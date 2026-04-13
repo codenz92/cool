@@ -1,0 +1,243 @@
+# ── 1. Classes ────────────────────────────────────────────────────────────────
+print("=== classes ===")
+
+class Animal:
+    def __init__(self, name, sound):
+        self.name = name
+        self.sound = sound
+
+    def speak(self):
+        return self.name + " says " + self.sound
+
+    def describe(self):
+        return "I am " + self.name
+
+class Dog(Animal):
+    def __init__(self, name):
+        self.name = name
+        self.sound = "woof"
+
+    def fetch(self):
+        return self.name + " fetches the ball!"
+
+a = Animal("Cat", "meow")
+print(a.speak())
+print(a.describe())
+
+d = Dog("Rex")
+print(d.speak())
+print(d.fetch())
+print(d.describe())
+
+# field access and mutation
+d.name = "Buddy"
+print(d.speak())
+
+# ── 2. Inheritance chain ──────────────────────────────────────────────────────
+print("=== inheritance ===")
+
+class Shape:
+    def __init__(self, color):
+        self.color = color
+
+    def area(self):
+        return 0
+
+    def info(self):
+        return self.color + " shape with area " + str(self.area())
+
+class Circle(Shape):
+    def __init__(self, color, radius):
+        self.color = color
+        self.radius = radius
+
+    def area(self):
+        return 3 * self.radius * self.radius
+
+c = Circle("red", 5)
+print(c.info())
+print(c.area())
+print(isinstance(c, "Circle"))
+print(isinstance(c, "Shape"))
+print(isinstance(c, "Dog"))
+
+# ── 3. try / except / raise ───────────────────────────────────────────────────
+print("=== try/except ===")
+
+try:
+    x = 1
+    raise "something went wrong"
+    x = 2
+except:
+    print("caught bare exception")
+
+print("after try")
+
+try:
+    raise "ValueError: bad input"
+except ValueError:
+    print("caught ValueError")
+except:
+    print("caught other")
+
+try:
+    a = 10
+    b = 0
+    if b == 0:
+        raise "ZeroDivisionError"
+except ZeroDivisionError:
+    print("caught zero div")
+
+# try with else (no exception)
+try:
+    z = 42
+except:
+    print("should not print")
+else:
+    print("no exception: z = " + str(z))
+
+# try/finally
+result = "none"
+try:
+    result = "try"
+    raise "oops"
+except:
+    result = "except"
+finally:
+    print("finally ran, result=" + result)
+
+# ── 4. Tuples ─────────────────────────────────────────────────────────────────
+print("=== tuples ===")
+
+t = (1, 2, 3)
+print(t)
+print(t[0])
+print(t[2])
+print(len(t))
+
+# single-element tuple
+single = (42,)
+print(single)
+
+# tuple in for loop
+for item in (10, 20, 30):
+    print(item)
+
+# ── 5. Tuple unpacking ────────────────────────────────────────────────────────
+print("=== unpack ===")
+
+a, b = (1, 2)
+print(a)
+print(b)
+
+x, y, z = [10, 20, 30]
+print(x)
+print(y)
+print(z)
+
+# swap
+a, b = (b, a)
+print(a)
+print(b)
+
+# ── 6. in / not in operator ───────────────────────────────────────────────────
+print("=== in operator ===")
+
+print(3 in [1, 2, 3, 4])
+print(5 in [1, 2, 3, 4])
+print(5 not in [1, 2, 3, 4])
+print("hello" in "say hello world")
+print("xyz" not in "hello")
+print("a" in {"a": 1, "b": 2})
+print("c" not in {"a": 1, "b": 2})
+
+# ── 7. Default parameters ─────────────────────────────────────────────────────
+print("=== default params ===")
+
+def greet(name, greeting="Hello"):
+    return greeting + ", " + name + "!"
+
+print(greet("Jamie"))
+print(greet("Jamie", "Hi"))
+print(greet("World", greeting="Hey"))
+
+def power(base, exp=2):
+    result = 1
+    i = 0
+    while i < exp:
+        result = result * base
+        i += 1
+    return result
+
+print(power(3))
+print(power(3, 3))
+print(power(2, 10))
+
+# ── 8. *args ──────────────────────────────────────────────────────────────────
+print("=== *args ===")
+
+def total(*nums):
+    s = 0
+    for n in nums:
+        s += n
+    return s
+
+print(total(1, 2, 3))
+print(total(10, 20))
+print(total())
+
+def tag(name, *items):
+    result = name + ": "
+    for item in items:
+        result += str(item) + " "
+    return result.strip()
+
+print(tag("nums", 1, 2, 3))
+print(tag("empty"))
+
+# ── 9. import math ────────────────────────────────────────────────────────────
+print("=== math module ===")
+
+import math
+print(math["pi"])
+print(sqrt(16.0))
+print(floor(3.7))
+print(ceil(3.2))
+
+# ── 10. File I/O ──────────────────────────────────────────────────────────────
+print("=== file I/O ===")
+
+f = open("/tmp/cool_test.txt", "w")
+f.write("Hello from Cool!\n")
+f.write("Line 2\n")
+f.close()
+
+f = open("/tmp/cool_test.txt", "r")
+content = f.read()
+f.close()
+print(content)
+
+f = open("/tmp/cool_test.txt", "r")
+lines = f.readlines()
+f.close()
+for line in lines:
+    print(line.strip())
+
+# ── 11. ** power operator ─────────────────────────────────────────────────────
+print("=== power operator ===")
+print(2 ** 10)
+print(3 ** 3)
+print(2.0 ** 0.5)
+
+# ── 12. String format ─────────────────────────────────────────────────────────
+print("=== string format ===")
+name = "Cool"
+version = 3
+print("Hello, {}! Version {}".format(name, version))
+
+# ── 13. isinstance / hasattr ──────────────────────────────────────────────────
+print("=== isinstance/hasattr ===")
+print(isinstance(42, "int"))
+print(isinstance("hi", "str"))
+print(isinstance(3.14, "float"))
+print(isinstance(true, "bool"))

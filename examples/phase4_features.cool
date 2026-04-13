@@ -1,0 +1,129 @@
+# Phase 4 feature tests
+
+# ── 1. f-strings ──────────────────────────────────────────────────────────────
+print("=== f-strings ===")
+name = "Cool"
+version = 4
+print(f"Hello, {name}! Version {version}")
+x = 10
+y = 3
+print(f"{x} + {y} = {x + y}")
+print(f"{'nested string'}")
+print(f"{{escaped braces}}")
+
+# ── 2. with statement ─────────────────────────────────────────────────────────
+print("=== with ===")
+with open("/tmp/with_test.txt", "w") as f:
+    f.write("hello from with\n")
+
+with open("/tmp/with_test.txt", "r") as f:
+    print(f.read().strip())
+
+# ── 3. lambda ─────────────────────────────────────────────────────────────────
+print("=== lambda ===")
+double = lambda x: x * 2
+add = lambda x, y: x + y
+print(double(5))
+print(add(3, 4))
+
+nums = [1, 2, 3, 4, 5]
+doubled = list(map(lambda x: x * 2, nums))
+print(doubled)
+
+# ── 4. ternary ────────────────────────────────────────────────────────────────
+print("=== ternary ===")
+x = 10
+label = "big" if x > 5 else "small"
+print(label)
+print("even" if x % 2 == 0 else "odd")
+
+# ── 5. list comprehensions ────────────────────────────────────────────────────
+print("=== list comprehensions ===")
+squares = [x * x for x in range(6)]
+print(squares)
+evens = [x for x in range(10) if x % 2 == 0]
+print(evens)
+words = ["hello", "world", "cool"]
+upper = [w.upper() for w in words]
+print(upper)
+
+# ── 6. assert ─────────────────────────────────────────────────────────────────
+print("=== assert ===")
+assert 1 + 1 == 2
+assert "hello".startswith("he"), "should start with he"
+try:
+    assert false, "this should fail"
+except:
+    print("caught failed assertion")
+
+# ── 7. nonlocal ───────────────────────────────────────────────────────────────
+print("=== nonlocal ===")
+def make_counter():
+    count = 0
+    def increment():
+        nonlocal count
+        count += 1
+        return count
+    return increment
+
+counter = make_counter()
+print(counter())
+print(counter())
+print(counter())
+
+# ── 8. global ─────────────────────────────────────────────────────────────────
+print("=== global ===")
+total = 0
+def add_to_total(n):
+    global total
+    total += n
+
+add_to_total(5)
+add_to_total(3)
+print(total)
+
+# ── 9. super() ────────────────────────────────────────────────────────────────
+print("=== super ===")
+class Animal:
+    def __init__(self, name, sound):
+        self.name = name
+        self.sound = sound
+
+    def speak(self):
+        return self.name + " says " + self.sound
+
+class Dog(Animal):
+    def __init__(self, name):
+        super().__init__(name, "woof")
+
+    def fetch(self):
+        return self.name + " fetches!"
+
+d = Dog("Rex")
+print(d.speak())
+print(d.fetch())
+
+# ── 10. Operator overloading ──────────────────────────────────────────────────
+print("=== operator overloading ===")
+class Vec2:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __add__(self, other):
+        return Vec2(self.x + other.x, self.y + other.y)
+
+    def __str__(self):
+        return f"Vec2({self.x}, {self.y})"
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
+
+v1 = Vec2(1, 2)
+v2 = Vec2(3, 4)
+v3 = v1 + v2
+print(v3)
+print(v1 == Vec2(1, 2))
+print(v1 == v2)
+
+print("all done!")

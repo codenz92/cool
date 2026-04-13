@@ -1,0 +1,52 @@
+print("Hello from Cool!")
+
+# Variables and arithmetic
+x = 10
+y = 3
+print(x + y)
+print(x * y)
+print(x / y)
+
+# String concatenation
+name = "world"
+print("Hello, " + name + "!")
+
+# If / elif / else
+if x > 5:
+    print("x is big")
+elif x == 5:
+    print("x is five")
+else:
+    print("x is small")
+
+# While loop
+i = 0
+while i < 3:
+    print(i)
+    i = i + 1
+
+# For loop with range
+for n in range(5):
+    print(n)
+
+# Functions
+def greet(person):
+    print("Hey, " + person + "!")
+
+greet("Cool")
+
+# Recursion
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+print(factorial(6))
+
+# Lists
+nums = [10, 20, 30, 40, 50]
+print(nums[0])
+print(len(nums))
+
+for item in nums:
+    print(item)
