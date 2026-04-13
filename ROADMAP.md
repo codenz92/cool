@@ -46,8 +46,8 @@
 - [x] Default parameters (`def greet(name, greeting="Hello")`)
 - [x] `*args` (variadic functions)
 - [x] Keyword arguments (`greet("Jamie", greeting="Hi")`)
-- [x] `import math` (sqrt, floor, ceil, pi, etc.)
-- [x] `import os` (listdir, mkdir, remove, rename, exists, getcwd)
+- [x] `import math` (sqrt, floor, ceil, pi, pow, etc.)
+- [x] `import os` (listdir, mkdir, remove, rename, exists, getcwd, join)
 - [x] `import sys` (argv, exit)
 - [x] File I/O (`open`, `read`, `write`, `readlines`, `close`, `append` mode)
 - [x] `**` power operator
@@ -102,17 +102,22 @@
 - [x] Better error messages (show line + column + source snippet)
 - [x] `**kwargs` support
 - [x] Multiline expressions with `\` continuation
+- [x] `sorted()`, `reversed()`, `enumerate()`, `zip()` built-ins
+- [x] `map()`, `filter()` built-ins
+- [x] `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()` built-ins
+- [x] `hasattr()`, `getattr()` built-ins
+- [x] String methods: `.upper()`, `.lower()`, `.strip()`, `.lstrip()`, `.rstrip()`, `.split()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`
 
 ---
 
-## Phase 5 — CoolOS Shell: More Commands
+## Phase 5 — CoolOS Shell: More Commands 🔄
 > Goal: a shell powerful enough for real use
 
 - [x] `cp <src> <dst>` — copy a file
-- [ ] `find <pattern>` — search for files
 - [x] `grep <pattern> <file>` — search file contents
 - [x] `head <file> [n]` / `tail <file> [n]` — first/last N lines
 - [x] `wc <file>` — word/line/char count
+- [ ] `find <pattern>` — search for files by name
 - [ ] Pipes: `ls | grep cool`
 - [ ] Environment variables (`set VAR=value`, `$VAR`)
 - [ ] Tab completion
@@ -125,8 +130,8 @@
 ## Phase 6 — Cool Language: Standard Library
 > Goal: a built-in library written in Cool itself
 
-- [ ] `string` module (split, join, strip, upper, lower, replace, startswith, endswith)
-- [ ] `list` module (sort, reverse, filter, map, reduce)
+- [~] `string` module — core methods already available natively on `str`; module form with `split`, `join`, `strip`, `upper`, `lower`, `replace`, `startswith`, `endswith` not yet importable as `import string`
+- [ ] `list` module (sort, reverse, filter, map, reduce as module-level functions)
 - [ ] `math` module (expand beyond current basics)
 - [ ] `json` module (parse and serialize JSON)
 - [ ] `re` module (basic regex)
@@ -184,7 +189,7 @@
 | 2 — Real Language Features | ✅ Complete |
 | 3 — CoolOS Shell | ✅ Complete |
 | 4 — Quality of Life | ✅ Complete |
-| 5 — Shell: More Commands | 🔄 Up next |
+| 5 — Shell: More Commands | 🔄 In progress |
 | 6 — Standard Library | ⏳ Planned |
 | 7 — CoolOS Applications | ⏳ Planned |
 | 8 — Compiler | ⏳ Long term |
