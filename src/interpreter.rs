@@ -378,6 +378,8 @@ enum Signal {
 pub struct Interpreter {
     pub current_line: usize,
     pub source_dir: std::path::PathBuf,
+    /// Source lines, for rich error messages.
+    source_lines: Vec<String>,
     /// Stash for a raised exception value that must cross a Result<Value,String> boundary.
     /// Set in call_value when a user function raises; cleared when try/except catches it.
     pub pending_raise: Option<Value>,
@@ -409,16 +411,29 @@ macro_rules! compare_op {
 }
 
 impl Interpreter {
-    pub fn new(source_dir: std::path::PathBuf) -> Self {
+    pub fn new(source_dir: std::path::PathBuf, source: &str) -> Self {
         Interpreter {
             current_line: 0,
             source_dir,
+            source_lines: source.lines().map(|l| l.to_string()).collect(),
             pending_raise: None,
         }
     }
 
     fn err(&self, msg: &str) -> String {
-        format!("line {}: {}", self.current_line, msg)
+        let snippet = if self.current_line > 0 {
+            self.source_lines
+                .get(self.current_line.saturating_sub(1))
+                .map(|line| {
+                    let trimmed = line.trim_start();
+                    let indent = line.len() - trimmed.len();
+                    format!("\n    {}\n    {}^", line, " ".repeat(indent))
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        format!("line {}: {}{}", self.current_line, msg, snippet)
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), String> {
@@ -2146,8 +2161,9 @@ impl Interpreter {
                     Some(Value::List(l)) => l,
                     _ => return Err(self.err("sum() requires a list")),
                 };
-                lst.borrow().iter().try_fold(Value::Int(0), |acc, x| {
-                    self.apply_binop(&BinOp::Add, acc, x.clone())
+                let items: Vec<Value> = lst.borrow().clone();
+                items.into_iter().try_fold(Value::Int(0), |acc, x| {
+                    self.apply_binop(&BinOp::Add, acc, x)
                 })
             }
             "sorted" => {

@@ -16,7 +16,7 @@ fn run_source(source: &str, source_dir: PathBuf) -> Result<(), String> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    let mut interpreter = Interpreter::new(source_dir);
+    let mut interpreter = Interpreter::new(source_dir, source);
     interpreter.run(&program)
 }
 

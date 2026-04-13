@@ -99,9 +99,9 @@
 - [x] `super()` for calling parent class methods
 - [x] Operator overloading (`__add__`, `__str__`, `__eq__`, `__len__`, etc.)
 - [x] `list()`, `tuple()`, `dict()`, `set()` built-in type constructors
-- [ ] Better error messages (show line + column + source snippet)
-- [ ] `**kwargs` support
-- [ ] Multiline expressions with `\` continuation
+- [x] Better error messages (show line + column + source snippet)
+- [x] `**kwargs` support
+- [x] Multiline expressions with `\` continuation
 
 ---
 
