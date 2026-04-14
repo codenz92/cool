@@ -2,6 +2,9 @@ mod lexer;
 mod ast;
 mod parser;
 mod interpreter;
+mod opcode;
+mod compiler;
+mod vm;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +21,18 @@ fn run_source(source: &str, source_dir: PathBuf) -> Result<(), String> {
 
     let mut interpreter = Interpreter::new(source_dir, source);
     interpreter.run(&program)
+}
+
+fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize()?;
+
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program()?;
+
+    let chunk = compiler::compile(&program)?;
+    let mut machine = vm::VM::new(source_dir);
+    machine.run(&chunk)
 }
 
 fn repl() {
@@ -42,10 +57,15 @@ fn repl() {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    match args.len() {
-        1 => repl(),
-        2 => {
-            let path = &args[1];
+
+    // Check for --vm flag anywhere in args.
+    let use_vm = args.iter().any(|a| a == "--vm");
+    let file_args: Vec<&String> = args[1..].iter().filter(|a| *a != "--vm").collect();
+
+    match file_args.len() {
+        0 => repl(),
+        1 => {
+            let path = file_args[0];
             if !Path::new(path).exists() {
                 eprintln!("cool: file not found: {}", path);
                 std::process::exit(1);
@@ -55,13 +75,18 @@ fn main() {
             let source_dir = Path::new(path).parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."));
-            if let Err(e) = run_source(&source, source_dir) {
+            let result = if use_vm {
+                run_source_vm(&source, source_dir)
+            } else {
+                run_source(&source, source_dir)
+            };
+            if let Err(e) = result {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
         }
         _ => {
-            eprintln!("Usage: cool [file.cool]");
+            eprintln!("Usage: cool [--vm] [file.cool]");
             std::process::exit(1);
         }
     }

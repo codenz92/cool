@@ -1,0 +1,2239 @@
+/// Stack-based bytecode VM for Cool.
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use crate::opcode::*;
+
+// ── Call frame ────────────────────────────────────────────────────────────────
+
+struct CallFrame {
+    closure: Rc<VmClosure>,
+    ip: usize,
+    /// Index into `VM::stack` where this frame's locals start.
+    base: usize,
+}
+
+// ── Exception handler entry ───────────────────────────────────────────────────
+
+struct ExcHandler {
+    handler_ip: usize,
+    stack_depth: usize,
+    frame_depth: usize,
+}
+
+// ── VM ────────────────────────────────────────────────────────────────────────
+
+pub struct VM {
+    stack: Vec<VmValue>,
+    frames: Vec<CallFrame>,
+    globals: HashMap<String, VmValue>,
+    exc_handlers: Vec<ExcHandler>,
+    /// Currently active exception (for bare `raise`).
+    current_exc: Option<VmValue>,
+    source_dir: std::path::PathBuf,
+    current_line: usize,
+    /// xorshift64 RNG state.
+    rng: u64,
+    /// All currently-open upvalue cells (regardless of which closure owns them).
+    /// Lets us close upvalues for any slot when it leaves the stack.
+    open_upvalues: Vec<UpvalueCell>,
+}
+
+impl VM {
+    pub fn new(source_dir: std::path::PathBuf) -> Self {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(12345678901234567);
+        let mut vm = VM {
+            stack: Vec::with_capacity(256),
+            frames: Vec::new(),
+            globals: HashMap::new(),
+            exc_handlers: Vec::new(),
+            current_exc: None,
+            source_dir,
+            current_line: 0,
+            rng: if seed == 0 { 1 } else { seed },
+            open_upvalues: Vec::new(),
+        };
+        vm.register_builtins();
+        vm
+    }
+
+    fn register_builtins(&mut self) {
+        for name in &[
+            "print","len","range","str","int","float","bool","type","input",
+            "repr","exit","open","isinstance","hasattr","getattr",
+            "list","tuple","dict","set","sorted","reversed","enumerate",
+            "zip","abs","min","max","sum","map","filter",
+            "set_completions","eval","append","pop","keys","values","items",
+            "runfile","super","__import_module__","__exc_matches__",
+        ] {
+            self.globals.insert(name.to_string(), VmValue::BuiltinFn(name.to_string()));
+        }
+        // Built-in exception classes (used in `except ExcType as e:` clauses).
+        for exc_name in &[
+            "Exception","ValueError","TypeError","RuntimeError","IndexError",
+            "KeyError","AttributeError","NameError","StopIteration","IOError",
+            "ZeroDivisionError","NotImplementedError","OverflowError",
+        ] {
+            let cls = Rc::new(VmClass {
+                name: exc_name.to_string(),
+                parent: None,
+                methods: std::collections::HashMap::new(),
+            });
+            self.globals.insert(exc_name.to_string(), VmValue::Class(cls));
+        }
+    }
+
+    // ── Error helpers ─────────────────────────────────────────────────────────
+
+    fn err(&self, msg: &str) -> String {
+        format!("RuntimeError (line {}): {}", self.current_line, msg)
+    }
+
+    fn type_err(&self, expected: &str, got: &VmValue) -> String {
+        self.err(&format!("expected {}, got {}", expected, got.type_name()))
+    }
+
+    // ── RNG helpers (xorshift64) ──────────────────────────────────────────────
+
+    fn rng_next_u64(&mut self) -> u64 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng = x;
+        x
+    }
+
+    fn rng_next_f64(&mut self) -> f64 {
+        (self.rng_next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    // ── Stack helpers ─────────────────────────────────────────────────────────
+
+    fn push(&mut self, v: VmValue) { self.stack.push(v); }
+
+    fn pop(&mut self) -> VmValue { self.stack.pop().expect("stack underflow") }
+
+    fn peek(&self) -> &VmValue { self.stack.last().expect("stack underflow") }
+
+    fn peek_mut(&mut self) -> &mut VmValue { self.stack.last_mut().expect("stack underflow") }
+
+    // ── Upvalue helpers ───────────────────────────────────────────────────────
+
+    fn read_upvalue(&self, cell: &UpvalueCell) -> VmValue {
+        match &*cell.0.borrow() {
+            UpvalueCellInner::Open(slot) => self.stack[*slot].clone(),
+            UpvalueCellInner::Closed(v) => v.clone(),
+        }
+    }
+
+    fn write_upvalue(&mut self, cell: &UpvalueCell, val: VmValue) {
+        match &mut *cell.0.borrow_mut() {
+            UpvalueCellInner::Open(slot) => { let s = *slot; self.stack[s] = val; }
+            UpvalueCellInner::Closed(v) => { *v = val; }
+        }
+    }
+
+    // ── Main execution loop ───────────────────────────────────────────────────
+
+    pub fn run(&mut self, chunk: &crate::opcode::Chunk) -> Result<(), String> {
+        // Wrap the top-level chunk in a synthetic closure.
+        let proto = Rc::new(FnProto {
+            name: "<script>".to_string(),
+            params: vec![],
+            chunk: {
+                // We can't move chunk; clone its contents into a Chunk.
+                let mut c = Chunk::new();
+                c.code = chunk.code.clone();
+                c.constants = chunk.constants.clone();
+                c.names = chunk.names.clone();
+                c.lines = chunk.lines.clone();
+                c
+            },
+            upvalue_count: 0,
+            local_count: 0,
+        });
+        let closure = Rc::new(VmClosure { proto, upvalues: vec![] });
+        self.frames.push(CallFrame { closure, ip: 0, base: 0 });
+
+        match self.execute() {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn execute(&mut self) -> Result<VmValue, String> {
+        let entry_frames = self.frames.len();
+        loop {
+            let (op, base) = {
+                let frame = self.frames.last().unwrap();
+                let op = frame.closure.proto.chunk.code[frame.ip].clone();
+                (op, frame.base)
+            };
+            self.frames.last_mut().unwrap().ip += 1;
+
+            // Run one instruction. On Err, route through exception handlers if any are installed.
+            match self.dispatch_op(op, base, entry_frames) {
+                Ok(None) => {}               // normal: continue loop
+                Ok(Some(v)) => return Ok(v), // Return instruction
+                Err(e) => {
+                    let exc = VmValue::Str(e.clone());
+                    self.current_exc = Some(exc.clone());
+                    if !self.exc_handlers.is_empty() {
+                        return self.handle_exception(exc);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    fn dispatch_op(&mut self, op: Op, base: usize, entry_frames: usize) -> Result<Option<VmValue>, String> {
+        match op {
+                Op::SetLine(n) => { self.current_line = n; }
+
+                Op::Constant(idx) => {
+                    let v = self.frames.last().unwrap().closure.proto.chunk.constants[idx].clone();
+                    self.push(v);
+                }
+                Op::Nil   => self.push(VmValue::Nil),
+                Op::True  => self.push(VmValue::Bool(true)),
+                Op::False => self.push(VmValue::Bool(false)),
+                Op::Pop   => { self.pop(); }
+                Op::DupTop => { let v = self.peek().clone(); self.push(v); }
+
+                // ── Arithmetic ─────────────────────────────────────────────
+                Op::Add => { let r = self.pop(); let l = self.pop(); self.push(self.add(l, r)?); }
+                Op::Sub => { let r = self.pop(); let l = self.pop(); self.push(self.arith(l, r, "-")?); }
+                Op::Mul => { let r = self.pop(); let l = self.pop(); self.push(self.mul(l, r)?); }
+                Op::Div => { let r = self.pop(); let l = self.pop(); self.push(self.div(l, r)?); }
+                Op::Mod => { let r = self.pop(); let l = self.pop(); self.push(self.modulo(l, r)?); }
+                Op::Pow => { let r = self.pop(); let l = self.pop(); self.push(self.pow(l, r)?); }
+                Op::FloorDiv => { let r = self.pop(); let l = self.pop(); self.push(self.floor_div(l, r)?); }
+
+                // ── Comparison ─────────────────────────────────────────────
+                Op::Eq    => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(vm_eq(&l, &r))); }
+                Op::NotEq => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(!vm_eq(&l, &r))); }
+                Op::Lt    => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, "<")?); }
+                Op::LtEq  => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, "<=")?); }
+                Op::Gt    => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, ">")?); }
+                Op::GtEq  => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, ">=")?); }
+                Op::In    => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(self.contains(&r, &l)?)); }
+                Op::NotIn => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(!self.contains(&r, &l)?)); }
+
+                // ── Bitwise ────────────────────────────────────────────────
+                Op::BitAnd => { let r = self.pop(); let l = self.pop(); self.push(self.bitop(l, r, "&")?); }
+                Op::BitOr  => { let r = self.pop(); let l = self.pop(); self.push(self.bitop(l, r, "|")?); }
+                Op::BitXor => { let r = self.pop(); let l = self.pop(); self.push(self.bitop(l, r, "^")?); }
+                Op::LShift => { let r = self.pop(); let l = self.pop(); self.push(self.bitop(l, r, "<<")?); }
+                Op::RShift => { let r = self.pop(); let l = self.pop(); self.push(self.bitop(l, r, ">>")?); }
+
+                // ── Unary ──────────────────────────────────────────────────
+                Op::Neg => {
+                    let v = self.pop();
+                    self.push(match v {
+                        VmValue::Int(n) => VmValue::Int(-n),
+                        VmValue::Float(f) => VmValue::Float(-f),
+                        other => return Err(self.type_err("number", &other)),
+                    });
+                }
+                Op::Not => {
+                    let v = self.pop();
+                    self.push(VmValue::Bool(!v.is_truthy()));
+                }
+                Op::BitNot => {
+                    let v = self.pop();
+                    match v {
+                        VmValue::Int(n) => self.push(VmValue::Int(!n)),
+                        other => return Err(self.type_err("int", &other)),
+                    }
+                }
+
+                // ── Variables ──────────────────────────────────────────────
+                Op::GetLocal(slot) => {
+                    let v = self.stack[base + slot].clone();
+                    self.push(v);
+                }
+                Op::SetLocal(slot) => {
+                    let v = self.pop();
+                    let idx = base + slot;
+                    if idx >= self.stack.len() {
+                        self.stack.resize(idx + 1, VmValue::Nil);
+                    }
+                    self.stack[idx] = v;
+                }
+                Op::GetGlobal(name_idx) => {
+                    let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
+                    let v = self.globals.get(&name).cloned()
+                        .ok_or_else(|| self.err(&format!("undefined variable '{}'", name)))?;
+                    self.push(v);
+                }
+                Op::SetGlobal(name_idx) => {
+                    let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
+                    let v = self.pop();
+                    self.globals.insert(name, v);
+                }
+                Op::GetUpvalue(idx) => {
+                    let cell = self.frames.last().unwrap().closure.upvalues[idx].clone();
+                    let v = self.read_upvalue(&cell);
+                    self.push(v);
+                }
+                Op::SetUpvalue(idx) => {
+                    let cell = self.frames.last().unwrap().closure.upvalues[idx].clone();
+                    let v = self.pop();
+                    self.write_upvalue(&cell, v);
+                }
+
+                // ── Control flow ───────────────────────────────────────────
+                Op::Jump(target) => {
+                    self.frames.last_mut().unwrap().ip = target;
+                }
+                Op::JumpIfFalse(target) => {
+                    if !self.peek().is_truthy() {
+                        self.frames.last_mut().unwrap().ip = target;
+                    }
+                }
+                Op::JumpIfTrue(target) => {
+                    if self.peek().is_truthy() {
+                        self.frames.last_mut().unwrap().ip = target;
+                    }
+                }
+
+                // ── Closures / calls ───────────────────────────────────────
+                Op::MakeClosure(proto_idx, refs) => {
+                    let proto = match &self.frames.last().unwrap().closure.proto.chunk.constants[proto_idx] {
+                        VmValue::Proto(p) => p.clone(),
+                        other => return Err(self.err(&format!("MakeClosure: not a proto: {}", other.type_name()))),
+                    };
+                    let mut upvalues: Vec<UpvalueCell> = Vec::new();
+                    for r in &refs {
+                        let cell = match r {
+                            UpvalueRef::Local(slot) => {
+                                let abs = base + slot;
+                                // Reuse an existing open cell for this slot if one exists.
+                                if let Some(existing) = self.open_upvalues.iter().find(|c| {
+                                    matches!(*c.0.borrow(), UpvalueCellInner::Open(s) if s == abs)
+                                }) {
+                                    existing.clone()
+                                } else {
+                                    let cell = UpvalueCell::open(abs);
+                                    self.open_upvalues.push(cell.clone());
+                                    cell
+                                }
+                            }
+                            UpvalueRef::Upvalue(idx) => {
+                                // Inherit from enclosing closure — already tracked.
+                                self.frames.last().unwrap().closure.upvalues[*idx].clone()
+                            }
+                        };
+                        upvalues.push(cell);
+                    }
+                    self.push(VmValue::Closure(Rc::new(VmClosure { proto, upvalues })));
+                }
+
+                Op::Call(argc, kwarg_names) => {
+                    let result = self.call_value(argc, &kwarg_names)?;
+                    self.push(result);
+                }
+
+                Op::Return => {
+                    let val = self.pop();
+                    let frame_base = self.frames.last().unwrap().base;
+                    self.close_upvalues_above(frame_base);
+                    self.stack.truncate(frame_base);
+                    self.frames.pop();
+                    if self.frames.len() < entry_frames {
+                        return Ok(Some(val));
+                    }
+                    self.push(val);
+                }
+
+                // ── Collections ────────────────────────────────────────────
+                Op::BuildList(n) => {
+                    let start = self.stack.len() - n;
+                    let items: Vec<VmValue> = self.stack.drain(start..).collect();
+                    self.push(VmValue::List(Rc::new(RefCell::new(items))));
+                }
+                Op::BuildDict(n) => {
+                    let start = self.stack.len() - n * 2;
+                    let pairs: Vec<VmValue> = self.stack.drain(start..).collect();
+                    let mut d = VmDict::new();
+                    for chunk in pairs.chunks(2) {
+                        d.set(chunk[0].clone(), chunk[1].clone());
+                    }
+                    self.push(VmValue::Dict(Rc::new(RefCell::new(d))));
+                }
+                Op::BuildTuple(n) => {
+                    let start = self.stack.len() - n;
+                    let items: Vec<VmValue> = self.stack.drain(start..).collect();
+                    self.push(VmValue::Tuple(Rc::new(items)));
+                }
+
+                // ── Subscript / attrs ──────────────────────────────────────
+                Op::GetItem => {
+                    let idx = self.pop();
+                    let obj = self.pop();
+                    self.push(self.get_item(obj, idx)?);
+                }
+                Op::SetItem => {
+                    let val = self.pop();
+                    let idx = self.pop();
+                    let obj = self.pop();
+                    self.set_item(obj, idx, val)?;
+                }
+                Op::GetSlice => {
+                    let stop  = self.pop();
+                    let start = self.pop();
+                    let obj   = self.pop();
+                    self.push(self.get_slice(obj, start, stop)?);
+                }
+                Op::GetAttr(name_idx) => {
+                    let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
+                    let obj = self.pop();
+                    self.push(self.get_attr(obj, &name)?);
+                }
+                Op::SetAttr(name_idx) => {
+                    let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
+                    let val = self.pop();
+                    let obj = self.pop();
+                    self.set_attr(obj, &name, val)?;
+                }
+
+                // ── Classes ────────────────────────────────────────────────
+                Op::MakeClass(name_idx, has_parent) => {
+                    let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
+                    let parent = if has_parent {
+                        match self.pop() {
+                            VmValue::Class(c) => Some(c),
+                            other => return Err(self.err(&format!("class parent must be a class, got {}", other.type_name()))),
+                        }
+                    } else { None };
+                    self.push(VmValue::Class(Rc::new(VmClass {
+                        name,
+                        parent,
+                        methods: HashMap::new(),
+                    })));
+                }
+
+                // ── Iteration ──────────────────────────────────────────────
+                Op::GetIter => {
+                    let obj = self.pop();
+                    let iter = self.make_iter(obj)?;
+                    self.push(VmValue::Iter(Rc::new(RefCell::new(iter))));
+                }
+                Op::ForIter(target) => {
+                    let next = match self.peek() {
+                        VmValue::Iter(it) => it.borrow_mut().next_val(),
+                        other => return Err(self.err(&format!("ForIter: not an iterator: {}", other.type_name()))),
+                    };
+                    match next {
+                        Some(v) => self.push(v),
+                        None => {
+                            self.pop(); // pop the exhausted iterator
+                            self.frames.last_mut().unwrap().ip = target;
+                        }
+                    }
+                }
+
+                // ── Exception handling ─────────────────────────────────────
+                Op::SetupExcept(target) => {
+                    self.exc_handlers.push(ExcHandler {
+                        handler_ip: target,
+                        stack_depth: self.stack.len(),
+                        frame_depth: self.frames.len(),
+                    });
+                }
+                Op::PopExcept => {
+                    self.exc_handlers.pop();
+                }
+                Op::Raise => {
+                    let val = self.pop();
+                    let exc = match &val {
+                        VmValue::Class(_) => self.call_value_direct(val.clone(), &[], &[])?,
+                        _ => val,
+                    };
+                    self.current_exc = Some(exc.clone());
+                    return self.handle_exception(exc).map(Some);
+                }
+                Op::RaiseFrom => {
+                    let exc = self.current_exc.clone().unwrap_or(VmValue::Nil);
+                    return self.handle_exception(exc).map(Some);
+                }
+                Op::ExcMatches(name_idx) => {
+                    // Peek TOS (exception); check if it matches the named class.
+                    let exc = self.peek().clone();
+                    let chunk = &self.frames.last().unwrap().closure.proto.chunk;
+                    let class_name = chunk.names.get(name_idx).cloned().unwrap_or_default();
+                    let matches = match &exc {
+                        VmValue::Instance(inst) => {
+                            // Look up the class in globals by name.
+                            if let Some(VmValue::Class(cls)) = self.globals.get(&class_name) {
+                                let cls = cls.clone();
+                                self.is_instance_of(&inst.class, &cls)
+                            } else {
+                                inst.class.name == class_name
+                            }
+                        }
+                        VmValue::Str(_) | VmValue::Nil => {
+                            // String exceptions match Exception, ValueError, TypeError etc.
+                            class_name == "Exception"
+                            || class_name == "ValueError"
+                            || class_name == "TypeError"
+                            || class_name == "RuntimeError"
+                            || class_name == "ZeroDivisionError"
+                            || class_name == "IndexError"
+                            || class_name == "KeyError"
+                            || class_name == "NameError"
+                            || class_name == "AttributeError"
+                            || class_name == "IOError"
+                            || class_name == "StopIteration"
+                        }
+                        _ => class_name == "Exception",
+                    };
+                    self.push(VmValue::Bool(matches));
+                }
+
+                // ── Misc ───────────────────────────────────────────────────
+                Op::Unpack(n) => {
+                    let val = self.pop();
+                    let items = self.to_iter_vec(val)?;
+                    if items.len() != n {
+                        return Err(self.err(&format!(
+                            "not enough values to unpack (expected {}, got {})", n, items.len()
+                        )));
+                    }
+                    for item in items { self.push(item); }
+                }
+                Op::ConcatStr(n) => {
+                    let start = self.stack.len() - n;
+                    let parts: Vec<VmValue> = self.stack.drain(start..).collect();
+                    let mut result = String::new();
+                    for p in parts {
+                        result.push_str(&p.to_string());
+                    }
+                    self.push(VmValue::Str(result));
+                }
+        }
+        Ok(None)
+    }
+
+    // ── Exception dispatch ────────────────────────────────────────────────────
+
+    fn handle_exception(&mut self, exc: VmValue) -> Result<VmValue, String> {
+        // Search for a handler, unwinding frames as needed.
+        while let Some(handler) = self.exc_handlers.pop() {
+            // Unwind frames to the one that installed the handler.
+            while self.frames.len() > handler.frame_depth {
+                let fb = self.frames.last().unwrap().base;
+                self.close_upvalues_above(fb);
+                self.stack.truncate(fb);
+                self.frames.pop();
+            }
+            // Restore stack depth.
+            self.stack.truncate(handler.stack_depth);
+            // Push the exception.
+            self.push(exc.clone());
+            // Jump to handler.
+            self.frames.last_mut().unwrap().ip = handler.handler_ip;
+            // Continue executing.
+            return self.execute();
+        }
+        // No handler found.
+        Err(format!("Unhandled exception (line {}): {}", self.current_line, exc))
+    }
+
+    // ── Upvalue closing ───────────────────────────────────────────────────────
+
+    /// Close all open upvalue cells that point to stack slots >= `min_slot`.
+    /// Scans the global open_upvalues list so closures stored as values are covered too.
+    fn close_upvalues_above(&mut self, min_slot: usize) {
+        for cell in &self.open_upvalues {
+            let mut inner = cell.0.borrow_mut();
+            if let UpvalueCellInner::Open(slot) = *inner {
+                if slot >= min_slot {
+                    let val = self.stack.get(slot).cloned().unwrap_or(VmValue::Nil);
+                    *inner = UpvalueCellInner::Closed(val);
+                }
+            }
+        }
+        // Drop cells that are now closed (they hold no Open reference anymore).
+        self.open_upvalues.retain(|c| matches!(*c.0.borrow(), UpvalueCellInner::Open(_)));
+    }
+
+    // ── Function calls ────────────────────────────────────────────────────────
+
+    /// Pop function + args from stack (layout: [func, arg0..argN-1, kwval0..]) and call.
+    fn call_value(&mut self, argc: usize, kwarg_names: &[String]) -> Result<VmValue, String> {
+        let total = argc + kwarg_names.len();
+        // Stack: [.., func, arg0, .., argN-1, kw0, .., kwM-1]
+        let func_pos = self.stack.len() - total - 1;
+        let func = self.stack[func_pos].clone();
+
+        // Collect kwargs.
+        let kwarg_vals: Vec<VmValue> = self.stack.drain(self.stack.len() - kwarg_names.len()..).collect();
+        let kwargs: Vec<(String, VmValue)> = kwarg_names.iter().cloned().zip(kwarg_vals).collect();
+
+        // Collect positional args.
+        let args: Vec<VmValue> = self.stack.drain(func_pos + 1..).collect();
+
+        // Remove the function.
+        self.stack.pop();
+
+        self.call_value_direct(func, &args, &kwargs)
+    }
+
+    fn call_value_direct(&mut self, func: VmValue, args: &[VmValue], kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        match func {
+            VmValue::Closure(closure) => {
+                self.call_closure(closure, args, kwargs)
+            }
+            VmValue::BoundMethod(bm) => {
+                // Prepend `self` to args.
+                let mut full_args = vec![VmValue::Instance(bm.receiver.clone())];
+                full_args.extend_from_slice(args);
+                self.call_closure(bm.method.clone(), &full_args, kwargs)
+            }
+            VmValue::BoundBuiltin(receiver, name) => {
+                // Prepend receiver as args[0], then dispatch as normal builtin.
+                let mut full_args = vec![*receiver];
+                full_args.extend_from_slice(args);
+                self.call_builtin(&name, &full_args, kwargs)
+            }
+            VmValue::Class(cls) => {
+                // Built-in exception classes: just return the message string.
+                let exc_names = ["Exception","ValueError","TypeError","RuntimeError","IndexError",
+                    "KeyError","AttributeError","NameError","StopIteration","IOError",
+                    "ZeroDivisionError","NotImplementedError","OverflowError"];
+                if exc_names.contains(&cls.name.as_str()) && cls.methods.is_empty() {
+                    // Return the message as a string, or an instance with a message field.
+                    let msg = args.first().map(|v| v.to_string()).unwrap_or_default();
+                    // Return instance with 'message' and 'args' fields for compat.
+                    let instance = Rc::new(VmInstance {
+                        class: cls.clone(),
+                        fields: RefCell::new({
+                            let mut m = HashMap::new();
+                            m.insert("message".to_string(), VmValue::Str(msg.clone()));
+                            m.insert("args".to_string(), VmValue::Tuple(Rc::new(
+                                args.to_vec()
+                            )));
+                            m
+                        }),
+                    });
+                    return Ok(VmValue::Instance(instance));
+                }
+                // Instantiate.
+                let instance = Rc::new(VmInstance {
+                    class: cls.clone(),
+                    fields: RefCell::new(HashMap::new()),
+                });
+                let inst_val = VmValue::Instance(instance.clone());
+                // Call __init__ if it exists.
+                if let Some(init) = self.find_method(&cls, "__init__") {
+                    let mut init_args = vec![inst_val.clone()];
+                    init_args.extend_from_slice(args);
+                    self.call_closure(init, &init_args, kwargs)?;
+                }
+                Ok(inst_val)
+            }
+            VmValue::BuiltinFn(name) => {
+                self.call_builtin(&name, args, kwargs)
+            }
+            other => Err(self.err(&format!("'{}' is not callable", other.type_name()))),
+        }
+    }
+
+    fn call_closure(&mut self, closure: Rc<VmClosure>, args: &[VmValue], kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        let params = &closure.proto.params;
+        let local_count = closure.proto.local_count;
+        let base = self.stack.len();
+
+        // Extend stack to hold all locals.
+        self.stack.resize(base + local_count.max(params.len()), VmValue::Nil);
+
+        // Bind parameters.
+        let mut pos_idx = 0usize;
+        for (i, param) in params.iter().enumerate() {
+            if param.is_vararg {
+                // Collect remaining positional args.
+                let rest: Vec<VmValue> = args[pos_idx..].to_vec();
+                self.stack[base + i] = VmValue::List(Rc::new(RefCell::new(rest)));
+                pos_idx = args.len();
+            } else if param.is_kwarg {
+                // Collect all kwargs into a dict.
+                let mut d = VmDict::new();
+                for (k, v) in kwargs {
+                    d.set(VmValue::Str(k.clone()), v.clone());
+                }
+                self.stack[base + i] = VmValue::Dict(Rc::new(RefCell::new(d)));
+            } else {
+                // Check if provided as kwarg.
+                if let Some((_, kv)) = kwargs.iter().find(|(k, _)| k == &param.name) {
+                    self.stack[base + i] = kv.clone();
+                } else if pos_idx < args.len() {
+                    self.stack[base + i] = args[pos_idx].clone();
+                    pos_idx += 1;
+                } else if let Some(default) = &param.default {
+                    // Compile and evaluate default? For now, re-use interpreter for default exprs.
+                    // Simpler: store nil and let the function body handle it.
+                    // Actually, defaults need to be pre-compiled. For now, use nil.
+                    self.stack[base + i] = VmValue::Nil;
+                } else {
+                    return Err(self.err(&format!(
+                        "{}() missing argument '{}'", closure.proto.name, param.name
+                    )));
+                }
+            }
+        }
+
+        self.frames.push(CallFrame { closure, ip: 0, base });
+
+        match self.execute() {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn find_method(&self, cls: &Rc<VmClass>, name: &str) -> Option<Rc<VmClosure>> {
+        if let Some(m) = cls.methods.get(name) {
+            return Some(m.clone());
+        }
+        if let Some(parent) = &cls.parent {
+            return self.find_method(parent, name);
+        }
+        None
+    }
+
+    // ── Attribute access ──────────────────────────────────────────────────────
+
+    fn get_attr(&self, obj: VmValue, name: &str) -> Result<VmValue, String> {
+        match &obj {
+            VmValue::Instance(inst) => {
+                // Fields take priority.
+                if let Some(v) = inst.fields.borrow().get(name).cloned() {
+                    return Ok(v);
+                }
+                // Methods.
+                if let Some(m) = self.find_method(&inst.class, name) {
+                    return Ok(VmValue::BoundMethod(Rc::new(VmBoundMethod {
+                        receiver: inst.clone(),
+                        method: m,
+                    })));
+                }
+                Err(self.err(&format!("'{}' object has no attribute '{}'", inst.class.name, name)))
+            }
+            VmValue::Class(cls) => {
+                if let Some(m) = self.find_method(cls, name) {
+                    return Ok(VmValue::Closure(m));
+                }
+                Err(self.err(&format!("class '{}' has no attribute '{}'", cls.name, name)))
+            }
+            VmValue::Super(sup) => {
+                if let Some(m) = self.find_method(&sup.parent, name) {
+                    return Ok(VmValue::BoundMethod(Rc::new(VmBoundMethod {
+                        receiver: sup.instance.clone(),
+                        method: m,
+                    })));
+                }
+                Err(self.err(&format!("super has no method '{}'", name)))
+            }
+            VmValue::List(v) => self.list_method(obj.clone(), v.clone(), name),
+            VmValue::Str(s) => self.str_method(obj.clone(), s.clone(), name),
+            VmValue::Dict(d) => {
+                // First check if `name` is a key in the dict (module namespace access).
+                let key_val = {
+                    let db = d.borrow();
+                    let key_str = VmValue::Str(name.to_string());
+                    db.keys.iter().position(|k| vm_eq(k, &key_str))
+                        .map(|i| db.vals[i].clone())
+                };
+                if let Some(v) = key_val {
+                    return Ok(v);
+                }
+                self.dict_method(obj.clone(), d.clone(), name)
+            }
+            VmValue::File(fh) => self.file_method(obj.clone(), fh.clone(), name),
+            other => Err(self.err(&format!("'{}' has no attribute '{}'", other.type_name(), name))),
+        }
+    }
+
+    fn set_attr(&self, obj: VmValue, name: &str, val: VmValue) -> Result<(), String> {
+        match obj {
+            VmValue::Instance(inst) => {
+                inst.fields.borrow_mut().insert(name.to_string(), val);
+                Ok(())
+            }
+            VmValue::Class(cls) => {
+                // Attaching a method to a class at runtime.
+                match val {
+                    VmValue::Closure(c) => {
+                        // We need mut access to methods; use unsafe or Rc<RefCell<>>.
+                        // Since VmClass uses a plain HashMap (no RefCell), we need to
+                        // get a mutable reference. Use Rc::get_mut if we're the only owner.
+                        unsafe {
+                            let cls_ptr = Rc::as_ptr(&cls) as *mut VmClass;
+                            (*cls_ptr).methods.insert(name.to_string(), c);
+                        }
+                        Ok(())
+                    }
+                    _ => Err(self.err("can only set methods on a class")),
+                }
+            }
+            other => Err(self.err(&format!("cannot set attribute on '{}'", other.type_name()))),
+        }
+    }
+
+    // ── Subscript ─────────────────────────────────────────────────────────────
+
+    fn get_item(&self, obj: VmValue, idx: VmValue) -> Result<VmValue, String> {
+        match (&obj, &idx) {
+            (VmValue::List(v), VmValue::Int(i)) => {
+                let v = v.borrow();
+                let i = self.normalize_index(*i, v.len())?;
+                Ok(v[i].clone())
+            }
+            (VmValue::Tuple(t), VmValue::Int(i)) => {
+                let i = self.normalize_index(*i, t.len())?;
+                Ok(t[i].clone())
+            }
+            (VmValue::Str(s), VmValue::Int(i)) => {
+                let chars: Vec<char> = s.chars().collect();
+                let i = self.normalize_index(*i, chars.len())?;
+                Ok(VmValue::Str(chars[i].to_string()))
+            }
+            (VmValue::Dict(d), _) => {
+                d.borrow().get(&idx).ok_or_else(|| self.err(&format!("key not found: {}", idx)))
+            }
+            _ => Err(self.err(&format!("cannot index {} with {}", obj.type_name(), idx.type_name()))),
+        }
+    }
+
+    fn set_item(&self, obj: VmValue, idx: VmValue, val: VmValue) -> Result<(), String> {
+        match (&obj, &idx) {
+            (VmValue::List(v), VmValue::Int(i)) => {
+                let mut v = v.borrow_mut();
+                let i = self.normalize_index(*i, v.len())?;
+                v[i] = val;
+                Ok(())
+            }
+            (VmValue::Dict(d), _) => {
+                d.borrow_mut().set(idx, val);
+                Ok(())
+            }
+            _ => Err(self.err(&format!("cannot index-assign {} with {}", obj.type_name(), idx.type_name()))),
+        }
+    }
+
+    fn get_slice(&self, obj: VmValue, start: VmValue, stop: VmValue) -> Result<VmValue, String> {
+        let to_opt = |v: VmValue| match v { VmValue::Nil => None, VmValue::Int(n) => Some(n), _ => None };
+        let s = to_opt(start);
+        let e = to_opt(stop);
+
+        match obj {
+            VmValue::List(v) => {
+                let v = v.borrow();
+                let len = v.len() as i64;
+                let start = resolve_slice_idx(s, len, 0);
+                let stop  = resolve_slice_idx(e, len, len);
+                let items = if start >= stop { vec![] } else { v[start as usize..stop as usize].to_vec() };
+                Ok(VmValue::List(Rc::new(RefCell::new(items))))
+            }
+            VmValue::Str(s_str) => {
+                let chars: Vec<char> = s_str.chars().collect();
+                let len = chars.len() as i64;
+                let start = resolve_slice_idx(s, len, 0);
+                let stop  = resolve_slice_idx(e, len, len);
+                let slice: String = if start >= stop { String::new() } else { chars[start as usize..stop as usize].iter().collect() };
+                Ok(VmValue::Str(slice))
+            }
+            VmValue::Tuple(t) => {
+                let len = t.len() as i64;
+                let start = resolve_slice_idx(s, len, 0);
+                let stop  = resolve_slice_idx(e, len, len);
+                let items = if start >= stop { vec![] } else { t[start as usize..stop as usize].to_vec() };
+                Ok(VmValue::Tuple(Rc::new(items)))
+            }
+            other => Err(self.err(&format!("cannot slice {}", other.type_name()))),
+        }
+    }
+
+    fn normalize_index(&self, i: i64, len: usize) -> Result<usize, String> {
+        let len = len as i64;
+        let i = if i < 0 { len + i } else { i };
+        if i < 0 || i >= len {
+            Err(self.err(&format!("index {} out of range (len {})", i, len)))
+        } else {
+            Ok(i as usize)
+        }
+    }
+
+    // ── Iterator construction ─────────────────────────────────────────────────
+
+    fn make_iter(&self, obj: VmValue) -> Result<VmIter, String> {
+        match obj {
+            VmValue::List(v) => Ok(VmIter::List { items: v, idx: 0 }),
+            VmValue::Tuple(t) => Ok(VmIter::Tuple { items: t, idx: 0 }),
+            VmValue::Str(s) => Ok(VmIter::Str { chars: s.chars().collect(), idx: 0 }),
+            VmValue::Dict(d) => Ok(VmIter::DictKeys { dict: d, idx: 0 }),
+            VmValue::Iter(it) => Ok(match Rc::try_unwrap(it) {
+                Ok(cell) => cell.into_inner(),
+                Err(rc) => {
+                    // Clone the iterator state.
+                    match &*rc.borrow() {
+                        VmIter::List { items, idx } => VmIter::List { items: items.clone(), idx: *idx },
+                        VmIter::Tuple { items, idx } => VmIter::Tuple { items: items.clone(), idx: *idx },
+                        VmIter::Str { chars, idx } => VmIter::Str { chars: chars.clone(), idx: *idx },
+                        VmIter::Range { current, stop, step } => VmIter::Range { current: *current, stop: *stop, step: *step },
+                        VmIter::DictKeys { dict, idx } => VmIter::DictKeys { dict: dict.clone(), idx: *idx },
+                    }
+                }
+            }),
+            other => Err(self.err(&format!("'{}' is not iterable", other.type_name()))),
+        }
+    }
+
+    fn to_iter_vec(&self, obj: VmValue) -> Result<Vec<VmValue>, String> {
+        match obj {
+            VmValue::List(v) => Ok(v.borrow().clone()),
+            VmValue::Tuple(t) => Ok(t.as_ref().clone()),
+            VmValue::Str(s) => Ok(s.chars().map(|c| VmValue::Str(c.to_string())).collect()),
+            VmValue::Dict(d) => Ok(d.borrow().keys.clone()),
+            other => Err(self.err(&format!("'{}' is not iterable", other.type_name()))),
+        }
+    }
+
+    // ── Arithmetic helpers ────────────────────────────────────────────────────
+
+    fn add(&self, l: VmValue, r: VmValue) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => Ok(VmValue::Int(a.wrapping_add(b))),
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a + b)),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(a as f64 + b)),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a + b as f64)),
+            (VmValue::Str(a), VmValue::Str(b)) => Ok(VmValue::Str(a + &b)),
+            (VmValue::List(a), VmValue::List(b)) => {
+                let mut v = a.borrow().clone();
+                v.extend_from_slice(&b.borrow());
+                Ok(VmValue::List(Rc::new(RefCell::new(v))))
+            }
+            // __add__ operator overload
+            (VmValue::Instance(inst), r) => {
+                if let Some(m) = self.find_method(&inst.class, "__add__") {
+                    let args = [VmValue::Instance(inst.clone()), r];
+                    // Can't call here due to &self, return error to signal; handled in Op::Add.
+                    let _ = args; let _ = m;
+                    Err(self.err("operator overloading requires mutable borrow; use call_value"))
+                } else {
+                    Err(self.err(&format!("unsupported operand types for +: instance and {}", "?")))
+                }
+            }
+            (l, r) => Err(self.err(&format!("cannot add {} and {}", l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn arith(&self, l: VmValue, r: VmValue, op: &str) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => Ok(VmValue::Int(match op {
+                "-" => a.wrapping_sub(b),
+                _ => unreachable!(),
+            })),
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(match op { "-" => a - b, _ => unreachable!() })),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(match op { "-" => a as f64 - b, _ => unreachable!() })),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(match op { "-" => a - b as f64, _ => unreachable!() })),
+            (l, r) => Err(self.err(&format!("cannot {} {} and {}", op, l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn mul(&self, l: VmValue, r: VmValue) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => Ok(VmValue::Int(a.wrapping_mul(b))),
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a * b)),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(a as f64 * b)),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a * b as f64)),
+            (VmValue::Str(s), VmValue::Int(n)) | (VmValue::Int(n), VmValue::Str(s)) => {
+                Ok(VmValue::Str(s.repeat(n.max(0) as usize)))
+            }
+            (VmValue::List(v), VmValue::Int(n)) => {
+                let v = v.borrow();
+                let mut result = Vec::new();
+                for _ in 0..n.max(0) { result.extend_from_slice(&v); }
+                Ok(VmValue::List(Rc::new(RefCell::new(result))))
+            }
+            (l, r) => Err(self.err(&format!("cannot multiply {} and {}", l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn div(&self, l: VmValue, r: VmValue) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => {
+                if b == 0 { return Err(self.err("division by zero")); }
+                Ok(VmValue::Float(a as f64 / b as f64))
+            }
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a / b)),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(a as f64 / b)),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a / b as f64)),
+            (l, r) => Err(self.err(&format!("cannot divide {} and {}", l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn modulo(&self, l: VmValue, r: VmValue) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => {
+                if b == 0 { return Err(self.err("modulo by zero")); }
+                Ok(VmValue::Int(a.rem_euclid(b)))
+            }
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a % b)),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(a as f64 % b)),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a % b as f64)),
+            (VmValue::Str(fmt_str), r) => self.str_format(&fmt_str, r),
+            (l, r) => Err(self.err(&format!("cannot mod {} and {}", l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn pow(&self, l: VmValue, r: VmValue) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => {
+                if b >= 0 { Ok(VmValue::Int(a.pow(b as u32))) }
+                else { Ok(VmValue::Float((a as f64).powi(b as i32))) }
+            }
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a.powf(b))),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float((a as f64).powf(b))),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a.powi(b as i32))),
+            (l, r) => Err(self.err(&format!("cannot pow {} and {}", l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn floor_div(&self, l: VmValue, r: VmValue) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => {
+                if b == 0 { return Err(self.err("floor division by zero")); }
+                Ok(VmValue::Int(a.div_euclid(b)))
+            }
+            (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float((a / b).floor())),
+            (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float((a as f64 / b).floor())),
+            (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float((a / b as f64).floor())),
+            (l, r) => Err(self.err(&format!("cannot floor-div {} and {}", l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn cmp_op(&self, l: VmValue, r: VmValue, op: &str) -> Result<VmValue, String> {
+        let result = match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => match op {
+                "<" => a < b, "<=" => a <= b, ">" => a > b, ">=" => a >= b, _ => unreachable!()
+            },
+            (VmValue::Float(a), VmValue::Float(b)) => match op {
+                "<" => a < b, "<=" => a <= b, ">" => a > b, ">=" => a >= b, _ => unreachable!()
+            },
+            (VmValue::Int(a), VmValue::Float(b)) => match op {
+                "<" => (a as f64) < b, "<=" => (a as f64) <= b,
+                ">" => (a as f64) > b, ">=" => (a as f64) >= b, _ => unreachable!()
+            },
+            (VmValue::Float(a), VmValue::Int(b)) => match op {
+                "<" => a < b as f64, "<=" => a <= b as f64,
+                ">" => a > b as f64, ">=" => a >= b as f64, _ => unreachable!()
+            },
+            (VmValue::Str(a), VmValue::Str(b)) => match op {
+                "<" => a < b, "<=" => a <= b, ">" => a > b, ">=" => a >= b, _ => unreachable!()
+            },
+            (l, r) => return Err(self.err(&format!("cannot compare {} and {}", l.type_name(), r.type_name()))),
+        };
+        Ok(VmValue::Bool(result))
+    }
+
+    fn bitop(&self, l: VmValue, r: VmValue, op: &str) -> Result<VmValue, String> {
+        match (l, r) {
+            (VmValue::Int(a), VmValue::Int(b)) => Ok(VmValue::Int(match op {
+                "&" => a & b, "|" => a | b, "^" => a ^ b,
+                "<<" => a << (b as u32), ">>" => a >> (b as u32),
+                _ => unreachable!()
+            })),
+            (l, r) => Err(self.err(&format!("bitwise {} requires ints, got {} and {}", op, l.type_name(), r.type_name()))),
+        }
+    }
+
+    fn contains(&self, container: &VmValue, item: &VmValue) -> Result<bool, String> {
+        match container {
+            VmValue::List(v) => Ok(v.borrow().iter().any(|x| vm_eq(x, item))),
+            VmValue::Tuple(t) => Ok(t.iter().any(|x| vm_eq(x, item))),
+            VmValue::Str(s) => {
+                if let VmValue::Str(sub) = item {
+                    Ok(s.contains(sub.as_str()))
+                } else { Err(self.err("'in' on str requires str")) }
+            }
+            VmValue::Dict(d) => Ok(d.borrow().contains(item)),
+            other => Err(self.err(&format!("'in' not supported for {}", other.type_name()))),
+        }
+    }
+
+    fn str_format(&self, fmt: &str, arg: VmValue) -> Result<VmValue, String> {
+        // Simple %s / %d / %f formatting.
+        let replacement = arg.to_string();
+        Ok(VmValue::Str(fmt.replacen("%s", &replacement, 1)
+            .replacen("%d", &replacement, 1)
+            .replacen("%f", &replacement, 1)))
+    }
+
+    // ── Built-in methods on primitive types ───────────────────────────────────
+
+    fn list_method(&self, receiver: VmValue, _list: Rc<RefCell<Vec<VmValue>>>, name: &str) -> Result<VmValue, String> {
+        match name {
+            "append" | "pop" | "sort" | "reverse" | "extend" |
+            "insert" | "remove" | "index" | "count" | "clear" | "copy" => {
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("list.{}", name)))
+            }
+            _ => Err(self.err(&format!("list has no method '{}'", name))),
+        }
+    }
+
+    fn str_method(&self, receiver: VmValue, s: String, name: &str) -> Result<VmValue, String> {
+        match name {
+            "upper" | "lower" | "strip" | "lstrip" | "rstrip" | "split" |
+            "replace" | "find" | "count" | "startswith" | "endswith" |
+            "join" | "format" | "title" | "capitalize" | "encode" |
+            "isdigit" | "isalpha" | "isspace" | "zfill" => {
+                // Embed the string value in the builtin name so we can recover it at call time.
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("str.{}:{}", name, s)))
+            }
+            _ => Err(self.err(&format!("str has no method '{}'", name))),
+        }
+    }
+
+    fn dict_method(&self, receiver: VmValue, _dict: Rc<RefCell<VmDict>>, name: &str) -> Result<VmValue, String> {
+        match name {
+            "keys" | "values" | "items" | "get" | "pop" | "update" | "clear" | "copy" => {
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("dict.{}", name)))
+            }
+            _ => Err(self.err(&format!("dict has no method '{}'", name))),
+        }
+    }
+
+    fn file_method(&self, receiver: VmValue, _fh: Rc<RefCell<VmFile>>, name: &str) -> Result<VmValue, String> {
+        match name {
+            "read" | "readline" | "readlines" | "write" | "close" | "seek" | "tell" => {
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("file.{}", name)))
+            }
+            _ => Err(self.err(&format!("file has no method '{}'", name))),
+        }
+    }
+
+    // ── Built-in function dispatch ────────────────────────────────────────────
+
+    fn call_builtin(&mut self, name: &str, args: &[VmValue], kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        // Handle namespaced method builtins first.
+        if let Some(rest) = name.strip_prefix("list.") {
+            return self.call_list_method(rest, args, kwargs);
+        }
+        if let Some(rest) = name.strip_prefix("dict.") {
+            return self.call_dict_method(rest, args, kwargs);
+        }
+        if let Some(rest) = name.strip_prefix("str.") {
+            return self.call_str_method(rest, args, kwargs);
+        }
+        if let Some(rest) = name.strip_prefix("file.") {
+            return self.call_file_method(rest, args, kwargs);
+        }
+
+        match name {
+            "print" => {
+                let sep = kwargs.iter().find(|(k,_)| k == "sep").map(|(_,v)| v.to_string()).unwrap_or_else(|| " ".to_string());
+                let end = kwargs.iter().find(|(k,_)| k == "end").map(|(_,v)| v.to_string()).unwrap_or_else(|| "\n".to_string());
+                let s: Vec<String> = args.iter().map(|v| v.to_string()).collect();
+                print!("{}{}", s.join(&sep), end);
+                use std::io::Write;
+                std::io::stdout().flush().ok();
+                Ok(VmValue::Nil)
+            }
+            "len" => {
+                let v = args.first().ok_or_else(|| self.err("len() requires 1 argument"))?;
+                Ok(VmValue::Int(self.vm_len(v)? as i64))
+            }
+            "range" => {
+                match args {
+                    [VmValue::Int(stop)] => {
+                        let items: Vec<VmValue> = (0..*stop).map(VmValue::Int).collect();
+                        Ok(VmValue::List(Rc::new(RefCell::new(items))))
+                    }
+                    [VmValue::Int(start), VmValue::Int(stop)] => {
+                        let items: Vec<VmValue> = (*start..*stop).map(VmValue::Int).collect();
+                        Ok(VmValue::List(Rc::new(RefCell::new(items))))
+                    }
+                    [VmValue::Int(start), VmValue::Int(stop), VmValue::Int(step)] => {
+                        let mut items = Vec::new();
+                        let mut i = *start;
+                        while if *step > 0 { i < *stop } else { i > *stop } {
+                            items.push(VmValue::Int(i));
+                            i += step;
+                        }
+                        Ok(VmValue::List(Rc::new(RefCell::new(items))))
+                    }
+                    _ => Err(self.err("range() requires 1–3 int arguments")),
+                }
+            }
+            "str" => {
+                let v = args.first().unwrap_or(&VmValue::Nil).clone();
+                // Call __str__ if the object has one.
+                if let VmValue::Instance(ref inst) = v {
+                    if let Some(m) = self.find_method(&inst.class, "__str__") {
+                        let result = self.call_closure(m, &[v.clone()], &[])?;
+                        return Ok(result);
+                    }
+                }
+                Ok(VmValue::Str(v.to_string()))
+            }
+            "int" => {
+                let v = args.first().ok_or_else(|| self.err("int() requires 1 argument"))?;
+                match v {
+                    VmValue::Int(n) => Ok(VmValue::Int(*n)),
+                    VmValue::Float(f) => Ok(VmValue::Int(*f as i64)),
+                    VmValue::Bool(b) => Ok(VmValue::Int(if *b { 1 } else { 0 })),
+                    VmValue::Str(s) => {
+                        let s = s.trim();
+                        if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                            i64::from_str_radix(hex, 16).map(VmValue::Int).map_err(|_| self.err(&format!("invalid int: '{}'", s)))
+                        } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+                            i64::from_str_radix(bin, 2).map(VmValue::Int).map_err(|_| self.err(&format!("invalid int: '{}'", s)))
+                        } else {
+                            s.parse::<i64>().map(VmValue::Int).map_err(|_| self.err(&format!("invalid int: '{}'", s)))
+                        }
+                    }
+                    other => Err(self.err(&format!("cannot convert {} to int", other.type_name()))),
+                }
+            }
+            "float" => {
+                let v = args.first().ok_or_else(|| self.err("float() requires 1 argument"))?;
+                match v {
+                    VmValue::Float(f) => Ok(VmValue::Float(*f)),
+                    VmValue::Int(n) => Ok(VmValue::Float(*n as f64)),
+                    VmValue::Str(s) => s.trim().parse::<f64>().map(VmValue::Float).map_err(|_| self.err(&format!("invalid float: '{}'", s))),
+                    other => Err(self.err(&format!("cannot convert {} to float", other.type_name()))),
+                }
+            }
+            "bool" => {
+                let v = args.first().unwrap_or(&VmValue::Nil);
+                Ok(VmValue::Bool(v.is_truthy()))
+            }
+            "type" => {
+                let v = args.first().unwrap_or(&VmValue::Nil);
+                Ok(VmValue::Str(v.type_name().to_string()))
+            }
+            "repr" => {
+                let v = args.first().unwrap_or(&VmValue::Nil);
+                Ok(VmValue::Str(vm_repr(v)))
+            }
+            "abs" => {
+                match args.first() {
+                    Some(VmValue::Int(n)) => Ok(VmValue::Int(n.abs())),
+                    Some(VmValue::Float(f)) => Ok(VmValue::Float(f.abs())),
+                    _ => Err(self.err("abs() requires a number")),
+                }
+            }
+            "min" => self.builtin_min_max(args, false),
+            "max" => self.builtin_min_max(args, true),
+            "sum" => {
+                let items = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    Some(VmValue::Tuple(t)) => t.as_ref().clone(),
+                    _ => return Err(self.err("sum() requires a list")),
+                };
+                let mut total: i64 = 0;
+                let mut ftotal: f64 = 0.0;
+                let mut is_float = false;
+                for item in &items {
+                    match item {
+                        VmValue::Int(n) => { total += n; ftotal += *n as f64; }
+                        VmValue::Float(f) => { ftotal += f; is_float = true; }
+                        _ => return Err(self.err("sum() requires a list of numbers")),
+                    }
+                }
+                if is_float { Ok(VmValue::Float(ftotal)) } else { Ok(VmValue::Int(total)) }
+            }
+            "sorted" => {
+                let items = match args.first() {
+                    Some(v) => self.to_iter_vec(v.clone())?,
+                    None => return Err(self.err("sorted() requires an argument")),
+                };
+                let mut v = items;
+                let reverse = kwargs.iter().find(|(k,_)| k == "reverse").map(|(_,v)| v.is_truthy()).unwrap_or(false);
+                v.sort_by(|a, b| vm_cmp_order(a, b));
+                if reverse { v.reverse(); }
+                Ok(VmValue::List(Rc::new(RefCell::new(v))))
+            }
+            "reversed" => {
+                let items = self.to_iter_vec(args.first().cloned().ok_or_else(|| self.err("reversed() requires an argument"))?)?;
+                let mut v = items;
+                v.reverse();
+                Ok(VmValue::List(Rc::new(RefCell::new(v))))
+            }
+            "enumerate" => {
+                let items = self.to_iter_vec(args.first().cloned().ok_or_else(|| self.err("enumerate() requires an argument"))?)?;
+                let start = if let Some(VmValue::Int(n)) = args.get(1) { *n } else { 0 };
+                let result: Vec<VmValue> = items.into_iter().enumerate()
+                    .map(|(i, v)| VmValue::Tuple(Rc::new(vec![VmValue::Int(start + i as i64), v])))
+                    .collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(result))))
+            }
+            "zip" => {
+                if args.is_empty() { return Ok(VmValue::List(Rc::new(RefCell::new(vec![])))); }
+                let iters: Result<Vec<Vec<VmValue>>, String> = args.iter().map(|a| self.to_iter_vec(a.clone())).collect();
+                let iters = iters?;
+                let len = iters.iter().map(|v| v.len()).min().unwrap_or(0);
+                let result: Vec<VmValue> = (0..len)
+                    .map(|i| VmValue::Tuple(Rc::new(iters.iter().map(|v| v[i].clone()).collect())))
+                    .collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(result))))
+            }
+            "map" => {
+                let func = args.first().cloned().ok_or_else(|| self.err("map() requires a function"))?;
+                let items = self.to_iter_vec(args.get(1).cloned().ok_or_else(|| self.err("map() requires an iterable"))?)?;
+                let mut result = Vec::new();
+                for item in items {
+                    let v = self.call_value_direct(func.clone(), &[item], &[])?;
+                    result.push(v);
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(result))))
+            }
+            "filter" => {
+                let func = args.first().cloned().ok_or_else(|| self.err("filter() requires a function"))?;
+                let items = self.to_iter_vec(args.get(1).cloned().ok_or_else(|| self.err("filter() requires an iterable"))?)?;
+                let mut result = Vec::new();
+                for item in items {
+                    let v = self.call_value_direct(func.clone(), &[item.clone()], &[])?;
+                    if v.is_truthy() { result.push(item); }
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(result))))
+            }
+            "isinstance" => {
+                let obj = args.first().ok_or_else(|| self.err("isinstance() requires 2 args"))?;
+                let cls = args.get(1).ok_or_else(|| self.err("isinstance() requires 2 args"))?;
+                match (obj, cls) {
+                    (VmValue::Instance(inst), VmValue::Class(c)) => {
+                        Ok(VmValue::Bool(self.is_instance_of(&inst.class, c)))
+                    }
+                    _ => Ok(VmValue::Bool(false)),
+                }
+            }
+            "hasattr" => {
+                let obj = args.first().cloned().ok_or_else(|| self.err("hasattr() requires 2 args"))?;
+                let attr = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("hasattr() attribute must be a string")),
+                };
+                Ok(VmValue::Bool(self.get_attr(obj, &attr).is_ok()))
+            }
+            "getattr" => {
+                let obj = args.first().cloned().ok_or_else(|| self.err("getattr() requires 2 args"))?;
+                let attr = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("getattr() attribute must be a string")),
+                };
+                match (self.get_attr(obj, &attr), args.get(2)) {
+                    (Ok(v), _) => Ok(v),
+                    (Err(_), Some(default)) => Ok(default.clone()),
+                    (Err(e), None) => Err(e),
+                }
+            }
+            "list" => {
+                match args.first() {
+                    None => Ok(VmValue::List(Rc::new(RefCell::new(vec![])))),
+                    Some(v) => {
+                        let items = self.to_iter_vec(v.clone())?;
+                        Ok(VmValue::List(Rc::new(RefCell::new(items))))
+                    }
+                }
+            }
+            "tuple" => {
+                match args.first() {
+                    None => Ok(VmValue::Tuple(Rc::new(vec![]))),
+                    Some(v) => {
+                        let items = self.to_iter_vec(v.clone())?;
+                        Ok(VmValue::Tuple(Rc::new(items)))
+                    }
+                }
+            }
+            "dict" => {
+                let d = VmDict::new();
+                Ok(VmValue::Dict(Rc::new(RefCell::new(d))))
+            }
+            "set" => {
+                // Return a list with unique items (set is not fully implemented).
+                let items = match args.first() {
+                    None => vec![],
+                    Some(v) => self.to_iter_vec(v.clone())?,
+                };
+                let mut unique: Vec<VmValue> = Vec::new();
+                for item in items {
+                    if !unique.iter().any(|x| vm_eq(x, &item)) {
+                        unique.push(item);
+                    }
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(unique))))
+            }
+            "input" => {
+                use std::io::{self, Write, BufRead};
+                let prompt = args.first().map(|v| v.to_string()).unwrap_or_default();
+                print!("{}", prompt);
+                io::stdout().flush().ok();
+                let mut line = String::new();
+                io::stdin().lock().read_line(&mut line).ok();
+                Ok(VmValue::Str(line.trim_end_matches('\n').trim_end_matches('\r').to_string()))
+            }
+            "exit" => {
+                let code = match args.first() { Some(VmValue::Int(n)) => *n as i32, _ => 0 };
+                std::process::exit(code);
+            }
+            "open" => {
+                let path = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("open() requires a path string")),
+                };
+                let mode = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    None => "r".to_string(),
+                    _ => return Err(self.err("open() mode must be a string")),
+                };
+                let full_path = self.source_dir.join(&path);
+                match mode.as_str() {
+                    "r" | "r+" => {
+                        let content = std::fs::read_to_string(&full_path)
+                            .map_err(|e| self.err(&format!("open '{}': {}", path, e)))?;
+                        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                        Ok(VmValue::File(Rc::new(RefCell::new(VmFile {
+                            path, mode, content: lines, line_pos: 0, write_buf: String::new(), closed: false,
+                        }))))
+                    }
+                    "w" | "a" | "w+" | "a+" => {
+                        Ok(VmValue::File(Rc::new(RefCell::new(VmFile {
+                            path, mode, content: vec![], line_pos: 0, write_buf: String::new(), closed: false,
+                        }))))
+                    }
+                    _ => Err(self.err(&format!("unsupported file mode '{}'", mode))),
+                }
+            }
+            "super" => {
+                // super() returns a Super value for the current instance.
+                // Look up `self` in the current frame.
+                let self_val = self.stack.get(self.frames.last().map(|f| f.base).unwrap_or(0)).cloned().unwrap_or(VmValue::Nil);
+                match self_val {
+                    VmValue::Instance(inst) => {
+                        let parent = inst.class.parent.clone().ok_or_else(|| self.err("class has no parent"))?;
+                        Ok(VmValue::Super(Rc::new(VmSuper { instance: inst, parent })))
+                    }
+                    _ => Err(self.err("super() called outside of method")),
+                }
+            }
+            "runfile" => {
+                let path = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("runfile() requires a path string")),
+                };
+                self.run_file(&path)
+            }
+            "__import_module__" => {
+                let module_name = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("__import_module__ requires a string")),
+                };
+                self.import_module(&module_name)
+            }
+            "__exc_matches__" => {
+                // Check if an exception matches a type.
+                let exc = args.first().ok_or_else(|| self.err("__exc_matches__ requires 2 args"))?;
+                let type_val = args.get(1).ok_or_else(|| self.err("__exc_matches__ requires 2 args"))?;
+                let result = match (exc, type_val) {
+                    (VmValue::Instance(inst), VmValue::Class(cls)) => self.is_instance_of(&inst.class, cls),
+                    (VmValue::Str(_), VmValue::Class(cls)) => cls.name == "Exception" || cls.name == "ValueError" || cls.name == "TypeError",
+                    (_, VmValue::Class(cls)) => cls.name == "Exception",
+                    _ => false,
+                };
+                Ok(VmValue::Bool(result))
+            }
+            "set_completions" => Ok(VmValue::Nil),
+            "eval" => {
+                let src = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("eval() requires a string")),
+                };
+                self.eval_source(&src)
+            }
+            // ── math module ──────────────────────────────────────────────────
+            _ if name.starts_with("math.") => {
+                let fname = &name[5..];
+                let n = match args.first() {
+                    Some(VmValue::Int(i)) => *i as f64,
+                    Some(VmValue::Float(f)) => *f,
+                    _ if fname == "gcd" || fname == "lcm" || fname == "atan2" || fname == "hypot" || fname == "pow" => 0.0,
+                    _ => return Err(self.err(&format!("math.{}() requires a number", fname))),
+                };
+                match fname {
+                    "sqrt"    => Ok(VmValue::Float(n.sqrt())),
+                    "floor"   => Ok(VmValue::Int(n.floor() as i64)),
+                    "ceil"    => Ok(VmValue::Int(n.ceil() as i64)),
+                    "trunc"   => Ok(VmValue::Int(n.trunc() as i64)),
+                    "abs"     => Ok(VmValue::Float(n.abs())),
+                    "exp"     => Ok(VmValue::Float(n.exp())),
+                    "exp2"    => Ok(VmValue::Float(n.exp2())),
+                    "sin"     => Ok(VmValue::Float(n.sin())),
+                    "cos"     => Ok(VmValue::Float(n.cos())),
+                    "tan"     => Ok(VmValue::Float(n.tan())),
+                    "asin"    => Ok(VmValue::Float(n.asin())),
+                    "acos"    => Ok(VmValue::Float(n.acos())),
+                    "atan"    => Ok(VmValue::Float(n.atan())),
+                    "sinh"    => Ok(VmValue::Float(n.sinh())),
+                    "cosh"    => Ok(VmValue::Float(n.cosh())),
+                    "tanh"    => Ok(VmValue::Float(n.tanh())),
+                    "degrees" => Ok(VmValue::Float(n.to_degrees())),
+                    "radians" => Ok(VmValue::Float(n.to_radians())),
+                    "isnan"   => Ok(VmValue::Bool(n.is_nan())),
+                    "isinf"   => Ok(VmValue::Bool(n.is_infinite())),
+                    "isfinite"=> Ok(VmValue::Bool(n.is_finite())),
+                    "log"     => {
+                        if args.len() >= 2 {
+                            let base = match &args[1] {
+                                VmValue::Int(i) => *i as f64,
+                                VmValue::Float(f) => *f,
+                                _ => return Err(self.err("math.log base must be a number")),
+                            };
+                            Ok(VmValue::Float(n.log(base)))
+                        } else {
+                            Ok(VmValue::Float(n.ln()))
+                        }
+                    }
+                    "log2"    => Ok(VmValue::Float(n.log2())),
+                    "log10"   => Ok(VmValue::Float(n.log10())),
+                    "atan2"   => {
+                        let y = n;
+                        let x = match args.get(1) {
+                            Some(VmValue::Int(i)) => *i as f64,
+                            Some(VmValue::Float(f)) => *f,
+                            _ => return Err(self.err("math.atan2 requires two numbers")),
+                        };
+                        Ok(VmValue::Float(y.atan2(x)))
+                    }
+                    "pow"     => {
+                        let exp = match args.get(1) {
+                            Some(VmValue::Int(i)) => *i as f64,
+                            Some(VmValue::Float(f)) => *f,
+                            _ => return Err(self.err("math.pow requires two numbers")),
+                        };
+                        Ok(VmValue::Float(n.powf(exp)))
+                    }
+                    "hypot"   => {
+                        let b = match args.get(1) {
+                            Some(VmValue::Int(i)) => *i as f64,
+                            Some(VmValue::Float(f)) => *f,
+                            _ => return Err(self.err("math.hypot requires two numbers")),
+                        };
+                        Ok(VmValue::Float(n.hypot(b)))
+                    }
+                    "gcd"     => {
+                        let a = match args.first() { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("math.gcd requires ints")) };
+                        let b = match args.get(1) { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("math.gcd requires ints")) };
+                        fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a.abs() } else { gcd(b, a % b) } }
+                        Ok(VmValue::Int(gcd(a, b)))
+                    }
+                    "lcm"     => {
+                        let a = match args.first() { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("math.lcm requires ints")) };
+                        let b = match args.get(1) { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("math.lcm requires ints")) };
+                        fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a.abs() } else { gcd(b, a % b) } }
+                        Ok(VmValue::Int(if a == 0 || b == 0 { 0 } else { (a / gcd(a, b)) * b }))
+                    }
+                    "factorial" => {
+                        let n = match args.first() { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("math.factorial requires int")) };
+                        if n < 0 { return Err(self.err("math.factorial: negative argument")); }
+                        Ok(VmValue::Int((1..=n).product()))
+                    }
+                    _ => Err(self.err(&format!("unknown math function '{}'", fname))),
+                }
+            }
+            // ── os module ────────────────────────────────────────────────────
+            _ if name.starts_with("os.") => {
+                let fname = &name[3..];
+                match fname {
+                    "getcwd" => Ok(VmValue::Str(std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default())),
+                    "listdir" => {
+                        let path = match args.first() {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => ".".to_string(),
+                        };
+                        let entries: Vec<VmValue> = std::fs::read_dir(&path)
+                            .map_err(|e| self.err(&e.to_string()))?
+                            .filter_map(|e| e.ok())
+                            .map(|e| VmValue::Str(e.file_name().to_string_lossy().to_string()))
+                            .collect();
+                        Ok(VmValue::List(Rc::new(RefCell::new(entries))))
+                    }
+                    "mkdir" => {
+                        let path = match args.first() { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("os.mkdir requires a string")) };
+                        std::fs::create_dir_all(&path).map_err(|e| self.err(&e.to_string()))?;
+                        Ok(VmValue::Nil)
+                    }
+                    "remove" => {
+                        let path = match args.first() { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("os.remove requires a string")) };
+                        std::fs::remove_file(&path).map_err(|e| self.err(&e.to_string()))?;
+                        Ok(VmValue::Nil)
+                    }
+                    "rename" => {
+                        let src = match args.first() { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("os.rename requires strings")) };
+                        let dst = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("os.rename requires two strings")) };
+                        std::fs::rename(&src, &dst).map_err(|e| self.err(&e.to_string()))?;
+                        Ok(VmValue::Nil)
+                    }
+                    "exists" => {
+                        let path = match args.first() { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("os.exists requires a string")) };
+                        Ok(VmValue::Bool(std::path::Path::new(&path).exists()))
+                    }
+                    "join" | "path" => {
+                        let parts: Vec<String> = args.iter().map(|v| v.to_string()).collect();
+                        Ok(VmValue::Str(parts.join("/")))
+                    }
+                    _ => Err(self.err(&format!("unknown os function '{}'", fname))),
+                }
+            }
+            // ── time module ──────────────────────────────────────────────────
+            _ if name.starts_with("time.") => {
+                let fname = &name[5..];
+                match fname {
+                    "time" => {
+                        use std::time::{SystemTime, UNIX_EPOCH};
+                        let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+                        Ok(VmValue::Float(t))
+                    }
+                    "monotonic" => {
+                        // Use a fixed epoch based on program start isn't available; use system time
+                        use std::time::{SystemTime, UNIX_EPOCH};
+                        let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+                        Ok(VmValue::Float(t))
+                    }
+                    "sleep" => {
+                        let secs = match args.first() {
+                            Some(VmValue::Int(i)) => *i as f64,
+                            Some(VmValue::Float(f)) => *f,
+                            _ => return Err(self.err("time.sleep requires a number")),
+                        };
+                        std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                        Ok(VmValue::Nil)
+                    }
+                    _ => Err(self.err(&format!("unknown time function '{}'", fname))),
+                }
+            }
+            // ── random module ────────────────────────────────────────────────
+            _ if name.starts_with("random.") => {
+                let fname = &name[7..];
+                match fname {
+                    "random" => Ok(VmValue::Float(self.rng_next_f64())),
+                    "seed"   => { /* ignore seed in VM */ Ok(VmValue::Nil) }
+                    "randint" => {
+                        let a = match args.first() { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("random.randint requires ints")) };
+                        let b = match args.get(1) { Some(VmValue::Int(i)) => *i, _ => return Err(self.err("random.randint requires two ints")) };
+                        let range = (b - a + 1).max(1) as u64;
+                        Ok(VmValue::Int(a + (self.rng_next_u64() % range) as i64))
+                    }
+                    "choice" => {
+                        let lst = match args.first() {
+                            Some(VmValue::List(v)) => v.borrow().clone(),
+                            Some(VmValue::Tuple(t)) => t.as_ref().clone(),
+                            _ => return Err(self.err("random.choice requires a sequence")),
+                        };
+                        if lst.is_empty() { return Err(self.err("random.choice: empty sequence")); }
+                        let idx = (self.rng_next_u64() as usize) % lst.len();
+                        Ok(lst[idx].clone())
+                    }
+                    "shuffle" => {
+                        let lst = match args.first() { Some(VmValue::List(v)) => v.clone(), _ => return Err(self.err("random.shuffle requires a list")) };
+                        let mut v = lst.borrow_mut();
+                        for i in (1..v.len()).rev() {
+                            let j = (self.rng_next_u64() as usize) % (i + 1);
+                            v.swap(i, j);
+                        }
+                        Ok(VmValue::Nil)
+                    }
+                    "uniform" => {
+                        let a = match args.first() { Some(VmValue::Int(i)) => *i as f64, Some(VmValue::Float(f)) => *f, _ => return Err(self.err("random.uniform requires numbers")) };
+                        let b = match args.get(1) { Some(VmValue::Int(i)) => *i as f64, Some(VmValue::Float(f)) => *f, _ => return Err(self.err("random.uniform requires two numbers")) };
+                        Ok(VmValue::Float(a + self.rng_next_f64() * (b - a)))
+                    }
+                    _ => Err(self.err(&format!("unknown random function '{}'", fname))),
+                }
+            }
+            // ── json module ──────────────────────────────────────────────────
+            _ if name.starts_with("json.") => {
+                let fname = &name[5..];
+                match fname {
+                    "loads" => {
+                        let s = match args.first() { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("json.loads requires a string")) };
+                        self.json_loads(&s)
+                    }
+                    "dumps" => {
+                        let v = match args.first() { Some(v) => v.clone(), _ => return Err(self.err("json.dumps requires a value")) };
+                        Ok(VmValue::Str(self.json_dumps(&v)))
+                    }
+                    _ => Err(self.err(&format!("unknown json function '{}'", fname))),
+                }
+            }
+            // ── re module ────────────────────────────────────────────────────
+            _ if name.starts_with("re.") => {
+                let fname = &name[3..];
+                let pattern = match args.first() { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err(&format!("re.{}() first arg must be string", fname))) };
+                let text = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err(&format!("re.{}() second arg must be string", fname))) };
+                use regex::Regex;
+                let re = Regex::new(&pattern).map_err(|e| self.err(&e.to_string()))?;
+                match fname {
+                    "match"     => Ok(VmValue::Bool(re.find(&text).map(|m| m.start() == 0).unwrap_or(false))),
+                    "search"    => Ok(VmValue::Bool(re.is_match(&text))),
+                    "fullmatch" => Ok(VmValue::Bool(re.find(&text).map(|m| m.start() == 0 && m.end() == text.len()).unwrap_or(false))),
+                    "findall"   => {
+                        let results: Vec<VmValue> = re.find_iter(&text).map(|m| VmValue::Str(m.as_str().to_string())).collect();
+                        Ok(VmValue::List(Rc::new(RefCell::new(results))))
+                    }
+                    "sub"       => {
+                        let repl = match args.get(2) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("re.sub requires 3 args")) };
+                        Ok(VmValue::Str(re.replace_all(&text, repl.as_str()).to_string()))
+                    }
+                    "split"     => {
+                        let parts: Vec<VmValue> = re.split(&text).map(|s| VmValue::Str(s.to_string())).collect();
+                        Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+                    }
+                    _ => Err(self.err(&format!("unknown re function '{}'", fname))),
+                }
+            }
+            _ => Err(self.err(&format!("unknown builtin '{}'", name))),
+        }
+    }
+
+    // ── List method dispatch ──────────────────────────────────────────────────
+
+    fn call_list_method(&mut self, method: &str, args: &[VmValue], _kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        // args[0] is the list (self).
+        let list = match args.first() {
+            Some(VmValue::List(v)) => v.clone(),
+            _ => return Err(self.err(&format!("list.{}() requires a list", method))),
+        };
+        match method {
+            "append" => {
+                let item = args.get(1).cloned().unwrap_or(VmValue::Nil);
+                list.borrow_mut().push(item);
+                Ok(VmValue::Nil)
+            }
+            "pop" => {
+                let idx = match args.get(1) {
+                    Some(VmValue::Int(i)) => {
+                        let len = list.borrow().len() as i64;
+                        let i = if *i < 0 { len + i } else { *i };
+                        Some(i as usize)
+                    }
+                    None => None,
+                    _ => return Err(self.err("list.pop() index must be an int")),
+                };
+                let mut v = list.borrow_mut();
+                if v.is_empty() { return Err(self.err("pop from empty list")); }
+                let remove_idx = idx.unwrap_or(v.len() - 1);
+                Ok(v.remove(remove_idx))
+            }
+            "sort" => {
+                list.borrow_mut().sort_by(|a, b| vm_cmp_order(a, b));
+                Ok(VmValue::Nil)
+            }
+            "reverse" => {
+                list.borrow_mut().reverse();
+                Ok(VmValue::Nil)
+            }
+            "extend" => {
+                let items = self.to_iter_vec(args.get(1).cloned().unwrap_or(VmValue::Nil))?;
+                list.borrow_mut().extend(items);
+                Ok(VmValue::Nil)
+            }
+            "insert" => {
+                let idx = match args.get(1) { Some(VmValue::Int(i)) => *i as usize, _ => return Err(self.err("insert() idx must be int")) };
+                let val = args.get(2).cloned().unwrap_or(VmValue::Nil);
+                let mut v = list.borrow_mut();
+                let idx = idx.min(v.len());
+                v.insert(idx, val);
+                Ok(VmValue::Nil)
+            }
+            "remove" => {
+                let target = args.get(1).ok_or_else(|| self.err("remove() requires a value"))?;
+                let mut v = list.borrow_mut();
+                let pos = v.iter().position(|x| vm_eq(x, target)).ok_or_else(|| self.err("value not in list"))?;
+                v.remove(pos);
+                Ok(VmValue::Nil)
+            }
+            "index" => {
+                let target = args.get(1).ok_or_else(|| self.err("index() requires a value"))?;
+                let v = list.borrow();
+                let pos = v.iter().position(|x| vm_eq(x, target)).ok_or_else(|| self.err("value not in list"))?;
+                Ok(VmValue::Int(pos as i64))
+            }
+            "count" => {
+                let target = args.get(1).ok_or_else(|| self.err("count() requires a value"))?;
+                let v = list.borrow();
+                Ok(VmValue::Int(v.iter().filter(|x| vm_eq(x, target)).count() as i64))
+            }
+            "clear" => { list.borrow_mut().clear(); Ok(VmValue::Nil) }
+            "copy" => {
+                let v = list.borrow().clone();
+                Ok(VmValue::List(Rc::new(RefCell::new(v))))
+            }
+            _ => Err(self.err(&format!("list has no method '{}'", method))),
+        }
+    }
+
+    // ── Dict method dispatch ──────────────────────────────────────────────────
+
+    fn call_dict_method(&mut self, method: &str, args: &[VmValue], _kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        let dict = match args.first() {
+            Some(VmValue::Dict(d)) => d.clone(),
+            _ => return Err(self.err(&format!("dict.{}() requires a dict", method))),
+        };
+        match method {
+            "keys" => Ok(VmValue::List(Rc::new(RefCell::new(dict.borrow().keys.clone())))),
+            "values" => Ok(VmValue::List(Rc::new(RefCell::new(dict.borrow().vals.clone())))),
+            "items" => {
+                let d = dict.borrow();
+                let items: Vec<VmValue> = d.keys.iter().zip(d.vals.iter())
+                    .map(|(k, v)| VmValue::Tuple(Rc::new(vec![k.clone(), v.clone()])))
+                    .collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(items))))
+            }
+            "get" => {
+                let key = args.get(1).ok_or_else(|| self.err("dict.get() requires a key"))?;
+                let default = args.get(2).cloned().unwrap_or(VmValue::Nil);
+                Ok(dict.borrow().get(key).unwrap_or(default))
+            }
+            "pop" => {
+                let key = args.get(1).ok_or_else(|| self.err("dict.pop() requires a key"))?;
+                let default = args.get(2).cloned();
+                match dict.borrow().get(key) {
+                    Some(v) => { dict.borrow_mut().remove(key); Ok(v) }
+                    None => default.ok_or_else(|| self.err("key not found")),
+                }
+            }
+            "update" => {
+                if let Some(VmValue::Dict(other)) = args.get(1) {
+                    let pairs: Vec<_> = other.borrow().keys.iter().zip(other.borrow().vals.iter())
+                        .map(|(k, v)| (k.clone(), v.clone())).collect();
+                    for (k, v) in pairs { dict.borrow_mut().set(k, v); }
+                }
+                Ok(VmValue::Nil)
+            }
+            "clear" => { dict.borrow_mut().keys.clear(); dict.borrow_mut().vals.clear(); Ok(VmValue::Nil) }
+            "copy" => Ok(VmValue::Dict(Rc::new(RefCell::new(dict.borrow().clone())))),
+            _ => Err(self.err(&format!("dict has no method '{}'", method))),
+        }
+    }
+
+    // ── String method dispatch ────────────────────────────────────────────────
+
+    fn call_str_method(&self, spec: &str, args: &[VmValue], _kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        // spec is "method_name:self_str"
+        let colon = spec.find(':').ok_or_else(|| self.err("invalid str method spec"))?;
+        let method = &spec[..colon];
+        let s = spec[colon + 1..].to_string();
+
+        match method {
+            "upper" => Ok(VmValue::Str(s.to_uppercase())),
+            "lower" => Ok(VmValue::Str(s.to_lowercase())),
+            "strip" => Ok(VmValue::Str(s.trim().to_string())),
+            "lstrip" => Ok(VmValue::Str(s.trim_start().to_string())),
+            "rstrip" => Ok(VmValue::Str(s.trim_end().to_string())),
+            "title" => {
+                let t = s.split_whitespace()
+                    .map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().to_string() + c.as_str()).unwrap_or_default() })
+                    .collect::<Vec<_>>().join(" ");
+                Ok(VmValue::Str(t))
+            }
+            "capitalize" => {
+                let mut c = s.chars();
+                let cap = c.next().map(|f| f.to_uppercase().to_string() + c.as_str()).unwrap_or_default();
+                Ok(VmValue::Str(cap))
+            }
+            "split" => {
+                // args[0] = receiver (string), args[1] = optional separator
+                let sep = match args.get(1) { Some(VmValue::Str(s)) => Some(s.as_str().to_string()), _ => None };
+                let parts: Vec<VmValue> = match sep {
+                    Some(sep) => s.split(sep.as_str()).map(|p| VmValue::Str(p.to_string())).collect(),
+                    None => s.split_whitespace().map(|p| VmValue::Str(p.to_string())).collect(),
+                };
+                Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+            }
+            "replace" => {
+                let from = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("replace() requires 2 string args")) };
+                let to   = match args.get(2) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("replace() requires 2 string args")) };
+                Ok(VmValue::Str(s.replace(from.as_str(), &to)))
+            }
+            "find" => {
+                let sub = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("find() requires a string")) };
+                Ok(VmValue::Int(s.find(sub.as_str()).map(|i| i as i64).unwrap_or(-1)))
+            }
+            "count" => {
+                let sub = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("count() requires a string")) };
+                Ok(VmValue::Int(s.matches(sub.as_str()).count() as i64))
+            }
+            "startswith" => {
+                let pre = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("startswith() requires a string")) };
+                Ok(VmValue::Bool(s.starts_with(pre.as_str())))
+            }
+            "endswith" => {
+                let suf = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("endswith() requires a string")) };
+                Ok(VmValue::Bool(s.ends_with(suf.as_str())))
+            }
+            "join" => {
+                // args[0] = receiver (separator string), args[1] = iterable
+                let items = self.to_iter_vec(args.get(1).cloned().unwrap_or(VmValue::Nil))?;
+                let parts: Vec<String> = items.iter().map(|v| v.to_string()).collect();
+                Ok(VmValue::Str(parts.join(&s)))
+            }
+            "format" => {
+                let mut result = s.clone();
+                // args[0] = receiver; user args start at 1
+                for arg in args.iter().skip(1) {
+                    if let Some(pos) = result.find("{}") {
+                        result = format!("{}{}{}", &result[..pos], arg, &result[pos + 2..]);
+                    }
+                }
+                Ok(VmValue::Str(result))
+            }
+            "isdigit" => Ok(VmValue::Bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))),
+            "isalpha" => Ok(VmValue::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic()))),
+            "isspace" => Ok(VmValue::Bool(!s.is_empty() && s.chars().all(|c| c.is_whitespace()))),
+            "zfill" => {
+                let width = match args.get(1) { Some(VmValue::Int(n)) => *n as usize, _ => return Err(self.err("zfill() requires an int")) };
+                Ok(VmValue::Str(format!("{:0>width$}", s)))
+            }
+            "encode" => Ok(VmValue::Str(s)), // stub
+            _ => Err(self.err(&format!("str has no method '{}'", method))),
+        }
+    }
+
+    // ── File method dispatch ──────────────────────────────────────────────────
+
+    fn call_file_method(&self, method: &str, args: &[VmValue], _kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
+        let fh_rc = match args.first() {
+            Some(VmValue::File(f)) => f.clone(),
+            _ => return Err(self.err(&format!("file.{}() requires a file", method))),
+        };
+        match method {
+            "read" => {
+                let fh = fh_rc.borrow();
+                if fh.mode.contains('r') {
+                    Ok(VmValue::Str(fh.content.join("\n")))
+                } else { Err(self.err("file not open for reading")) }
+            }
+            "readline" => {
+                let mut fh = fh_rc.borrow_mut();
+                if fh.line_pos < fh.content.len() {
+                    let line = fh.content[fh.line_pos].clone() + "\n";
+                    fh.line_pos += 1;
+                    Ok(VmValue::Str(line))
+                } else { Ok(VmValue::Str(String::new())) }
+            }
+            "readlines" => {
+                let fh = fh_rc.borrow();
+                let lines: Vec<VmValue> = fh.content.iter().map(|l| VmValue::Str(l.clone() + "\n")).collect();
+                Ok(VmValue::List(Rc::new(RefCell::new(lines))))
+            }
+            "write" => {
+                let text = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("write() requires a string")) };
+                let mut fh = fh_rc.borrow_mut();
+                fh.write_buf.push_str(&text);
+                let full_path = self.source_dir.join(&fh.path);
+                let existing = if fh.mode == "a" || fh.mode == "a+" {
+                    std::fs::read_to_string(&full_path).unwrap_or_default()
+                } else { String::new() };
+                std::fs::write(&full_path, existing + &fh.write_buf)
+                    .map_err(|e| self.err(&format!("write: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "close" => { fh_rc.borrow_mut().closed = true; Ok(VmValue::Nil) }
+            _ => Err(self.err(&format!("file has no method '{}'", method))),
+        }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn vm_len(&self, v: &VmValue) -> Result<usize, String> {
+        match v {
+            VmValue::List(l) => Ok(l.borrow().len()),
+            VmValue::Str(s) => Ok(s.chars().count()),
+            VmValue::Tuple(t) => Ok(t.len()),
+            VmValue::Dict(d) => Ok(d.borrow().keys.len()),
+            other => Err(self.err(&format!("len() not supported for {}", other.type_name()))),
+        }
+    }
+
+    fn builtin_min_max(&self, args: &[VmValue], is_max: bool) -> Result<VmValue, String> {
+        let items: Vec<VmValue> = if args.len() == 1 {
+            self.to_iter_vec(args[0].clone())?
+        } else {
+            args.to_vec()
+        };
+        if items.is_empty() { return Err(self.err(if is_max { "max() of empty sequence" } else { "min() of empty sequence" })); }
+        let mut best = items[0].clone();
+        for item in &items[1..] {
+            let cmp = vm_cmp_order(&best, item);
+            if (is_max && cmp == std::cmp::Ordering::Less) ||
+               (!is_max && cmp == std::cmp::Ordering::Greater) {
+                best = item.clone();
+            }
+        }
+        Ok(best)
+    }
+
+    fn is_instance_of(&self, cls: &Rc<VmClass>, target: &Rc<VmClass>) -> bool {
+        if std::ptr::eq(cls.as_ref(), target.as_ref()) || cls.name == target.name { return true; }
+        if let Some(parent) = &cls.parent { return self.is_instance_of(parent, target); }
+        false
+    }
+
+    fn run_file(&mut self, path: &str) -> Result<VmValue, String> {
+        let full = self.source_dir.join(path);
+        let source = std::fs::read_to_string(&full)
+            .map_err(|e| self.err(&format!("runfile '{}': {}", path, e)))?;
+        let mut lexer = crate::lexer::Lexer::new(&source);
+        let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = parser.parse_program().map_err(|e| self.err(&e))?;
+        let chunk = crate::compiler::compile(&program).map_err(|e| self.err(&e))?;
+        self.run(&chunk)?;
+        Ok(VmValue::Nil)
+    }
+
+    // ── JSON helpers ──────────────────────────────────────────────────────────
+
+    fn json_loads(&mut self, s: &str) -> Result<VmValue, String> {
+        let s = s.trim();
+        if s == "null"  { return Ok(VmValue::Nil); }
+        if s == "true"  { return Ok(VmValue::Bool(true)); }
+        if s == "false" { return Ok(VmValue::Bool(false)); }
+        if let Ok(i) = s.parse::<i64>()   { return Ok(VmValue::Int(i)); }
+        if let Ok(f) = s.parse::<f64>()   { return Ok(VmValue::Float(f)); }
+        if s.starts_with('"') && s.ends_with('"') {
+            let inner = &s[1..s.len()-1];
+            return Ok(VmValue::Str(inner.replace("\\n","\n").replace("\\t","\t").replace("\\\"","\"").replace("\\\\","\\")));
+        }
+        if s.starts_with('[') && s.ends_with(']') {
+            let inner = &s[1..s.len()-1].trim();
+            let mut items = Vec::new();
+            if !inner.is_empty() {
+                for item in Self::json_split_array(inner) {
+                    items.push(self.json_loads(item.trim())?);
+                }
+            }
+            return Ok(VmValue::List(Rc::new(RefCell::new(items))));
+        }
+        if s.starts_with('{') && s.ends_with('}') {
+            let inner = s[1..s.len()-1].trim();
+            let mut d = VmDict::new();
+            if !inner.is_empty() {
+                for pair in Self::json_split_array(inner) {
+                    let pair = pair.trim();
+                    if let Some(colon) = Self::json_find_colon(pair) {
+                        let key = self.json_loads(pair[..colon].trim())?;
+                        let val = self.json_loads(pair[colon+1..].trim())?;
+                        d.set(key, val);
+                    }
+                }
+            }
+            return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));
+        }
+        Err(self.err(&format!("json.loads: cannot parse: {}", &s[..s.len().min(40)])))
+    }
+
+    fn json_split_array(s: &str) -> Vec<&str> {
+        let mut parts = Vec::new();
+        let mut depth = 0i32;
+        let mut in_str = false;
+        let mut start = 0;
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' if !in_str => in_str = true,
+                b'"' if in_str && (i == 0 || bytes[i-1] != b'\\') => in_str = false,
+                b'[' | b'{' if !in_str => depth += 1,
+                b']' | b'}' if !in_str => depth -= 1,
+                b',' if !in_str && depth == 0 => {
+                    parts.push(&s[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        parts.push(&s[start..]);
+        parts
+    }
+
+    fn json_find_colon(s: &str) -> Option<usize> {
+        let mut in_str = false;
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' if !in_str => in_str = true,
+                b'"' if in_str && (i == 0 || bytes[i-1] != b'\\') => in_str = false,
+                b':' if !in_str => return Some(i),
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn json_dumps(&self, v: &VmValue) -> String {
+        match v {
+            VmValue::Nil          => "null".to_string(),
+            VmValue::Bool(b)      => if *b { "true".to_string() } else { "false".to_string() },
+            VmValue::Int(i)       => i.to_string(),
+            VmValue::Float(f)     => format!("{}", f),
+            VmValue::Str(s)       => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\t', "\\t")),
+            VmValue::List(v)      => {
+                let items: Vec<String> = v.borrow().iter().map(|x| self.json_dumps(x)).collect();
+                format!("[{}]", items.join(", "))
+            }
+            VmValue::Dict(d)      => {
+                let db = d.borrow();
+                let pairs: Vec<String> = db.keys.iter().zip(db.vals.iter())
+                    .map(|(k, val)| format!("{}: {}", self.json_dumps(k), self.json_dumps(val)))
+                    .collect();
+                format!("{{{}}}", pairs.join(", "))
+            }
+            other => format!("\"{}\"", other.to_string().replace('"', "\\\"")),
+        }
+    }
+
+    fn eval_source(&mut self, src: &str) -> Result<VmValue, String> {
+        let mut lexer = crate::lexer::Lexer::new(src);
+        let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = parser.parse_program().map_err(|e| self.err(&e))?;
+        let chunk = crate::compiler::compile(&program).map_err(|e| self.err(&e))?;
+        self.run(&chunk)?;
+        Ok(VmValue::Nil)
+    }
+
+    fn import_module(&mut self, name: &str) -> Result<VmValue, String> {
+        // Try to load from source dir first (e.g., math.cool, os.cool).
+        let candidates = [
+            self.source_dir.join(format!("{}.cool", name)),
+            self.source_dir.join(name).join("__init__.cool"),
+            // stdlib lives next to the interpreter binary or in a known path.
+            std::path::PathBuf::from(format!("lib/{}.cool", name)),
+        ];
+        for path in &candidates {
+            if path.exists() {
+                let source = std::fs::read_to_string(path)
+                    .map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
+                // Compile and run in a sub-scope; collect exported names into a dict.
+                let old_source_dir = self.source_dir.clone();
+                self.source_dir = path.parent().unwrap_or(&old_source_dir).to_path_buf();
+                let mut lexer = crate::lexer::Lexer::new(&source);
+                let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
+                let mut parser = crate::parser::Parser::new(tokens);
+                let program = parser.parse_program().map_err(|e| self.err(&e))?;
+                let chunk = crate::compiler::compile(&program).map_err(|e| self.err(&e))?;
+                // Run the module — it populates globals directly (simple approach).
+                self.run(&chunk)?;
+                self.source_dir = old_source_dir;
+                // Return the module's global dict as a namespace object.
+                let mut d = VmDict::new();
+                for (k, v) in &self.globals {
+                    d.set(VmValue::Str(k.clone()), v.clone());
+                }
+                return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));
+            }
+        }
+        // Fall back: built-in stub modules.
+        self.make_builtin_module(name)
+    }
+
+    fn make_builtin_module(&mut self, name: &str) -> Result<VmValue, String> {
+        let mut d = VmDict::new();
+        let set = |d: &mut VmDict, k: &str, v: VmValue| d.set(VmValue::Str(k.to_string()), v);
+        let bf = |n: &str| VmValue::BuiltinFn(n.to_string());
+
+        match name {
+            "math" => {
+                set(&mut d, "pi", VmValue::Float(std::f64::consts::PI));
+                set(&mut d, "e",  VmValue::Float(std::f64::consts::E));
+                set(&mut d, "tau", VmValue::Float(std::f64::consts::TAU));
+                for fname in &["sqrt","floor","ceil","log","log2","log10","sin","cos","tan",
+                               "asin","acos","atan","atan2","degrees","radians","exp","exp2",
+                               "abs","pow","hypot","gcd","lcm","factorial","trunc",
+                               "sinh","cosh","tanh","isnan","isinf","isfinite"] {
+                    set(&mut d, fname, bf(&format!("math.{}", fname)));
+                }
+                self.globals.extend([
+                    ("math.sqrt".to_string(), bf("math.sqrt")),
+                    ("math.floor".to_string(), bf("math.floor")),
+                    ("math.ceil".to_string(), bf("math.ceil")),
+                    ("math.pi".to_string(), VmValue::Float(std::f64::consts::PI)),
+                    ("math.e".to_string(), VmValue::Float(std::f64::consts::E)),
+                    ("math.tau".to_string(), VmValue::Float(std::f64::consts::TAU)),
+                ]);
+            }
+            "os" => {
+                for fname in &["listdir","mkdir","remove","rename","exists","getcwd","join","path"] {
+                    set(&mut d, fname, bf(&format!("os.{}", fname)));
+                }
+            }
+            "sys" => {
+                let argv: Vec<VmValue> = std::env::args().map(|a| VmValue::Str(a)).collect();
+                set(&mut d, "argv", VmValue::List(Rc::new(RefCell::new(argv))));
+                set(&mut d, "exit", bf("exit"));
+            }
+            "time" => {
+                for fname in &["time","sleep","monotonic"] {
+                    set(&mut d, fname, bf(&format!("time.{}", fname)));
+                }
+            }
+            "random" => {
+                for fname in &["random","randint","choice","shuffle","uniform","seed"] {
+                    set(&mut d, fname, bf(&format!("random.{}", fname)));
+                }
+            }
+            "json" => {
+                set(&mut d, "loads", bf("json.loads"));
+                set(&mut d, "dumps", bf("json.dumps"));
+            }
+            "re" => {
+                for fname in &["match","search","fullmatch","findall","sub","split"] {
+                    set(&mut d, fname, bf(&format!("re.{}", fname)));
+                }
+            }
+            "string" | "list" | "collections" => {
+                // These are Cool stdlib modules; they'll be loaded as .cool files.
+                // If not found, return empty namespace.
+            }
+            _ => return Err(self.err(&format!("unknown module '{}'", name))),
+        }
+        Ok(VmValue::Dict(Rc::new(RefCell::new(d))))
+    }
+}
+
+// ── Ordering helper ───────────────────────────────────────────────────────────
+
+fn vm_cmp_order(a: &VmValue, b: &VmValue) -> std::cmp::Ordering {
+    match (a, b) {
+        (VmValue::Int(x), VmValue::Int(y)) => x.cmp(y),
+        (VmValue::Float(x), VmValue::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (VmValue::Int(x), VmValue::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (VmValue::Float(x), VmValue::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (VmValue::Str(x), VmValue::Str(y)) => x.cmp(y),
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
+// ── Slice index resolution ────────────────────────────────────────────────────
+
+fn resolve_slice_idx(idx: Option<i64>, len: i64, default: i64) -> i64 {
+    match idx {
+        None => default,
+        Some(i) => {
+            let i = if i < 0 { len + i } else { i };
+            i.max(0).min(len)
+        }
+    }
+}

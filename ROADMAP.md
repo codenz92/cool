@@ -166,7 +166,7 @@
 
 > Goal: compile Cool to native binaries so CoolOS can be self-hosted
 
-- [ ] Bytecode VM (compile AST to bytecode, run on a VM)
+- [x] Bytecode VM (compile AST to bytecode, run on a VM)
 - [ ] LLVM backend (compile Cool to LLVM IR → native binary)
 - [ ] FFI (call C functions from Cool)
 - [ ] Inline assembly (`asm { ... }`)
@@ -202,5 +202,5 @@
 | 5 — Shell: More Commands | ✅ Complete |
 | 6 — Standard Library | ✅ Complete |
 | 7 — CoolOS Applications | ✅ Complete |
-| 8 — Compiler | ⏳ Long term |
+| 8 — Compiler | 🔧 In progress |
 | 9 — Real Kernel | ⏳ Very long term |
