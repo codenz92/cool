@@ -1,5 +1,5 @@
 /// Compile a Cool AST into bytecode for the stack-based VM.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::ast::*;

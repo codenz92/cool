@@ -215,7 +215,7 @@ impl VM {
                         if let Some(m) = self.find_method(&inst.class, "__add__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
                             self.push(result);
-                            continue;
+                            return Ok(None);
                         }
                     }
                     self.push(self.add(l, r)?);
@@ -226,7 +226,7 @@ impl VM {
                         if let Some(m) = self.find_method(&inst.class, "__sub__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
                             self.push(result);
-                            continue;
+                            return Ok(None);
                         }
                     }
                     self.push(self.arith(l, r, "-")?);
@@ -237,7 +237,7 @@ impl VM {
                         if let Some(m) = self.find_method(&inst.class, "__mul__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
                             self.push(result);
-                            continue;
+                            return Ok(None);
                         }
                     }
                     self.push(self.mul(l, r)?);
@@ -253,7 +253,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__eq__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
-                            self.push(result); continue;
+                            self.push(result); return Ok(None);
                         }
                     }
                     self.push(VmValue::Bool(vm_eq(&l, &r)));
@@ -264,7 +264,7 @@ impl VM {
                         if let Some(m) = self.find_method(&inst.class, "__eq__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
                             let b = result.is_truthy();
-                            self.push(VmValue::Bool(!b)); continue;
+                            self.push(VmValue::Bool(!b)); return Ok(None);
                         }
                     }
                     self.push(VmValue::Bool(!vm_eq(&l, &r)));
@@ -274,7 +274,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__lt__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
-                            self.push(result); continue;
+                            self.push(result); return Ok(None);
                         }
                     }
                     self.push(self.cmp_op(l, r, "<")?);
@@ -284,7 +284,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__le__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
-                            self.push(result); continue;
+                            self.push(result); return Ok(None);
                         }
                     }
                     self.push(self.cmp_op(l, r, "<=")?);
@@ -294,7 +294,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__gt__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
-                            self.push(result); continue;
+                            self.push(result); return Ok(None);
                         }
                     }
                     self.push(self.cmp_op(l, r, ">")?);
@@ -304,7 +304,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__ge__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
-                            self.push(result); continue;
+                            self.push(result); return Ok(None);
                         }
                     }
                     self.push(self.cmp_op(l, r, ">=")?);
