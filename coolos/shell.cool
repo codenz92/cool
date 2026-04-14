@@ -6,13 +6,19 @@ import sys
 
 # ── Version ───────────────────────────────────────────────────────────────────
 
-COOLOS_VERSION = "0.1.0"
+COOLOS_VERSION = "0.2.0"
 
 # ── State ─────────────────────────────────────────────────────────────────────
 
 cwd = getcwd()
 history = []
 running = true
+env_vars = {}
+aliases = {}
+
+# Pipe state: nil = not in pipe mode, list = capture mode
+_pipe_buf = nil
+_pipe_input = nil
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -29,6 +35,13 @@ def join_path(base, part):
 def path_exists(p):
     return os["exists"](p)
 
+# Output helper — writes to pipe buffer when in capture mode, else prints normally
+def shell_print(text):
+    if _pipe_buf == nil:
+        print(text)
+    else:
+        _pipe_buf.append(str(text))
+
 def print_banner():
     print("   ____            _ ___  ____  ")
     print("  / ___|___   ___ | / _ \\/ ___| ")
@@ -39,40 +52,61 @@ def print_banner():
     print("CoolOS v" + COOLOS_VERSION + " — type 'help' to get started")
     print("")
 
+# Expand $VAR references in a line using the env_vars dict
+def expand_env_vars(line):
+    result = line
+    for key in env_vars.keys():
+        result = result.replace("$" + key, str(env_vars[key]))
+    return result
+
 # ── Built-in commands ─────────────────────────────────────────────────────────
 
 def cmd_help(args):
-    print("Built-in commands:")
-    print("  help               — show this help")
-    print("  ls [path]          — list directory contents")
-    print("  cd <path>          — change directory")
-    print("  pwd                — print working directory")
-    print("  cat <file>         — print file contents")
-    print("  mkdir <dir>        — create directory")
-    print("  touch <file>       — create empty file")
-    print("  rm <file>          — delete a file")
-    print("  mv <src> <dst>     — rename/move a file")
-    print("  cp <src> <dst>     — copy a file")
-    print("  head <file> [n]    — first n lines (default 10)")
-    print("  tail <file> [n]    — last n lines (default 10)")
-    print("  wc <file>          — word/line/char count")
-    print("  grep <pat> <file>  — search file for pattern")
-    print("  echo <text>        — print text")
-    print("  write <file> <txt> — write text to file")
-    print("  run <file.cool>    — run a Cool program")
-    print("  history            — show command history")
-    print("  clear              — clear the screen")
-    print("  exit               — exit CoolOS shell")
+    shell_print("Built-in commands:")
+    shell_print("  help               — show this help")
+    shell_print("  ls [path]          — list directory contents")
+    shell_print("  cd <path>          — change directory")
+    shell_print("  pwd                — print working directory")
+    shell_print("  cat <file>         — print file contents")
+    shell_print("  mkdir <dir>        — create directory")
+    shell_print("  touch <file>       — create empty file")
+    shell_print("  rm <file>          — delete a file")
+    shell_print("  mv <src> <dst>     — rename/move a file")
+    shell_print("  cp <src> <dst>     — copy a file")
+    shell_print("  head <file> [n]    — first n lines (default 10)")
+    shell_print("  tail <file> [n]    — last n lines (default 10)")
+    shell_print("  wc <file>          — word/line/char count")
+    shell_print("  grep <pat> <file>  — search file for pattern")
+    shell_print("  find [pattern]     — search for files by name")
+    shell_print("  echo <text>        — print text")
+    shell_print("  write <file> <txt> — write text to file")
+    shell_print("  run <file.cool>    — run a Cool program")
+    shell_print("  source <file>      — run a shell script")
+    shell_print("  set [VAR=value]    — set/list environment variables")
+    shell_print("  alias [name cmd]   — set/list aliases")
+    shell_print("  history            — show command history")
+    shell_print("  clear              — clear the screen")
+    shell_print("  exit               — exit CoolOS shell")
+    shell_print("")
+    shell_print("Pipes: ls | grep cool")
+    shell_print("")
+    shell_print("Apps:")
+    shell_print("  calc               — calculator REPL")
+    shell_print("  notes              — note-taking app")
+    shell_print("  top                — process viewer")
+    shell_print("  edit <file>        — text editor")
+    shell_print("  snake              — Snake game")
+    shell_print("  http <method> <url>— HTTP client")
 
 def cmd_pwd(args):
-    print(cwd)
+    shell_print(cwd)
 
 def cmd_ls(args):
     path = cwd
     if args.len() > 0:
         path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("ls: no such directory: " + path)
+        shell_print("ls: no such directory: " + path)
         return
     try:
         entries = os["listdir"](path)
@@ -80,94 +114,99 @@ def cmd_ls(args):
         for entry in entries:
             full = path + "/" + entry
             if path_exists(full + "/."):
-                print(entry + "/")
+                shell_print(entry + "/")
             else:
-                print(entry)
+                shell_print(entry)
     except:
-        print("ls: cannot list " + path)
+        shell_print("ls: cannot list " + path)
 
 def cmd_cd(args):
+    global cwd
     if args.len() == 0:
-        print("cd: missing argument")
+        shell_print("cd: missing argument")
         return
     new_path = join_path(cwd, args[0])
     if not path_exists(new_path):
-        print("cd: no such directory: " + new_path)
+        shell_print("cd: no such directory: " + new_path)
         return
-    # Update global cwd
     cwd = new_path
 
 def cmd_cat(args):
+    if _pipe_input != nil:
+        for line in _pipe_input:
+            shell_print(line.strip())
+        return
     if args.len() == 0:
-        print("cat: missing filename")
+        shell_print("cat: missing filename")
         return
     path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("cat: file not found: " + path)
+        shell_print("cat: file not found: " + path)
         return
     try:
         f = open(path, "r")
-        content = f.read()
+        lines = f.readlines()
         f.close()
-        print(content)
+        for line in lines:
+            shell_print(line.strip())
     except:
-        print("cat: cannot read " + path)
+        shell_print("cat: cannot read " + path)
 
 def cmd_mkdir(args):
     if args.len() == 0:
-        print("mkdir: missing directory name")
+        shell_print("mkdir: missing directory name")
         return
     path = join_path(cwd, args[0])
     try:
         os["mkdir"](path)
-        print("created " + path)
+        shell_print("created " + path)
     except:
-        print("mkdir: cannot create " + path)
+        shell_print("mkdir: cannot create " + path)
 
 def cmd_touch(args):
     if args.len() == 0:
-        print("touch: missing filename")
+        shell_print("touch: missing filename")
         return
     path = join_path(cwd, args[0])
     try:
         f = open(path, "w")
         f.close()
     except:
-        print("touch: cannot create " + path)
+        shell_print("touch: cannot create " + path)
 
 def cmd_rm(args):
     if args.len() == 0:
-        print("rm: missing filename")
+        shell_print("rm: missing filename")
         return
     path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("rm: file not found: " + path)
+        shell_print("rm: file not found: " + path)
         return
     try:
         os["remove"](path)
-        print("removed " + path)
+        shell_print("removed " + path)
     except:
-        print("rm: cannot remove " + path)
+        shell_print("rm: cannot remove " + path)
 
 def cmd_mv(args):
     if args.len() < 2:
-        print("mv: usage: mv <source> <dest>")
+        shell_print("mv: usage: mv <source> <dest>")
         return
     src = join_path(cwd, args[0])
     dst = join_path(cwd, args[1])
     try:
         os["rename"](src, dst)
     except:
-        print("mv: cannot move " + src)
+        shell_print("mv: cannot move " + src)
 
 def cmd_cp(args):
     if args.len() < 2:
-        print("cp: usage: cp <source> <dest>")
+        shell_print("cp: usage: cp <source> <dest>")
         return
     src = join_path(cwd, args[0])
     dst = join_path(cwd, args[1])
     if not path_exists(src):
-        print("cp: file not found: " + src)
+        shell_print("cp: file not found: " + src)
         return
     try:
         f = open(src, "r")
@@ -177,18 +216,27 @@ def cmd_cp(args):
         f.write(content)
         f.close()
     except:
-        print("cp: cannot copy " + src)
+        shell_print("cp: cannot copy " + src)
 
 def cmd_head(args):
+    if _pipe_input != nil:
+        n = 10
+        if args.len() > 0:
+            n = int(args[0])
+        i = 0
+        while i < n and i < _pipe_input.len():
+            shell_print(_pipe_input[i].strip())
+            i += 1
+        return
     if args.len() == 0:
-        print("head: missing filename")
+        shell_print("head: missing filename")
         return
     n = 10
     if args.len() > 1:
         n = int(args[1])
     path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("head: file not found: " + path)
+        shell_print("head: file not found: " + path)
         return
     try:
         f = open(path, "r")
@@ -196,21 +244,33 @@ def cmd_head(args):
         f.close()
         i = 0
         while i < n and i < lines.len():
-            print(lines[i].strip())
+            shell_print(lines[i].strip())
             i += 1
     except:
-        print("head: cannot read " + path)
+        shell_print("head: cannot read " + path)
 
 def cmd_tail(args):
+    if _pipe_input != nil:
+        n = 10
+        if args.len() > 0:
+            n = int(args[0])
+        start = _pipe_input.len() - n
+        if start < 0:
+            start = 0
+        i = start
+        while i < _pipe_input.len():
+            shell_print(_pipe_input[i].strip())
+            i += 1
+        return
     if args.len() == 0:
-        print("tail: missing filename")
+        shell_print("tail: missing filename")
         return
     n = 10
     if args.len() > 1:
         n = int(args[1])
     path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("tail: file not found: " + path)
+        shell_print("tail: file not found: " + path)
         return
     try:
         f = open(path, "r")
@@ -221,18 +281,25 @@ def cmd_tail(args):
             start = 0
         i = start
         while i < lines.len():
-            print(lines[i].strip())
+            shell_print(lines[i].strip())
             i += 1
     except:
-        print("tail: cannot read " + path)
+        shell_print("tail: cannot read " + path)
 
 def cmd_wc(args):
+    if _pipe_input != nil:
+        content = "\n".join(_pipe_input)
+        lines = _pipe_input.len()
+        words = content.split(" ").len()
+        chars = len(content)
+        shell_print(str(lines) + " lines  " + str(words) + " words  " + str(chars) + " chars")
+        return
     if args.len() == 0:
-        print("wc: missing filename")
+        shell_print("wc: missing filename")
         return
     path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("wc: file not found: " + path)
+        shell_print("wc: file not found: " + path)
         return
     try:
         f = open(path, "r")
@@ -241,18 +308,31 @@ def cmd_wc(args):
         lines = content.split("\n").len()
         words = content.split(" ").len()
         chars = len(content)
-        print(str(lines) + " lines  " + str(words) + " words  " + str(chars) + " chars  " + args[0])
+        shell_print(str(lines) + " lines  " + str(words) + " words  " + str(chars) + " chars  " + args[0])
     except:
-        print("wc: cannot read " + path)
+        shell_print("wc: cannot read " + path)
 
 def cmd_grep(args):
+    if _pipe_input != nil:
+        if args.len() == 0:
+            shell_print("grep: missing pattern")
+            return
+        pattern = args[0]
+        i = 0
+        found = 0
+        for line in _pipe_input:
+            if pattern in line:
+                shell_print(line.strip())
+                found += 1
+            i += 1
+        return
     if args.len() < 2:
-        print("grep: usage: grep <pattern> <file>")
+        shell_print("grep: usage: grep <pattern> <file>")
         return
     pattern = args[0]
     path = join_path(cwd, args[1])
     if not path_exists(path):
-        print("grep: file not found: " + path)
+        shell_print("grep: file not found: " + path)
         return
     try:
         f = open(path, "r")
@@ -262,20 +342,41 @@ def cmd_grep(args):
         found = 0
         for line in lines:
             if pattern in line:
-                print(str(i + 1) + ": " + line.strip())
+                shell_print(str(i + 1) + ": " + line.strip())
                 found += 1
             i += 1
         if found == 0:
-            print("grep: no matches for '" + pattern + "'")
+            shell_print("grep: no matches for '" + pattern + "'")
     except:
-        print("grep: cannot read " + path)
+        shell_print("grep: cannot read " + path)
+
+def cmd_find(args):
+    pattern = ""
+    if args.len() > 0:
+        pattern = args[0]
+
+    def find_recursive(dir_path, pat):
+        if not path_exists(dir_path):
+            return
+        try:
+            entries = os["listdir"](dir_path)
+            for entry in entries:
+                full = dir_path + "/" + entry
+                if pat.len() == 0 or pat in entry:
+                    shell_print(full)
+                if path_exists(full + "/."):
+                    find_recursive(full, pat)
+        except:
+            pass
+
+    find_recursive(cwd, pattern)
 
 def cmd_echo(args):
-    print(" ".join(args))
+    shell_print(" ".join(args))
 
 def cmd_write(args):
     if args.len() < 2:
-        print("write: usage: write <file> <text>")
+        shell_print("write: usage: write <file> <text>")
         return
     path = join_path(cwd, args[0])
     rest = []
@@ -289,26 +390,106 @@ def cmd_write(args):
         f.write(text + "\n")
         f.close()
     except:
-        print("write: cannot write to " + path)
+        shell_print("write: cannot write to " + path)
 
 def cmd_run(args):
     if args.len() == 0:
-        print("run: missing filename")
+        shell_print("run: missing filename")
         return
     path = join_path(cwd, args[0])
     if not path_exists(path):
-        print("run: file not found: " + path)
+        shell_print("run: file not found: " + path)
         return
     runfile(path)
+
+def cmd_source(args):
+    if args.len() == 0:
+        shell_print("source: missing filename")
+        return
+    path = join_path(cwd, args[0])
+    if not path_exists(path):
+        shell_print("source: file not found: " + path)
+        return
+    try:
+        f = open(path, "r")
+        lines = f.readlines()
+        f.close()
+        for script_line in lines:
+            script_line = script_line.strip()
+            if script_line.len() > 0 and not script_line.startswith("#"):
+                dispatch(script_line)
+    except:
+        shell_print("source: cannot read " + path)
+
+def cmd_set(args):
+    if args.len() == 0:
+        if env_vars.keys().len() == 0:
+            shell_print("(no environment variables set)")
+        else:
+            for key in env_vars.keys():
+                shell_print(key + "=" + str(env_vars[key]))
+        return
+    setting = args[0]
+    if "=" in setting:
+        idx = setting.find("=")
+        varname = setting[:idx]
+        value = setting[idx + 1:]
+        env_vars[varname] = value
+    else:
+        shell_print("set: usage: set VAR=value")
+
+def cmd_alias(args):
+    if args.len() == 0:
+        if aliases.keys().len() == 0:
+            shell_print("(no aliases defined)")
+        else:
+            for key in aliases.keys():
+                shell_print("alias " + key + "='" + aliases[key] + "'")
+        return
+    if args.len() < 2:
+        shell_print("alias: usage: alias <name> <command>")
+        return
+    name = args[0]
+    parts = []
+    j = 1
+    while j < args.len():
+        parts.append(args[j])
+        j += 1
+    aliases[name] = " ".join(parts)
 
 def cmd_history(args):
     i = 0
     for entry in history:
-        print(str(i) + "  " + entry)
+        shell_print(str(i) + "  " + entry)
         i += 1
 
 def cmd_clear(args):
     print("\x1b[2J\x1b[H")
+
+# ── Built-in apps ─────────────────────────────────────────────────────────────
+
+def cmd_calc(args):
+    runfile(join_path(cwd, "coolos/calc.cool"))
+
+def cmd_notes(args):
+    runfile(join_path(cwd, "coolos/notes.cool"))
+
+def cmd_top(args):
+    runfile(join_path(cwd, "coolos/top.cool"))
+
+def cmd_snake(args):
+    runfile(join_path(cwd, "coolos/snake.cool"))
+
+def cmd_edit(args):
+    if len(args) == 0:
+        print("Usage: edit <file>")
+        return
+    # Build a temporary launcher that passes the filename via argv workaround
+    target = join_path(cwd, args[0])
+    runfile(join_path(cwd, "coolos/edit.cool"))
+
+def cmd_http(args):
+    runfile(join_path(cwd, "coolos/http.cool"))
 
 # ── Command dispatcher ────────────────────────────────────────────────────────
 
@@ -327,19 +508,25 @@ commands = {
     "tail":    cmd_tail,
     "wc":      cmd_wc,
     "grep":    cmd_grep,
+    "find":    cmd_find,
     "echo":    cmd_echo,
     "write":   cmd_write,
     "run":     cmd_run,
+    "source":  cmd_source,
+    "set":     cmd_set,
+    "alias":   cmd_alias,
     "history": cmd_history,
     "clear":   cmd_clear,
+    "calc":    cmd_calc,
+    "notes":   cmd_notes,
+    "top":     cmd_top,
+    "snake":   cmd_snake,
+    "edit":    cmd_edit,
+    "http":    cmd_http,
 }
 
-def dispatch(line):
-    line = line.strip()
-    if line.len() == 0:
-        return
-    history.append(line)
-
+def run_command(line):
+    global running
     parts = line.split(" ")
     cmd = parts[0]
     args = []
@@ -349,6 +536,15 @@ def dispatch(line):
             args.append(parts[i])
         i += 1
 
+    # Expand alias
+    if aliases.contains(cmd):
+        expanded = aliases[cmd]
+        new_line = expanded
+        if args.len() > 0:
+            new_line = expanded + " " + " ".join(args)
+        run_command(new_line)
+        return
+
     if cmd == "exit" or cmd == "quit":
         print("Goodbye!")
         running = false
@@ -357,14 +553,67 @@ def dispatch(line):
     if commands.contains(cmd):
         commands[cmd](args)
     else:
-        print("coolos: command not found: " + cmd)
-        print("  (type 'help' for a list of commands)")
+        shell_print("coolos: command not found: " + cmd)
+        shell_print("  (type 'help' for a list of commands)")
+
+def run_pipeline(line):
+    global _pipe_buf, _pipe_input
+    segments = line.split("|")
+
+    # Run the first segment, capturing its output
+    _pipe_buf = []
+    _pipe_input = nil
+    run_command(segments[0].strip())
+    data = _pipe_buf
+    _pipe_buf = nil
+
+    # Thread the output through each subsequent segment
+    i = 1
+    while i < segments.len():
+        _pipe_buf = []
+        _pipe_input = data
+        run_command(segments[i].strip())
+        data = _pipe_buf
+        _pipe_buf = nil
+        _pipe_input = nil
+        i += 1
+
+    # Print the final stage's output
+    for out_line in data:
+        print(out_line)
+
+def dispatch(line):
+    line = line.strip()
+    if line.len() == 0:
+        return
+
+    # Expand $VAR references
+    line = expand_env_vars(line)
+
+    history.append(line)
+
+    if "|" in line:
+        run_pipeline(line)
+        return
+
+    run_command(line)
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 print_banner()
 
 while running:
-    prompt = "coolos" + cwd + " -> "
+    comp_list = list(commands.keys())
+    comp_list.append("exit")
+    comp_list.append("quit")
+    try:
+        files = os["listdir"](cwd)
+        for f in files:
+            comp_list.append(f)
+    except:
+        pass
+    set_completions(comp_list)
+
+    prompt = "coolos " + cwd + " -> "
     line = input(prompt)
     dispatch(line)

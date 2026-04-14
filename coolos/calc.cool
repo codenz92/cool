@@ -1,0 +1,32 @@
+import math
+
+def show_help():
+    print("calc v1.0 — expression calculator")
+    print("  Type any Cool expression: 2 + 3, sqrt(16), 2 ** 10")
+    print("  Variables work: x = 5, then x * 2")
+    print("  Math constants: pi, tau, e, inf")
+    print("  Commands: help, clear, exit")
+
+show_help()
+
+while true:
+    line = input("calc> ")
+    line = line.strip()
+
+    if line == "":
+        continue
+    if line == "exit" or line == "quit":
+        break
+    if line == "help":
+        show_help()
+        continue
+    if line == "clear":
+        print("\x1b[2J\x1b[H")
+        continue
+
+    try:
+        result = eval(line)
+        if result != nil:
+            print("= " + str(result))
+    except e:
+        print("Error: " + str(e))

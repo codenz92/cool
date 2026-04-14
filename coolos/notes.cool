@@ -1,0 +1,150 @@
+import os
+
+def get_notes_dir():
+    home = os["getenv"]("HOME")
+    if home == nil:
+        home = "."
+    d = os["join"](home, ".cool_notes")
+    if not os["exists"](d):
+        os["mkdir"](d)
+    return d
+
+def note_path(name):
+    return os["join"](get_notes_dir(), name + ".txt")
+
+def cmd_list(args):
+    d = get_notes_dir()
+    files = os["listdir"](d)
+    notes = []
+    for f in files:
+        if f.endswith(".txt"):
+            notes.append(f[:-4])
+    if len(notes) == 0:
+        print("No notes yet. Use 'new <name>' to create one.")
+        return
+    notes.sort()
+    for n in notes:
+        print("  " + n)
+
+def cmd_new(args):
+    if len(args) == 0:
+        print("Usage: new <name>")
+        return
+    name = args[0]
+    path = note_path(name)
+    print("Enter note (blank line to finish):")
+    lines = []
+    while true:
+        line = input("")
+        if line == "":
+            break
+        lines.append(line)
+    content = ""
+    for l in lines:
+        content = content + l + "\n"
+    f = open(path, "w")
+    f.write(content)
+    f.close()
+    print("Saved '" + name + "'.")
+
+def cmd_show(args):
+    if len(args) == 0:
+        print("Usage: show <name>")
+        return
+    name = args[0]
+    path = note_path(name)
+    if not os["exists"](path):
+        print("Note '" + name + "' not found.")
+        return
+    f = open(path, "r")
+    content = f.read()
+    f.close()
+    print("=== " + name + " ===")
+    print(content)
+
+def cmd_append(args):
+    if len(args) == 0:
+        print("Usage: append <name>")
+        return
+    name = args[0]
+    path = note_path(name)
+    if not os["exists"](path):
+        print("Note '" + name + "' not found. Use 'new' to create it.")
+        return
+    line = input("Append: ")
+    f = open(path, "a")
+    f.write(line + "\n")
+    f.close()
+    print("Appended.")
+
+def cmd_delete(args):
+    if len(args) == 0:
+        print("Usage: delete <name>")
+        return
+    name = args[0]
+    path = note_path(name)
+    if not os["exists"](path):
+        print("Note '" + name + "' not found.")
+        return
+    os["remove"](path)
+    print("Deleted '" + name + "'.")
+
+def cmd_search(args):
+    if len(args) == 0:
+        print("Usage: search <pattern>")
+        return
+    pattern = args[0].lower()
+    d = get_notes_dir()
+    files = os["listdir"](d)
+    found = false
+    for fname in files:
+        if not fname.endswith(".txt"):
+            continue
+        path = os["join"](d, fname)
+        f = open(path, "r")
+        content = f.read()
+        f.close()
+        if pattern in content.lower():
+            name = fname[:-4]
+            print("  " + name + ": " + content.strip()[:60])
+            found = true
+    if not found:
+        print("No notes match '" + pattern + "'.")
+
+def cmd_help(args):
+    print("notes v1.0 — commands:")
+    print("  list             List all notes")
+    print("  new <name>       Create a new note")
+    print("  show <name>      Display a note")
+    print("  append <name>    Append to a note")
+    print("  delete <name>    Delete a note")
+    print("  search <pattern> Search note contents")
+    print("  help             Show this help")
+    print("  exit             Quit")
+
+commands = {
+    "list":   cmd_list,
+    "new":    cmd_new,
+    "show":   cmd_show,
+    "append": cmd_append,
+    "delete": cmd_delete,
+    "search": cmd_search,
+    "help":   cmd_help,
+}
+
+cmd_help([])
+
+while true:
+    line = input("notes> ")
+    line = line.strip()
+    if line == "" :
+        continue
+    if line == "exit" or line == "quit":
+        break
+    parts = line.split(" ")
+    cmd = parts[0]
+    args = parts[1:]
+    if cmd in commands:
+        commands[cmd](args)
+    else:
+        print("Unknown command: '" + cmd + "'. Type 'help' for commands.")

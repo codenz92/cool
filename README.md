@@ -8,7 +8,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 
 ## Features
 
-**Language**
+### Language
 
 - Indentation-based block syntax (Python-style)
 - Variables, arithmetic, comparisons, logical and bitwise operators
@@ -23,31 +23,43 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 - List comprehensions, lambda expressions, ternary expressions
 - `nonlocal` / `global`, `assert`, `with` / context managers
 - `import math`, `import os`, `import sys`
+- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`
+- Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
 - `runfile()` to execute another `.cool` file at runtime
+- `eval(str)` to evaluate a Cool expression or statement at runtime
+- `import term` for raw terminal mode, cursor control, and real-time key input (powered by crossterm)
+- `os.popen(cmd)` to run shell commands and capture output
 - Hex / binary / octal literals, `\x` escape sequences
 - REPL mode
 
-**Built-in Functions**
+### Built-in Functions
 
 `print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()`, `round()`, `pow()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `assert`, `exit()`
 
-**String Methods**
+### String Methods
 
 `.upper()`, `.lower()`, `.strip()`, `.lstrip()`, `.rstrip()`, `.split()`, `.join()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`, `.format()`
 
-**CoolOS Shell** (`coolos/shell.cool`)
+### CoolOS Shell (`coolos/shell.cool`)
 
 A fully interactive shell written in Cool:
 
-```
+```text
 ls [path]          cd <path>          pwd
 cat <file>         mkdir <dir>        touch <file>
 rm <file>          mv <src> <dst>     cp <src> <dst>
 head <file> [n]    tail <file> [n]    wc <file>
-grep <pat> <file>  echo <text>        write <file> <text>
-run <file.cool>    history            clear
+grep <pat> <file>  find <pattern>     echo <text>
+write <file> <txt> run <file.cool>    source <file>
+set VAR=value      alias name=cmd     history
+clear
 ```
+
+- Pipes: `ls | grep cool`, `cat file | head 5`
+- Environment variables: `set PATH=/usr/bin`, use as `$PATH`
+- Tab completion and up-arrow history navigation
+- Shell scripting via `source <file>`
 
 ---
 
@@ -113,7 +125,7 @@ More examples are in the [`examples/`](examples/) directory.
 
 ## Project Structure
 
-```
+```text
 src/
   lexer.rs        Token scanner with INDENT/DEDENT handling
   parser.rs       Recursive descent parser → AST
@@ -123,6 +135,12 @@ src/
 
 coolos/
   shell.cool      The CoolOS interactive shell
+  calc.cool       Calculator REPL
+  notes.cool      Note-taking app
+  top.cool        Process viewer
+  edit.cool       Text editor
+  snake.cool      Snake game
+  http.cool       HTTP client
 
 examples/
   hello.cool
@@ -138,14 +156,14 @@ examples/
 ## Roadmap
 
 | Phase | Status |
-|---|---|
+| ----- | ------ |
 | 1 — Core interpreter | ✅ Complete |
 | 2 — Real language features | ✅ Complete |
 | 3 — CoolOS shell | ✅ Complete |
 | 4 — Quality of life (f-strings, lambdas, comprehensions…) | ✅ Complete |
-| 5 — Shell: more commands | 🔄 In progress |
-| 6 — Standard library (json, re, time, random…) | ⏳ Planned |
-| 7 — CoolOS applications (editor, calculator, snake…) | ⏳ Planned |
+| 5 — Shell: more commands | ✅ Complete |
+| 6 — Standard library (json, re, time, random…) | ✅ Complete |
+| 7 — CoolOS applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Bytecode VM / LLVM compiler | ⏳ Long term |
 | 9 — Real kernel (bare-metal, self-hosting) | ⏳ Very long term |
 

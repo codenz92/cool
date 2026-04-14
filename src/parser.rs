@@ -64,6 +64,11 @@ impl Parser {
 
     // ── Program / block ───────────────────────────────────────────────────
 
+    /// Returns true if the parser has consumed all meaningful tokens (only Eof/Newline remain).
+    pub fn is_at_end(&self) -> bool {
+        matches!(self.peek(), Token::Eof | Token::Newline)
+    }
+
     pub fn parse_program(&mut self) -> Result<Program, String> {
         let mut stmts = Vec::new();
         self.skip_newlines();
@@ -252,10 +257,20 @@ impl Parser {
             self.eat_newline();
             Ok(Stmt::Import(path))
         } else if let Token::Ident(name) = self.peek().clone() {
-            // import math  — built-in module
+            // import math  or  import foo.bar  — built-in or dotted module
             self.advance();
+            let mut parts = vec![name];
+            while self.peek() == &Token::Dot {
+                self.advance(); // consume '.'
+                if let Token::Ident(part) = self.peek().clone() {
+                    self.advance();
+                    parts.push(part);
+                } else {
+                    return Err(format!("line {}: expected identifier after '.' in import", self.line()));
+                }
+            }
             self.eat_newline();
-            Ok(Stmt::ImportModule(name))
+            Ok(Stmt::ImportModule(parts.join(".")))
         } else {
             Err(format!("line {}: import expects a string path or module name", self.line()))
         }
@@ -476,7 +491,7 @@ impl Parser {
 
     // ── Expressions (Pratt-style precedence climbing) ─────────────────────
 
-    fn parse_expr(&mut self) -> Result<Expr, String> {
+    pub fn parse_expr(&mut self) -> Result<Expr, String> {
         // lambda: lambda [params]: expr
         if self.check(&Token::Lambda) {
             self.advance();

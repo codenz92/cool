@@ -115,7 +115,7 @@
 
 ---
 
-## Phase 5 — CoolOS Shell: More Commands 🔄
+## Phase 5 — CoolOS Shell: More Commands ✅
 
 > Goal: a shell powerful enough for real use
 
@@ -123,42 +123,42 @@
 - [x] `grep <pattern> <file>` — search file contents
 - [x] `head <file> [n]` / `tail <file> [n]` — first/last N lines
 - [x] `wc <file>` — word/line/char count
-- [ ] `find <pattern>` — search for files by name
-- [ ] Pipes: `ls | grep cool`
-- [ ] Environment variables (`set VAR=value`, `$VAR`)
-- [ ] Tab completion
-- [ ] Up-arrow history navigation
-- [ ] Shell scripting (run `.cool` scripts as shell scripts)
-- [ ] `alias` command
+- [x] `find <pattern>` — search for files by name
+- [x] Pipes: `ls | grep cool`
+- [x] Environment variables (`set VAR=value`, `$VAR`)
+- [x] Tab completion
+- [x] Up-arrow history navigation
+- [x] Shell scripting (`source <file>` runs shell scripts line by line)
+- [x] `alias` command
 
 ---
 
-## Phase 6 — Cool Language: Standard Library
+## Phase 6 — Cool Language: Standard Library ✅
 
 > Goal: a built-in library written in Cool itself
 
-- [~] `string` module — core methods already available natively on `str`; module form with `split`, `join`, `strip`, `upper`, `lower`, `replace`, `startswith`, `endswith` not yet importable as `import string`
-- [ ] `list` module (sort, reverse, filter, map, reduce as module-level functions)
-- [ ] `math` module (expand beyond current basics)
-- [ ] `json` module (parse and serialize JSON)
-- [ ] `re` module (basic regex)
-- [ ] `time` module (timestamp, sleep)
-- [ ] `random` module
-- [ ] `collections` module (queue, stack, ordered dict)
-- [ ] Package system (`import` from subdirectories)
+- [x] `string` module — `import string` with `split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`
+- [x] `list` module — `import list` with `sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`
+- [x] `math` module (expanded) — added `gcd`, `lcm`, `factorial`, `hypot`, `degrees`, `radians`, `trunc`, `exp`, `exp2`, `sinh`, `cosh`, `tanh`, `isnan`, `isinf`, `isfinite`, `tau` constant
+- [x] `json` module — `json.loads()` / `json.dumps()` with full JSON support
+- [x] `re` module — `re.match()`, `re.search()`, `re.fullmatch()`, `re.findall()`, `re.sub()`, `re.split()`
+- [x] `time` module — `time.time()`, `time.sleep()`, `time.monotonic()`
+- [x] `random` module — `random.random()`, `random.randint()`, `random.choice()`, `random.shuffle()`, `random.uniform()`, `random.seed()`
+- [x] `collections` module — `Queue` and `Stack` classes (written in Cool itself)
+- [x] Package system — `import foo.bar` loads `foo/bar.cool` from source directory
 
 ---
 
-## Phase 7 — CoolOS Applications
+## Phase 7 — CoolOS Applications ✅
 
 > Goal: write real apps entirely in Cool that run inside CoolOS
 
-- [ ] `edit` — a simple text editor (like nano)
-- [ ] `calc` — a calculator REPL
-- [ ] `top` — a process/task viewer
-- [ ] `notes` — a simple note-taking app
-- [ ] `snake` — Snake game (ASCII)
-- [ ] `http` — simple HTTP client (`http get <url>`)
+- [x] `calc` — calculator REPL with persistent variables, full math library support
+- [x] `notes` — note-taking app (new, show, append, delete, search commands)
+- [x] `top` — process/task viewer using `ps aux` and system stats
+- [x] `edit` — nano-like text editor (arrow keys, Ctrl+S save, Ctrl+X exit)
+- [x] `snake` — Snake game (ASCII, arrow keys, real-time with raw terminal mode)
+- [x] `http` — HTTP client (`http get/post/head/getjson <url>`) backed by curl
 
 ---
 
@@ -199,8 +199,8 @@
 | 2 — Real Language Features | ✅ Complete |
 | 3 — CoolOS Shell | ✅ Complete |
 | 4 — Quality of Life | ✅ Complete |
-| 5 — Shell: More Commands | 🔄 In progress |
-| 6 — Standard Library | ⏳ Planned |
-| 7 — CoolOS Applications | ⏳ Planned |
+| 5 — Shell: More Commands | ✅ Complete |
+| 6 — Standard Library | ✅ Complete |
+| 7 — CoolOS Applications | ✅ Complete |
 | 8 — Compiler | ⏳ Long term |
 | 9 — Real Kernel | ⏳ Very long term |

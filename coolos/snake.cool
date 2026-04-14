@@ -1,0 +1,119 @@
+import term
+import random
+import time
+import math
+
+WIDTH  = 30
+HEIGHT = 18
+
+def make_pos(x, y):
+    return (x, y)
+
+def pos_x(p):
+    return p[0]
+
+def pos_y(p):
+    return p[1]
+
+def rand_food(snake):
+    while true:
+        fx = random["randint"](0, WIDTH - 1)
+        fy = random["randint"](0, HEIGHT - 1)
+        fp = make_pos(fx, fy)
+        if not (fp in snake):
+            return fp
+
+def draw(snake, food, score, high_score):
+    term["move_cursor"](1, 1)
+
+    top = "+" + "-" * WIDTH + "+"
+    term["write"](top + "\n")
+
+    for y in range(HEIGHT):
+        row = "|"
+        for x in range(WIDTH):
+            p = make_pos(x, y)
+            if p == snake[0]:
+                row = row + "@"
+            elif p in snake:
+                row = row + "o"
+            elif p == food:
+                row = row + "*"
+            else:
+                row = row + " "
+        row = row + "|"
+        term["write"](row + "\n")
+
+    term["write"]("+" + "-" * WIDTH + "+\n")
+    term["write"]("Score: " + str(score) + "   High: " + str(high_score) + "   (arrows=move  q=quit)\n")
+    term["flush"]()
+
+def run_snake():
+    random["seed"](math["trunc"](time["time"]()))
+
+    snake = [make_pos(WIDTH // 2, HEIGHT // 2)]
+    dx = 1
+    dy = 0
+    food = rand_food(snake)
+    score = 0
+    high_score = 0
+    alive = true
+
+    term["raw"]()
+    term["clear"]()
+    term["hide_cursor"]()
+
+    try:
+        while alive:
+            draw(snake, food, score, high_score)
+
+            key = term["poll_char"](120)
+
+            if key == "UP" and dy != 1:
+                dx = 0
+                dy = -1
+            elif key == "DOWN" and dy != -1:
+                dx = 0
+                dy = 1
+            elif key == "LEFT" and dx != 1:
+                dx = -1
+                dy = 0
+            elif key == "RIGHT" and dx != -1:
+                dx = 1
+                dy = 0
+            elif key == "q" or key == "ESC" or key == "CTRL_C":
+                alive = false
+                continue
+
+            nx = pos_x(snake[0]) + dx
+            ny = pos_y(snake[0]) + dy
+
+            if nx < 0 or nx >= WIDTH or ny < 0 or ny >= HEIGHT:
+                alive = false
+                continue
+
+            head = make_pos(nx, ny)
+
+            if head in snake:
+                alive = false
+                continue
+
+            snake.insert(0, head)
+
+            if head == food:
+                score = score + 1
+                if score > high_score:
+                    high_score = score
+                food = rand_food(snake)
+            else:
+                snake.pop()
+
+    except e:
+        pass
+
+    term["show_cursor"]()
+    term["normal"]()
+    term["clear"]()
+    print("Game over! Final score: " + str(score))
+
+run_snake()

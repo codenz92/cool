@@ -1,9 +1,53 @@
 use crate::ast::*;
 /// Tree-walk interpreter for Cool.
+use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal;
+use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
+
+// ── Readline / Tab-completion ─────────────────────────────────────────────────
+
+thread_local! {
+    static COMPLETIONS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+}
+
+/// A rustyline helper that completes against the `COMPLETIONS` list.
+struct CoolHelper;
+
+impl rustyline::completion::Completer for CoolHelper {
+    type Candidate = String;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<String>)> {
+        let word_start = line[..pos]
+            .rfind(|c: char| c == ' ' || c == '\t')
+            .map_or(0, |i| i + 1);
+        let word = &line[word_start..pos];
+        let candidates: Vec<String> = COMPLETIONS.with(|c| {
+            c.borrow()
+                .iter()
+                .filter(|s| s.starts_with(word))
+                .cloned()
+                .collect()
+        });
+        Ok((word_start, candidates))
+    }
+}
+
+impl rustyline::hint::Hinter for CoolHelper {
+    type Hint = String;
+}
+impl rustyline::highlight::Highlighter for CoolHelper {}
+impl rustyline::validate::Validator for CoolHelper {}
+impl rustyline::Helper for CoolHelper {}
 
 // ── Environment ───────────────────────────────────────────────────────────────
 
@@ -66,6 +110,8 @@ impl Env {
             "tuple",
             "dict",
             "set",
+            "set_completions",
+            "eval",
         ] {
             data.vars
                 .insert(name.to_string(), Value::BuiltinFn(name.to_string()));
@@ -375,6 +421,8 @@ enum Signal {
 
 // ── Interpreter ───────────────────────────────────────────────────────────────
 
+type RlEditor = rustyline::Editor<CoolHelper, rustyline::history::DefaultHistory>;
+
 pub struct Interpreter {
     pub current_line: usize,
     pub source_dir: std::path::PathBuf,
@@ -383,6 +431,10 @@ pub struct Interpreter {
     /// Stash for a raised exception value that must cross a Result<Value,String> boundary.
     /// Set in call_value when a user function raises; cleared when try/except catches it.
     pub pending_raise: Option<Value>,
+    /// Rustyline editor — Some when running interactively, None as fallback.
+    readline_editor: Option<RlEditor>,
+    /// xorshift64 state for the random module.
+    rng_state: u64,
 }
 
 macro_rules! numeric_op {
@@ -412,11 +464,25 @@ macro_rules! compare_op {
 
 impl Interpreter {
     pub fn new(source_dir: std::path::PathBuf, source: &str) -> Self {
+        let readline_editor = rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
+            .ok()
+            .map(|mut ed| {
+                ed.set_helper(Some(CoolHelper));
+                ed
+            });
+        // Seed xorshift64 from system time; fall back to a fixed seed if time is unavailable.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(12345678901234567);
+        let rng_state = if seed == 0 { 1 } else { seed };
         Interpreter {
             current_line: 0,
             source_dir,
             source_lines: source.lines().map(|l| l.to_string()).collect(),
             pending_raise: None,
+            readline_editor,
+            rng_state,
         }
     }
 
@@ -861,9 +927,28 @@ impl Interpreter {
                 math_fn!("acos");
                 math_fn!("atan");
                 math_fn!("atan2");
+                math_fn!("exp");
+                math_fn!("exp2");
+                math_fn!("sinh");
+                math_fn!("cosh");
+                math_fn!("tanh");
+                math_fn!("hypot");
+                math_fn!("degrees");
+                math_fn!("radians");
+                math_fn!("trunc");
+                math_fn!("gcd");
+                math_fn!("lcm");
+                math_fn!("factorial");
+                math_fn!("isnan");
+                math_fn!("isinf");
+                math_fn!("isfinite");
                 map.set(
                     Value::Str("pi".to_string()),
                     Value::Float(std::f64::consts::PI),
+                );
+                map.set(
+                    Value::Str("tau".to_string()),
+                    Value::Float(std::f64::consts::TAU),
                 );
                 map.set(
                     Value::Str("e".to_string()),
@@ -886,6 +971,7 @@ impl Interpreter {
                     Value::BuiltinFn("math.ceil".to_string()),
                 );
                 env.set_local("pi".to_string(), Value::Float(std::f64::consts::PI));
+                env.set_local("tau".to_string(), Value::Float(std::f64::consts::TAU));
             }
             "os" => {
                 let mut map = IndexedMap::new();
@@ -905,6 +991,7 @@ impl Interpreter {
                 os_fn!("mkdir");
                 os_fn!("remove");
                 os_fn!("rename");
+                os_fn!("popen");
                 env.set_local("os".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
                 env.set_local(
                     "getcwd".to_string(),
@@ -928,9 +1015,119 @@ impl Interpreter {
                 );
                 env.set_local("sys".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "string" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["split","join","strip","lstrip","rstrip","upper","lower",
+                                  "replace","startswith","endswith","find","count","format","title","capitalize"] {
+                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("string.{}", fn_name)));
+                }
+                env.set_local("string".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "list" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["sort","reverse","filter","map","reduce","flatten","unique"] {
+                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("list.{}", fn_name)));
+                }
+                env.set_local("list".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "json" => {
+                let mut map = IndexedMap::new();
+                map.set(Value::Str("loads".to_string()), Value::BuiltinFn("json.loads".to_string()));
+                map.set(Value::Str("dumps".to_string()), Value::BuiltinFn("json.dumps".to_string()));
+                env.set_local("json".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "re" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["match","search","fullmatch","findall","sub","split"] {
+                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("re.{}", fn_name)));
+                }
+                env.set_local("re".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "time" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["time","sleep","monotonic"] {
+                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("time.{}", fn_name)));
+                }
+                env.set_local("time".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "random" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["random","randint","choice","shuffle","uniform","seed"] {
+                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("random.{}", fn_name)));
+                }
+                env.set_local("random".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "term" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["raw","normal","clear","clear_line","move_cursor",
+                                  "hide_cursor","show_cursor","write","flush",
+                                  "poll_char","get_char","size"] {
+                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("term.{}", fn_name)));
+                }
+                env.set_local("term".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "collections" => {
+                // Implemented as Cool code
+                let src = r#"
+class Queue:
+    def __init__(self):
+        self.items = []
+
+    def push(self, item):
+        self.items.append(item)
+
+    def pop(self):
+        if len(self.items) == 0:
+            raise "Queue is empty"
+        item = self.items[0]
+        self.items = self.items[1:]
+        return item
+
+    def peek(self):
+        if len(self.items) == 0:
+            raise "Queue is empty"
+        return self.items[0]
+
+    def is_empty(self):
+        return len(self.items) == 0
+
+    def size(self):
+        return len(self.items)
+
+class Stack:
+    def __init__(self):
+        self.items = []
+
+    def push(self, item):
+        self.items.append(item)
+
+    def pop(self):
+        if len(self.items) == 0:
+            raise "Stack is empty"
+        return self.items.pop()
+
+    def peek(self):
+        if len(self.items) == 0:
+            raise "Stack is empty"
+        return self.items[len(self.items) - 1]
+
+    def is_empty(self):
+        return len(self.items) == 0
+
+    def size(self):
+        return len(self.items)
+"#;
+                let mut lexer = crate::lexer::Lexer::new(src);
+                let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
+                let mut parser = crate::parser::Parser::new(tokens);
+                let program = parser.parse_program().map_err(|e| self.err(&e))?;
+                self.exec_block(&program, env)?;
+            }
             _ => {
                 // Try to load as a .cool file from source_dir
-                let path = self.source_dir.join(format!("{}.cool", name));
+                // Support dotted names: "foo.bar" → "foo/bar.cool"
+                let file_path = name.replace('.', "/");
+                let path = self.source_dir.join(format!("{}.cool", file_path));
                 if path.exists() {
                     let source = std::fs::read_to_string(&path)
                         .map_err(|e| self.err(&format!("import error: {}", e)))?;
@@ -1940,6 +2137,27 @@ impl Interpreter {
         if let Some(os_fn) = name.strip_prefix("os.") {
             return self.call_os_fn(os_fn, args);
         }
+        if let Some(f) = name.strip_prefix("string.") {
+            return self.call_string_fn(f, args, env);
+        }
+        if let Some(f) = name.strip_prefix("list.") {
+            return self.call_list_mod_fn(f, args, env);
+        }
+        if let Some(f) = name.strip_prefix("json.") {
+            return self.call_json_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("re.") {
+            return self.call_re_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("time.") {
+            return self.call_time_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("random.") {
+            return self.call_random_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("term.") {
+            return self.call_term_fn(f, args);
+        }
 
         match name {
             "print" => {
@@ -2264,16 +2482,81 @@ impl Interpreter {
                 Ok(Value::List(Rc::new(RefCell::new(result))))
             }
             "input" => {
-                use std::io::Write;
-                if let Some(prompt) = args.first() {
+                let prompt = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => String::new(),
+                };
+                if let Some(editor) = &mut self.readline_editor {
+                    match editor.readline(&prompt) {
+                        Ok(line) => {
+                            let _ = editor.add_history_entry(line.as_str());
+                            Ok(Value::Str(line))
+                        }
+                        Err(rustyline::error::ReadlineError::Eof) => {
+                            Ok(Value::Str(String::new()))
+                        }
+                        Err(rustyline::error::ReadlineError::Interrupted) => {
+                            std::process::exit(0);
+                        }
+                        Err(e) => Err(self.err(&format!("input() error: {}", e))),
+                    }
+                } else {
+                    use std::io::Write;
                     print!("{}", prompt);
                     std::io::stdout().flush().ok();
+                    let mut line = String::new();
+                    std::io::stdin()
+                        .read_line(&mut line)
+                        .map_err(|e| self.err(&format!("input() error: {}", e)))?;
+                    Ok(Value::Str(line.trim_end_matches('\n').to_string()))
                 }
-                let mut line = String::new();
-                std::io::stdin()
-                    .read_line(&mut line)
-                    .map_err(|e| self.err(&format!("input() error: {}", e)))?;
-                Ok(Value::Str(line.trim_end_matches('\n').to_string()))
+            }
+            "set_completions" => {
+                if let Some(Value::List(lst)) = args.first() {
+                    let completions: Vec<String> = lst
+                        .borrow()
+                        .iter()
+                        .filter_map(|v| {
+                            if let Value::Str(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    COMPLETIONS.with(|c| *c.borrow_mut() = completions);
+                }
+                Ok(Value::Nil)
+            }
+            "eval" => {
+                let code = match args.into_iter().next() {
+                    Some(Value::Str(s)) => s,
+                    _ => return Err(self.err("eval() requires a string")),
+                };
+                // Only use the expression path if the entire input is consumed
+                let expr_opt: Option<crate::ast::Expr> = {
+                    let mut lex = crate::lexer::Lexer::new(&code);
+                    if let Ok(toks) = lex.tokenize() {
+                        let mut p = crate::parser::Parser::new(toks);
+                        match p.parse_expr() {
+                            Ok(e) if p.is_at_end() => Some(e),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                };
+                if let Some(expr) = expr_opt {
+                    self.eval(&expr, env)
+                } else {
+                    let mut lex2 = crate::lexer::Lexer::new(&code);
+                    let tokens = lex2.tokenize().map_err(|e| self.err(&e))?;
+                    let mut parser2 = crate::parser::Parser::new(tokens);
+                    let prog = parser2.parse_program().map_err(|e| self.err(&e))?;
+                    self.exec_block(&prog, env)?;
+                    Ok(Value::Nil)
+                }
             }
             "exit" => {
                 let code = match args.first() {
@@ -2453,48 +2736,81 @@ impl Interpreter {
     }
 
     fn call_math_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
-        let n = match args.get(0) {
-            Some(Value::Int(i)) => *i as f64,
-            Some(Value::Float(f)) => *f,
-            _ => return Err(self.err(&format!("math.{}() requires a number", name))),
-        };
-        let result = match name {
-            "sqrt" => n.sqrt(),
-            "floor" => n.floor(),
-            "ceil" => n.ceil(),
-            "abs" => n.abs(),
-            "log" => n.ln(),
-            "log2" => n.log2(),
-            "log10" => n.log10(),
-            "sin" => n.sin(),
-            "cos" => n.cos(),
-            "tan" => n.tan(),
-            "asin" => n.asin(),
-            "acos" => n.acos(),
-            "atan" => n.atan(),
+        // Functions that don't need a numeric first arg
+        match name {
+            "isnan" => {
+                let n = as_float_arg(&args, 0, "math.isnan")?;
+                return Ok(Value::Bool(n.is_nan()));
+            }
+            "isinf" => {
+                let n = as_float_arg(&args, 0, "math.isinf")?;
+                return Ok(Value::Bool(n.is_infinite()));
+            }
+            "isfinite" => {
+                let n = as_float_arg(&args, 0, "math.isfinite")?;
+                return Ok(Value::Bool(n.is_finite()));
+            }
+            "gcd" => {
+                let a = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.gcd() requires integers")) };
+                let b = match args.get(1) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.gcd() requires 2 integers")) };
+                fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a.abs() } else { gcd(b, a % b) } }
+                return Ok(Value::Int(gcd(a, b)));
+            }
+            "lcm" => {
+                let a = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.lcm() requires integers")) };
+                let b = match args.get(1) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.lcm() requires 2 integers")) };
+                fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a.abs() } else { gcd(b, a % b) } }
+                return Ok(Value::Int(if a == 0 || b == 0 { 0 } else { (a * b).abs() / gcd(a, b) }));
+            }
+            "factorial" => {
+                let n = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.factorial() requires an integer")) };
+                if n < 0 { return Err(self.err("math.factorial() requires a non-negative integer")); }
+                let result: i64 = (1..=n).product();
+                return Ok(Value::Int(result));
+            }
+            "hypot" => {
+                let a = as_float_arg(&args, 0, "math.hypot")?;
+                let b = as_float_arg(&args, 1, "math.hypot")?;
+                return Ok(Value::Float(a.hypot(b)));
+            }
             "atan2" => {
-                let m = match args.get(1) {
-                    Some(Value::Int(i)) => *i as f64,
-                    Some(Value::Float(f)) => *f,
-                    _ => return Err(self.err("math.atan2() requires 2 numbers")),
-                };
-                n.atan2(m)
+                let a = as_float_arg(&args, 0, "math.atan2")?;
+                let b = as_float_arg(&args, 1, "math.atan2")?;
+                return Ok(Value::Float(a.atan2(b)));
             }
             "pow" => {
-                let exp = match args.get(1) {
-                    Some(Value::Int(i)) => *i as f64,
-                    Some(Value::Float(f)) => *f,
-                    _ => return Err(self.err("math.pow() requires 2 numbers")),
-                };
-                n.powf(exp)
+                let a = as_float_arg(&args, 0, "math.pow")?;
+                let b = as_float_arg(&args, 1, "math.pow")?;
+                return Ok(Value::Float(a.powf(b)));
             }
+            _ => {}
+        }
+        let n = as_float_arg(&args, 0, &format!("math.{}", name))?;
+        let result = match name {
+            "sqrt"    => n.sqrt(),
+            "floor"   => { return Ok(Value::Int(n.floor() as i64)); }
+            "ceil"    => { return Ok(Value::Int(n.ceil() as i64)); }
+            "trunc"   => { return Ok(Value::Int(n.trunc() as i64)); }
+            "abs"     => n.abs(),
+            "log"     => n.ln(),
+            "log2"    => n.log2(),
+            "log10"   => n.log10(),
+            "exp"     => n.exp(),
+            "exp2"    => n.exp2(),
+            "sin"     => n.sin(),
+            "cos"     => n.cos(),
+            "tan"     => n.tan(),
+            "asin"    => n.asin(),
+            "acos"    => n.acos(),
+            "atan"    => n.atan(),
+            "sinh"    => n.sinh(),
+            "cosh"    => n.cosh(),
+            "tanh"    => n.tanh(),
+            "degrees" => n.to_degrees(),
+            "radians" => n.to_radians(),
             _ => return Err(self.err(&format!("math has no function '{}'", name))),
         };
-        if result.fract() == 0.0 && matches!(name, "floor" | "ceil") {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(result))
-        }
+        Ok(Value::Float(result))
     }
 
     fn call_os_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
@@ -2583,7 +2899,403 @@ impl Interpreter {
                     .map_err(|e| self.err(&format!("os.rename() error: {}", e)))?;
                 Ok(Value::Nil)
             }
+            "popen" => {
+                let cmd = match args.into_iter().next() {
+                    Some(Value::Str(s)) => s,
+                    _ => return Err(self.err("os.popen() requires a command string")),
+                };
+                let output = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .output()
+                    .map_err(|e| self.err(&format!("os.popen() error: {}", e)))?;
+                Ok(Value::Str(String::from_utf8_lossy(&output.stdout).to_string()))
+            }
             _ => Err(self.err(&format!("os has no function '{}'", name))),
+        }
+    }
+
+    // ── string module ─────────────────────────────────────────────────────
+
+    fn call_string_fn(&mut self, name: &str, args: Vec<Value>, _env: &Env) -> Result<Value, String> {
+        match name {
+            "split" => {
+                let s = req_str_arg(&args, 0, "string.split")?;
+                let sep = match args.get(1) { Some(Value::Str(sep)) => Some(sep.clone()), None => None, _ => return Err(self.err("string.split() separator must be a string")) };
+                let parts: Vec<Value> = match sep { Some(sep) => s.split(&*sep).map(|p| Value::Str(p.to_string())).collect(), None => s.split_whitespace().map(|p| Value::Str(p.to_string())).collect() };
+                Ok(Value::List(Rc::new(RefCell::new(parts))))
+            }
+            "join" => {
+                let sep = req_str_arg(&args, 0, "string.join")?;
+                let lst = match args.get(1) { Some(Value::List(l)) => l.clone(), _ => return Err(self.err("string.join() requires a list as 2nd argument")) };
+                let parts: Vec<String> = lst.borrow().iter().map(|v| v.to_string()).collect();
+                Ok(Value::Str(parts.join(&sep)))
+            }
+            "strip"     => { let s = req_str_arg(&args, 0, "string.strip")?; Ok(Value::Str(s.trim().to_string())) }
+            "lstrip"    => { let s = req_str_arg(&args, 0, "string.lstrip")?; Ok(Value::Str(s.trim_start().to_string())) }
+            "rstrip"    => { let s = req_str_arg(&args, 0, "string.rstrip")?; Ok(Value::Str(s.trim_end().to_string())) }
+            "upper"     => { let s = req_str_arg(&args, 0, "string.upper")?; Ok(Value::Str(s.to_uppercase())) }
+            "lower"     => { let s = req_str_arg(&args, 0, "string.lower")?; Ok(Value::Str(s.to_lowercase())) }
+            "title"     => { let s = req_str_arg(&args, 0, "string.title")?; Ok(Value::Str(s.split_whitespace().map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().to_string() + c.as_str()).unwrap_or_default() }).collect::<Vec<_>>().join(" "))) }
+            "capitalize"=> { let s = req_str_arg(&args, 0, "string.capitalize")?; let mut c = s.chars(); Ok(Value::Str(c.next().map(|f| f.to_uppercase().to_string() + c.as_str()).unwrap_or_default())) }
+            "replace" => {
+                let s   = req_str_arg(&args, 0, "string.replace")?;
+                let old = req_str_arg(&args, 1, "string.replace")?;
+                let new = req_str_arg(&args, 2, "string.replace")?;
+                Ok(Value::Str(s.replace(&*old, &*new)))
+            }
+            "startswith" => {
+                let s   = req_str_arg(&args, 0, "string.startswith")?;
+                let pre = req_str_arg(&args, 1, "string.startswith")?;
+                Ok(Value::Bool(s.starts_with(&*pre)))
+            }
+            "endswith" => {
+                let s   = req_str_arg(&args, 0, "string.endswith")?;
+                let suf = req_str_arg(&args, 1, "string.endswith")?;
+                Ok(Value::Bool(s.ends_with(&*suf)))
+            }
+            "find" => {
+                let s   = req_str_arg(&args, 0, "string.find")?;
+                let sub = req_str_arg(&args, 1, "string.find")?;
+                Ok(Value::Int(s.find(&*sub).map(|i| i as i64).unwrap_or(-1)))
+            }
+            "count" => {
+                let s   = req_str_arg(&args, 0, "string.count")?;
+                let sub = req_str_arg(&args, 1, "string.count")?;
+                Ok(Value::Int(s.matches(&*sub).count() as i64))
+            }
+            "format" => {
+                // string.format(template, *args) — same as template.format(args)
+                let s = req_str_arg(&args, 0, "string.format")?;
+                let rest = args.into_iter().skip(1).collect::<Vec<_>>();
+                let mut result = s.clone();
+                for v in rest {
+                    if let Some(pos) = result.find("{}") {
+                        result.replace_range(pos..pos + 2, &v.to_string());
+                    }
+                }
+                Ok(Value::Str(result))
+            }
+            _ => Err(self.err(&format!("string has no function '{}'", name))),
+        }
+    }
+
+    // ── list module ───────────────────────────────────────────────────────
+
+    fn call_list_mod_fn(&mut self, name: &str, args: Vec<Value>, env: &Env) -> Result<Value, String> {
+        match name {
+            "sort" => {
+                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.sort() requires a list")) };
+                let mut v = lst.borrow().clone();
+                v.sort_by(|a, b| compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal));
+                Ok(Value::List(Rc::new(RefCell::new(v))))
+            }
+            "reverse" => {
+                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.reverse() requires a list")) };
+                let mut v = lst.borrow().clone();
+                v.reverse();
+                Ok(Value::List(Rc::new(RefCell::new(v))))
+            }
+            "map" => {
+                if args.len() < 2 { return Err(self.err("list.map() requires (fn, list)")); }
+                let func = args[0].clone();
+                let lst = match &args[1] { Value::List(l) => l.clone(), _ => return Err(self.err("list.map() 2nd argument must be a list")) };
+                let items = lst.borrow().clone();
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.call_value(func.clone(), vec![item], vec![], env)?);
+                }
+                Ok(Value::List(Rc::new(RefCell::new(out))))
+            }
+            "filter" => {
+                if args.len() < 2 { return Err(self.err("list.filter() requires (fn, list)")); }
+                let func = args[0].clone();
+                let lst = match &args[1] { Value::List(l) => l.clone(), _ => return Err(self.err("list.filter() 2nd argument must be a list")) };
+                let items = lst.borrow().clone();
+                let mut out = Vec::new();
+                for item in items {
+                    let keep = self.call_value(func.clone(), vec![item.clone()], vec![], env)?;
+                    if keep.is_truthy() { out.push(item); }
+                }
+                Ok(Value::List(Rc::new(RefCell::new(out))))
+            }
+            "reduce" => {
+                if args.len() < 2 { return Err(self.err("list.reduce() requires (fn, list[, initial])")); }
+                let func = args[0].clone();
+                let lst = match &args[1] { Value::List(l) => l.clone(), _ => return Err(self.err("list.reduce() 2nd argument must be a list")) };
+                let items = lst.borrow().clone();
+                let mut iter = items.into_iter();
+                let mut acc = if args.len() >= 3 {
+                    args[2].clone()
+                } else {
+                    iter.next().ok_or_else(|| self.err("list.reduce() called on empty list with no initial value"))?
+                };
+                for item in iter {
+                    acc = self.call_value(func.clone(), vec![acc, item], vec![], env)?;
+                }
+                Ok(acc)
+            }
+            "flatten" => {
+                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.flatten() requires a list")) };
+                let mut out = Vec::new();
+                for item in lst.borrow().iter() {
+                    match item {
+                        Value::List(inner) => out.extend(inner.borrow().clone()),
+                        other => out.push(other.clone()),
+                    }
+                }
+                Ok(Value::List(Rc::new(RefCell::new(out))))
+            }
+            "unique" => {
+                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.unique() requires a list")) };
+                let mut out: Vec<Value> = Vec::new();
+                for item in lst.borrow().iter() {
+                    if !out.iter().any(|x| values_equal(x, item)) {
+                        out.push(item.clone());
+                    }
+                }
+                Ok(Value::List(Rc::new(RefCell::new(out))))
+            }
+            _ => Err(self.err(&format!("list module has no function '{}'", name))),
+        }
+    }
+
+    // ── json module ───────────────────────────────────────────────────────
+
+    fn call_json_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "loads" => {
+                let s = req_str_arg(&args, 0, "json.loads")?;
+                json_parse(&s).map_err(|e| self.err(&format!("json.loads() error: {}", e)))
+            }
+            "dumps" => {
+                let v = args.into_iter().next().ok_or_else(|| self.err("json.dumps() requires 1 argument"))?;
+                Ok(Value::Str(json_dumps(&v)))
+            }
+            _ => Err(self.err(&format!("json has no function '{}'", name))),
+        }
+    }
+
+    // ── re module ─────────────────────────────────────────────────────────
+
+    fn call_re_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        let pattern = req_str_arg(&args, 0, &format!("re.{}", name))?;
+        let text    = req_str_arg(&args, 1, &format!("re.{}", name))?;
+        let re = Regex::new(&pattern).map_err(|e| self.err(&format!("re.{}() invalid pattern: {}", name, e)))?;
+        match name {
+            "match" => {
+                // Anchored at start
+                let anchored = format!("^(?:{})", pattern);
+                let re2 = Regex::new(&anchored).map_err(|e| self.err(&format!("re.match() invalid pattern: {}", e)))?;
+                match re2.find(&text) {
+                    Some(m) => Ok(Value::Str(m.as_str().to_string())),
+                    None    => Ok(Value::Nil),
+                }
+            }
+            "fullmatch" => {
+                let anchored = format!("^(?:{})$", pattern);
+                let re2 = Regex::new(&anchored).map_err(|e| self.err(&format!("re.fullmatch() invalid pattern: {}", e)))?;
+                match re2.find(&text) {
+                    Some(m) => Ok(Value::Str(m.as_str().to_string())),
+                    None    => Ok(Value::Nil),
+                }
+            }
+            "search" => {
+                match re.find(&text) {
+                    Some(m) => Ok(Value::Str(m.as_str().to_string())),
+                    None    => Ok(Value::Nil),
+                }
+            }
+            "findall" => {
+                let matches: Vec<Value> = re.find_iter(&text).map(|m| Value::Str(m.as_str().to_string())).collect();
+                Ok(Value::List(Rc::new(RefCell::new(matches))))
+            }
+            "sub" => {
+                let repl = req_str_arg(&args, 2, "re.sub")?;
+                Ok(Value::Str(re.replace_all(&text, repl.as_str()).to_string()))
+            }
+            "split" => {
+                let parts: Vec<Value> = re.split(&text).map(|s| Value::Str(s.to_string())).collect();
+                Ok(Value::List(Rc::new(RefCell::new(parts))))
+            }
+            _ => Err(self.err(&format!("re has no function '{}'", name))),
+        }
+    }
+
+    // ── time module ───────────────────────────────────────────────────────
+
+    fn call_time_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "time" => {
+                let t = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                Ok(Value::Float(t))
+            }
+            "monotonic" => {
+                // Use process start as epoch; we just return seconds as float
+                static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+                let start = START.get_or_init(std::time::Instant::now);
+                Ok(Value::Float(start.elapsed().as_secs_f64()))
+            }
+            "sleep" => {
+                let secs = as_float_arg(&args, 0, "time.sleep")?;
+                std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                Ok(Value::Nil)
+            }
+            _ => Err(self.err(&format!("time has no function '{}'", name))),
+        }
+    }
+
+    // ── random module ─────────────────────────────────────────────────────
+
+    fn xorshift64(&mut self) -> u64 {
+        let mut x = self.rng_state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng_state = x;
+        x
+    }
+
+    fn call_random_fn(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "random" => {
+                let bits = self.xorshift64();
+                Ok(Value::Float((bits >> 11) as f64 / (1u64 << 53) as f64))
+            }
+            "randint" => {
+                let a = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("random.randint() requires integers")) };
+                let b = match args.get(1) { Some(Value::Int(i)) => *i, _ => return Err(self.err("random.randint() requires 2 integers")) };
+                if a > b { return Err(self.err("random.randint() a must be <= b")); }
+                let range = (b - a + 1) as u64;
+                let bits = self.xorshift64();
+                Ok(Value::Int(a + (bits % range) as i64))
+            }
+            "uniform" => {
+                let a = as_float_arg(&args, 0, "random.uniform")?;
+                let b = as_float_arg(&args, 1, "random.uniform")?;
+                let bits = self.xorshift64();
+                let t = (bits >> 11) as f64 / (1u64 << 53) as f64;
+                Ok(Value::Float(a + t * (b - a)))
+            }
+            "choice" => {
+                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("random.choice() requires a list")) };
+                let v = lst.borrow();
+                if v.is_empty() { return Err(self.err("random.choice() called on empty list")); }
+                let idx = (self.xorshift64() % v.len() as u64) as usize;
+                Ok(v[idx].clone())
+            }
+            "shuffle" => {
+                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("random.shuffle() requires a list")) };
+                let mut v = lst.borrow_mut();
+                let n = v.len();
+                for i in (1..n).rev() {
+                    let j = (self.xorshift64() % (i as u64 + 1)) as usize;
+                    v.swap(i, j);
+                }
+                Ok(Value::Nil)
+            }
+            "seed" => {
+                let s = match args.into_iter().next() { Some(Value::Int(i)) => i as u64, Some(Value::Float(f)) => f as u64, _ => return Err(self.err("random.seed() requires a number")) };
+                self.rng_state = if s == 0 { 1 } else { s };
+                Ok(Value::Nil)
+            }
+            _ => Err(self.err(&format!("random has no function '{}'", name))),
+        }
+    }
+
+    // ── term module ───────────────────────────────────────────────────────
+
+    fn call_term_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        use std::io::Write;
+        match name {
+            "raw" => {
+                terminal::enable_raw_mode()
+                    .map_err(|e| self.err(&format!("term.raw() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "normal" => {
+                terminal::disable_raw_mode()
+                    .map_err(|e| self.err(&format!("term.normal() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "clear" => {
+                execute!(std::io::stdout(),
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                    crossterm::cursor::MoveTo(0, 0)
+                ).map_err(|e| self.err(&format!("term.clear() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "clear_line" => {
+                execute!(std::io::stdout(),
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+                ).map_err(|e| self.err(&format!("term.clear_line() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "move_cursor" => {
+                let row = match args.get(0) { Some(Value::Int(n)) => (*n as u16).saturating_sub(1), _ => return Err(self.err("term.move_cursor(row, col) requires integers")) };
+                let col = match args.get(1) { Some(Value::Int(n)) => (*n as u16).saturating_sub(1), _ => return Err(self.err("term.move_cursor(row, col) requires integers")) };
+                execute!(std::io::stdout(), crossterm::cursor::MoveTo(col, row))
+                    .map_err(|e| self.err(&format!("term.move_cursor() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "hide_cursor" => {
+                execute!(std::io::stdout(), crossterm::cursor::Hide)
+                    .map_err(|e| self.err(&format!("term.hide_cursor() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "show_cursor" => {
+                execute!(std::io::stdout(), crossterm::cursor::Show)
+                    .map_err(|e| self.err(&format!("term.show_cursor() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "write" => {
+                let s = match args.into_iter().next() {
+                    Some(Value::Str(s)) => s,
+                    Some(v) => v.to_string(),
+                    None => return Ok(Value::Nil),
+                };
+                print!("{}", s);
+                std::io::stdout().flush().ok();
+                Ok(Value::Nil)
+            }
+            "flush" => {
+                std::io::stdout().flush().ok();
+                Ok(Value::Nil)
+            }
+            "size" => {
+                let (w, h) = terminal::size()
+                    .map_err(|e| self.err(&format!("term.size() error: {}", e)))?;
+                Ok(Value::Tuple(Rc::new(vec![Value::Int(w as i64), Value::Int(h as i64)])))
+            }
+            "get_char" => {
+                // Blocking read of one keypress
+                loop {
+                    if let Ok(Event::Key(key)) = ct_event::read() {
+                        return Ok(Value::Str(key_to_string(key)));
+                    }
+                }
+            }
+            "poll_char" => {
+                // Non-blocking: wait up to `ms` milliseconds
+                let ms = match args.get(0) {
+                    Some(Value::Int(n)) => *n as u64,
+                    Some(Value::Float(f)) => *f as u64,
+                    None => 0,
+                    _ => return Err(self.err("term.poll_char(ms) requires a number")),
+                };
+                if ct_event::poll(std::time::Duration::from_millis(ms))
+                    .map_err(|e| self.err(&format!("term.poll_char() error: {}", e)))?
+                {
+                    if let Ok(Event::Key(key)) = ct_event::read() {
+                        return Ok(Value::Str(key_to_string(key)));
+                    }
+                }
+                Ok(Value::Nil)
+            }
+            _ => Err(self.err(&format!("term has no function '{}'", name))),
         }
     }
 
@@ -2770,6 +3482,11 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Tuple(x), Value::Tuple(y)) => {
             x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| values_equal(a, b))
         }
+        (Value::List(x), Value::List(y)) => {
+            let x = x.borrow();
+            let y = y.borrow();
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| values_equal(a, b))
+        }
         _ => false,
     }
 }
@@ -2844,4 +3561,215 @@ fn req_int_arg(args: &[Value], i: usize, method: &str) -> Result<i64, String> {
             i + 1
         )),
     }
+}
+
+fn key_to_string(key: KeyEvent) -> String {
+    // Ctrl+letter → "CTRL_X"
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let KeyCode::Char(c) = key.code {
+            return format!("CTRL_{}", c.to_uppercase().next().unwrap_or(c));
+        }
+    }
+    match key.code {
+        KeyCode::Char(c)  => c.to_string(),
+        KeyCode::Up       => "UP".to_string(),
+        KeyCode::Down     => "DOWN".to_string(),
+        KeyCode::Left     => "LEFT".to_string(),
+        KeyCode::Right    => "RIGHT".to_string(),
+        KeyCode::Enter    => "ENTER".to_string(),
+        KeyCode::Backspace=> "BACKSPACE".to_string(),
+        KeyCode::Delete   => "DELETE".to_string(),
+        KeyCode::Esc      => "ESC".to_string(),
+        KeyCode::Tab      => "TAB".to_string(),
+        KeyCode::Home     => "HOME".to_string(),
+        KeyCode::End      => "END".to_string(),
+        KeyCode::PageUp   => "PAGEUP".to_string(),
+        KeyCode::PageDown => "PAGEDOWN".to_string(),
+        _                 => "UNKNOWN".to_string(),
+    }
+}
+
+fn as_float_arg(args: &[Value], i: usize, method: &str) -> Result<f64, String> {
+    match args.get(i) {
+        Some(Value::Int(n))   => Ok(*n as f64),
+        Some(Value::Float(f)) => Ok(*f),
+        Some(other) => Err(format!("{}() argument {} must be a number, got {}", method, i + 1, other.type_name())),
+        None => Err(format!("{}() requires at least {} argument(s)", method, i + 1)),
+    }
+}
+
+// ── JSON parser/serializer ─────────────────────────────────────────────
+
+fn json_dumps(v: &Value) -> String {
+    match v {
+        Value::Nil         => "null".to_string(),
+        Value::Bool(b)     => if *b { "true".to_string() } else { "false".to_string() },
+        Value::Int(n)      => n.to_string(),
+        Value::Float(f)    => {
+            if f.is_nan() || f.is_infinite() { "null".to_string() }
+            else { format!("{}", f) }
+        }
+        Value::Str(s)      => {
+            let mut out = String::from('"');
+            for c in s.chars() {
+                match c {
+                    '"'  => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c    => out.push(c),
+                }
+            }
+            out.push('"');
+            out
+        }
+        Value::List(lst)   => {
+            let items: Vec<String> = lst.borrow().iter().map(json_dumps).collect();
+            format!("[{}]", items.join(","))
+        }
+        Value::Dict(map)   => {
+            let items: Vec<String> = map.borrow().iter().map(|(k, v)| {
+                format!("{}:{}", json_dumps(k), json_dumps(v))
+            }).collect();
+            format!("{{{}}}", items.join(","))
+        }
+        Value::Tuple(t)    => {
+            let items: Vec<String> = t.iter().map(json_dumps).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => format!("\"{}\"", other),
+    }
+}
+
+fn json_parse(s: &str) -> Result<Value, String> {
+    let s = s.trim();
+    let mut chars = s.chars().peekable();
+    json_parse_value(&mut chars)
+}
+
+fn json_parse_value(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
+    skip_ws(chars);
+    match chars.peek() {
+        Some('"')  => json_parse_string(chars),
+        Some('{')  => json_parse_object(chars),
+        Some('[')  => json_parse_array(chars),
+        Some('t')  => { consume_literal(chars, "true")?;  Ok(Value::Bool(true)) }
+        Some('f')  => { consume_literal(chars, "false")?; Ok(Value::Bool(false)) }
+        Some('n')  => { consume_literal(chars, "null")?;  Ok(Value::Nil) }
+        Some(c) if c.is_ascii_digit() || *c == '-' => json_parse_number(chars),
+        Some(c) => Err(format!("unexpected JSON character '{}'", c)),
+        None    => Err("unexpected end of JSON".to_string()),
+    }
+}
+
+fn skip_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
+    while matches!(chars.peek(), Some(' ') | Some('\t') | Some('\n') | Some('\r')) {
+        chars.next();
+    }
+}
+
+fn consume_literal(chars: &mut std::iter::Peekable<std::str::Chars>, lit: &str) -> Result<(), String> {
+    for expected in lit.chars() {
+        match chars.next() {
+            Some(c) if c == expected => {}
+            Some(c) => return Err(format!("expected '{}' but got '{}'", expected, c)),
+            None    => return Err(format!("unexpected end parsing '{}'", lit)),
+        }
+    }
+    Ok(())
+}
+
+fn json_parse_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
+    chars.next(); // consume '"'
+    let mut s = String::new();
+    loop {
+        match chars.next() {
+            Some('"')  => break,
+            Some('\\') => match chars.next() {
+                Some('"')  => s.push('"'),
+                Some('\\') => s.push('\\'),
+                Some('/')  => s.push('/'),
+                Some('n')  => s.push('\n'),
+                Some('r')  => s.push('\r'),
+                Some('t')  => s.push('\t'),
+                Some('b')  => s.push('\x08'),
+                Some('f')  => s.push('\x0C'),
+                Some('u')  => {
+                    let hex: String = (0..4).filter_map(|_| chars.next()).collect();
+                    let cp = u32::from_str_radix(&hex, 16).map_err(|_| format!("invalid \\u escape: {}", hex))?;
+                    s.push(char::from_u32(cp).unwrap_or('?'));
+                }
+                Some(c)  => { s.push('\\'); s.push(c); }
+                None     => return Err("unterminated string escape".to_string()),
+            },
+            Some(c)  => s.push(c),
+            None     => return Err("unterminated JSON string".to_string()),
+        }
+    }
+    Ok(Value::Str(s))
+}
+
+fn json_parse_number(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
+    let mut s = String::new();
+    let mut is_float = false;
+    if chars.peek() == Some(&'-') { s.push(chars.next().unwrap()); }
+    while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) { s.push(chars.next().unwrap()); }
+    if chars.peek() == Some(&'.') {
+        is_float = true;
+        s.push(chars.next().unwrap());
+        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) { s.push(chars.next().unwrap()); }
+    }
+    if matches!(chars.peek(), Some('e') | Some('E')) {
+        is_float = true;
+        s.push(chars.next().unwrap());
+        if matches!(chars.peek(), Some('+') | Some('-')) { s.push(chars.next().unwrap()); }
+        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) { s.push(chars.next().unwrap()); }
+    }
+    if is_float {
+        Ok(Value::Float(s.parse::<f64>().map_err(|e| e.to_string())?))
+    } else {
+        Ok(Value::Int(s.parse::<i64>().map_err(|e| e.to_string())?))
+    }
+}
+
+fn json_parse_array(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
+    chars.next(); // consume '['
+    let mut items = Vec::new();
+    skip_ws(chars);
+    if chars.peek() == Some(&']') { chars.next(); return Ok(Value::List(Rc::new(RefCell::new(items)))); }
+    loop {
+        items.push(json_parse_value(chars)?);
+        skip_ws(chars);
+        match chars.next() {
+            Some(']') => break,
+            Some(',') => {}
+            Some(c)   => return Err(format!("expected ',' or ']' in JSON array, got '{}'", c)),
+            None      => return Err("unterminated JSON array".to_string()),
+        }
+    }
+    Ok(Value::List(Rc::new(RefCell::new(items))))
+}
+
+fn json_parse_object(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
+    chars.next(); // consume '{'
+    let mut map = IndexedMap::new();
+    skip_ws(chars);
+    if chars.peek() == Some(&'}') { chars.next(); return Ok(Value::Dict(Rc::new(RefCell::new(map)))); }
+    loop {
+        skip_ws(chars);
+        let key = json_parse_string(chars)?;
+        skip_ws(chars);
+        match chars.next() { Some(':') => {} Some(c) => return Err(format!("expected ':' in JSON object, got '{}'", c)), None => return Err("unterminated JSON object".to_string()) }
+        let val = json_parse_value(chars)?;
+        map.set(key, val);
+        skip_ws(chars);
+        match chars.next() {
+            Some('}') => break,
+            Some(',') => {}
+            Some(c)   => return Err(format!("expected ',' or '}}' in JSON object, got '{}'", c)),
+            None      => return Err("unterminated JSON object".to_string()),
+        }
+    }
+    Ok(Value::Dict(Rc::new(RefCell::new(map))))
 }

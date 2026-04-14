@@ -1,0 +1,81 @@
+import os
+import time
+
+REFRESH = 2.0
+
+def clear():
+    print("\x1b[2J\x1b[H")
+
+def run_top():
+    print("top v1.0 — press Ctrl+C to exit (refreshes every " + str(REFRESH) + "s)")
+    time["sleep"](0.8)
+
+    while true:
+        clear()
+
+        now = time["time"]()
+        import math
+        ts = str(math["trunc"](now))
+
+        print("=== CoolOS top === time: " + ts + " ===")
+        print("")
+
+        # System uptime / load (macOS: sysctl, Linux: /proc/loadavg)
+        loadavg = os["popen"]("cat /proc/loadavg 2>/dev/null || sysctl -n vm.loadavg 2>/dev/null | tr -d '{}'")
+        if loadavg.strip() != "":
+            print("Load: " + loadavg.strip())
+
+        # Memory (macOS: vm_stat, Linux: free -h)
+        mem = os["popen"]("free -h 2>/dev/null | head -2 || vm_stat 2>/dev/null | head -6")
+        if mem.strip() != "":
+            print("Memory:")
+            lines = mem.split("\n")
+            for l in lines:
+                if l.strip() != "":
+                    print("  " + l)
+
+        print("")
+        print("PID      CPU%  MEM%  COMMAND")
+        print("-------- ----- ----- -------")
+
+        # Process list — ps works on both macOS and Linux
+        ps = os["popen"]("ps aux --sort=-%cpu 2>/dev/null || ps aux 2>/dev/null")
+        ps_lines = ps.split("\n")
+        shown = 0
+        for i in range(1, len(ps_lines)):
+            l = ps_lines[i].strip()
+            if l == "":
+                continue
+            parts = l.split()
+            if len(parts) < 11:
+                continue
+            pid  = parts[1]
+            cpu  = parts[2]
+            mem  = parts[3]
+            cmd  = parts[10]
+            # Truncate command
+            if len(cmd) > 30:
+                cmd = cmd[:27] + "..."
+            row = pid
+            while len(row) < 9:
+                row = row + " "
+            row = row + cpu
+            while len(row) < 15:
+                row = row + " "
+            row = row + mem
+            while len(row) < 21:
+                row = row + " "
+            row = row + cmd
+            print(row)
+            shown = shown + 1
+            if shown >= 20:
+                break
+
+        print("")
+        print("(Ctrl+C to exit)")
+        time["sleep"](REFRESH)
+
+try:
+    run_top()
+except e:
+    print("top exited: " + str(e))

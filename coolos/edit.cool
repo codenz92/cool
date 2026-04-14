@@ -1,0 +1,203 @@
+import term
+import os
+import sys
+
+def load_file(path):
+    if os["exists"](path):
+        f = open(path, "r")
+        content = f.read()
+        f.close()
+        lines = content.split("\n")
+        # Remove trailing empty line from split
+        if len(lines) > 0 and lines[len(lines) - 1] == "":
+            lines.pop()
+        return lines
+    return [""]
+
+def save_file(path, lines):
+    content = ""
+    for i in range(len(lines)):
+        if i > 0:
+            content = content + "\n"
+        content = content + lines[i]
+    content = content + "\n"
+    f = open(path, "w")
+    f.write(content)
+    f.close()
+
+def render(lines, cursor_row, cursor_col, path, modified, rows, cols):
+    term["move_cursor"](1, 1)
+
+    status = " edit: " + path
+    if modified:
+        status = status + " [modified]"
+    status = status + " | ^S save  ^X exit  ^G goto"
+    while len(status) < cols:
+        status = status + " "
+    term["write"]("\x1b[7m" + status[:cols] + "\x1b[0m\n")
+
+    # Viewport: show rows-2 lines of content
+    view_rows = rows - 2
+    view_start = 0
+    if cursor_row >= view_rows:
+        view_start = cursor_row - view_rows + 1
+
+    for i in range(view_rows):
+        lnum = view_start + i
+        if lnum < len(lines):
+            line = lines[lnum]
+            if len(line) > cols - 6:
+                line = line[:cols - 6]
+            ln = str(lnum + 1)
+            while len(ln) < 4:
+                ln = " " + ln
+            row_str = "\x1b[90m" + ln + "\x1b[0m " + line
+        else:
+            row_str = "\x1b[90m   ~\x1b[0m"
+        term["clear_line"]()
+        term["write"](row_str + "\n")
+
+    # Bottom status bar
+    pos_info = " Ln " + str(cursor_row + 1) + ", Col " + str(cursor_col + 1)
+    while len(pos_info) < cols:
+        pos_info = pos_info + " "
+    term["write"]("\x1b[7m" + pos_info[:cols] + "\x1b[0m")
+
+    # Position cursor
+    display_row = cursor_row - view_start + 2
+    display_col = cursor_col + 6
+    term["move_cursor"](display_row, display_col)
+    term["flush"]()
+
+def run_editor(path):
+    lines = load_file(path)
+    cursor_row = 0
+    cursor_col = 0
+    modified = false
+    running = true
+
+    term["raw"]()
+    term["clear"]()
+    term["hide_cursor"]()
+
+    try:
+        while running:
+            size = term["size"]()
+            cols = size[0]
+            rows = size[1]
+
+            render(lines, cursor_row, cursor_col, path, modified, rows, cols)
+
+            key = term["get_char"]()
+
+            if key == "CTRL_X":
+                if modified:
+                    term["move_cursor"](rows, 1)
+                    term["write"]("Save before exit? (y/n) ")
+                    term["flush"]()
+                    answer = term["get_char"]()
+                    if answer == "y" or answer == "Y":
+                        save_file(path, lines)
+                running = false
+
+            elif key == "CTRL_S":
+                save_file(path, lines)
+                modified = false
+
+            elif key == "UP":
+                if cursor_row > 0:
+                    cursor_row = cursor_row - 1
+                    line_len = len(lines[cursor_row])
+                    if cursor_col > line_len:
+                        cursor_col = line_len
+
+            elif key == "DOWN":
+                if cursor_row < len(lines) - 1:
+                    cursor_row = cursor_row + 1
+                    line_len = len(lines[cursor_row])
+                    if cursor_col > line_len:
+                        cursor_col = line_len
+
+            elif key == "LEFT":
+                if cursor_col > 0:
+                    cursor_col = cursor_col - 1
+                elif cursor_row > 0:
+                    cursor_row = cursor_row - 1
+                    cursor_col = len(lines[cursor_row])
+
+            elif key == "RIGHT":
+                line_len = len(lines[cursor_row])
+                if cursor_col < line_len:
+                    cursor_col = cursor_col + 1
+                elif cursor_row < len(lines) - 1:
+                    cursor_row = cursor_row + 1
+                    cursor_col = 0
+
+            elif key == "HOME":
+                cursor_col = 0
+
+            elif key == "END":
+                cursor_col = len(lines[cursor_row])
+
+            elif key == "ENTER":
+                line = lines[cursor_row]
+                before = line[:cursor_col]
+                after = line[cursor_col:]
+                lines[cursor_row] = before
+                lines.insert(cursor_row + 1, after)
+                cursor_row = cursor_row + 1
+                cursor_col = 0
+                modified = true
+
+            elif key == "BACKSPACE":
+                if cursor_col > 0:
+                    line = lines[cursor_row]
+                    lines[cursor_row] = line[:cursor_col - 1] + line[cursor_col:]
+                    cursor_col = cursor_col - 1
+                    modified = true
+                elif cursor_row > 0:
+                    prev = lines[cursor_row - 1]
+                    cursor_col = len(prev)
+                    lines[cursor_row - 1] = prev + lines[cursor_row]
+                    lines.remove(lines[cursor_row])
+                    cursor_row = cursor_row - 1
+                    modified = true
+
+            elif key == "DELETE":
+                line = lines[cursor_row]
+                if cursor_col < len(line):
+                    lines[cursor_row] = line[:cursor_col] + line[cursor_col + 1:]
+                    modified = true
+                elif cursor_row < len(lines) - 1:
+                    lines[cursor_row] = line + lines[cursor_row + 1]
+                    lines.remove(lines[cursor_row + 1])
+                    modified = true
+
+            elif key == "TAB":
+                line = lines[cursor_row]
+                lines[cursor_row] = line[:cursor_col] + "    " + line[cursor_col:]
+                cursor_col = cursor_col + 4
+                modified = true
+
+            elif len(key) == 1:
+                line = lines[cursor_row]
+                lines[cursor_row] = line[:cursor_col] + key + line[cursor_col:]
+                cursor_col = cursor_col + 1
+                modified = true
+
+    except e:
+        term["show_cursor"]()
+        term["normal"]()
+        term["clear"]()
+        print("edit error: " + str(e))
+        return
+
+    term["show_cursor"]()
+    term["normal"]()
+    term["clear"]()
+
+args = sys["argv"]
+if len(args) < 3:
+    print("Usage: edit <file>")
+else:
+    run_editor(args[2])

@@ -1,0 +1,120 @@
+import os
+import sys
+import json
+
+def http_get(url, headers):
+    cmd = "curl -s -L"
+    for h in headers:
+        cmd = cmd + " -H '" + h + "'"
+    cmd = cmd + " '" + url + "'"
+    return os["popen"](cmd)
+
+def http_post(url, data, headers):
+    cmd = "curl -s -L -X POST"
+    for h in headers:
+        cmd = cmd + " -H '" + h + "'"
+    cmd = cmd + " -d '" + data + "'"
+    cmd = cmd + " '" + url + "'"
+    return os["popen"](cmd)
+
+def http_head(url):
+    cmd = "curl -s -I '" + url + "'"
+    return os["popen"](cmd)
+
+def show_help():
+    print("http v1.0 — simple HTTP client")
+    print("  http get <url>                  GET request")
+    print("  http post <url> <data>          POST request")
+    print("  http head <url>                 HEAD request (headers only)")
+    print("  http getjson <url>              GET and pretty-print JSON")
+    print("")
+    print("  Options (add anywhere):")
+    print("    -H 'Header: value'            Add request header")
+
+def pretty_print_json(text):
+    text = text.strip()
+    indent = 0
+    in_string = false
+    result = ""
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == '"' and (i == 0 or text[i-1] != '\\'):
+            in_string = not in_string
+            result = result + c
+        elif in_string:
+            result = result + c
+        elif c == "{" or c == "[":
+            indent = indent + 1
+            result = result + c + "\n" + "  " * indent
+        elif c == "}" or c == "]":
+            indent = indent - 1
+            result = result + "\n" + "  " * indent + c
+        elif c == ",":
+            result = result + c + "\n" + "  " * indent
+        elif c == ":":
+            result = result + c + " "
+        elif c != " " and c != "\n" and c != "\r" and c != "\t":
+            result = result + c
+        i = i + 1
+    print(result)
+
+args = sys["argv"]
+
+if len(args) < 3:
+    show_help()
+else:
+    method = args[2].lower()
+    headers = []
+
+    remaining_args = []
+    i = 3
+    while i < len(args):
+        if args[i] == "-H" and i + 1 < len(args):
+            headers.append(args[i + 1])
+            i = i + 2
+        else:
+            remaining_args.append(args[i])
+            i = i + 1
+
+    if method == "get":
+        if len(remaining_args) == 0:
+            print("Usage: http get <url>")
+        else:
+            url = remaining_args[0]
+            print(http_get(url, headers))
+
+    elif method == "getjson":
+        if len(remaining_args) == 0:
+            print("Usage: http getjson <url>")
+        else:
+            url = remaining_args[0]
+            if not ("-H 'Accept: application/json'" in headers):
+                headers.append("Accept: application/json")
+            result = http_get(url, headers)
+            try:
+                pretty_print_json(result)
+            except e:
+                print(result)
+
+    elif method == "post":
+        if len(remaining_args) < 2:
+            print("Usage: http post <url> <data>")
+        else:
+            url  = remaining_args[0]
+            data = remaining_args[1]
+            print(http_post(url, data, headers))
+
+    elif method == "head":
+        if len(remaining_args) == 0:
+            print("Usage: http head <url>")
+        else:
+            url = remaining_args[0]
+            print(http_head(url))
+
+    elif method == "help":
+        show_help()
+
+    else:
+        print("Unknown method: '" + method + "'")
+        show_help()
