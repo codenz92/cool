@@ -43,6 +43,9 @@ struct LoopInfo {
     break_patches: Vec<usize>,
     /// Instruction index to jump back to for `continue`.
     continue_target: usize,
+    /// Whether the loop has an iterator on the stack (for-loops do; while-loops don't).
+    /// A `break` must pop the iterator before jumping out.
+    has_iter_on_stack: bool,
 }
 
 impl FnScope {
@@ -322,6 +325,44 @@ impl Compiler {
                 }
             }
 
+            Stmt::UnpackTargets { targets, value } => {
+                // Compile RHS tuple onto stack, then assign to each target in order.
+                // Use DupTop + GetItem(i) to extract each element, keeping the
+                // tuple on the stack until the last target.
+                self.compile_expr(value)?;
+                let n = targets.len();
+                for (i, target) in targets.iter().enumerate() {
+                    let is_last = i == n - 1;
+                    if !is_last {
+                        self.emit(Op::DupTop); // preserve tuple for remaining targets
+                    }
+                    let ci = self.add_constant(VmValue::Int(i as i64));
+                    self.emit(Op::Constant(ci));
+                    self.emit(Op::GetItem); // items[i] is now TOS
+                    match target {
+                        Expr::Ident(name) => {
+                            let op = self.resolve_set(name);
+                            self.emit(op);
+                        }
+                        Expr::Index { object, index } => {
+                            self.compile_expr(object)?;
+                            self.compile_expr(index)?;
+                            // Stack: [..., items[i], obj, idx]
+                            self.emit(Op::RotThree); // → [..., obj, idx, items[i]]
+                            self.emit(Op::SetItem);
+                        }
+                        Expr::Attr { object, name } => {
+                            self.compile_expr(object)?;
+                            // Stack: [..., items[i], obj]
+                            self.emit(Op::Swap); // → [..., obj, items[i]]
+                            let name_idx = self.add_name(name);
+                            self.emit(Op::SetAttr(name_idx));
+                        }
+                        _ => return Err(format!("line {}: invalid unpack target", self.current_line)),
+                    }
+                }
+            }
+
             Stmt::SetItem { object, index, value } => {
                 self.compile_expr(object)?;
                 self.compile_expr(index)?;
@@ -347,8 +388,14 @@ impl Compiler {
             Stmt::Pass => {}
 
             Stmt::Break => {
+                // If breaking out of a for-loop, pop the iterator off the stack first.
+                let has_iter = self.scopes.last().unwrap().loop_stack.last()
+                    .map(|l| l.has_iter_on_stack)
+                    .ok_or_else(|| "break outside loop".to_string())?;
+                if has_iter {
+                    self.emit(Op::Pop); // discard the VmIter
+                }
                 let patch_idx = self.emit_jump(Op::Jump);
-                // Register for later patching.
                 if let Some(loop_info) = self.scopes.last_mut().unwrap().loop_stack.last_mut() {
                     loop_info.break_patches.push(patch_idx);
                 } else {
@@ -404,6 +451,7 @@ impl Compiler {
                 self.scope().loop_stack.push(LoopInfo {
                     break_patches: Vec::new(),
                     continue_target: loop_start,
+                    has_iter_on_stack: false,
                 });
 
                 self.compile_expr(condition)?;
@@ -431,6 +479,7 @@ impl Compiler {
                 self.scope().loop_stack.push(LoopInfo {
                     break_patches: Vec::new(),
                     continue_target: loop_start,
+                    has_iter_on_stack: true,
                 });
 
                 let exit_patch = self.emit_jump(Op::ForIter);
@@ -484,8 +533,8 @@ impl Compiler {
                 let name_idx = self.add_name(name);
                 self.emit(Op::MakeClass(name_idx, has_parent));
 
-                // The class is now on TOS. Compile methods and attach them.
-                // We use DupTop + SetAttr for each method.
+                // The class is now on TOS. Compile methods and class variables and attach them.
+                // We use DupTop + SetAttr for each method or class variable.
                 for stmt in body {
                     match stmt {
                         Stmt::FnDef { name: method_name, params, body: method_body } => {
@@ -496,13 +545,19 @@ impl Compiler {
                             let attr_idx = self.add_name(method_name);
                             self.emit(Op::SetAttr(attr_idx));
                         }
+                        Stmt::Assign { name: var_name, value } => {
+                            // Class variable: ClassName.var = value
+                            self.emit(Op::DupTop);
+                            self.compile_expr(value)?;
+                            let attr_idx = self.add_name(var_name);
+                            self.emit(Op::SetAttr(attr_idx));
+                        }
                         Stmt::Pass => {}
                         Stmt::SetLine(n) => {
                             self.current_line = *n;
                         }
                         _ => {
-                            // Static class-body statements (not methods) — just run them
-                            // (uncommon but technically valid).
+                            // Other class-body statements — silently skip.
                         }
                     }
                 }
@@ -588,7 +643,6 @@ impl Compiler {
             Stmt::ImportModule(module_name) => {
                 // import math / os / sys / etc.
                 let ci = self.add_constant(VmValue::Str(module_name.clone()));
-                self.emit(Op::Constant(ci));
                 let name_idx = self.add_name(module_name);
                 // Set the module into a global with the module name
                 // VM handles this specially via __import_module__ builtin.
@@ -944,7 +998,10 @@ impl Compiler {
                         }
                     }
                 }
-                if n != 1 {
+                if n == 0 {
+                    let ci = self.add_constant(VmValue::Str(String::new()));
+                    self.emit(Op::Constant(ci));
+                } else {
                     self.emit(Op::ConcatStr(n));
                 }
             }
@@ -968,67 +1025,78 @@ impl Compiler {
             }
 
             Expr::ListComp { expr, var, iter, condition } => {
-                // Compile as:
-                //   result = []
-                //   for var in iter: if condition: result.append(expr)
-                // We implement this inline using a temporary local.
-                let list_slot = self.scopes.last_mut().unwrap().add_local("<listcomp_result>");
+                // Stack-based list comprehension (no local variable for accumulator).
+                //
+                // Stack layout during the loop:
+                //   [..., acc, iterator]
+                // where acc stays on the stack throughout. `Over` (DUP TOS-1) is used
+                // to access acc for the append call without consuming it.
+                //
+                // This avoids the "local slot clobbers callee" bug when a list comp
+                // is used directly as a function argument.
+
+                // Push the accumulator list. It stays on the stack for the entire loop.
                 self.emit(Op::BuildList(0));
-                let set_list = Op::SetLocal(list_slot);
-                self.emit(set_list);
 
                 // for var in iter:
                 self.compile_expr(iter)?;
                 self.emit(Op::GetIter);
+                // Stack: [..., acc, iterator]
 
                 let loop_start = self.chunk().current_ip();
                 self.scope().loop_stack.push(LoopInfo {
                     break_patches: Vec::new(),
                     continue_target: loop_start,
+                    // The iterator is on the stack; break must pop it.
+                    // Additionally, the accumulator is below it; we pop that too in the
+                    // break handler via the normal break path (which only pops iterator).
+                    // Since you can't break inside a list comprehension in Cool, this is
+                    // effectively dead code, but keeping it safe.
+                    has_iter_on_stack: true,
                 });
 
                 let exit_patch = self.emit_jump(Op::ForIter);
                 let set_var = self.resolve_set(var);
                 self.emit(set_var);
+                // Stack: [..., acc, iterator]  (loop var stored, not on stack)
 
                 // Optional condition.
                 let mut cond_patch = None;
                 if let Some(cond) = condition {
                     self.compile_expr(cond)?;
                     cond_patch = Some(self.emit_jump(Op::JumpIfFalse));
-                    self.emit(Op::Pop);
+                    self.emit(Op::Pop); // pop truthy cond bool (true path)
                 }
 
-                // result.append(expr)
-                self.emit(Op::GetLocal(list_slot));
+                // acc.append(expr): use Over to copy acc (at TOS-1) without consuming it.
+                // Stack before: [..., acc, iterator]
+                self.emit(Op::Over); // [..., acc, iterator, acc_copy]
                 let append_idx = self.add_name("append");
-                self.emit(Op::GetAttr(append_idx));
-                self.compile_expr(expr)?;
-                self.emit(Op::Call(1, vec![]));
-                self.emit(Op::Pop);
+                self.emit(Op::GetAttr(append_idx)); // [..., acc, iterator, BoundBuiltin]
+                self.compile_expr(expr)?;            // [..., acc, iterator, BoundBuiltin, val]
+                self.emit(Op::Call(1, vec![]));      // [..., acc, iterator, nil]
+                self.emit(Op::Pop);                  // [..., acc, iterator]
 
                 // Jump back to loop (skipping the false-condition path below).
                 let true_continue = self.emit_jump(Op::Jump);
 
                 if let Some(p) = cond_patch {
-                    self.patch(p);          // false case jumps here
-                    self.emit(Op::Pop);     // pop the peeked false condition bool
+                    self.patch(p);       // false case jumps here (cond bool still on stack)
+                    self.emit(Op::Pop);  // pop the falsy cond bool
                 }
 
-                // Both true and false paths converge here.
+                // Both paths converge here → jump back to loop start.
                 self.patch(true_continue);
                 self.emit(Op::Jump(loop_start));
+
+                // Exit: ForIter has popped the exhausted iterator.
+                // Stack: [..., acc_with_all_elements]  ← this IS the result at TOS
                 self.patch(exit_patch);
 
                 let info = self.scopes.last_mut().unwrap().loop_stack.pop().unwrap();
                 let after = self.chunk().current_ip();
                 for p in info.break_patches { self.chunk().patch_jump(p, after); }
-
-                // Push result.
-                self.emit(Op::GetLocal(list_slot));
-                // Remove temp local (just decrement next_slot — won't affect execution).
-                self.scopes.last_mut().unwrap().next_slot -= 1;
-                self.scopes.last_mut().unwrap().locals.pop();
+                // acc is already on TOS — no GetLocal needed.
             }
         }
         Ok(())

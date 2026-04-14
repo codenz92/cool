@@ -123,6 +123,11 @@ pub enum Stmt {
         names: Vec<String>,
         value: Expr,
     },
+    /// Tuple unpack with non-trivial targets: a[i], obj.x = expr
+    UnpackTargets {
+        targets: Vec<Expr>,
+        value: Expr,
+    },
     Return(Option<Expr>),
     Break,
     Continue,

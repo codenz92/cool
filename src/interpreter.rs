@@ -93,6 +93,7 @@ impl Env {
             "enumerate",
             "zip",
             "abs",
+            "round",
             "min",
             "max",
             "sum",
@@ -564,6 +565,45 @@ impl Interpreter {
                 }
                 for (name, val) in names.iter().zip(items) {
                     env.set_local(name.clone(), val);
+                }
+                Ok(Signal::None)
+            }
+
+            Stmt::UnpackTargets { targets, value } => {
+                let v = self.eval(value, env)?;
+                let items = self.to_iterable(v)?;
+                if items.len() != targets.len() {
+                    return Err(self.err(&format!(
+                        "unpack: expected {} values, got {}",
+                        targets.len(),
+                        items.len()
+                    )));
+                }
+                for (target, val) in targets.iter().zip(items) {
+                    match target {
+                        Expr::Ident(name) => { env.set_local(name.clone(), val); }
+                        Expr::Index { object, index } => {
+                            let obj = self.eval(object, env)?;
+                            let idx = self.eval(index, env)?;
+                            match obj {
+                                Value::List(lst) => {
+                                    let i = to_list_index(&lst.borrow(), idx)?;
+                                    lst.borrow_mut()[i] = val;
+                                }
+                                Value::Dict(map) => { map.borrow_mut().set(idx, val); }
+                                other => return Err(self.err(&format!("cannot index-assign on {}", other.type_name()))),
+                            }
+                        }
+                        Expr::Attr { object, name } => {
+                            let obj = self.eval(object, env)?;
+                            match obj {
+                                Value::Dict(map) => { map.borrow_mut().set(Value::Str(name.clone()), val); }
+                                Value::Instance(inst) => { inst.fields.borrow_mut().insert(name.clone(), val); }
+                                other => return Err(self.err(&format!("cannot set attr on {}", other.type_name()))),
+                            }
+                        }
+                        _ => return Err(self.err("invalid unpack target")),
+                    }
                 }
                 Ok(Signal::None)
             }
@@ -2318,6 +2358,21 @@ class Stack:
                     other => {
                         Err(self.err(&format!("abs() not supported for {}", other.type_name())))
                     }
+                }
+            }
+            "round" => {
+                let ndigits = args.get(1).and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
+                match args.first() {
+                    Some(Value::Int(n)) => Ok(Value::Int(*n)),
+                    Some(Value::Float(f)) => {
+                        if ndigits == 0 {
+                            Ok(Value::Int(f.round() as i64))
+                        } else {
+                            let factor = 10f64.powi(ndigits as i32);
+                            Ok(Value::Float((f * factor).round() / factor))
+                        }
+                    }
+                    _ => Err(self.err("round() requires a number")),
                 }
             }
             "min" => {

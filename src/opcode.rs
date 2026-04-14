@@ -26,6 +26,9 @@ pub enum Op {
     False,
     Pop,
     DupTop,
+    Over,      // duplicate TOS-1 (second from top) onto TOS
+    Swap,      // swap TOS and TOS-1
+    RotThree,  // lift TOS-2 to TOS, shift TOS and TOS-1 down one
 
     // ── Arithmetic ────────────────────────────────────────────────────────────
     Add, Sub, Mul, Div, Mod, Pow, FloorDiv,
@@ -233,6 +236,7 @@ pub struct VmClass {
     pub name: String,
     pub parent: Option<Rc<VmClass>>,
     pub methods: HashMap<String, Rc<VmClosure>>,
+    pub class_vars: RefCell<HashMap<String, VmValue>>,
 }
 
 #[derive(Debug)]

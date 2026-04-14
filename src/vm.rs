@@ -66,7 +66,7 @@ impl VM {
             "print","len","range","str","int","float","bool","type","input",
             "repr","exit","open","isinstance","hasattr","getattr",
             "list","tuple","dict","set","sorted","reversed","enumerate",
-            "zip","abs","min","max","sum","map","filter",
+            "zip","abs","round","min","max","sum","map","filter",
             "set_completions","eval","append","pop","keys","values","items",
             "runfile","super","__import_module__","__exc_matches__",
         ] {
@@ -82,6 +82,7 @@ impl VM {
                 name: exc_name.to_string(),
                 parent: None,
                 methods: std::collections::HashMap::new(),
+                class_vars: RefCell::new(HashMap::new()),
             });
             self.globals.insert(exc_name.to_string(), VmValue::Class(cls));
         }
@@ -159,7 +160,10 @@ impl VM {
             local_count: 0,
         });
         let closure = Rc::new(VmClosure { proto, upvalues: vec![] });
-        self.frames.push(CallFrame { closure, ip: 0, base: 0 });
+        // base = current stack height so that Op::Return truncates back to here,
+        // not to 0 (which would destroy callers' locals when run() is called mid-execution).
+        let base = self.stack.len();
+        self.frames.push(CallFrame { closure, ip: 0, base });
 
         match self.execute() {
             Ok(_) => Ok(()),
@@ -194,6 +198,18 @@ impl VM {
     }
 
     fn dispatch_op(&mut self, op: Op, base: usize, entry_frames: usize) -> Result<Option<VmValue>, String> {
+        // Save frame count before dispatching. After any user-code call (call_closure,
+        // call_value), check this: if frames dropped, it means exception handling ran
+        // the handler (and possibly the rest of the script) in a recursive execute()
+        // context, consuming our frames. We must signal an early exit in that case.
+        let frames_before = self.frames.len();
+        macro_rules! check_frames {
+            ($v:expr) => {{
+                if self.frames.len() < frames_before {
+                    return Ok(Some($v));
+                }
+            }};
+        }
         match op {
                 Op::SetLine(n) => { self.current_line = n; }
 
@@ -206,6 +222,22 @@ impl VM {
                 Op::False => self.push(VmValue::Bool(false)),
                 Op::Pop   => { self.pop(); }
                 Op::DupTop => { let v = self.peek().clone(); self.push(v); }
+                Op::Over => {
+                    let len = self.stack.len();
+                    let v = self.stack[len - 2].clone();
+                    self.push(v);
+                }
+                Op::Swap => {
+                    let len = self.stack.len();
+                    self.stack.swap(len - 1, len - 2);
+                }
+                Op::RotThree => {
+                    // Lift TOS-2 to TOS; TOS and TOS-1 shift down one.
+                    // [.., a, b, c] (TOS=c) → [.., b, c, a]
+                    let len = self.stack.len();
+                    let a = self.stack.remove(len - 3);
+                    self.stack.push(a);
+                }
 
                 // ── Arithmetic ─────────────────────────────────────────────
                 Op::Add => {
@@ -214,6 +246,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__add__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result);
                             return Ok(None);
                         }
@@ -225,6 +258,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__sub__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result);
                             return Ok(None);
                         }
@@ -236,6 +270,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__mul__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result);
                             return Ok(None);
                         }
@@ -253,6 +288,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__eq__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result); return Ok(None);
                         }
                     }
@@ -263,6 +299,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__eq__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             let b = result.is_truthy();
                             self.push(VmValue::Bool(!b)); return Ok(None);
                         }
@@ -274,6 +311,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__lt__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result); return Ok(None);
                         }
                     }
@@ -284,6 +322,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__le__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result); return Ok(None);
                         }
                     }
@@ -294,6 +333,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__gt__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result); return Ok(None);
                         }
                     }
@@ -304,6 +344,7 @@ impl VM {
                     if let VmValue::Instance(ref inst) = l {
                         if let Some(m) = self.find_method(&inst.class, "__ge__") {
                             let result = self.call_closure(m, &[l, r], &[])?;
+                            check_frames!(result.clone());
                             self.push(result); return Ok(None);
                         }
                     }
@@ -424,15 +465,20 @@ impl VM {
 
                 Op::Call(argc, kwarg_names) => {
                     let result = self.call_value(argc, &kwarg_names)?;
+                    check_frames!(result.clone());
                     self.push(result);
                 }
 
                 Op::Return => {
                     let val = self.pop();
                     let frame_base = self.frames.last().unwrap().base;
+                    let returning_depth = self.frames.len();
                     self.close_upvalues_above(frame_base);
                     self.stack.truncate(frame_base);
                     self.frames.pop();
+                    // Clean up any exc_handlers that were installed by the returning frame.
+                    // Without this, a `return` inside a `try` block would leave stale handlers.
+                    self.exc_handlers.retain(|h| h.frame_depth < returning_depth);
                     if self.frames.len() < entry_frames {
                         return Ok(Some(val));
                     }
@@ -503,6 +549,7 @@ impl VM {
                         name,
                         parent,
                         methods: HashMap::new(),
+                        class_vars: RefCell::new(HashMap::new()),
                     })));
                 }
 
@@ -807,9 +854,17 @@ impl VM {
                         method: m,
                     })));
                 }
+                // Class variables (inherited).
+                if let Some(v) = inst.class.class_vars.borrow().get(name).cloned() {
+                    return Ok(v);
+                }
                 Err(self.err(&format!("'{}' object has no attribute '{}'", inst.class.name, name)))
             }
             VmValue::Class(cls) => {
+                // Check class variables first.
+                if let Some(v) = cls.class_vars.borrow().get(name).cloned() {
+                    return Ok(v);
+                }
                 if let Some(m) = self.find_method(cls, name) {
                     return Ok(VmValue::Closure(m));
                 }
@@ -851,19 +906,19 @@ impl VM {
                 Ok(())
             }
             VmValue::Class(cls) => {
-                // Attaching a method to a class at runtime.
                 match val {
                     VmValue::Closure(c) => {
-                        // We need mut access to methods; use unsafe or Rc<RefCell<>>.
-                        // Since VmClass uses a plain HashMap (no RefCell), we need to
-                        // get a mutable reference. Use Rc::get_mut if we're the only owner.
                         unsafe {
                             let cls_ptr = Rc::as_ptr(&cls) as *mut VmClass;
                             (*cls_ptr).methods.insert(name.to_string(), c);
                         }
                         Ok(())
                     }
-                    _ => Err(self.err("can only set methods on a class")),
+                    other => {
+                        // Class variable (non-method)
+                        cls.class_vars.borrow_mut().insert(name.to_string(), other);
+                        Ok(())
+                    }
                 }
             }
             other => Err(self.err(&format!("cannot set attribute on '{}'", other.type_name()))),
@@ -1176,7 +1231,8 @@ impl VM {
 
     fn dict_method(&self, receiver: VmValue, _dict: Rc<RefCell<VmDict>>, name: &str) -> Result<VmValue, String> {
         match name {
-            "keys" | "values" | "items" | "get" | "pop" | "update" | "clear" | "copy" => {
+            "keys" | "values" | "items" | "get" | "pop" | "update" | "clear" | "copy"
+            | "contains" | "has_key" => {
                 Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("dict.{}", name)))
             }
             _ => Err(self.err(&format!("dict has no method '{}'", name))),
@@ -1188,6 +1244,9 @@ impl VM {
             "read" | "readline" | "readlines" | "write" | "close" | "seek" | "tell" => {
                 Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("file.{}", name)))
             }
+            // Context manager protocol: __enter__ returns self, __exit__ closes the file.
+            "__enter__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "file.__enter__".to_string())),
+            "__exit__"  => Ok(VmValue::BoundBuiltin(Box::new(receiver), "file.__exit__".to_string())),
             _ => Err(self.err(&format!("file has no method '{}'", name))),
         }
     }
@@ -1301,6 +1360,21 @@ impl VM {
                     Some(VmValue::Int(n)) => Ok(VmValue::Int(n.abs())),
                     Some(VmValue::Float(f)) => Ok(VmValue::Float(f.abs())),
                     _ => Err(self.err("abs() requires a number")),
+                }
+            }
+            "round" => {
+                let ndigits = args.get(1).and_then(|v| if let VmValue::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
+                match args.first() {
+                    Some(VmValue::Int(n)) => Ok(VmValue::Int(*n)),
+                    Some(VmValue::Float(f)) => {
+                        if ndigits == 0 {
+                            Ok(VmValue::Int(f.round() as i64))
+                        } else {
+                            let factor = 10f64.powi(ndigits as i32);
+                            Ok(VmValue::Float((f * factor).round() / factor))
+                        }
+                    }
+                    _ => Err(self.err("round() requires a number")),
                 }
             }
             "min" => self.builtin_min_max(args, false),
@@ -1893,6 +1967,10 @@ impl VM {
             }
             "clear" => { dict.borrow_mut().keys.clear(); dict.borrow_mut().vals.clear(); Ok(VmValue::Nil) }
             "copy" => Ok(VmValue::Dict(Rc::new(RefCell::new(dict.borrow().clone())))),
+            "contains" | "has_key" => {
+                let key = args.get(1).ok_or_else(|| self.err("dict.contains() requires a key"))?;
+                Ok(VmValue::Bool(dict.borrow().get(key).is_some()))
+            }
             _ => Err(self.err(&format!("dict has no method '{}'", method))),
         }
     }
@@ -1989,9 +2067,12 @@ impl VM {
         };
         match method {
             "read" => {
-                let fh = fh_rc.borrow();
-                if fh.mode.contains('r') {
-                    Ok(VmValue::Str(fh.content.join("\n")))
+                let (mode, path) = { let fh = fh_rc.borrow(); (fh.mode.clone(), fh.path.clone()) };
+                if mode.contains('r') {
+                    let full_path = self.source_dir.join(&path);
+                    let content = std::fs::read_to_string(&full_path)
+                        .map_err(|e| self.err(&format!("read '{}': {}", path, e)))?;
+                    Ok(VmValue::Str(content))
                 } else { Err(self.err("file not open for reading")) }
             }
             "readline" => {
@@ -2003,9 +2084,14 @@ impl VM {
                 } else { Ok(VmValue::Str(String::new())) }
             }
             "readlines" => {
-                let fh = fh_rc.borrow();
-                let lines: Vec<VmValue> = fh.content.iter().map(|l| VmValue::Str(l.clone() + "\n")).collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(lines))))
+                let (mode, path) = { let fh = fh_rc.borrow(); (fh.mode.clone(), fh.path.clone()) };
+                if mode.contains('r') {
+                    let full_path = self.source_dir.join(&path);
+                    let content = std::fs::read_to_string(&full_path)
+                        .map_err(|e| self.err(&format!("readlines '{}': {}", path, e)))?;
+                    let lines: Vec<VmValue> = content.lines().map(|l| VmValue::Str(l.to_string() + "\n")).collect();
+                    Ok(VmValue::List(Rc::new(RefCell::new(lines))))
+                } else { Err(self.err("file not open for reading")) }
             }
             "write" => {
                 let text = match args.get(1) { Some(VmValue::Str(s)) => s.clone(), _ => return Err(self.err("write() requires a string")) };

@@ -307,7 +307,15 @@ impl Lexer {
         }
         match self.peek() {
             None | Some('\n') => return vec![],
-            Some('#') => { self.skip_comment(); return vec![]; }
+            Some('#') => {
+                self.skip_comment();
+                // Consume the trailing newline and treat the whole comment line as blank.
+                if self.peek() == Some('\n') {
+                    self.advance();
+                    self.line += 1;
+                }
+                return self.handle_indent();
+            }
             _ => {}
         }
 

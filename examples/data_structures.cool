@@ -35,7 +35,7 @@ inventory = {
 print("\n=== Inventory ===")
 for item in inventory:
     qty = inventory[item]
-    bar = "*" * (qty / 5)
+    bar = "*" * (qty // 5)
     print(f"  {item:<10} {qty:>3}  {bar}")
 
 # Low-stock alert

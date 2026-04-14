@@ -244,9 +244,20 @@ impl Parser {
             self.eat_newline();
             return Ok(Stmt::Return(None));
         }
-        let expr = self.parse_expr()?;
+        let first = self.parse_expr()?;
+        // Support bare tuple return: return a, b  →  return (a, b)
+        if self.check(&Token::Comma) {
+            let mut elems = vec![first];
+            while self.check(&Token::Comma) {
+                self.advance();
+                if self.check(&Token::Newline) || self.check(&Token::Eof) { break; }
+                elems.push(self.parse_expr()?);
+            }
+            self.eat_newline();
+            return Ok(Stmt::Return(Some(Expr::Tuple(elems))));
+        }
         self.eat_newline();
-        Ok(Stmt::Return(Some(expr)))
+        Ok(Stmt::Return(Some(first)))
     }
 
     fn parse_import(&mut self) -> Result<Stmt, String> {
@@ -421,6 +432,69 @@ impl Parser {
 
         // Parse LHS as an expression, then check for =
         let lhs = self.parse_expr()?;
+
+        // Check for augmented assignment on subscript/attr targets: a[i] += x, obj.f += x
+        let aug_op = match self.peek() {
+            Token::PlusEq  => Some(BinOp::Add),
+            Token::MinusEq => Some(BinOp::Sub),
+            Token::StarEq  => Some(BinOp::Mul),
+            Token::SlashEq => Some(BinOp::Div),
+            _ => None,
+        };
+        if let Some(op) = aug_op {
+            self.advance(); // consume op=
+            let rhs = self.parse_expr()?;
+            self.eat_newline();
+            // Desugar: lhs op= rhs  →  lhs = lhs op rhs
+            let combined = Expr::BinOp { op, left: Box::new(lhs.clone()), right: Box::new(rhs) };
+            return match lhs {
+                Expr::Ident(name) => Ok(Stmt::Assign { name, value: combined }),
+                Expr::Index { object, index } => Ok(Stmt::SetItem {
+                    object: *object,
+                    index: *index,
+                    value: combined,
+                }),
+                Expr::Attr { object, name } => Ok(Stmt::SetAttr {
+                    object: *object,
+                    name,
+                    value: combined,
+                }),
+                _ => Err(format!("line {}: invalid augmented assignment target", self.line())),
+            };
+        }
+
+        // Tuple targets: a[i], b.x = expr  (comma after a non-ident LHS)
+        if self.check(&Token::Comma) {
+            let mut targets = vec![lhs];
+            while self.check(&Token::Comma) {
+                self.advance();
+                targets.push(self.parse_expr()?);
+            }
+            self.eat(&Token::Eq)?;
+            // RHS may be a tuple: a, b = c, d
+            let first_val = self.parse_expr()?;
+            let value = if self.check(&Token::Comma) {
+                let mut elems = vec![first_val];
+                while self.check(&Token::Comma) {
+                    self.advance();
+                    if self.check(&Token::Newline) || self.check(&Token::Eof) { break; }
+                    elems.push(self.parse_expr()?);
+                }
+                Expr::Tuple(elems)
+            } else {
+                first_val
+            };
+            self.eat_newline();
+            // If all targets are plain idents, use the simpler Unpack node
+            let all_idents: Option<Vec<String>> = targets.iter().map(|t| {
+                if let Expr::Ident(n) = t { Some(n.clone()) } else { None }
+            }).collect();
+            return if let Some(names) = all_idents {
+                Ok(Stmt::Unpack { names, value })
+            } else {
+                Ok(Stmt::UnpackTargets { targets, value })
+            };
+        }
 
         if self.check(&Token::Eq) {
             self.advance(); // consume =
@@ -813,7 +887,18 @@ impl Parser {
                     let iter = self.parse_or()?;
                     let condition = if self.check(&Token::If) {
                         self.advance();
-                        Some(Box::new(self.parse_or()?))
+                        let mut cond = self.parse_or()?;
+                        // Multiple `if` guards: chain with `and`
+                        while self.check(&Token::If) {
+                            self.advance();
+                            let right = self.parse_or()?;
+                            cond = Expr::BinOp {
+                                op: BinOp::And,
+                                left: Box::new(cond),
+                                right: Box::new(right),
+                            };
+                        }
+                        Some(Box::new(cond))
                     } else {
                         None
                     };
