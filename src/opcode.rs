@@ -187,6 +187,8 @@ impl Chunk {
 pub struct FnProto {
     pub name: String,
     pub params: Vec<crate::ast::Param>,
+    /// Pre-evaluated default values, parallel to `params`.  `None` = no default.
+    pub defaults: Vec<Option<VmValue>>,
     pub chunk: Chunk,
     pub upvalue_count: usize,
     /// Total local-variable slots needed (params + locals).

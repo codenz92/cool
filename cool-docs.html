@@ -1,0 +1,2909 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Official documentation for Cool — a Python-inspired scripting language and interactive OS shell implemented in Rust. Learn syntax, closures, classes, f-strings, and the CoolOS shell.">
+    <meta name="robots" content="index, follow">
+    <meta property="og:title" content="Cool Language — Documentation">
+    <meta property="og:description" content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="Cool Language — Documentation">
+    <meta name="twitter:description" content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄</text></svg>">
+    <title>Cool Language — Documentation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300;12..96,400;12..96,500;12..96,600&family=JetBrains+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap"
+      rel="stylesheet">
+    <link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/base16/tomorrow-night.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/rust.min.js"></script>
+    <style>
+      :root {
+        --bg: #07090c;
+        --bg2: #0c0f14;
+        --bg3: #111620;
+        --border: #1c2333;
+        --border2: #243044;
+        --muted: #3d4f6b;
+        --text: #b8c8dc;
+        --text2: #7a93b0;
+        --heading: #ddeeff;
+        --accent: #38e8c0;
+        --accent2: #1ab89a;
+        --accent-bg: rgba(56, 232, 192, 0.07);
+        --warn: #f0a843;
+        --code-bg: #050709;
+        --sidebar-w: 260px;
+        --font-sans: 'IBM Plex Sans', sans-serif;
+        --font-disp: 'Bricolage Grotesque', sans-serif;
+        --font-mono: 'JetBrains Mono', monospace;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        font-size: 15px;
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        line-height: 1.7;
+        display: flex;
+        min-height: 100vh;
+      }
+
+      /* ── SIDEBAR ── */
+      #sidebar {
+        width: var(--sidebar-w);
+        min-height: 100vh;
+        background: var(--bg2);
+        border-right: 1px solid var(--border);
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        z-index: 100;
+      }
+
+      #sidebar::-webkit-scrollbar {
+        width: 4px;
+      }
+
+      #sidebar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      #sidebar::-webkit-scrollbar-thumb {
+        background: var(--border2);
+        border-radius: 2px;
+      }
+
+      .sidebar-logo {
+        padding: 24px 20px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sidebar-logo .wordmark {
+        font-family: var(--font-mono);
+        font-size: 1.25rem;
+        font-weight: 500;
+        color: var(--accent);
+        letter-spacing: -0.02em;
+        display: block;
+      }
+
+      .sidebar-logo .tagline {
+        font-size: 0.72rem;
+        color: var(--muted);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin-top: 4px;
+        font-family: var(--font-mono);
+      }
+
+      .sidebar-search {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sidebar-search input {
+        width: 100%;
+        background: var(--bg3);
+        border: 1px solid var(--border2);
+        border-radius: 5px;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        padding: 7px 10px;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+
+      .sidebar-search input::placeholder {
+        color: var(--muted);
+      }
+
+      .sidebar-search input:focus {
+        border-color: var(--accent2);
+      }
+
+      nav {
+        flex: 1;
+        padding: 10px 0 24px;
+      }
+
+      .nav-group {
+        margin-bottom: 2px;
+      }
+
+      .nav-group-label {
+        font-family: var(--font-mono);
+        font-size: 0.65rem;
+        font-weight: 500;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        padding: 14px 20px 6px;
+        display: block;
+      }
+
+      nav a {
+        display: block;
+        padding: 5px 20px;
+        font-size: 0.825rem;
+        color: var(--text2);
+        text-decoration: none;
+        font-family: var(--font-sans);
+        transition: color 0.12s, background 0.12s;
+        border-left: 2px solid transparent;
+        line-height: 1.5;
+      }
+
+      nav a:hover {
+        color: var(--text);
+        background: var(--bg3);
+      }
+
+      nav a.active {
+        color: var(--accent);
+        border-left-color: var(--accent);
+        background: var(--accent-bg);
+        font-weight: 500;
+      }
+
+      .sidebar-footer {
+        padding: 14px 20px;
+        border-top: 1px solid var(--border);
+        font-size: 0.72rem;
+        color: var(--muted);
+        font-family: var(--font-mono);
+      }
+
+      .sidebar-footer a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .sidebar-footer a:hover {
+        color: var(--accent);
+      }
+
+      /* ── MAIN ── */
+      #main {
+        margin-left: var(--sidebar-w);
+        flex: 1;
+        max-width: 900px;
+        padding: 0 56px 120px 64px;
+      }
+
+      /* ── HERO ── */
+      .hero {
+        padding: 72px 0 56px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 64px;
+      }
+
+      .hero-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        color: var(--accent2);
+        background: var(--accent-bg);
+        border: 1px solid rgba(56, 232, 192, 0.15);
+        padding: 4px 10px;
+        border-radius: 3px;
+        letter-spacing: 0.04em;
+        margin-bottom: 24px;
+      }
+
+      .hero-badge::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        background: var(--accent);
+        border-radius: 50%;
+      }
+
+      .hero h1 {
+        font-family: var(--font-disp);
+        font-size: 3.4rem;
+        font-weight: 600;
+        color: var(--heading);
+        line-height: 1.1;
+        letter-spacing: -0.03em;
+        margin-bottom: 18px;
+      }
+
+      .hero h1 span {
+        color: var(--accent);
+      }
+
+      .hero-sub {
+        font-size: 1.05rem;
+        color: var(--text2);
+        max-width: 520px;
+        line-height: 1.65;
+        margin-bottom: 32px;
+      }
+
+      .hero-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        font-weight: 500;
+        padding: 9px 18px;
+        border-radius: 4px;
+        text-decoration: none;
+        transition: all 0.15s;
+        display: inline-block;
+        letter-spacing: 0.02em;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #050709;
+      }
+
+      .btn-primary:hover {
+        background: #56f4ce;
+      }
+
+      .btn-ghost {
+        background: transparent;
+        color: var(--text2);
+        border: 1px solid var(--border2);
+      }
+
+      .btn-ghost:hover {
+        border-color: var(--accent2);
+        color: var(--accent);
+      }
+
+      /* ── SECTIONS ── */
+      .doc-section {
+        padding-top: 12px;
+        margin-bottom: 72px;
+      }
+
+      .doc-section:target {
+        scroll-margin-top: 32px;
+      }
+
+      .section-anchor {
+        display: block;
+        position: relative;
+        top: -20px;
+        visibility: hidden;
+      }
+
+      h2 {
+        font-family: var(--font-disp);
+        font-size: 1.85rem;
+        font-weight: 600;
+        color: var(--heading);
+        letter-spacing: -0.025em;
+        margin-bottom: 8px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border);
+        margin-top: 0;
+      }
+
+      h3 {
+        font-family: var(--font-disp);
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--heading);
+        margin: 36px 0 12px;
+        letter-spacing: -0.01em;
+      }
+
+      h4 {
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        font-weight: 500;
+        color: var(--accent2);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        margin: 28px 0 10px;
+      }
+
+      p {
+        margin-bottom: 14px;
+        font-size: 0.925rem;
+      }
+
+      a {
+        color: var(--accent2);
+        text-decoration: none;
+      }
+
+      a:hover {
+        color: var(--accent);
+        text-decoration: underline;
+      }
+
+      /* ── CODE BLOCKS ── */
+      .code-wrap {
+        position: relative;
+        margin: 16px 0 24px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        overflow: hidden;
+      }
+
+      .code-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 7px 14px;
+        background: var(--bg3);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .code-lang {
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .copy-btn {
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 3px;
+        transition: color 0.12s, background 0.12s;
+        letter-spacing: 0.04em;
+      }
+
+      .copy-btn:hover {
+        color: var(--accent);
+        background: var(--accent-bg);
+      }
+
+      .copy-btn.copied {
+        color: var(--accent);
+      }
+
+      .code-wrap pre {
+        margin: 0 !important;
+        border-radius: 0 !important;
+        border: none !important;
+        background: var(--code-bg) !important;
+        padding: 16px 18px !important;
+        font-family: var(--font-mono) !important;
+        font-size: 0.82rem !important;
+        line-height: 1.65 !important;
+        overflow-x: auto;
+      }
+
+      .code-wrap pre::-webkit-scrollbar {
+        height: 4px;
+      }
+
+      .code-wrap pre::-webkit-scrollbar-thumb {
+        background: var(--border2);
+      }
+
+      code {
+        font-family: var(--font-mono);
+        font-size: 0.82em;
+        background: var(--bg3);
+        color: var(--accent);
+        padding: 2px 6px;
+        border-radius: 3px;
+        border: 1px solid var(--border);
+      }
+
+      pre code {
+        background: none !important;
+        border: none !important;
+        color: inherit !important;
+        padding: 0 !important;
+        font-size: inherit !important;
+      }
+
+      /* ── TABLES ── */
+      .table-wrap {
+        overflow-x: auto;
+        margin: 16px 0 24px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+      }
+
+      thead tr {
+        background: var(--bg3);
+      }
+
+      th {
+        text-align: left;
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      td {
+        padding: 9px 16px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text);
+        vertical-align: top;
+      }
+
+      tr:last-child td {
+        border-bottom: none;
+      }
+
+      tr:hover td {
+        background: var(--bg2);
+      }
+
+      td code {
+        font-size: 0.8em;
+      }
+
+      /* ── CALLOUTS ── */
+      .callout {
+        border-left: 3px solid var(--accent2);
+        background: var(--accent-bg);
+        padding: 12px 16px;
+        border-radius: 0 5px 5px 0;
+        margin: 18px 0;
+        font-size: 0.875rem;
+      }
+
+      .callout.warn {
+        border-left-color: var(--warn);
+        background: rgba(240, 168, 67, 0.06);
+      }
+
+      .callout strong {
+        color: var(--heading);
+        font-weight: 600;
+      }
+
+      /* ── FEATURE GRID ── */
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px;
+        margin: 20px 0 28px;
+      }
+
+      .feature-card {
+        background: var(--bg2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 14px 16px;
+        transition: border-color 0.15s;
+      }
+
+      .feature-card:hover {
+        border-color: var(--border2);
+      }
+
+      .feature-card .fc-title {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: var(--accent);
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+
+      .feature-card .fc-desc {
+        font-size: 0.8rem;
+        color: var(--text2);
+        line-height: 1.5;
+      }
+
+      /* ── STATUS BADGES ── */
+      .badge {
+        display: inline-block;
+        font-family: var(--font-mono);
+        font-size: 0.68rem;
+        padding: 2px 7px;
+        border-radius: 3px;
+        font-weight: 500;
+        letter-spacing: 0.04em;
+      }
+
+      .badge-done {
+        background: rgba(56, 232, 192, 0.12);
+        color: var(--accent);
+        border: 1px solid rgba(56, 232, 192, 0.2);
+      }
+
+      .badge-wip {
+        background: rgba(240, 168, 67, 0.12);
+        color: var(--warn);
+        border: 1px solid rgba(240, 168, 67, 0.2);
+      }
+
+      .badge-todo {
+        background: var(--bg3);
+        color: var(--muted);
+        border: 1px solid var(--border);
+      }
+
+      /* ── COMMAND TABLE ── */
+      .cmd {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: var(--accent);
+        white-space: nowrap;
+      }
+
+      /* ── INLINE UL/OL ── */
+      ul,
+      ol {
+        padding-left: 1.5em;
+        margin-bottom: 14px;
+        font-size: 0.925rem;
+      }
+
+      li {
+        margin-bottom: 4px;
+      }
+
+      li code {
+        font-size: 0.8em;
+      }
+
+      /* ── SEPARATOR ── */
+      hr {
+        border: none;
+        border-top: 1px solid var(--border);
+        margin: 48px 0;
+      }
+
+      /* ── SCROLLBAR ── */
+      ::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: var(--bg);
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: var(--border2);
+        border-radius: 3px;
+      }
+
+      /* ── SEARCH HIGHLIGHT ── */
+      mark {
+        background: rgba(56, 232, 192, 0.2);
+        color: var(--accent);
+        border-radius: 2px;
+        padding: 0 2px;
+      }
+
+      /* ── SKIP NAV ── */
+      .skip-nav {
+        position: absolute;
+        top: -100%;
+        left: 0;
+        background: var(--accent);
+        color: #050709;
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        padding: 8px 16px;
+        z-index: 9999;
+        text-decoration: none;
+        border-radius: 0 0 4px 0;
+        transition: top 0.15s;
+      }
+
+      .skip-nav:focus {
+        top: 0;
+      }
+
+      /* ── MOBILE MENU BUTTON ── */
+      .menu-toggle {
+        display: none;
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        z-index: 200;
+        background: var(--bg2);
+        border: 1px solid var(--border2);
+        border-radius: 5px;
+        width: 36px;
+        height: 36px;
+        cursor: pointer;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 5px;
+        padding: 8px;
+        transition: background 0.15s, border-color 0.15s;
+      }
+
+      .menu-toggle:hover {
+        background: var(--bg3);
+        border-color: var(--accent2);
+      }
+
+      .menu-toggle span {
+        display: block;
+        width: 18px;
+        height: 1.5px;
+        background: var(--text2);
+        border-radius: 1px;
+        transition: transform 0.2s, opacity 0.2s;
+        transform-origin: center;
+      }
+
+      .menu-toggle.is-open span:nth-child(1) { transform: translateY(6.5px) rotate(45deg); }
+      .menu-toggle.is-open span:nth-child(2) { opacity: 0; }
+      .menu-toggle.is-open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
+
+      /* ── SIDEBAR OVERLAY ── */
+      .sidebar-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 99;
+        backdrop-filter: blur(2px);
+      }
+
+      /* ── RESPONSIVE ── */
+      @media (max-width: 900px) {
+        :root {
+          --sidebar-w: 220px;
+        }
+
+        #main {
+          padding: 0 24px 80px 32px;
+        }
+      }
+
+      @media (max-width: 680px) {
+        #sidebar {
+          transform: translateX(-100%);
+          transition: transform 0.25s ease;
+        }
+
+        #sidebar.open {
+          transform: none;
+        }
+
+        .sidebar-overlay.visible {
+          display: block;
+        }
+
+        #main {
+          margin-left: 0;
+          padding: 0 20px 80px;
+        }
+
+        .hero h1 {
+          font-size: 2.2rem;
+        }
+
+        .menu-toggle {
+          display: flex;
+        }
+      }
+
+      /* ── HIGHLIGHT.JS OVERRIDES ── */
+      .hljs {
+        background: var(--code-bg) !important;
+      }
+
+      .hljs-keyword {
+        color: #7eb8f7 !important;
+      }
+
+      .hljs-string {
+        color: #8ec99a !important;
+      }
+
+      .hljs-number {
+        color: #f0a843 !important;
+      }
+
+      .hljs-comment {
+        color: var(--muted) !important;
+        font-style: italic;
+      }
+
+      .hljs-built_in {
+        color: #c99ff0 !important;
+      }
+
+      .hljs-title {
+        color: var(--accent) !important;
+      }
+
+      .hljs-params {
+        color: var(--text) !important;
+      }
+
+      .hljs-attr {
+        color: #f0a843 !important;
+      }
+
+      .hljs-literal {
+        color: #7eb8f7 !important;
+      }
+
+      /* page load fade */
+      body {
+        animation: fadein 0.25s ease;
+      }
+
+      @keyframes fadein {
+        from {
+          opacity: 0;
+        }
+
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+
+    <!-- ── SIDEBAR ── -->
+    <aside id="sidebar">
+      <div class="sidebar-logo">
+        <span class="wordmark">cool</span>
+        <span class="tagline">Language Reference v1.x</span>
+      </div>
+
+      <div class="sidebar-search">
+        <input type="text" id="search-input" placeholder="Search docs…" autocomplete="off" spellcheck="false">
+      </div>
+
+      <nav id="nav">
+        <span class="nav-group-label">Overview</span>
+        <a href="#introduction">Introduction</a>
+        <a href="#getting-started">Getting Started</a>
+
+        <span class="nav-group-label">Language</span>
+        <a href="#basics">Language Basics</a>
+        <a href="#variables">Variables &amp; Types</a>
+        <a href="#operators">Operators</a>
+        <a href="#control-flow">Control Flow</a>
+        <a href="#functions">Functions</a>
+        <a href="#classes">Classes &amp; OOP</a>
+        <a href="#data-structures">Data Structures</a>
+        <a href="#strings">String Handling</a>
+        <a href="#errors">Error Handling</a>
+
+        <span class="nav-group-label">Runtime</span>
+        <a href="#modules">Modules &amp; Imports</a>
+        <a href="#fileio">File I/O</a>
+        <a href="#builtins">Built-in Functions</a>
+        <a href="#stdlib">Standard Library</a>
+
+        <span class="nav-group-label">CoolOS</span>
+        <a href="#coolos-shell">Shell</a>
+        <a href="#coolos-apps">Applications</a>
+
+        <span class="nav-group-label">Project</span>
+        <a href="#structure">Project Structure</a>
+        <a href="#roadmap">Roadmap</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a href="https://github.com/codenz92/cool" target="_blank" rel="noopener noreferrer">github.com/codenz92/cool</a><br>
+        MIT License &mdash; created by codenz92
+      </div>
+    </aside>
+
+    <!-- ── MAIN CONTENT ── -->
+    <main id="main">
+
+      <!-- HERO -->
+      <div class="hero">
+        <h1><span>Cool</span> Language<br>Documentation</h1>
+        <p class="hero-sub">A Python-inspired scripting language and interactive OS shell, implemented in Rust. Clean
+          syntax, closures, classes, f-strings, and a fully-featured shell — all in one.</p>
+        <div class="hero-actions">
+          <a href="#getting-started" class="btn btn-primary">Get Started</a>
+          <a href="https://github.com/codenz92/cool" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View on GitHub</a>
+        </div>
+      </div>
+
+      <!-- INTRODUCTION -->
+      <section class="doc-section" id="introduction">
+        <h2>Introduction</h2>
+        <p>Cool is a tree-walk interpreted language with Python-like syntax built on a clean Rust runtime. It ships with
+          <strong>CoolOS</strong> — a fully interactive OS shell written entirely in Cool itself.
+        </p>
+
+        <div class="feature-grid">
+          <div class="feature-card">
+            <div class="fc-title">Indentation Blocks</div>
+            <div class="fc-desc">Python-style. No braces, no end keywords.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">Classes &amp; OOP</div>
+            <div class="fc-desc">Inheritance, super(), operator overloading.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">Closures</div>
+            <div class="fc-desc">Functions capture their scope. nonlocal &amp; global supported.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">f-strings</div>
+            <div class="fc-desc">Interpolation, expressions, method calls inline.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">Standard Library</div>
+            <div class="fc-desc">math, json, re, time, random, collections, term.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">CoolOS Shell</div>
+            <div class="fc-desc">Full interactive shell. Pipes, env vars, tab complete.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">Rust Runtime</div>
+            <div class="fc-desc">Fast, safe, no external dependencies.</div>
+          </div>
+          <div class="feature-card">
+            <div class="fc-title">MIT Licensed</div>
+            <div class="fc-desc">Free to use, modify, and distribute.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- GETTING STARTED -->
+      <section class="doc-section" id="getting-started">
+        <h2>Getting Started</h2>
+
+        <h3>Prerequisites</h3>
+        <p>You need <a href="https://rustup.rs" target="_blank" rel="noopener noreferrer">Rust</a> (stable, edition 2021) installed. No other
+          dependencies.</p>
+
+        <h3>Build from Source</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">git clone https://github.com/codenz92/cool
+cd cool
+cargo build --release</code></pre>
+        </div>
+
+        <p>The binary will be at <code>./target/release/cool</code>.</p>
+
+        <h3>Running Cool</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>./target/release/cool</code></td>
+                <td>Start the interactive REPL</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool hello.cool</code></td>
+                <td>Run a Cool script</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool coolos/shell.cool</code></td>
+                <td>Launch CoolOS shell</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Your First Program</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># hello.cool
+def greet(name, greeting="Hello"):
+    print(f"{greeting}, {name}!")
+
+greet("world")
+greet("Cool", greeting="Hey")</code></pre>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">./target/release/cool hello.cool
+# Hello, world!
+# Hey, Cool!</code></pre>
+        </div>
+
+        <h3>REPL</h3>
+        <p>Run with no arguments to enter the interactive REPL:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">repl</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">./target/release/cool
+>>> print("hello")
+hello
+>>> 2 + 2
+4
+>>> x = [i * i for i in range(5)]
+>>> x
+[0, 1, 4, 9, 16]</code></pre>
+        </div>
+      </section>
+
+      <!-- BASICS -->
+      <section class="doc-section" id="basics">
+        <h2>Language Basics</h2>
+
+        <h3>Comments</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># Single-line comment. There are no multi-line comment blocks.</code></pre>
+        </div>
+
+        <h3>Indentation</h3>
+        <p>Cool uses indentation to define code blocks — no braces or <code>end</code> keywords. Indent with spaces or
+          tabs consistently within a file.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">if x > 0:
+    print("positive")   # inside the block
+    print("still here") # still inside
+print("outside")        # back to top level</code></pre>
+        </div>
+
+        <h3>Line Continuation</h3>
+        <p>Use <code>\</code> to continue a long expression on the next line:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">result = very_long_variable_name + \
+         another_long_name + \
+         yet_another</code></pre>
+        </div>
+        <p>Multi-line collection literals don't need <code>\</code>:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">data = {
+    "name": "Alice",
+    "age": 30,
+    "scores": [95, 87, 91],
+}</code></pre>
+        </div>
+      </section>
+
+      <!-- VARIABLES -->
+      <section class="doc-section" id="variables">
+        <h2>Variables &amp; Types</h2>
+
+        <h3>Assignment</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">x       = 42
+name    = "Cool"
+pi      = 3.14159
+active  = true
+nothing = nil</code></pre>
+        </div>
+
+        <h3>Augmented Assignment</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">x += 5    # x = x + 5
+x -= 2    # x = x - 2
+x *= 3    # x = x * 3
+x /= 4    # x = x / 4
+x //= 2   # floor division
+x **= 2   # power
+x %= 3    # modulo</code></pre>
+        </div>
+
+        <h3>Type Overview</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>Example</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>int</code></td>
+                <td><code>42</code>, <code>0xFF</code>, <code>0b1010</code>, <code>0o77</code></td>
+                <td>Arbitrary precision</td>
+              </tr>
+              <tr>
+                <td><code>float</code></td>
+                <td><code>3.14</code>, <code>2.0</code></td>
+                <td>64-bit float</td>
+              </tr>
+              <tr>
+                <td><code>str</code></td>
+                <td><code>"hello"</code>, <code>'world'</code>, <code>"""multi"""</code></td>
+                <td>Unicode</td>
+              </tr>
+              <tr>
+                <td><code>bool</code></td>
+                <td><code>true</code>, <code>false</code></td>
+                <td>Lowercase</td>
+              </tr>
+              <tr>
+                <td><code>nil</code></td>
+                <td><code>nil</code></td>
+                <td>Null / None equivalent</td>
+              </tr>
+              <tr>
+                <td><code>list</code></td>
+                <td><code>[1, 2, 3]</code></td>
+                <td>Ordered, mutable</td>
+              </tr>
+              <tr>
+                <td><code>dict</code></td>
+                <td><code>{"k": "v"}</code></td>
+                <td>Key-value pairs</td>
+              </tr>
+              <tr>
+                <td><code>tuple</code></td>
+                <td><code>(1, 2, 3)</code></td>
+                <td>Ordered, immutable</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Numeric Literals</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">dec = 255
+hex = 0xFF       # 255
+bin = 0b11111111 # 255
+oct = 0o377      # 255
+esc = "\x1b"     # ESC character (useful for ANSI)</code></pre>
+        </div>
+
+        <h3>Type Checking</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">type(42)          # "int"
+type("hello")     # "str"
+type([1, 2])      # "list"
+type(nil)         # "nil"
+
+isinstance(x, int)       # true/false
+isinstance(dog, Animal)  # works with classes too</code></pre>
+        </div>
+      </section>
+
+      <!-- OPERATORS -->
+      <section class="doc-section" id="operators">
+        <h2>Operators</h2>
+
+        <h3>Arithmetic</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">5 + 3    # 8      addition
+5 - 3    # 2      subtraction
+5 * 3    # 15     multiplication
+5 / 3    # 1.666  true division (always float)
+5 // 3   # 1      floor division
+5 % 3    # 2      modulo
+5 ** 3   # 125    exponentiation</code></pre>
+        </div>
+
+        <h3>Comparison</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">x == y   # equal
+x != y   # not equal
+x < y    # less than
+x <= y   # less than or equal
+x > y    # greater than
+x >= y   # greater than or equal</code></pre>
+        </div>
+
+        <h3>Logical</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">x and y  # true if both are truthy
+x or y   # true if either is truthy
+not x    # invert boolean</code></pre>
+        </div>
+
+        <h3>Membership</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">3 in [1, 2, 3]          # true
+"a" in "cat"            # true
+"key" in {"key": 1}     # true (checks dict keys)
+5 not in [1, 2, 3]      # true</code></pre>
+        </div>
+
+        <h3>Bitwise</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">a & b    # bitwise AND
+a | b    # bitwise OR
+a ^ b    # bitwise XOR
+~a       # bitwise NOT
+a << 2   # left shift by 2
+a >> 2   # right shift by 2</code></pre>
+        </div>
+      </section>
+
+      <!-- CONTROL FLOW -->
+      <section class="doc-section" id="control-flow">
+        <h2>Control Flow</h2>
+
+        <h3>if / elif / else</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">if score >= 90:
+    grade = "A"
+elif score >= 80:
+    grade = "B"
+elif score >= 70:
+    grade = "C"
+else:
+    grade = "F"</code></pre>
+        </div>
+
+        <h3>Ternary Expression</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">label = "even" if x % 2 == 0 else "odd"
+msg   = "yes" if flag else "no"</code></pre>
+        </div>
+
+        <h3>while</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">i = 0
+while i < 5:
+    print(i)
+    i += 1</code></pre>
+        </div>
+
+        <h3>for</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># Iterate a list
+for item in ["a", "b", "c"]:
+    print(item)
+
+# Range
+for i in range(10):        # 0–9
+    print(i)
+
+for i in range(2, 10, 2):  # 2, 4, 6, 8
+    print(i)
+
+# Enumerate — index + value
+for i, val in enumerate(["x", "y", "z"]):
+    print(i, val)
+
+# Dict items
+for key, val in data.items():
+    print(f"{key} = {val}")</code></pre>
+        </div>
+
+        <h3>break / continue</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">for i in range(10):
+    if i == 5:
+        break       # exit loop entirely
+    if i % 2 == 0:
+        continue    # skip to next iteration
+    print(i)        # prints 1, 3</code></pre>
+        </div>
+
+        <h3>assert</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">assert x > 0
+assert len(name) > 0, "name cannot be empty"</code></pre>
+        </div>
+      </section>
+
+      <!-- FUNCTIONS -->
+      <section class="doc-section" id="functions">
+        <h2>Functions</h2>
+
+        <h3>Basic Definition</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def greet(name):
+    print(f"Hello, {name}!")
+    return name.upper()
+
+result = greet("world")</code></pre>
+        </div>
+
+        <h3>Default Parameters</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def greet(name, greeting="Hello", punctuation="!"):
+    print(f"{greeting}, {name}{punctuation}")
+
+greet("Alice")                         # Hello, Alice!
+greet("Bob", greeting="Hey")           # Hey, Bob!
+greet("Carol", punctuation=".")        # Hello, Carol.</code></pre>
+        </div>
+
+        <h3>*args — Variadic Positional</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def add(*nums):
+    total = 0
+    for n in nums:
+        total += n
+    return total
+
+add(1, 2, 3, 4, 5)   # 15</code></pre>
+        </div>
+
+        <h3>**kwargs — Variadic Keyword</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def display(**opts):
+    for key, val in opts.items():
+        print(f"  {key}: {val}")
+
+display(host="localhost", port=3000, secure=true)</code></pre>
+        </div>
+
+        <h3>Keyword Arguments at Call Site</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def connect(host, port=8080, secure=false):
+    pass
+
+connect("localhost", port=3000, secure=true)</code></pre>
+        </div>
+
+        <h3>Closures</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def make_counter(start=0):
+    count = start
+    def increment(by=1):
+        nonlocal count
+        count += by
+        return count
+    return increment
+
+c = make_counter(10)
+c()     # 11
+c(5)    # 16</code></pre>
+        </div>
+
+        <h3>Lambda Expressions</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">double = lambda x: x * 2
+add    = lambda a, b: a + b
+clamp  = lambda x, lo, hi: max(lo, min(hi, x))
+
+nums = [3, 1, 4, 1, 5, 9]
+sorted_nums = sorted(nums, key=lambda x: -x)  # descending</code></pre>
+        </div>
+
+        <h3>nonlocal / global</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">count = 0
+
+def increment():
+    global count     # access module-level variable
+    count += 1
+
+def outer():
+    x = 0
+    def inner():
+        nonlocal x   # access enclosing function's variable
+        x += 1
+    inner()
+    return x         # 1</code></pre>
+        </div>
+      </section>
+
+      <!-- CLASSES -->
+      <section class="doc-section" id="classes">
+        <h2>Classes &amp; OOP</h2>
+
+        <h3>Defining a Class</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">class Animal:
+    def __init__(self, name, species):
+        self.name    = name
+        self.species = species
+
+    def speak(self):
+        return "..."
+
+    def __str__(self):
+        return f"{self.species}({self.name})"
+
+    def __repr__(self):
+        return f"Animal(name={self.name!r}, species={self.species!r})"</code></pre>
+        </div>
+
+        <h3>Inheritance</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">class Dog(Animal):
+    def __init__(self, name, breed):
+        super().__init__(name, "Dog")
+        self.breed = breed
+
+    def speak(self):
+        return f"{self.name} says woof!"
+
+    def fetch(self, item):
+        return f"{self.name} fetches the {item}!"
+
+rex = Dog("Rex", "Labrador")
+print(rex.speak())       # Rex says woof!
+print(rex.fetch("ball")) # Rex fetches the ball!</code></pre>
+        </div>
+
+        <h3>isinstance()</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">isinstance(rex, Dog)     # true
+isinstance(rex, Animal)  # true — inheritance is respected
+isinstance(rex, Cat)     # false</code></pre>
+        </div>
+
+        <h3>Operator Overloading</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Operator / Usage</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>__init__</code></td>
+                <td>Constructor</td>
+              </tr>
+              <tr>
+                <td><code>__str__</code></td>
+                <td><code>str(obj)</code>, <code>print(obj)</code></td>
+              </tr>
+              <tr>
+                <td><code>__repr__</code></td>
+                <td><code>repr(obj)</code></td>
+              </tr>
+              <tr>
+                <td><code>__len__</code></td>
+                <td><code>len(obj)</code></td>
+              </tr>
+              <tr>
+                <td><code>__add__</code></td>
+                <td><code>obj + other</code></td>
+              </tr>
+              <tr>
+                <td><code>__sub__</code></td>
+                <td><code>obj - other</code></td>
+              </tr>
+              <tr>
+                <td><code>__mul__</code></td>
+                <td><code>obj * other</code></td>
+              </tr>
+              <tr>
+                <td><code>__eq__</code></td>
+                <td><code>obj == other</code></td>
+              </tr>
+              <tr>
+                <td><code>__lt__</code></td>
+                <td><code>obj &lt; other</code></td>
+              </tr>
+              <tr>
+                <td><code>__enter__</code> / <code>__exit__</code></td>
+                <td><code>with obj as x:</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">class Vector:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __add__(self, other):
+        return Vector(self.x + other.x, self.y + other.y)
+
+    def __mul__(self, scalar):
+        return Vector(self.x * scalar, self.y * scalar)
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y
+
+    def __len__(self):
+        return 2
+
+    def __str__(self):
+        return f"({self.x}, {self.y})"
+
+v1 = Vector(1, 2)
+v2 = Vector(3, 4)
+print(v1 + v2)     # (4, 6)
+print(v1 * 3)      # (3, 6)
+print(len(v1))     # 2</code></pre>
+        </div>
+
+        <h3>Context Managers (with)</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">class Timer:
+    def __enter__(self):
+        self.start = time.monotonic()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        elapsed = time.monotonic() - self.start
+        print(f"Elapsed: {elapsed:.4f}s")
+        return false   # don't suppress exceptions
+
+with Timer():
+    do_heavy_work()</code></pre>
+        </div>
+
+        <h3>hasattr / getattr</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">hasattr(obj, "name")            # true/false
+getattr(obj, "name")            # returns obj.name
+getattr(obj, "missing", "N/A")  # returns "N/A" if not found</code></pre>
+        </div>
+      </section>
+
+      <!-- DATA STRUCTURES -->
+      <section class="doc-section" id="data-structures">
+        <h2>Data Structures</h2>
+
+        <h3>Lists</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">nums = [3, 1, 4, 1, 5, 9, 2, 6]
+
+nums.append(7)         # add to end
+nums.pop()             # remove last
+nums.sort()            # sort in place
+nums.reverse()         # reverse in place
+len(nums)              # length
+
+# Indexing
+nums[0]                # first element
+nums[-1]               # last element
+
+# Slicing
+nums[1:4]              # elements 1,2,3
+nums[:3]               # first 3
+nums[2:]               # from index 2 to end
+nums[::2]              # every other element
+nums[::-1]             # reversed copy</code></pre>
+        </div>
+
+        <h3>List Comprehensions</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">squares = [x * x for x in range(10)]
+evens   = [x for x in range(20) if x % 2 == 0]
+words   = [w.upper() for w in ["foo", "bar", "baz"]]
+
+# Nested
+pairs   = [(x, y) for x in range(3) for y in range(3) if x != y]
+
+# With function call
+lengths = [len(s) for s in ["hello", "world", "cool"]]</code></pre>
+        </div>
+
+        <h3>Dicts</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">config = {
+    "host":    "localhost",
+    "port":    8080,
+    "secure":  false,
+    "tags":    ["web", "api"],
+}
+
+config["host"]           # "localhost"
+config["timeout"] = 30   # add or update key
+"port" in config         # true (key check)
+
+config.keys()            # list of keys
+config.values()          # list of values
+config.items()           # list of (key, value) tuples
+
+# Iterating
+for key, val in config.items():
+    print(f"{key}: {val}")</code></pre>
+        </div>
+
+        <h3>Tuples</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">point = (10, 20)
+rgb   = (255, 128, 0)
+
+# Indexing
+point[0]     # 10
+point[-1]    # 20
+
+# Unpacking
+x, y = point
+r, g, b = rgb
+
+# In for loops
+coords = [(0,0), (1,2), (3,4)]
+for x, y in coords:
+    print(f"({x}, {y})")</code></pre>
+        </div>
+
+        <h3>Sets</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># set() returns a deduplicated list
+unique = set([1, 2, 2, 3, 3, 3])   # [1, 2, 3]
+tags   = set(["python", "rust", "python", "cool"])  # deduped</code></pre>
+        </div>
+
+        <h3>Functional Helpers</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">nums = [1, 2, 3, 4, 5]
+
+doubled  = list(map(lambda x: x * 2, nums))
+evens    = list(filter(lambda x: x % 2 == 0, nums))
+pairs    = list(zip([1,2,3], ["a","b","c"]))
+indexed  = list(enumerate(["x","y","z"]))
+desc     = sorted(nums, key=lambda x: -x)
+rev      = list(reversed(nums))</code></pre>
+        </div>
+      </section>
+
+      <!-- STRINGS -->
+      <section class="doc-section" id="strings">
+        <h2>String Handling</h2>
+
+        <h3>Literals</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">s1 = "double quotes"
+s2 = 'single quotes'
+s3 = """
+Multi-line string.
+Preserves newlines and indentation.
+"""</code></pre>
+        </div>
+
+        <h3>f-strings</h3>
+        <p>Interpolate any expression directly in a string:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">name = "Alice"
+age  = 30
+
+print(f"Name: {name}, Age: {age}")
+print(f"Next year: {age + 1}")
+print(f"Uppercase: {name.upper()}")
+print(f"Pi is approx {3.14159:.2f}")  # Pi is approx 3.14</code></pre>
+        </div>
+
+        <h3>.format()</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">"Hello, {}!".format("world")
+"{} + {} = {}".format(1, 2, 3)
+"Name: {name}".format(name="Alice")</code></pre>
+        </div>
+
+        <h3>String Methods</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Method</th>
+                <th>Description</th>
+                <th>Example</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>.upper()</code></td>
+                <td>Uppercase</td>
+                <td><code>"hi".upper()</code> → <code>"HI"</code></td>
+              </tr>
+              <tr>
+                <td><code>.lower()</code></td>
+                <td>Lowercase</td>
+                <td><code>"HI".lower()</code> → <code>"hi"</code></td>
+              </tr>
+              <tr>
+                <td><code>.strip()</code></td>
+                <td>Remove leading/trailing whitespace</td>
+                <td><code>"  hi  ".strip()</code> → <code>"hi"</code></td>
+              </tr>
+              <tr>
+                <td><code>.lstrip()</code></td>
+                <td>Remove leading whitespace</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><code>.rstrip()</code></td>
+                <td>Remove trailing whitespace</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><code>.split(sep)</code></td>
+                <td>Split into list</td>
+                <td><code>"a,b,c".split(",")</code></td>
+              </tr>
+              <tr>
+                <td><code>sep.join(list)</code></td>
+                <td>Join list into string</td>
+                <td><code>",".join(["a","b"])</code></td>
+              </tr>
+              <tr>
+                <td><code>.replace(a, b)</code></td>
+                <td>Replace occurrences of a with b</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><code>.find(sub)</code></td>
+                <td>Index of first match, -1 if not found</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><code>.count(sub)</code></td>
+                <td>Count occurrences</td>
+                <td><code>"abab".count("ab")</code> → <code>2</code></td>
+              </tr>
+              <tr>
+                <td><code>.startswith(s)</code></td>
+                <td>True if starts with s</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><code>.endswith(s)</code></td>
+                <td>True if ends with s</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><code>.format()</code></td>
+                <td>Format string interpolation</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Slicing Strings</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">s = "Hello, World!"
+
+s[0]      # "H"
+s[-1]     # "!"
+s[7:12]   # "World"
+s[:5]     # "Hello"
+s[7:]     # "World!"
+s[::-1]   # "!dlroW ,olleH"</code></pre>
+        </div>
+
+        <h3>Escape Sequences</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Sequence</th>
+                <th>Meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>\n</code></td>
+                <td>Newline</td>
+              </tr>
+              <tr>
+                <td><code>\t</code></td>
+                <td>Tab</td>
+              </tr>
+              <tr>
+                <td><code>\\</code></td>
+                <td>Literal backslash</td>
+              </tr>
+              <tr>
+                <td><code>\"</code></td>
+                <td>Double quote inside double-quoted string</td>
+              </tr>
+              <tr>
+                <td><code>\'</code></td>
+                <td>Single quote inside single-quoted string</td>
+              </tr>
+              <tr>
+                <td><code>\xNN</code></td>
+                <td>Hex byte (e.g. <code>\x1b</code> = ESC for ANSI)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ERROR HANDLING -->
+      <section class="doc-section" id="errors">
+        <h2>Error Handling</h2>
+
+        <h3>try / except / else / finally</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">try:
+    result = int(user_input)
+    value  = 100 / result
+except ZeroDivisionError:
+    print("cannot divide by zero")
+except ValueError as e:
+    print(f"not a valid number: {e}")
+except Exception as e:
+    print(f"unexpected error: {e}")
+else:
+    print(f"result = {value}")   # runs only if no exception
+finally:
+    print("always runs — cleanup here")</code></pre>
+        </div>
+
+        <h3>raise</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def divide(a, b):
+    if b == 0:
+        raise ValueError("divisor cannot be zero")
+    if type(a) != int or type(b) != int:
+        raise TypeError("arguments must be integers")
+    return a / b</code></pre>
+        </div>
+
+        <h3>Exception Propagation</h3>
+        <p>Uncaught exceptions propagate up the call stack automatically:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">def parse(data):
+    return int(data["value"])   # may raise ValueError
+
+def process(raw):
+    return parse(raw)           # exception propagates up
+
+try:
+    process({"value": "bad"})
+except ValueError as e:
+    print(f"caught it: {e}")</code></pre>
+        </div>
+      </section>
+
+      <!-- MODULES -->
+      <section class="doc-section" id="modules">
+        <h2>Modules &amp; Imports</h2>
+
+        <h3>Built-in Modules</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import math
+import os
+import sys
+import string
+import list
+import json
+import re
+import time
+import random
+import collections
+import term</code></pre>
+        </div>
+
+        <h3>math</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import math
+
+math.pi             # 3.14159265...
+math.e              # 2.71828182...
+math.tau            # 6.28318530...
+
+math.sqrt(16)       # 4.0
+math.pow(2, 10)     # 1024.0
+math.floor(3.9)     # 3
+math.ceil(3.1)      # 4
+math.round(3.5)     # 4
+math.abs(-7)        # 7
+math.gcd(48, 18)    # 6
+math.lcm(4, 6)      # 12
+math.factorial(7)   # 5040
+
+math.sin(math.pi)   # ~0
+math.cos(0)         # 1.0
+math.log(math.e)    # 1.0
+math.log(100, 10)   # 2.0
+
+math.degrees(math.pi)  # 180.0
+math.radians(180)       # 3.14159...
+math.hypot(3, 4)        # 5.0
+
+math.isnan(float("nan")) # true
+math.isinf(float("inf")) # true</code></pre>
+        </div>
+
+        <h3>os</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import os
+
+os.getcwd()                    # current working directory
+os.listdir(".")                # list files in directory
+os.listdir("/home/user/docs")
+
+os.exists("path/to/file")      # true/false
+os.mkdir("new_directory")
+os.remove("file.txt")
+os.rename("old.txt", "new.txt")
+os.join("path", "to", "file")  # platform-safe path join
+
+os.popen("ls -la")             # run shell command, capture stdout
+os.popen("uname -a")</code></pre>
+        </div>
+
+        <h3>sys</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import sys
+
+sys.argv          # list of command-line arguments (argv[0] = script path)
+sys.exit(0)       # exit with success
+sys.exit(1)       # exit with error code</code></pre>
+        </div>
+
+        <h3>json</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import json
+
+# Parse JSON string → Cool dict/list
+data = json.loads('{"name":"Alice","scores":[95,87,91]}')
+data["name"]      # "Alice"
+data["scores"][0] # 95
+
+# Serialize Cool value → JSON string
+text = json.dumps({"a": 1, "b": [1, 2, 3], "c": true})
+# '{"a": 1, "b": [1, 2, 3], "c": true}'</code></pre>
+        </div>
+
+        <h3>re (Regular Expressions)</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import re
+
+re.match("^\d+$", "123")           # match from start of string
+re.search("\d+", "abc123def")      # search anywhere in string
+re.fullmatch("\d+", "12345")       # entire string must match
+
+re.findall("\d+", "a1 b22 c333")   # ["1", "22", "333"]
+re.sub("\d", "X", "a1b2c3")        # "aXbXcX"
+re.split(",\s*", "a, b,  c")       # ["a", "b", "c"]</code></pre>
+        </div>
+
+        <h3>time</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import time
+
+time.time()          # Unix timestamp as float (seconds since epoch)
+time.sleep(1.5)      # sleep for 1.5 seconds
+time.monotonic()     # monotonic clock, for measuring elapsed time
+
+start = time.monotonic()
+do_work()
+elapsed = time.monotonic() - start
+print(f"took {elapsed:.3f}s")</code></pre>
+        </div>
+
+        <h3>random</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import random
+
+random.seed(42)                  # seed for reproducibility
+random.random()                  # float in [0.0, 1.0)
+random.randint(1, 100)           # int in [1, 100] inclusive
+random.uniform(0.5, 2.5)        # float in [0.5, 2.5]
+random.choice(["a", "b", "c"])   # random element
+random.shuffle([1, 2, 3, 4, 5]) # shuffle list in place</code></pre>
+        </div>
+
+        <h3>collections</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import collections
+
+q = collections.Queue()
+q.enqueue("first")
+q.enqueue("second")
+q.dequeue()    # "first"  (FIFO)
+
+s = collections.Stack()
+s.push("a")
+s.push("b")
+s.pop()        # "b"  (LIFO)</code></pre>
+        </div>
+
+        <h3>term (Terminal Control)</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import term
+
+term.raw()          # enter raw terminal mode (no echo, immediate input)
+term.restore()      # restore normal terminal mode
+term.read_key()     # read a single keypress (returns key name string)
+term.move(x, y)     # move cursor to column x, row y
+term.clear()        # clear screen</code></pre>
+        </div>
+
+        <div class="callout">
+          <strong>Used by CoolOS apps</strong> — the text editor, snake game, and top viewer all rely on
+          <code>term</code> for real-time key input and cursor positioning. Powered by the <a
+            href="https://crates.io/crates/crossterm" target="_blank" rel="noopener noreferrer">crossterm</a> Rust crate.
+        </div>
+
+        <h3>Package System</h3>
+        <p>Create your own modules as <code>.cool</code> files. Place them relative to your script:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">myproject/
+  main.cool
+  utils/
+    math.cool
+    string.cool</code></pre>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># In main.cool
+import utils.math
+import utils.string</code></pre>
+        </div>
+
+        <h3>runfile / eval</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">runfile("setup.cool")            # execute another .cool file inline
+result = eval("2 + 2")           # evaluate a Cool expression string → 4
+eval("print('hello from eval')")</code></pre>
+        </div>
+      </section>
+
+      <!-- FILE I/O -->
+      <section class="doc-section" id="fileio">
+        <h2>File I/O</h2>
+
+        <h3>Opening Files</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mode</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>"r"</code></td>
+                <td>Read (default). File must exist.</td>
+              </tr>
+              <tr>
+                <td><code>"w"</code></td>
+                <td>Write. Creates file or truncates existing.</td>
+              </tr>
+              <tr>
+                <td><code>"a"</code></td>
+                <td>Append. Creates file if it doesn't exist.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>with Statement (Recommended)</h3>
+        <p>Always use <code>with</code> — it automatically closes the file even if an exception occurs:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># Read entire file
+with open("data.txt", "r") as f:
+    content = f.read()
+
+# Read lines
+with open("data.txt", "r") as f:
+    lines = f.readlines()
+    for line in lines:
+        print(line.strip())
+
+# Write
+with open("output.txt", "w") as f:
+    f.write("Hello, file!\n")
+    f.write("Second line\n")
+
+# Append
+with open("log.txt", "a") as f:
+    f.write(f"[{time.time()}] Event occurred\n")</code></pre>
+        </div>
+
+        <h3>Manual open/close</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">f = open("data.txt", "r")
+content = f.read()
+f.close()    # always close manually when not using `with`</code></pre>
+        </div>
+      </section>
+
+      <!-- BUILTINS -->
+      <section class="doc-section" id="builtins">
+        <h2>Built-in Functions</h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Function</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>print(*args)</code></td>
+                <td>Print to stdout, space-separated</td>
+              </tr>
+              <tr>
+                <td><code>input(prompt)</code></td>
+                <td>Read a line from stdin, returns string</td>
+              </tr>
+              <tr>
+                <td><code>str(x)</code></td>
+                <td>Convert to string</td>
+              </tr>
+              <tr>
+                <td><code>int(x)</code></td>
+                <td>Convert to integer (truncates floats, parses strings)</td>
+              </tr>
+              <tr>
+                <td><code>float(x)</code></td>
+                <td>Convert to float</td>
+              </tr>
+              <tr>
+                <td><code>bool(x)</code></td>
+                <td>Convert to boolean</td>
+              </tr>
+              <tr>
+                <td><code>len(x)</code></td>
+                <td>Length of string, list, tuple, or dict</td>
+              </tr>
+              <tr>
+                <td><code>range(n)</code></td>
+                <td>Integers 0…n-1</td>
+              </tr>
+              <tr>
+                <td><code>range(start, stop)</code></td>
+                <td>Integers start…stop-1</td>
+              </tr>
+              <tr>
+                <td><code>range(start, stop, step)</code></td>
+                <td>With step size</td>
+              </tr>
+              <tr>
+                <td><code>type(x)</code></td>
+                <td>Returns type name as string</td>
+              </tr>
+              <tr>
+                <td><code>repr(x)</code></td>
+                <td>Developer representation string</td>
+              </tr>
+              <tr>
+                <td><code>abs(x)</code></td>
+                <td>Absolute value</td>
+              </tr>
+              <tr>
+                <td><code>min(*args)</code></td>
+                <td>Minimum value</td>
+              </tr>
+              <tr>
+                <td><code>max(*args)</code></td>
+                <td>Maximum value</td>
+              </tr>
+              <tr>
+                <td><code>sum(iterable)</code></td>
+                <td>Sum all elements</td>
+              </tr>
+              <tr>
+                <td><code>round(x, n)</code></td>
+                <td>Round to n decimal places</td>
+              </tr>
+              <tr>
+                <td><code>pow(x, y)</code></td>
+                <td>x raised to the power y</td>
+              </tr>
+              <tr>
+                <td><code>sorted(iterable, key=nil)</code></td>
+                <td>Returns new sorted list</td>
+              </tr>
+              <tr>
+                <td><code>reversed(iterable)</code></td>
+                <td>Returns reversed iterator</td>
+              </tr>
+              <tr>
+                <td><code>enumerate(iterable)</code></td>
+                <td>Yields (index, value) pairs</td>
+              </tr>
+              <tr>
+                <td><code>zip(a, b)</code></td>
+                <td>Pairs elements from two iterables</td>
+              </tr>
+              <tr>
+                <td><code>map(fn, iterable)</code></td>
+                <td>Apply fn to each element</td>
+              </tr>
+              <tr>
+                <td><code>filter(fn, iterable)</code></td>
+                <td>Keep elements where fn returns true</td>
+              </tr>
+              <tr>
+                <td><code>list(x)</code></td>
+                <td>Convert to list</td>
+              </tr>
+              <tr>
+                <td><code>tuple(x)</code></td>
+                <td>Convert to tuple</td>
+              </tr>
+              <tr>
+                <td><code>dict(x)</code></td>
+                <td>Convert to dict</td>
+              </tr>
+              <tr>
+                <td><code>set(x)</code></td>
+                <td>Deduplicate iterable, returns list</td>
+              </tr>
+              <tr>
+                <td><code>isinstance(x, t)</code></td>
+                <td>True if x is an instance of class t</td>
+              </tr>
+              <tr>
+                <td><code>hasattr(obj, name)</code></td>
+                <td>True if obj has attribute name</td>
+              </tr>
+              <tr>
+                <td><code>getattr(obj, name, default?)</code></td>
+                <td>Get attribute by name string</td>
+              </tr>
+              <tr>
+                <td><code>exit(code)</code></td>
+                <td>Exit interpreter with given status code</td>
+              </tr>
+              <tr>
+                <td><code>runfile(path)</code></td>
+                <td>Execute another .cool file at runtime</td>
+              </tr>
+              <tr>
+                <td><code>eval(expr)</code></td>
+                <td>Evaluate a Cool expression string</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- STDLIB -->
+      <section class="doc-section" id="stdlib">
+        <h2>Standard Library</h2>
+        <p>The standard library modules are written in Cool itself. Import them with <code>import</code>.</p>
+
+        <h3>string module</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import string
+
+string.split("a,b,c", ",")           # ["a", "b", "c"]
+string.join(["a", "b", "c"], " | ")  # "a | b | c"
+string.strip("  hello  ")            # "hello"
+string.lstrip("  hello  ")           # "hello  "
+string.rstrip("  hello  ")           # "  hello"
+string.upper("hello")                # "HELLO"
+string.lower("HELLO")                # "hello"
+string.replace("abcabc", "a", "X")  # "XbcXbc"
+string.startswith("hello", "he")     # true
+string.endswith("hello", "lo")       # true
+string.find("hello", "ll")           # 2
+string.count("hello", "l")           # 2
+string.title("hello world")          # "Hello World"
+string.capitalize("hello world")     # "Hello world"</code></pre>
+        </div>
+
+        <h3>list module</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import list
+
+list.sort([3, 1, 4, 1, 5])                          # [1, 1, 3, 4, 5]
+list.reverse([1, 2, 3])                              # [3, 2, 1]
+list.map([1, 2, 3], lambda x: x * 2)                # [2, 4, 6]
+list.filter([1, 2, 3, 4, 5], lambda x: x > 2)       # [3, 4, 5]
+list.reduce([1, 2, 3, 4], lambda acc, x: acc + x, 0) # 10
+list.flatten([[1, 2], [3, [4, 5]]])                   # [1, 2, 3, 4, 5]
+list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
+        </div>
+      </section>
+
+      <!-- COOLOS SHELL -->
+      <section class="doc-section" id="coolos-shell">
+        <h2>CoolOS Shell</h2>
+        <p>CoolOS is a fully interactive shell written entirely in Cool. It runs on top of the Cool interpreter and
+          provides a Unix-like command-line environment.</p>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">./target/release/cool coolos/shell.cool</code></pre>
+        </div>
+
+        <h3>File System Commands</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cmd">ls [path]</span></td>
+                <td>List directory contents. Defaults to current directory.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">cd &lt;path&gt;</span></td>
+                <td>Change directory. Supports relative and absolute paths.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">pwd</span></td>
+                <td>Print current working directory.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">cat &lt;file&gt;</span></td>
+                <td>Print file contents to stdout.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">mkdir &lt;dir&gt;</span></td>
+                <td>Create a directory.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">touch &lt;file&gt;</span></td>
+                <td>Create an empty file.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">rm &lt;file&gt;</span></td>
+                <td>Delete a file.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">mv &lt;src&gt; &lt;dst&gt;</span></td>
+                <td>Move or rename a file.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">cp &lt;src&gt; &lt;dst&gt;</span></td>
+                <td>Copy a file.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">write &lt;file&gt; &lt;text&gt;</span></td>
+                <td>Write text to a file (overwrites).</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Text Processing Commands</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cmd">head &lt;file&gt; [n]</span></td>
+                <td>Show first N lines (default: 10).</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">tail &lt;file&gt; [n]</span></td>
+                <td>Show last N lines (default: 10).</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">wc &lt;file&gt;</span></td>
+                <td>Count words, lines, and characters.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">grep &lt;pattern&gt; &lt;file&gt;</span></td>
+                <td>Search file for lines matching pattern.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">find &lt;pattern&gt;</span></td>
+                <td>Search for files by name pattern.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">echo &lt;text&gt;</span></td>
+                <td>Print text to stdout.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Shell Commands</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cmd">run &lt;file.cool&gt;</span></td>
+                <td>Execute a Cool script from the shell.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">source &lt;file&gt;</span></td>
+                <td>Execute a shell script file line by line.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">history</span></td>
+                <td>Show command history.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">alias name=cmd</span></td>
+                <td>Create a command alias.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">set VAR=value</span></td>
+                <td>Set an environment variable.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">clear</span></td>
+                <td>Clear the terminal screen.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">help</span></td>
+                <td>List all available commands.</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">exit / quit</span></td>
+                <td>Exit CoolOS.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Pipes</h3>
+        <p>Chain commands together with <code>|</code>:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">ls | grep .cool
+cat README.md | head 20
+cat file.txt | grep "error" | wc</code></pre>
+        </div>
+
+        <h3>Environment Variables</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">set NAME=Alice
+set PORT=3000
+echo $NAME          # Alice
+echo $PORT          # 3000
+set PATH=/usr/local/bin</code></pre>
+        </div>
+
+        <h3>Aliases</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">alias ll=ls -la
+alias cls=clear
+alias reload=source ~/.coolrc</code></pre>
+        </div>
+
+        <h3>Shell Scripting</h3>
+        <p>Write reusable shell scripts and run them with <code>source</code>:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash"># deploy.cool
+echo Deploying...
+cd /var/app
+run build.cool
+echo Done.</code></pre>
+        </div>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">source deploy.cool</code></pre>
+        </div>
+
+        <h3>Tab Completion &amp; History</h3>
+        <p>Press <code>Tab</code> to autocomplete commands and file paths. Use the <code>↑</code> arrow key to navigate
+          through previous commands.</p>
+      </section>
+
+      <!-- COOLOS APPS -->
+      <section class="doc-section" id="coolos-apps">
+        <h2>CoolOS Applications</h2>
+        <p>CoolOS ships with several built-in applications, all written entirely in Cool.</p>
+
+        <h3>calc — Calculator REPL</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run coolos/calc.cool</code></pre>
+        </div>
+        <p>Interactive calculator with persistent variables and full <code>math</code> library support.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">> 2 + 2
+4
+> x = math.sqrt(144)
+> x * 2
+24.0
+> math.factorial(10)
+3628800</code></pre>
+        </div>
+
+        <h3>notes — Note-taking App</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run coolos/notes.cool</code></pre>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cmd">new &lt;title&gt;</span></td>
+                <td>Create a new note</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">show &lt;id&gt;</span></td>
+                <td>Display a note by ID</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">append &lt;id&gt; &lt;text&gt;</span></td>
+                <td>Append text to an existing note</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">delete &lt;id&gt;</span></td>
+                <td>Delete a note</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">search &lt;query&gt;</span></td>
+                <td>Search notes by content</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>top — Process Viewer</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run coolos/top.cool</code></pre>
+        </div>
+        <p>Displays running processes and system statistics using <code>os.popen("ps aux")</code>. Updates in real time.
+        </p>
+
+        <h3>edit — Text Editor</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run coolos/edit.cool filename.txt</code></pre>
+        </div>
+        <p>A nano-like terminal text editor powered by <code>import term</code>.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>Arrow keys</code></td>
+                <td>Move cursor</td>
+              </tr>
+              <tr>
+                <td><code>Ctrl+S</code></td>
+                <td>Save file</td>
+              </tr>
+              <tr>
+                <td><code>Ctrl+X</code></td>
+                <td>Exit editor</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>snake — Snake Game</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run coolos/snake.cool</code></pre>
+        </div>
+        <p>ASCII Snake game with real-time arrow key input via <code>import term</code>. Runs entirely in the terminal.
+        </p>
+
+        <h3>http — HTTP Client</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run coolos/http.cool</code></pre>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="cmd">http get &lt;url&gt;</span></td>
+                <td>HTTP GET request, print response</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">http post &lt;url&gt; &lt;data&gt;</span></td>
+                <td>HTTP POST with body</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">http head &lt;url&gt;</span></td>
+                <td>HTTP HEAD — headers only</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">http getjson &lt;url&gt;</span></td>
+                <td>GET and parse response as JSON</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="callout">Backed by <code>os.popen("curl ...")</code> — requires <code>curl</code> on the host
+          system.</div>
+      </section>
+
+      <!-- PROJECT STRUCTURE -->
+      <section class="doc-section" id="structure">
+        <h2>Project Structure</h2>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">cool/
+├── src/
+│   ├── main.rs           # CLI entry point and REPL loop
+│   ├── lexer.rs          # Token scanner — INDENT/DEDENT handling
+│   ├── parser.rs         # Recursive descent parser → AST
+│   ├── ast.rs            # AST node type definitions
+│   ├── interpreter.rs    # Tree-walk interpreter (evaluates AST)
+│   ├── opcode.rs         # Bytecode instruction set definitions
+│   ├── compiler.rs       # AST → bytecode compiler
+│   └── vm.rs             # Bytecode virtual machine
+│
+├── coolos/
+│   ├── shell.cool        # Main CoolOS interactive shell
+│   ├── calc.cool         # Calculator REPL
+│   ├── notes.cool        # Note-taking application
+│   ├── top.cool          # Process viewer
+│   ├── edit.cool         # Terminal text editor
+│   ├── snake.cool        # Snake game
+│   └── http.cool         # HTTP client
+│
+├── examples/
+│   ├── hello.cool              # Variables, loops, functions — start here
+│   ├── data_structures.cool    # Lists, dicts, tuples, comprehensions
+│   ├── oop.cool                # Classes, inheritance, operator overloading
+│   ├── functional.cool         # Closures, lambdas, map/filter, memoize
+│   ├── errors_and_files.cool   # try/except/finally, file I/O, JSON
+│   └── stdlib.cool             # math, random, re, json, time, collections
+│
+├── Cargo.toml
+├── Cargo.lock
+├── README.md
+└── ROADMAP.md</code></pre>
+        </div>
+
+        <h3>How the Interpreter Works</h3>
+        <p>Cool uses a classic pipeline architecture:</p>
+        <ol>
+          <li><strong>Lexer</strong> (<code>lexer.rs</code>) — scans source text into tokens. Handles Python-style
+            indentation by emitting synthetic <code>INDENT</code> and <code>DEDENT</code> tokens.</li>
+          <li><strong>Parser</strong> (<code>parser.rs</code>) — recursive descent parser that consumes the token stream
+            and produces an Abstract Syntax Tree (AST).</li>
+          <li><strong>Interpreter</strong> (<code>interpreter.rs</code>) — walks the AST and evaluates each node.
+            Manages scope, closures, classes, and all built-in operations.</li>
+        </ol>
+        <p>Phase 8 adds a compiler backend alongside the interpreter:</p>
+        <ol>
+          <li><strong>Compiler</strong> (<code>compiler.rs</code>) — translates the AST into a flat bytecode instruction sequence.</li>
+          <li><strong>VM</strong> (<code>vm.rs</code>) — stack-based virtual machine that executes bytecode. Defined opcodes live in <code>opcode.rs</code>.</li>
+        </ol>
+      </section>
+
+      <!-- ROADMAP -->
+      <section class="doc-section" id="roadmap">
+        <h2>Roadmap</h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Phase</th>
+                <th>Description</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>1</td>
+                <td>Core interpreter — lexer, parser, variables, functions, loops</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>2</td>
+                <td>Real language features — classes, inheritance, exceptions, file I/O</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>3</td>
+                <td>CoolOS shell — interactive shell written in Cool</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>4</td>
+                <td>Quality of life — f-strings, lambdas, comprehensions, context managers</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>5</td>
+                <td>Shell: more commands — pipes, env vars, tab complete, aliases</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>6</td>
+                <td>Standard library — json, re, time, random, collections, string, list</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>7</td>
+                <td>CoolOS applications — calc, notes, top, edit, snake, http</td>
+                <td><span class="badge badge-done">Complete</span></td>
+              </tr>
+              <tr>
+                <td>8</td>
+                <td>Bytecode VM / LLVM compiler</td>
+                <td><span class="badge badge-wip">In Progress</span></td>
+              </tr>
+              <tr>
+                <td>9</td>
+                <td>Real kernel — bare-metal boot, self-hosting</td>
+                <td><span class="badge badge-todo">Very Long Term</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Phase 8 — Compiler</h3>
+        <p>The goal is to compile Cool to native binaries, enabling self-hosting and OS-level use. The bytecode VM is complete; the LLVM backend is next.</p>
+        <ul>
+          <li>✅ Bytecode VM — compile AST to bytecode, run on a stack-based virtual machine (<code>compiler.rs</code>, <code>vm.rs</code>, <code>opcode.rs</code>)</li>
+          <li>LLVM backend — compile Cool → LLVM IR → native binary</li>
+          <li>FFI — call C functions from Cool code</li>
+          <li>Inline assembly — <code>asm { ... }</code> blocks</li>
+          <li>Pointer types and raw memory access</li>
+          <li><code>cool build</code> command for compiling projects</li>
+        </ul>
+
+        <h3>Phase 9 — Real Kernel</h3>
+        <p>The very long-term goal: a real OS that boots on bare metal with Cool as its shell.</p>
+        <ul>
+          <li>Bootloader (GRUB or custom)</li>
+          <li>Rust kernel — memory management, interrupts, process scheduler</li>
+          <li>VGA / framebuffer text output</li>
+          <li>Keyboard and filesystem drivers</li>
+          <li>Cool interpreter embedded in the kernel</li>
+          <li>CoolOS shell boots as PID 1</li>
+          <li>Self-hosting — CoolOS can run <code>cool build</code> to recompile itself</li>
+        </ul>
+
+        <div class="callout">
+          See <a href="https://github.com/codenz92/cool/blob/master/ROADMAP.md" target="_blank" rel="noopener noreferrer">ROADMAP.md</a> for the
+          full phase-by-phase breakdown with individual task tracking.
+        </div>
+      </section>
+
+      <hr>
+      <p style="color:var(--muted); font-family:var(--font-mono); font-size:0.78rem; padding-bottom:32px;">
+        Cool Language &mdash; MIT License &mdash; Created by <a href="https://github.com/codenz92"
+          target="_blank" rel="noopener noreferrer">codenz92</a>
+      </p>
+
+    </main>
+
+    <script>
+      // ── HIGHLIGHT.JS ──
+      document.addEventListener('DOMContentLoaded', () => {
+        hljs.configure({ ignoreUnescapedHTML: true });
+        document.querySelectorAll('pre code').forEach(el => {
+          hljs.highlightElement(el);
+        });
+
+        // ── COPY BUTTONS ──
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const code = btn.closest('.code-wrap').querySelector('code');
+            navigator.clipboard.writeText(code.innerText).then(() => {
+              btn.textContent = 'copied';
+              btn.classList.add('copied');
+              setTimeout(() => {
+                btn.textContent = 'copy';
+                btn.classList.remove('copied');
+              }, 1800);
+            });
+          });
+        });
+
+        // ── ACTIVE NAV ON SCROLL ──
+        const sections = document.querySelectorAll('.doc-section, .hero');
+        const navLinks = document.querySelectorAll('#nav a');
+
+        const observer = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (entry.isIntersecting) {
+              navLinks.forEach(a => a.classList.remove('active'));
+              const id = entry.target.id;
+              const active = document.querySelector(`#nav a[href="#${id}"]`);
+              if (active) {
+                active.classList.add('active');
+                active.scrollIntoView({ block: 'nearest' });
+              }
+            }
+          });
+        }, { rootMargin: '-20% 0px -70% 0px' });
+
+        sections.forEach(s => observer.observe(s));
+
+        // ── SEARCH ──
+        const searchInput = document.getElementById('search-input');
+        const mainContent = document.getElementById('main');
+
+        searchInput.addEventListener('input', () => {
+          const q = searchInput.value.trim().toLowerCase();
+
+          // Remove old highlights
+          mainContent.querySelectorAll('mark').forEach(m => {
+            m.replaceWith(m.textContent);
+          });
+          mainContent.normalize();
+
+          if (q.length < 2) return;
+
+          // Find nav links whose text matches
+          navLinks.forEach(a => {
+            const text = a.textContent.toLowerCase();
+            a.style.opacity = text.includes(q) ? '1' : '0.35';
+          });
+
+          // Highlight text in content
+          const walker = document.createTreeWalker(mainContent, NodeFilter.SHOW_TEXT);
+          const textNodes = [];
+          let node;
+          while ((node = walker.nextNode())) {
+            if (!['SCRIPT', 'STYLE', 'CODE', 'PRE'].includes(node.parentElement.tagName)) {
+              textNodes.push(node);
+            }
+          }
+
+          textNodes.forEach(tn => {
+            const idx = tn.textContent.toLowerCase().indexOf(q);
+            if (idx !== -1) {
+              const range = document.createRange();
+              range.setStart(tn, idx);
+              range.setEnd(tn, idx + q.length);
+              const mark = document.createElement('mark');
+              range.surroundContents(mark);
+            }
+          });
+        });
+
+        searchInput.addEventListener('blur', () => {
+          navLinks.forEach(a => a.style.opacity = '');
+        });
+
+        // ── KEYBOARD SHORTCUT ──
+        document.addEventListener('keydown', e => {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+            e.preventDefault();
+            searchInput.focus();
+          }
+        });
+      });
+    </script>
+  </body>
+
+</html>

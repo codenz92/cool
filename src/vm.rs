@@ -145,6 +145,7 @@ impl VM {
         let proto = Rc::new(FnProto {
             name: "<script>".to_string(),
             params: vec![],
+            defaults: vec![],
             chunk: {
                 // We can't move chunk; clone its contents into a Chunk.
                 let mut c = Chunk::new();
@@ -207,21 +208,107 @@ impl VM {
                 Op::DupTop => { let v = self.peek().clone(); self.push(v); }
 
                 // ── Arithmetic ─────────────────────────────────────────────
-                Op::Add => { let r = self.pop(); let l = self.pop(); self.push(self.add(l, r)?); }
-                Op::Sub => { let r = self.pop(); let l = self.pop(); self.push(self.arith(l, r, "-")?); }
-                Op::Mul => { let r = self.pop(); let l = self.pop(); self.push(self.mul(l, r)?); }
+                Op::Add => {
+                    let r = self.pop(); let l = self.pop();
+                    // Check for __add__ before numeric add.
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__add__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result);
+                            continue;
+                        }
+                    }
+                    self.push(self.add(l, r)?);
+                }
+                Op::Sub => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__sub__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result);
+                            continue;
+                        }
+                    }
+                    self.push(self.arith(l, r, "-")?);
+                }
+                Op::Mul => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__mul__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result);
+                            continue;
+                        }
+                    }
+                    self.push(self.mul(l, r)?);
+                }
                 Op::Div => { let r = self.pop(); let l = self.pop(); self.push(self.div(l, r)?); }
                 Op::Mod => { let r = self.pop(); let l = self.pop(); self.push(self.modulo(l, r)?); }
                 Op::Pow => { let r = self.pop(); let l = self.pop(); self.push(self.pow(l, r)?); }
                 Op::FloorDiv => { let r = self.pop(); let l = self.pop(); self.push(self.floor_div(l, r)?); }
 
                 // ── Comparison ─────────────────────────────────────────────
-                Op::Eq    => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(vm_eq(&l, &r))); }
-                Op::NotEq => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(!vm_eq(&l, &r))); }
-                Op::Lt    => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, "<")?); }
-                Op::LtEq  => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, "<=")?); }
-                Op::Gt    => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, ">")?); }
-                Op::GtEq  => { let r = self.pop(); let l = self.pop(); self.push(self.cmp_op(l, r, ">=")?); }
+                Op::Eq    => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__eq__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result); continue;
+                        }
+                    }
+                    self.push(VmValue::Bool(vm_eq(&l, &r)));
+                }
+                Op::NotEq => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__eq__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            let b = result.is_truthy();
+                            self.push(VmValue::Bool(!b)); continue;
+                        }
+                    }
+                    self.push(VmValue::Bool(!vm_eq(&l, &r)));
+                }
+                Op::Lt    => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__lt__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result); continue;
+                        }
+                    }
+                    self.push(self.cmp_op(l, r, "<")?);
+                }
+                Op::LtEq  => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__le__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result); continue;
+                        }
+                    }
+                    self.push(self.cmp_op(l, r, "<=")?);
+                }
+                Op::Gt    => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__gt__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result); continue;
+                        }
+                    }
+                    self.push(self.cmp_op(l, r, ">")?);
+                }
+                Op::GtEq  => {
+                    let r = self.pop(); let l = self.pop();
+                    if let VmValue::Instance(ref inst) = l {
+                        if let Some(m) = self.find_method(&inst.class, "__ge__") {
+                            let result = self.call_closure(m, &[l, r], &[])?;
+                            self.push(result); continue;
+                        }
+                    }
+                    self.push(self.cmp_op(l, r, ">=")?);
+                }
                 Op::In    => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(self.contains(&r, &l)?)); }
                 Op::NotIn => { let r = self.pop(); let l = self.pop(); self.push(VmValue::Bool(!self.contains(&r, &l)?)); }
 
@@ -676,11 +763,8 @@ impl VM {
                 } else if pos_idx < args.len() {
                     self.stack[base + i] = args[pos_idx].clone();
                     pos_idx += 1;
-                } else if let Some(default) = &param.default {
-                    // Compile and evaluate default? For now, re-use interpreter for default exprs.
-                    // Simpler: store nil and let the function body handle it.
-                    // Actually, defaults need to be pre-compiled. For now, use nil.
-                    self.stack[base + i] = VmValue::Nil;
+                } else if let Some(default_val) = closure.proto.defaults.get(i).and_then(|d| d.clone()) {
+                    self.stack[base + i] = default_val;
                 } else {
                     return Err(self.err(&format!(
                         "{}() missing argument '{}'", closure.proto.name, param.name
@@ -918,17 +1002,6 @@ impl VM {
                 let mut v = a.borrow().clone();
                 v.extend_from_slice(&b.borrow());
                 Ok(VmValue::List(Rc::new(RefCell::new(v))))
-            }
-            // __add__ operator overload
-            (VmValue::Instance(inst), r) => {
-                if let Some(m) = self.find_method(&inst.class, "__add__") {
-                    let args = [VmValue::Instance(inst.clone()), r];
-                    // Can't call here due to &self, return error to signal; handled in Op::Add.
-                    let _ = args; let _ = m;
-                    Err(self.err("operator overloading requires mutable borrow; use call_value"))
-                } else {
-                    Err(self.err(&format!("unsupported operand types for +: instance and {}", "?")))
-                }
             }
             (l, r) => Err(self.err(&format!("cannot add {} and {}", l.type_name(), r.type_name()))),
         }

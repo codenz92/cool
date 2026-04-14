@@ -1,0 +1,141 @@
+# errors_and_files.cool — error handling and file I/O
+#
+# Run: cool errors_and_files.cool
+
+import os
+import json
+
+# ── try / except / else / finally ────────────────────────────────────────────
+
+def safe_divide(a, b):
+    try:
+        if b == 0:
+            raise "ZeroDivisionError: cannot divide by zero"
+        return a / b
+    except ZeroDivisionError:
+        return nil
+
+def parse_int(s):
+    try:
+        return int(s)
+    except:
+        return nil
+
+print("=== Error handling ===")
+print(f"  10 / 2  = {safe_divide(10, 2)}")
+print(f"  10 / 0  = {safe_divide(10, 0)}")
+print(f"  '42'    = {parse_int('42')}")
+print(f"  'oops'  = {parse_int('oops')}")
+
+# finally guarantees cleanup even when exceptions fly
+def read_first_line(path):
+    f = nil
+    try:
+        f = open(path, "r")
+        lines = f.readlines()
+        if len(lines) == 0:
+            raise "ValueError: file is empty"
+        return lines[0].strip()
+    except ValueError as e:
+        return f"[empty file]"
+    except:
+        return f"[could not read {path}]"
+    finally:
+        if f != nil:
+            f.close()
+
+# ── Writing files ─────────────────────────────────────────────────────────────
+
+tmp = "/tmp/cool_demo"
+
+print("\n=== File I/O ===")
+
+# Write with `with` — file closes automatically
+with open(tmp + "_log.txt", "w") as f:
+    f.write("2026-04-14 08:00  server started\n")
+    f.write("2026-04-14 08:01  connected: 127.0.0.1\n")
+    f.write("2026-04-14 08:05  request: GET /api/data\n")
+    f.write("2026-04-14 08:05  response: 200 OK\n")
+    f.write("2026-04-14 08:10  request: POST /api/update\n")
+    f.write("2026-04-14 08:10  response: 204 No Content\n")
+
+print(f"  wrote log to {tmp}_log.txt")
+
+# Read all lines and filter
+with open(tmp + "_log.txt", "r") as f:
+    lines = f.readlines()
+
+requests = [l.strip() for l in lines if "request:" in l]
+errors   = [l.strip() for l in lines if "4" in l.split(" ")[-1] if l.strip() != ""]
+
+print(f"  total lines: {len(lines)}")
+print(f"  requests:    {len(requests)}")
+for r in requests:
+    print(f"    {r}")
+
+# Append a new entry
+with open(tmp + "_log.txt", "a") as f:
+    f.write("2026-04-14 08:15  server shutdown\n")
+
+print(f"  appended shutdown entry")
+
+# ── JSON round-trip ───────────────────────────────────────────────────────────
+
+config = {
+    "host":    "localhost",
+    "port":    8080,
+    "debug":   true,
+    "allowed": ["127.0.0.1", "10.0.0.1"],
+}
+
+config_path = tmp + "_config.json"
+
+with open(config_path, "w") as f:
+    f.write(json["dumps"](config))
+
+print(f"\n=== JSON config ===")
+print(f"  wrote: {config_path}")
+
+with open(config_path, "r") as f:
+    raw = f.read()
+
+loaded = json["loads"](raw)
+print(f"  host:  {loaded['host']}")
+print(f"  port:  {loaded['port']}")
+print(f"  debug: {loaded['debug']}")
+
+# ── Directory operations ──────────────────────────────────────────────────────
+
+work_dir = "/tmp/cool_workdir"
+
+print(f"\n=== Directory ops ===")
+
+if not os["exists"](work_dir):
+    os["mkdir"](work_dir)
+    print(f"  created {work_dir}")
+
+# Write a few files
+names = ["alpha", "beta", "gamma"]
+for name in names:
+    with open(os["join"](work_dir, name + ".txt"), "w") as f:
+        f.write(f"contents of {name}\n")
+
+files = os["listdir"](work_dir)
+txt_files = [fn for fn in files if fn.endswith(".txt")]
+print(f"  files in workdir: {txt_files}")
+
+# Read each back
+for fn in txt_files:
+    path = os["join"](work_dir, fn)
+    line = read_first_line(path)
+    print(f"    {fn}: {line}")
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+
+for fn in txt_files:
+    os["remove"](os["join"](work_dir, fn))
+os["remove"](work_dir)
+os["remove"](tmp + "_log.txt")
+os["remove"](config_path)
+
+print("\n  cleaned up — all temp files removed")

@@ -1,0 +1,99 @@
+# data_structures.cool — lists, dicts, tuples, and comprehensions
+#
+# Run: cool data_structures.cool
+
+# ── Lists ─────────────────────────────────────────────────────────────────────
+
+scores = [88, 92, 75, 96, 61, 84, 79]
+
+scores.sort()
+best  = scores[-1]
+worst = scores[0]
+total = sum(scores)
+avg   = total / len(scores)
+
+print("=== Score report ===")
+print(f"  count:   {len(scores)}")
+print(f"  average: {round(avg, 1)}")
+print(f"  best:    {best}")
+print(f"  worst:   {worst}")
+print(f"  passing: {[s for s in scores if s >= 70]}")
+
+# Slicing
+top3 = scores[-3:]
+print(f"  top 3:   {top3}")
+
+# ── Dicts ─────────────────────────────────────────────────────────────────────
+
+inventory = {
+    "apples":  42,
+    "bananas": 17,
+    "oranges": 8,
+    "grapes":  31,
+}
+
+print("\n=== Inventory ===")
+for item in inventory:
+    qty = inventory[item]
+    bar = "*" * (qty / 5)
+    print(f"  {item:<10} {qty:>3}  {bar}")
+
+# Low-stock alert
+low = [item for item in inventory if inventory[item] < 20]
+print(f"  low stock: {low}")
+
+# Merge in a restock
+restock = {"bananas": 25, "oranges": 50}
+for item in restock:
+    inventory[item] = inventory[item] + restock[item]
+
+print(f"  after restock — bananas: {inventory['bananas']}, oranges: {inventory['oranges']}")
+
+# ── Tuples ────────────────────────────────────────────────────────────────────
+
+# Tuples are useful for fixed records
+point   = (3, 4)
+color   = (255, 128, 0)
+rgb_names = ["r", "g", "b"]
+
+x, y = point
+print(f"\n=== Geometry ===")
+print(f"  point:    ({x}, {y})")
+print(f"  distance: {round((x*x + y*y) ** 0.5, 4)}")
+
+print(f"  color:    rgb({color[0]}, {color[1]}, {color[2]})")
+for pair in zip(rgb_names, color):
+    print(f"    {pair[0]} = {pair[1]}")
+
+# ── Nested structures ─────────────────────────────────────────────────────────
+
+students = [
+    {"name": "Alice",   "grade": "A", "score": 95},
+    {"name": "Bob",     "grade": "B", "score": 83},
+    {"name": "Carol",   "grade": "A", "score": 91},
+    {"name": "Dave",    "grade": "C", "score": 74},
+    {"name": "Eve",     "grade": "B", "score": 87},
+]
+
+print("\n=== Class results ===")
+a_students = [s["name"] for s in students if s["grade"] == "A"]
+avg_score  = sum([s["score"] for s in students]) / len(students)
+
+# Sort by score descending
+for i in range(len(students) - 1):
+    for j in range(i + 1, len(students)):
+        if students[j]["score"] > students[i]["score"]:
+            students[i], students[j] = students[j], students[i]
+
+for s in students:
+    print(f"  {s['name']:<8} {s['grade']}  {s['score']}")
+
+print(f"\n  class avg:  {round(avg_score, 1)}")
+print(f"  A students: {a_students}")
+
+# ── set() deduplication ───────────────────────────────────────────────────────
+
+tags = ["python", "cool", "rust", "cool", "python", "scripting", "rust"]
+unique = set(tags)
+print(f"\n=== Tags (deduplicated) ===")
+print(f"  {unique}")

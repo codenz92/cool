@@ -745,15 +745,51 @@ impl Compiler {
         let upvalue_count = upvalue_refs.len();
         let local_count = scope.next_slot;
 
+        // Pre-evaluate default parameter values.
+        let defaults: Vec<Option<VmValue>> = params.iter().map(|p| {
+            p.default.as_ref().map(|expr| Self::eval_const_expr(expr))
+        }).collect();
+
         let proto = FnProto {
             name: name.to_string(),
             params: params.to_vec(),
+            defaults,
             chunk,
             upvalue_count,
             local_count,
         };
 
         Ok((proto, upvalue_refs))
+    }
+
+    /// Evaluate a constant expression at compile time.
+    /// Only handles simple literals; complex expressions return Nil.
+    fn eval_const_expr(expr: &Expr) -> VmValue {
+        match expr {
+            Expr::Int(n)    => VmValue::Int(*n),
+            Expr::Float(f)  => VmValue::Float(*f),
+            Expr::Str(s)    => VmValue::Str(s.clone()),
+            Expr::Bool(b)   => VmValue::Bool(*b),
+            Expr::Nil       => VmValue::Nil,
+            Expr::List(items) if items.is_empty() => {
+                VmValue::List(Rc::new(std::cell::RefCell::new(Vec::new())))
+            }
+            Expr::Dict(pairs) if pairs.is_empty() => {
+                VmValue::Dict(Rc::new(std::cell::RefCell::new(VmDict::new())))
+            }
+            Expr::Tuple(items) if items.is_empty() => {
+                VmValue::Tuple(Rc::new(Vec::new()))
+            }
+            // Unary minus on a literal
+            Expr::UnaryOp { op: UnaryOp::Neg, expr: operand } => {
+                match Self::eval_const_expr(operand) {
+                    VmValue::Int(n)   => VmValue::Int(-n),
+                    VmValue::Float(f) => VmValue::Float(-f),
+                    _                 => VmValue::Nil,
+                }
+            }
+            _ => VmValue::Nil, // non-constant; will be Nil at call time
+        }
     }
 
     /// Unused wrapper kept for API compatibility.

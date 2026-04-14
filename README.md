@@ -143,12 +143,12 @@ coolos/
   http.cool       HTTP client
 
 examples/
-  hello.cool
-  features.cool        Comprehensive language feature demo
-  math_utils.cool
-  files.cool
-  phase4_features.cool
-  v3_features.cool
+  hello.cool            Variables, loops, functions — start here
+  data_structures.cool  Lists, dicts, tuples, comprehensions
+  oop.cool              Classes, inheritance, operator overloading
+  functional.cool       Closures, lambdas, map/filter, memoize
+  errors_and_files.cool try/except/finally, file I/O, JSON, dirs
+  stdlib.cool           math, random, re, json, time, collections
 ```
 
 ---

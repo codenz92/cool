@@ -1,0 +1,150 @@
+# stdlib.cool — standard library showcase
+#
+# Covers: math, random, re, json, time, collections
+#
+# Run: cool stdlib.cool
+
+import math
+import random
+import re
+import json
+import time
+import collections
+
+# ── math ──────────────────────────────────────────────────────────────────────
+
+print("=== math ===")
+print(f"  pi         = {math['pi']}")
+print(f"  e          = {round(math['e'], 6)}")
+print(f"  sqrt(2)    = {round(sqrt(2), 6)}")
+print(f"  log(1000)  = {round(log(1000), 4)}")
+print(f"  sin(pi/6)  = {round(sin(math['pi'] / 6), 4)}")
+print(f"  floor(2.9) = {floor(2.9)}")
+print(f"  ceil(2.1)  = {ceil(2.1)}")
+print(f"  abs(-17)   = {abs(-17)}")
+
+# Hypotenuse via Pythagoras
+def hypotenuse(a, b):
+    return sqrt(a*a + b*b)
+
+for pair in [(3, 4), (5, 12), (8, 15)]:
+    h = hypotenuse(pair[0], pair[1])
+    print(f"  hyp({pair[0]}, {pair[1]}) = {h}")
+
+# ── random ────────────────────────────────────────────────────────────────────
+
+print("\n=== random ===")
+random["seed"](42)
+
+# Random integers
+dice_rolls = [random["randint"](1, 6) for i in range(10)]
+print(f"  10 dice rolls: {dice_rolls}")
+print(f"  total: {sum(dice_rolls)}")
+
+# Shuffle a deck (just suits for brevity)
+suits = ["♠", "♥", "♦", "♣"]
+random["shuffle"](suits)
+print(f"  shuffled suits: {suits}")
+
+# Random floats → simple histogram
+buckets = [0, 0, 0, 0, 0]
+for i in range(500):
+    v = random["random"]()
+    idx = int(v * 5)
+    if idx == 5:
+        idx = 4
+    buckets[idx] += 1
+
+print("  uniform distribution (500 samples, 5 buckets):")
+for i in range(5):
+    bar = "#" * (buckets[i] / 5)
+    print(f"    {i*20}-{(i+1)*20}%: {bar} ({buckets[i]})")
+
+# ── re (regular expressions) ──────────────────────────────────────────────────
+
+print("\n=== re ===")
+
+log_line = "2026-04-14T08:05:32 ERROR  [auth] invalid token from 192.168.1.55"
+
+# Extract date/time
+date_match = re["search"](r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", log_line)
+if date_match != nil:
+    print(f"  timestamp: {date_match['match']}")
+
+# Extract IP address
+ip_match = re["search"](r"\d+\.\d+\.\d+\.\d+", log_line)
+if ip_match != nil:
+    print(f"  ip:        {ip_match['match']}")
+
+# Find all words in CAPS
+words = re["findall"](r"[A-Z]{2,}", log_line)
+print(f"  caps words: {words}")
+
+# Redact the IP
+redacted = re["sub"](r"\d+\.\d+\.\d+\.\d+", "[REDACTED]", log_line)
+print(f"  redacted:  {redacted}")
+
+# Validate an email address
+def is_valid_email(addr):
+    m = re["search"](r"^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$", addr)
+    return m != nil
+
+emails = ["user@example.com", "bad@", "also.good+tag@mail.co.uk", "@nodomain"]
+for e in emails:
+    status = "✓" if is_valid_email(e) else "✗"
+    print(f"  {status}  {e}")
+
+# ── json ──────────────────────────────────────────────────────────────────────
+
+print("\n=== json ===")
+
+payload = {
+    "event":   "user.signup",
+    "user_id": 10482,
+    "meta":    {"plan": "pro", "referral": nil},
+    "tags":    ["new", "trial"],
+}
+
+serialized = json["dumps"](payload)
+print(f"  serialized: {serialized}")
+
+restored = json["loads"](serialized)
+print(f"  event:   {restored['event']}")
+print(f"  user_id: {restored['user_id']}")
+print(f"  plan:    {restored['meta']['plan']}")
+print(f"  tags:    {restored['tags']}")
+
+# ── time ──────────────────────────────────────────────────────────────────────
+
+print("\n=== time ===")
+
+start = time["now"]()
+
+# Simulate some work
+total = 0
+for i in range(100000):
+    total += i
+
+elapsed = time["now"]() - start
+print(f"  sum 0..99999 = {total}")
+print(f"  elapsed:      {round(elapsed * 1000, 2)} ms")
+
+# ── collections (Counter / defaultdict) ──────────────────────────────────────
+
+print("\n=== collections ===")
+
+words = ["the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog", "the"]
+freq = collections["Counter"](words)
+
+print("  word frequencies:")
+for pair in freq["most_common"](3):
+    print(f"    '{pair[0]}': {pair[1]}")
+
+# defaultdict — count characters without KeyError
+chars = collections["defaultdict"](0)
+for ch in "abracadabra":
+    chars[ch] = chars[ch] + 1
+
+print("  char counts in 'abracadabra':")
+for k in chars:
+    print(f"    '{k}': {chars[k]}")

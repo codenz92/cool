@@ -1,52 +1,89 @@
-print("Hello from Cool!")
+# hello.cool — your first Cool program
+#
+# Run: cool hello.cool
 
-# Variables and arithmetic
-x = 10
-y = 3
-print(x + y)
-print(x * y)
-print(x / y)
+# ── Variables & types ─────────────────────────────────────────────────────────
 
-# String concatenation
-name = "world"
-print("Hello, " + name + "!")
+name    = "Cool"
+version = 1
+pi      = 3.14159
+active  = true
 
-# If / elif / else
-if x > 5:
-    print("x is big")
-elif x == 5:
-    print("x is five")
+print(f"Welcome to {name} v{version}!")
+print(f"pi ≈ {pi}, active = {active}")
+
+# ── Arithmetic & string ops ───────────────────────────────────────────────────
+
+a = 12
+b = 5
+print(f"{a} + {b} = {a + b}")
+print(f"{a} % {b} = {a % b}")
+print(f"{a} ** 2 = {a ** 2}")
+
+greeting = "hello"
+print(greeting.upper() + ", world!")
+
+# ── Conditionals ──────────────────────────────────────────────────────────────
+
+temp = 22
+if temp >= 30:
+    label = "hot"
+elif temp >= 20:
+    label = "warm"
+elif temp >= 10:
+    label = "cool"
 else:
-    print("x is small")
+    label = "cold"
 
-# While loop
-i = 0
-while i < 3:
-    print(i)
-    i = i + 1
+print(f"{temp}°C feels {label}")
 
-# For loop with range
-for n in range(5):
-    print(n)
+# ── Loops ─────────────────────────────────────────────────────────────────────
 
-# Functions
-def greet(person):
-    print("Hey, " + person + "!")
+# Counting up
+total = 0
+for i in range(1, 6):
+    total += i
+print(f"1+2+3+4+5 = {total}")
 
-greet("Cool")
+# Iterating a list
+fruits = ["apple", "banana", "cherry"]
+for fruit in fruits:
+    print(f"  - {fruit}")
 
-# Recursion
+# While with early exit
+n = 1
+while n < 1000:
+    n *= 2
+print(f"First power of 2 over 1000: {n}")
+
+# ── Functions ─────────────────────────────────────────────────────────────────
+
+def greet(name, title=""):
+    if title != "":
+        return f"Hello, {title} {name}!"
+    return f"Hello, {name}!"
+
+print(greet("Alice"))
+print(greet("Smith", title="Dr."))
+
 def factorial(n):
     if n <= 1:
         return 1
     return n * factorial(n - 1)
 
-print(factorial(6))
+for k in [5, 7, 10]:
+    print(f"{k}! = {factorial(k)}")
 
-# Lists
-nums = [10, 20, 30, 40, 50]
-print(nums[0])
-print(len(nums))
+# ── Lists & comprehensions ────────────────────────────────────────────────────
 
-for item in nums:
-    print(item)
+numbers  = [4, 1, 8, 3, 7, 2, 9, 5, 6]
+evens    = [x for x in numbers if x % 2 == 0]
+squares  = [x * x for x in range(1, 6)]
+
+print(f"sorted:  {sorted(numbers)}")
+print(f"evens:   {evens}")
+print(f"squares: {squares}")
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+
+print("\nThat's Cool!")

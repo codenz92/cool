@@ -1,0 +1,180 @@
+# oop.cool — classes, inheritance, super(), and operator overloading
+#
+# Run: cool oop.cool
+
+# ── Base class ────────────────────────────────────────────────────────────────
+
+class Shape:
+    def __init__(self, color):
+        self.color = color
+
+    def area(self):
+        return 0
+
+    def perimeter(self):
+        return 0
+
+    def __str__(self):
+        return f"{self.color} {type(self)} (area={round(self.area(), 2)}, perimeter={round(self.perimeter(), 2)})"
+
+
+# ── Subclasses ────────────────────────────────────────────────────────────────
+
+class Rectangle(Shape):
+    def __init__(self, color, width, height):
+        super().__init__(color)
+        self.width  = width
+        self.height = height
+
+    def area(self):
+        return self.width * self.height
+
+    def perimeter(self):
+        return 2 * (self.width + self.height)
+
+    def is_square(self):
+        return self.width == self.height
+
+
+class Circle(Shape):
+    PI = 3.14159265
+
+    def __init__(self, color, radius):
+        super().__init__(color)
+        self.radius = radius
+
+    def area(self):
+        return Circle.PI * self.radius * self.radius
+
+    def perimeter(self):
+        return 2 * Circle.PI * self.radius
+
+
+class Triangle(Shape):
+    def __init__(self, color, a, b, c):
+        super().__init__(color)
+        self.a = a
+        self.b = b
+        self.c = c
+
+    def area(self):
+        # Heron's formula
+        s = (self.a + self.b + self.c) / 2
+        return (s * (s - self.a) * (s - self.b) * (s - self.c)) ** 0.5
+
+    def perimeter(self):
+        return self.a + self.b + self.c
+
+
+# ── Polymorphism ──────────────────────────────────────────────────────────────
+
+shapes = [
+    Rectangle("red",   10, 4),
+    Rectangle("blue",  6,  6),
+    Circle("green",    5),
+    Triangle("yellow", 3, 4, 5),
+]
+
+print("=== All shapes ===")
+for s in shapes:
+    print(f"  {s}")
+
+total_area = sum([s.area() for s in shapes])
+print(f"\n  total area: {round(total_area, 2)}")
+
+largest = shapes[0]
+for s in shapes[1:]:
+    if s.area() > largest.area():
+        largest = s
+print(f"  largest:    {largest}")
+
+# isinstance checks
+rects = [s for s in shapes if isinstance(s, "Rectangle")]
+print(f"  rectangles: {len(rects)}, squares: {len([r for r in rects if r.is_square()])}")
+
+
+# ── Operator overloading ──────────────────────────────────────────────────────
+
+class Vector:
+    def __init__(self, x, y, z=0):
+        self.x = x
+        self.y = y
+        self.z = z
+
+    def __add__(self, other):
+        return Vector(self.x + other.x, self.y + other.y, self.z + other.z)
+
+    def __eq__(self, other):
+        return self.x == other.x and self.y == other.y and self.z == other.z
+
+    def __str__(self):
+        return f"Vector({self.x}, {self.y}, {self.z})"
+
+    def magnitude(self):
+        return (self.x**2 + self.y**2 + self.z**2) ** 0.5
+
+    def dot(self, other):
+        return self.x * other.x + self.y * other.y + self.z * other.z
+
+    def scale(self, factor):
+        return Vector(self.x * factor, self.y * factor, self.z * factor)
+
+
+print("\n=== Vectors ===")
+v1 = Vector(1, 2, 3)
+v2 = Vector(4, -1, 2)
+
+print(f"  v1        = {v1}")
+print(f"  v2        = {v2}")
+print(f"  v1 + v2   = {v1 + v2}")
+print(f"  v1 · v2   = {v1.dot(v2)}")
+print(f"  |v1|      = {round(v1.magnitude(), 4)}")
+print(f"  v1 × 3    = {v1.scale(3)}")
+print(f"  v1 == v1  = {v1 == Vector(1, 2, 3)}")
+print(f"  v1 == v2  = {v1 == v2}")
+
+
+# ── Error handling in classes ─────────────────────────────────────────────────
+
+class BoundedCounter:
+    """A counter that stays within [min, max]."""
+
+    def __init__(self, min_val, max_val, start=0):
+        if min_val > max_val:
+            raise "ValueError: min must be <= max"
+        self.min_val = min_val
+        self.max_val = max_val
+        self.value   = start
+
+    def increment(self, step=1):
+        self.value = min(self.value + step, self.max_val)
+        return self
+
+    def decrement(self, step=1):
+        self.value = max(self.value - step, self.min_val)
+        return self
+
+    def reset(self):
+        self.value = self.min_val
+        return self
+
+    def __str__(self):
+        return f"Counter({self.value}, range=[{self.min_val}, {self.max_val}])"
+
+
+print("\n=== BoundedCounter ===")
+c = BoundedCounter(0, 10, start=5)
+print(f"  start:      {c}")
+c.increment(3)
+print(f"  +3:         {c}")
+c.increment(5)
+print(f"  +5 (capped): {c}")
+c.decrement(4)
+print(f"  -4:         {c}")
+c.reset()
+print(f"  reset:      {c}")
+
+try:
+    bad = BoundedCounter(10, 0)
+except ValueError:
+    print("\n  caught: min > max is invalid")
