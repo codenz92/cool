@@ -365,6 +365,6 @@ def dispatch(line):
 print_banner()
 
 while running:
-    prompt = "[CoolOS " + cwd + "]$ "
+    prompt = "coolos" + cwd + " -> "
     line = input(prompt)
     dispatch(line)
