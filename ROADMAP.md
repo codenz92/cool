@@ -1,6 +1,7 @@
 # Cool Language & CoolOS Roadmap
 
 ## Legend
+
 - [x] Done
 - [~] Partial / needs more work
 - [ ] Not started
@@ -8,6 +9,7 @@
 ---
 
 ## Phase 1 — Cool Language: Core Interpreter ✅
+
 > Goal: a working tree-walk interpreter that can run real programs
 
 - [x] Lexer (tokens, indentation, INDENT/DEDENT)
@@ -32,6 +34,7 @@
 ---
 
 ## Phase 2 — Cool Language: Real Language Features ✅
+
 > Goal: enough features to write real programs
 
 - [x] Classes (`class`, `__init__`, methods, `self`)
@@ -63,6 +66,7 @@
 ---
 
 ## Phase 3 — CoolOS Shell ✅
+
 > Goal: a working interactive shell written entirely in Cool
 
 - [x] ASCII banner on startup
@@ -87,6 +91,7 @@
 ---
 
 ## Phase 4 — Cool Language: Quality of Life ✅
+
 > Goal: remove rough edges, make the language more pleasant to use
 
 - [x] f-strings (`f"Hello {name}!"`)
@@ -111,6 +116,7 @@
 ---
 
 ## Phase 5 — CoolOS Shell: More Commands 🔄
+
 > Goal: a shell powerful enough for real use
 
 - [x] `cp <src> <dst>` — copy a file
@@ -128,6 +134,7 @@
 ---
 
 ## Phase 6 — Cool Language: Standard Library
+
 > Goal: a built-in library written in Cool itself
 
 - [~] `string` module — core methods already available natively on `str`; module form with `split`, `join`, `strip`, `upper`, `lower`, `replace`, `startswith`, `endswith` not yet importable as `import string`
@@ -143,6 +150,7 @@
 ---
 
 ## Phase 7 — CoolOS Applications
+
 > Goal: write real apps entirely in Cool that run inside CoolOS
 
 - [ ] `edit` — a simple text editor (like nano)
@@ -155,6 +163,7 @@
 ---
 
 ## Phase 8 — Cool Language: Compiler (Long Term)
+
 > Goal: compile Cool to native binaries so CoolOS can be self-hosted
 
 - [ ] Bytecode VM (compile AST to bytecode, run on a VM)
@@ -167,6 +176,7 @@
 ---
 
 ## Phase 9 — CoolOS: Real Kernel (Very Long Term)
+
 > Goal: a real OS that boots on bare metal and runs Cool as its shell
 
 - [ ] Bootloader (GRUB or custom)
