@@ -1,0 +1,33 @@
+import ffi
+import math
+
+# Load the math library
+libm = ffi.open("libm")
+
+# Single-argument math functions
+sin_fn   = ffi.func(libm, "sin",  "f64", ["f64"])
+cos_fn   = ffi.func(libm, "cos",  "f64", ["f64"])
+sqrt_fn  = ffi.func(libm, "sqrt", "f64", ["f64"])
+
+# Two-argument math functions
+pow_fn   = ffi.func(libm, "pow",   "f64", ["f64", "f64"])
+atan2_fn = ffi.func(libm, "atan2", "f64", ["f64", "f64"])
+
+pi = math.pi
+
+print("=== libm via FFI ===")
+print("sin(pi/2)   =", sin_fn(pi / 2.0))
+print("cos(0)      =", cos_fn(0.0))
+print("sqrt(2)     =", sqrt_fn(2.0))
+print("pow(2, 10)  =", pow_fn(2.0, 10.0))
+print("atan2(1, 1) =", atan2_fn(1.0, 1.0))
+
+# Integer functions from libc
+libc = ffi.open("libc")
+abs_fn = ffi.func(libc, "abs", "i32", ["i32"])
+
+print("")
+print("=== libc via FFI ===")
+print("abs(-42)  =", abs_fn(-42))
+print("abs(7)    =", abs_fn(7))
+print("abs(-100) =", abs_fn(-100))

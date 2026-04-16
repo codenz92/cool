@@ -7,6 +7,7 @@ edition = "2021"
 rustyline = "14"
 regex = "1"
 crossterm = "0.28"
+libloading = "0.8"
 
 [dependencies.inkwell]
 version = "0.4"

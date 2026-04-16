@@ -14,3 +14,15 @@
 
 # macOS
 .DS_Store
+
+# Compiled Cool output binaries (produced by cool build / --compile)
+/test
+/anything
+examples/llvm_test
+examples/ffi_demo
+examples/hello
+examples/data_structures
+examples/oop
+examples/functional
+examples/errors_and_files
+examples/stdlib

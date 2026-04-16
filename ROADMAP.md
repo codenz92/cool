@@ -167,11 +167,12 @@
 > Goal: compile Cool to native binaries so Cool can be self-hosted
 
 - [x] Bytecode VM (compile AST to bytecode, run on a VM)
-- [ ] LLVM backend (compile Cool to LLVM IR → native binary)
-- [ ] FFI (call C functions from Cool)
+- [x] LLVM backend (compile Cool to LLVM IR → native binary via C runtime)
+- [x] FFI (`import ffi` — load shared libs, call C functions from Cool)
+- [x] `cool build` command (compile a `.cool` project to a native binary)
+- [x] `cool new` command (scaffold a new Cool project with `cool.toml`)
 - [ ] Inline assembly (`asm { ... }`)
 - [ ] Pointer types / raw memory access
-- [ ] `cool build` command (compile a `.cool` project)
 
 ---
 
@@ -186,4 +187,4 @@
 | 5 — Shell: More Commands | ✅ Complete |
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
-| 8 — Compiler | 🔧 In progress |
+| 8 — Compiler | 🔧 In progress (LLVM + FFI + build done; asm/ptrs remaining) |

@@ -233,6 +233,20 @@ pub struct FileHandle {
     pub closed: bool,
 }
 
+// ── FFI handle ────────────────────────────────────────────────────────────────
+
+/// Handle to a dynamically-loaded shared library.
+#[derive(Clone)]
+pub struct FfiLibHandle(pub std::sync::Arc<libloading::Library>);
+
+impl std::fmt::Debug for FfiLibHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<ffi library>")
+    }
+}
+
+// ── Values ────────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -257,6 +271,16 @@ pub enum Value {
     Super {
         instance: Rc<CoolInstance>,
         parent: Rc<CoolClass>,
+    },
+    /// A loaded shared library (from ffi.open)
+    FfiLib(FfiLibHandle),
+    /// A callable C function with resolved symbol address and type info
+    FfiFunc {
+        lib: FfiLibHandle,
+        sym: usize,
+        name: String,
+        ret_type: String,
+        arg_types: Vec<String>,
     },
 }
 
@@ -366,6 +390,19 @@ impl fmt::Display for Value {
             Value::Instance(inst) => write!(f, "<{} object>", inst.class.name),
             Value::File(fh) => write!(f, "<file '{}'>", fh.borrow().path),
             Value::Super { parent, .. } => write!(f, "<super of {}>", parent.name),
+            Value::FfiLib(_) => write!(f, "<ffi library>"),
+            Value::FfiFunc {
+                name,
+                ret_type,
+                arg_types,
+                ..
+            } => write!(
+                f,
+                "<ffi func {}({}) -> {}>",
+                name,
+                arg_types.join(", "),
+                ret_type
+            ),
         }
     }
 }
@@ -386,6 +423,7 @@ impl Value {
             Value::List(v) => !v.borrow().is_empty(),
             Value::Dict(m) => !m.borrow().keys.is_empty(),
             Value::Tuple(t) => !t.is_empty(),
+            Value::FfiLib(_) | Value::FfiFunc { .. } => true,
             _ => true,
         }
     }
@@ -406,6 +444,8 @@ impl Value {
             Value::Instance(_) => "instance",
             Value::File(_) => "file",
             Value::Super { .. } => "super",
+            Value::FfiLib(_) => "ffi_lib",
+            Value::FfiFunc { .. } => "ffi_func",
         }
     }
 }
@@ -465,12 +505,13 @@ macro_rules! compare_op {
 
 impl Interpreter {
     pub fn new(source_dir: std::path::PathBuf, source: &str) -> Self {
-        let readline_editor = rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
-            .ok()
-            .map(|mut ed| {
-                ed.set_helper(Some(CoolHelper));
-                ed
-            });
+        let readline_editor =
+            rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
+                .ok()
+                .map(|mut ed| {
+                    ed.set_helper(Some(CoolHelper));
+                    ed
+                });
         // Seed xorshift64 from system time; fall back to a fixed seed if time is unavailable.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -581,7 +622,9 @@ impl Interpreter {
                 }
                 for (target, val) in targets.iter().zip(items) {
                     match target {
-                        Expr::Ident(name) => { env.set_local(name.clone(), val); }
+                        Expr::Ident(name) => {
+                            env.set_local(name.clone(), val);
+                        }
                         Expr::Index { object, index } => {
                             let obj = self.eval(object, env)?;
                             let idx = self.eval(index, env)?;
@@ -590,16 +633,30 @@ impl Interpreter {
                                     let i = to_list_index(&lst.borrow(), idx)?;
                                     lst.borrow_mut()[i] = val;
                                 }
-                                Value::Dict(map) => { map.borrow_mut().set(idx, val); }
-                                other => return Err(self.err(&format!("cannot index-assign on {}", other.type_name()))),
+                                Value::Dict(map) => {
+                                    map.borrow_mut().set(idx, val);
+                                }
+                                other => {
+                                    return Err(self.err(&format!(
+                                        "cannot index-assign on {}",
+                                        other.type_name()
+                                    )))
+                                }
                             }
                         }
                         Expr::Attr { object, name } => {
                             let obj = self.eval(object, env)?;
                             match obj {
-                                Value::Dict(map) => { map.borrow_mut().set(Value::Str(name.clone()), val); }
-                                Value::Instance(inst) => { inst.fields.borrow_mut().insert(name.clone(), val); }
-                                other => return Err(self.err(&format!("cannot set attr on {}", other.type_name()))),
+                                Value::Dict(map) => {
+                                    map.borrow_mut().set(Value::Str(name.clone()), val);
+                                }
+                                Value::Instance(inst) => {
+                                    inst.fields.borrow_mut().insert(name.clone(), val);
+                                }
+                                other => {
+                                    return Err(self
+                                        .err(&format!("cannot set attr on {}", other.type_name())))
+                                }
                             }
                         }
                         _ => return Err(self.err("invalid unpack target")),
@@ -1057,52 +1114,110 @@ impl Interpreter {
             }
             "string" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["split","join","strip","lstrip","rstrip","upper","lower",
-                                  "replace","startswith","endswith","find","count","format","title","capitalize"] {
-                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("string.{}", fn_name)));
+                for fn_name in &[
+                    "split",
+                    "join",
+                    "strip",
+                    "lstrip",
+                    "rstrip",
+                    "upper",
+                    "lower",
+                    "replace",
+                    "startswith",
+                    "endswith",
+                    "find",
+                    "count",
+                    "format",
+                    "title",
+                    "capitalize",
+                ] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("string.{}", fn_name)),
+                    );
                 }
-                env.set_local("string".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+                env.set_local(
+                    "string".to_string(),
+                    Value::Dict(Rc::new(RefCell::new(map))),
+                );
             }
             "list" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["sort","reverse","filter","map","reduce","flatten","unique"] {
-                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("list.{}", fn_name)));
+                for fn_name in &[
+                    "sort", "reverse", "filter", "map", "reduce", "flatten", "unique",
+                ] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("list.{}", fn_name)),
+                    );
                 }
                 env.set_local("list".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "json" => {
                 let mut map = IndexedMap::new();
-                map.set(Value::Str("loads".to_string()), Value::BuiltinFn("json.loads".to_string()));
-                map.set(Value::Str("dumps".to_string()), Value::BuiltinFn("json.dumps".to_string()));
+                map.set(
+                    Value::Str("loads".to_string()),
+                    Value::BuiltinFn("json.loads".to_string()),
+                );
+                map.set(
+                    Value::Str("dumps".to_string()),
+                    Value::BuiltinFn("json.dumps".to_string()),
+                );
                 env.set_local("json".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "re" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["match","search","fullmatch","findall","sub","split"] {
-                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("re.{}", fn_name)));
+                for fn_name in &["match", "search", "fullmatch", "findall", "sub", "split"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("re.{}", fn_name)),
+                    );
                 }
                 env.set_local("re".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "time" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["time","sleep","monotonic"] {
-                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("time.{}", fn_name)));
+                for fn_name in &["time", "sleep", "monotonic"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("time.{}", fn_name)),
+                    );
                 }
                 env.set_local("time".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "random" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["random","randint","choice","shuffle","uniform","seed"] {
-                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("random.{}", fn_name)));
+                for fn_name in &["random", "randint", "choice", "shuffle", "uniform", "seed"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("random.{}", fn_name)),
+                    );
                 }
-                env.set_local("random".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+                env.set_local(
+                    "random".to_string(),
+                    Value::Dict(Rc::new(RefCell::new(map))),
+                );
             }
             "term" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["raw","normal","clear","clear_line","move_cursor",
-                                  "hide_cursor","show_cursor","write","flush",
-                                  "poll_char","get_char","size"] {
-                    map.set(Value::Str(fn_name.to_string()), Value::BuiltinFn(format!("term.{}", fn_name)));
+                for fn_name in &[
+                    "raw",
+                    "normal",
+                    "clear",
+                    "clear_line",
+                    "move_cursor",
+                    "hide_cursor",
+                    "show_cursor",
+                    "write",
+                    "flush",
+                    "poll_char",
+                    "get_char",
+                    "size",
+                ] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("term.{}", fn_name)),
+                    );
                 }
                 env.set_local("term".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
@@ -1162,6 +1277,16 @@ class Stack:
                 let mut parser = crate::parser::Parser::new(tokens);
                 let program = parser.parse_program().map_err(|e| self.err(&e))?;
                 self.exec_block(&program, env)?;
+            }
+            "ffi" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["open", "func"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("ffi.{}", fn_name)),
+                    );
+                }
+                env.set_local("ffi".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             _ => {
                 // Try to load as a .cool file from source_dir
@@ -1482,9 +1607,17 @@ class Stack:
                             inst.class.name, name
                         )))
                     }
-                    Value::Str(_) | Value::List(_) | Value::Dict(_) | Value::File(_) => Ok(
-                        Value::BuiltinFn(format!("<method {} on {}>", name, obj.type_name())),
-                    ),
+                    Value::Dict(map) => {
+                        // First look up the attribute as a dict key (e.g. module.member)
+                        if let Some(v) = map.borrow().get(&Value::Str(name.clone())) {
+                            return Ok(v);
+                        }
+                        // Fall back to a method stub (keys, values, items, etc.)
+                        Ok(Value::BuiltinFn(format!("<method {} on dict>", name)))
+                    }
+                    Value::Str(_) | Value::List(_) | Value::File(_) => Ok(Value::BuiltinFn(
+                        format!("<method {} on {}>", name, obj.type_name()),
+                    )),
                     Value::Class(cls) => {
                         if let Some(v) = cls.methods.get(name) {
                             return Ok(v.clone());
@@ -1550,6 +1683,17 @@ class Stack:
         kwargs: Vec<(String, Value)>,
         env: &Env,
     ) -> Result<Value, String> {
+        // For dicts, first check if the dict stores a callable under that key
+        // (e.g. module dicts like `ffi`, `math`, `os`).
+        if let Value::Dict(ref map) = obj {
+            let callable = map.borrow().get(&Value::Str(method.to_string()));
+            if let Some(
+                func @ (Value::BuiltinFn(_) | Value::Function { .. } | Value::FfiFunc { .. }),
+            ) = callable
+            {
+                return self.call_value(func, args, kwargs, env);
+            }
+        }
         match &obj {
             Value::Str(s) => self.str_method(s.clone(), method, args),
             Value::List(_) => self.list_method(obj, method, args),
@@ -2064,6 +2208,17 @@ class Stack:
                 }
                 Ok(inst_val)
             }
+            Value::FfiFunc {
+                sym,
+                ret_type,
+                arg_types,
+                ..
+            } => {
+                if !kwargs.is_empty() {
+                    return Err(self.err("FFI functions do not support keyword arguments"));
+                }
+                self.invoke_ffi(sym, &ret_type, &arg_types, args)
+            }
             other => Err(self.err(&format!("{} is not callable", other.type_name()))),
         }
     }
@@ -2197,6 +2352,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("term.") {
             return self.call_term_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("ffi.") {
+            return self.call_ffi_builtin(f, args);
         }
 
         match name {
@@ -2361,7 +2519,16 @@ class Stack:
                 }
             }
             "round" => {
-                let ndigits = args.get(1).and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None }).unwrap_or(0);
+                let ndigits = args
+                    .get(1)
+                    .and_then(|v| {
+                        if let Value::Int(n) = v {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
                 match args.first() {
                     Some(Value::Int(n)) => Ok(Value::Int(*n)),
                     Some(Value::Float(f)) => {
@@ -2548,9 +2715,7 @@ class Stack:
                             let _ = editor.add_history_entry(line.as_str());
                             Ok(Value::Str(line))
                         }
-                        Err(rustyline::error::ReadlineError::Eof) => {
-                            Ok(Value::Str(String::new()))
-                        }
+                        Err(rustyline::error::ReadlineError::Eof) => Ok(Value::Str(String::new())),
                         Err(rustyline::error::ReadlineError::Interrupted) => {
                             std::process::exit(0);
                         }
@@ -2806,20 +2971,53 @@ class Stack:
                 return Ok(Value::Bool(n.is_finite()));
             }
             "gcd" => {
-                let a = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.gcd() requires integers")) };
-                let b = match args.get(1) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.gcd() requires 2 integers")) };
-                fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a.abs() } else { gcd(b, a % b) } }
+                let a = match args.get(0) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("math.gcd() requires integers")),
+                };
+                let b = match args.get(1) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("math.gcd() requires 2 integers")),
+                };
+                fn gcd(a: i64, b: i64) -> i64 {
+                    if b == 0 {
+                        a.abs()
+                    } else {
+                        gcd(b, a % b)
+                    }
+                }
                 return Ok(Value::Int(gcd(a, b)));
             }
             "lcm" => {
-                let a = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.lcm() requires integers")) };
-                let b = match args.get(1) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.lcm() requires 2 integers")) };
-                fn gcd(a: i64, b: i64) -> i64 { if b == 0 { a.abs() } else { gcd(b, a % b) } }
-                return Ok(Value::Int(if a == 0 || b == 0 { 0 } else { (a * b).abs() / gcd(a, b) }));
+                let a = match args.get(0) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("math.lcm() requires integers")),
+                };
+                let b = match args.get(1) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("math.lcm() requires 2 integers")),
+                };
+                fn gcd(a: i64, b: i64) -> i64 {
+                    if b == 0 {
+                        a.abs()
+                    } else {
+                        gcd(b, a % b)
+                    }
+                }
+                return Ok(Value::Int(if a == 0 || b == 0 {
+                    0
+                } else {
+                    (a * b).abs() / gcd(a, b)
+                }));
             }
             "factorial" => {
-                let n = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("math.factorial() requires an integer")) };
-                if n < 0 { return Err(self.err("math.factorial() requires a non-negative integer")); }
+                let n = match args.get(0) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("math.factorial() requires an integer")),
+                };
+                if n < 0 {
+                    return Err(self.err("math.factorial() requires a non-negative integer"));
+                }
                 let result: i64 = (1..=n).product();
                 return Ok(Value::Int(result));
             }
@@ -2842,25 +3040,31 @@ class Stack:
         }
         let n = as_float_arg(&args, 0, &format!("math.{}", name))?;
         let result = match name {
-            "sqrt"    => n.sqrt(),
-            "floor"   => { return Ok(Value::Int(n.floor() as i64)); }
-            "ceil"    => { return Ok(Value::Int(n.ceil() as i64)); }
-            "trunc"   => { return Ok(Value::Int(n.trunc() as i64)); }
-            "abs"     => n.abs(),
-            "log"     => n.ln(),
-            "log2"    => n.log2(),
-            "log10"   => n.log10(),
-            "exp"     => n.exp(),
-            "exp2"    => n.exp2(),
-            "sin"     => n.sin(),
-            "cos"     => n.cos(),
-            "tan"     => n.tan(),
-            "asin"    => n.asin(),
-            "acos"    => n.acos(),
-            "atan"    => n.atan(),
-            "sinh"    => n.sinh(),
-            "cosh"    => n.cosh(),
-            "tanh"    => n.tanh(),
+            "sqrt" => n.sqrt(),
+            "floor" => {
+                return Ok(Value::Int(n.floor() as i64));
+            }
+            "ceil" => {
+                return Ok(Value::Int(n.ceil() as i64));
+            }
+            "trunc" => {
+                return Ok(Value::Int(n.trunc() as i64));
+            }
+            "abs" => n.abs(),
+            "log" => n.ln(),
+            "log2" => n.log2(),
+            "log10" => n.log10(),
+            "exp" => n.exp(),
+            "exp2" => n.exp2(),
+            "sin" => n.sin(),
+            "cos" => n.cos(),
+            "tan" => n.tan(),
+            "asin" => n.asin(),
+            "acos" => n.acos(),
+            "atan" => n.atan(),
+            "sinh" => n.sinh(),
+            "cosh" => n.cosh(),
+            "tanh" => n.tanh(),
             "degrees" => n.to_degrees(),
             "radians" => n.to_radians(),
             _ => return Err(self.err(&format!("math has no function '{}'", name))),
@@ -2964,7 +3168,9 @@ class Stack:
                     .arg(&cmd)
                     .output()
                     .map_err(|e| self.err(&format!("os.popen() error: {}", e)))?;
-                Ok(Value::Str(String::from_utf8_lossy(&output.stdout).to_string()))
+                Ok(Value::Str(
+                    String::from_utf8_lossy(&output.stdout).to_string(),
+                ))
             }
             _ => Err(self.err(&format!("os has no function '{}'", name))),
         }
@@ -2972,50 +3178,104 @@ class Stack:
 
     // ── string module ─────────────────────────────────────────────────────
 
-    fn call_string_fn(&mut self, name: &str, args: Vec<Value>, _env: &Env) -> Result<Value, String> {
+    fn call_string_fn(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        _env: &Env,
+    ) -> Result<Value, String> {
         match name {
             "split" => {
                 let s = req_str_arg(&args, 0, "string.split")?;
-                let sep = match args.get(1) { Some(Value::Str(sep)) => Some(sep.clone()), None => None, _ => return Err(self.err("string.split() separator must be a string")) };
-                let parts: Vec<Value> = match sep { Some(sep) => s.split(&*sep).map(|p| Value::Str(p.to_string())).collect(), None => s.split_whitespace().map(|p| Value::Str(p.to_string())).collect() };
+                let sep = match args.get(1) {
+                    Some(Value::Str(sep)) => Some(sep.clone()),
+                    None => None,
+                    _ => return Err(self.err("string.split() separator must be a string")),
+                };
+                let parts: Vec<Value> = match sep {
+                    Some(sep) => s.split(&*sep).map(|p| Value::Str(p.to_string())).collect(),
+                    None => s
+                        .split_whitespace()
+                        .map(|p| Value::Str(p.to_string()))
+                        .collect(),
+                };
                 Ok(Value::List(Rc::new(RefCell::new(parts))))
             }
             "join" => {
                 let sep = req_str_arg(&args, 0, "string.join")?;
-                let lst = match args.get(1) { Some(Value::List(l)) => l.clone(), _ => return Err(self.err("string.join() requires a list as 2nd argument")) };
+                let lst = match args.get(1) {
+                    Some(Value::List(l)) => l.clone(),
+                    _ => return Err(self.err("string.join() requires a list as 2nd argument")),
+                };
                 let parts: Vec<String> = lst.borrow().iter().map(|v| v.to_string()).collect();
                 Ok(Value::Str(parts.join(&sep)))
             }
-            "strip"     => { let s = req_str_arg(&args, 0, "string.strip")?; Ok(Value::Str(s.trim().to_string())) }
-            "lstrip"    => { let s = req_str_arg(&args, 0, "string.lstrip")?; Ok(Value::Str(s.trim_start().to_string())) }
-            "rstrip"    => { let s = req_str_arg(&args, 0, "string.rstrip")?; Ok(Value::Str(s.trim_end().to_string())) }
-            "upper"     => { let s = req_str_arg(&args, 0, "string.upper")?; Ok(Value::Str(s.to_uppercase())) }
-            "lower"     => { let s = req_str_arg(&args, 0, "string.lower")?; Ok(Value::Str(s.to_lowercase())) }
-            "title"     => { let s = req_str_arg(&args, 0, "string.title")?; Ok(Value::Str(s.split_whitespace().map(|w| { let mut c = w.chars(); c.next().map(|f| f.to_uppercase().to_string() + c.as_str()).unwrap_or_default() }).collect::<Vec<_>>().join(" "))) }
-            "capitalize"=> { let s = req_str_arg(&args, 0, "string.capitalize")?; let mut c = s.chars(); Ok(Value::Str(c.next().map(|f| f.to_uppercase().to_string() + c.as_str()).unwrap_or_default())) }
+            "strip" => {
+                let s = req_str_arg(&args, 0, "string.strip")?;
+                Ok(Value::Str(s.trim().to_string()))
+            }
+            "lstrip" => {
+                let s = req_str_arg(&args, 0, "string.lstrip")?;
+                Ok(Value::Str(s.trim_start().to_string()))
+            }
+            "rstrip" => {
+                let s = req_str_arg(&args, 0, "string.rstrip")?;
+                Ok(Value::Str(s.trim_end().to_string()))
+            }
+            "upper" => {
+                let s = req_str_arg(&args, 0, "string.upper")?;
+                Ok(Value::Str(s.to_uppercase()))
+            }
+            "lower" => {
+                let s = req_str_arg(&args, 0, "string.lower")?;
+                Ok(Value::Str(s.to_lowercase()))
+            }
+            "title" => {
+                let s = req_str_arg(&args, 0, "string.title")?;
+                Ok(Value::Str(
+                    s.split_whitespace()
+                        .map(|w| {
+                            let mut c = w.chars();
+                            c.next()
+                                .map(|f| f.to_uppercase().to_string() + c.as_str())
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ))
+            }
+            "capitalize" => {
+                let s = req_str_arg(&args, 0, "string.capitalize")?;
+                let mut c = s.chars();
+                Ok(Value::Str(
+                    c.next()
+                        .map(|f| f.to_uppercase().to_string() + c.as_str())
+                        .unwrap_or_default(),
+                ))
+            }
             "replace" => {
-                let s   = req_str_arg(&args, 0, "string.replace")?;
+                let s = req_str_arg(&args, 0, "string.replace")?;
                 let old = req_str_arg(&args, 1, "string.replace")?;
                 let new = req_str_arg(&args, 2, "string.replace")?;
                 Ok(Value::Str(s.replace(&*old, &*new)))
             }
             "startswith" => {
-                let s   = req_str_arg(&args, 0, "string.startswith")?;
+                let s = req_str_arg(&args, 0, "string.startswith")?;
                 let pre = req_str_arg(&args, 1, "string.startswith")?;
                 Ok(Value::Bool(s.starts_with(&*pre)))
             }
             "endswith" => {
-                let s   = req_str_arg(&args, 0, "string.endswith")?;
+                let s = req_str_arg(&args, 0, "string.endswith")?;
                 let suf = req_str_arg(&args, 1, "string.endswith")?;
                 Ok(Value::Bool(s.ends_with(&*suf)))
             }
             "find" => {
-                let s   = req_str_arg(&args, 0, "string.find")?;
+                let s = req_str_arg(&args, 0, "string.find")?;
                 let sub = req_str_arg(&args, 1, "string.find")?;
                 Ok(Value::Int(s.find(&*sub).map(|i| i as i64).unwrap_or(-1)))
             }
             "count" => {
-                let s   = req_str_arg(&args, 0, "string.count")?;
+                let s = req_str_arg(&args, 0, "string.count")?;
                 let sub = req_str_arg(&args, 1, "string.count")?;
                 Ok(Value::Int(s.matches(&*sub).count() as i64))
             }
@@ -3037,24 +3297,40 @@ class Stack:
 
     // ── list module ───────────────────────────────────────────────────────
 
-    fn call_list_mod_fn(&mut self, name: &str, args: Vec<Value>, env: &Env) -> Result<Value, String> {
+    fn call_list_mod_fn(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        env: &Env,
+    ) -> Result<Value, String> {
         match name {
             "sort" => {
-                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.sort() requires a list")) };
+                let lst = match args.into_iter().next() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err(self.err("list.sort() requires a list")),
+                };
                 let mut v = lst.borrow().clone();
                 v.sort_by(|a, b| compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal));
                 Ok(Value::List(Rc::new(RefCell::new(v))))
             }
             "reverse" => {
-                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.reverse() requires a list")) };
+                let lst = match args.into_iter().next() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err(self.err("list.reverse() requires a list")),
+                };
                 let mut v = lst.borrow().clone();
                 v.reverse();
                 Ok(Value::List(Rc::new(RefCell::new(v))))
             }
             "map" => {
-                if args.len() < 2 { return Err(self.err("list.map() requires (fn, list)")); }
+                if args.len() < 2 {
+                    return Err(self.err("list.map() requires (fn, list)"));
+                }
                 let func = args[0].clone();
-                let lst = match &args[1] { Value::List(l) => l.clone(), _ => return Err(self.err("list.map() 2nd argument must be a list")) };
+                let lst = match &args[1] {
+                    Value::List(l) => l.clone(),
+                    _ => return Err(self.err("list.map() 2nd argument must be a list")),
+                };
                 let items = lst.borrow().clone();
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
@@ -3063,27 +3339,41 @@ class Stack:
                 Ok(Value::List(Rc::new(RefCell::new(out))))
             }
             "filter" => {
-                if args.len() < 2 { return Err(self.err("list.filter() requires (fn, list)")); }
+                if args.len() < 2 {
+                    return Err(self.err("list.filter() requires (fn, list)"));
+                }
                 let func = args[0].clone();
-                let lst = match &args[1] { Value::List(l) => l.clone(), _ => return Err(self.err("list.filter() 2nd argument must be a list")) };
+                let lst = match &args[1] {
+                    Value::List(l) => l.clone(),
+                    _ => return Err(self.err("list.filter() 2nd argument must be a list")),
+                };
                 let items = lst.borrow().clone();
                 let mut out = Vec::new();
                 for item in items {
                     let keep = self.call_value(func.clone(), vec![item.clone()], vec![], env)?;
-                    if keep.is_truthy() { out.push(item); }
+                    if keep.is_truthy() {
+                        out.push(item);
+                    }
                 }
                 Ok(Value::List(Rc::new(RefCell::new(out))))
             }
             "reduce" => {
-                if args.len() < 2 { return Err(self.err("list.reduce() requires (fn, list[, initial])")); }
+                if args.len() < 2 {
+                    return Err(self.err("list.reduce() requires (fn, list[, initial])"));
+                }
                 let func = args[0].clone();
-                let lst = match &args[1] { Value::List(l) => l.clone(), _ => return Err(self.err("list.reduce() 2nd argument must be a list")) };
+                let lst = match &args[1] {
+                    Value::List(l) => l.clone(),
+                    _ => return Err(self.err("list.reduce() 2nd argument must be a list")),
+                };
                 let items = lst.borrow().clone();
                 let mut iter = items.into_iter();
                 let mut acc = if args.len() >= 3 {
                     args[2].clone()
                 } else {
-                    iter.next().ok_or_else(|| self.err("list.reduce() called on empty list with no initial value"))?
+                    iter.next().ok_or_else(|| {
+                        self.err("list.reduce() called on empty list with no initial value")
+                    })?
                 };
                 for item in iter {
                     acc = self.call_value(func.clone(), vec![acc, item], vec![], env)?;
@@ -3091,7 +3381,10 @@ class Stack:
                 Ok(acc)
             }
             "flatten" => {
-                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.flatten() requires a list")) };
+                let lst = match args.into_iter().next() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err(self.err("list.flatten() requires a list")),
+                };
                 let mut out = Vec::new();
                 for item in lst.borrow().iter() {
                     match item {
@@ -3102,7 +3395,10 @@ class Stack:
                 Ok(Value::List(Rc::new(RefCell::new(out))))
             }
             "unique" => {
-                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("list.unique() requires a list")) };
+                let lst = match args.into_iter().next() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err(self.err("list.unique() requires a list")),
+                };
                 let mut out: Vec<Value> = Vec::new();
                 for item in lst.borrow().iter() {
                     if !out.iter().any(|x| values_equal(x, item)) {
@@ -3124,7 +3420,10 @@ class Stack:
                 json_parse(&s).map_err(|e| self.err(&format!("json.loads() error: {}", e)))
             }
             "dumps" => {
-                let v = args.into_iter().next().ok_or_else(|| self.err("json.dumps() requires 1 argument"))?;
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("json.dumps() requires 1 argument"))?;
                 Ok(Value::Str(json_dumps(&v)))
             }
             _ => Err(self.err(&format!("json has no function '{}'", name))),
@@ -3135,34 +3434,38 @@ class Stack:
 
     fn call_re_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
         let pattern = req_str_arg(&args, 0, &format!("re.{}", name))?;
-        let text    = req_str_arg(&args, 1, &format!("re.{}", name))?;
-        let re = Regex::new(&pattern).map_err(|e| self.err(&format!("re.{}() invalid pattern: {}", name, e)))?;
+        let text = req_str_arg(&args, 1, &format!("re.{}", name))?;
+        let re = Regex::new(&pattern)
+            .map_err(|e| self.err(&format!("re.{}() invalid pattern: {}", name, e)))?;
         match name {
             "match" => {
                 // Anchored at start
                 let anchored = format!("^(?:{})", pattern);
-                let re2 = Regex::new(&anchored).map_err(|e| self.err(&format!("re.match() invalid pattern: {}", e)))?;
+                let re2 = Regex::new(&anchored)
+                    .map_err(|e| self.err(&format!("re.match() invalid pattern: {}", e)))?;
                 match re2.find(&text) {
                     Some(m) => Ok(Value::Str(m.as_str().to_string())),
-                    None    => Ok(Value::Nil),
+                    None => Ok(Value::Nil),
                 }
             }
             "fullmatch" => {
                 let anchored = format!("^(?:{})$", pattern);
-                let re2 = Regex::new(&anchored).map_err(|e| self.err(&format!("re.fullmatch() invalid pattern: {}", e)))?;
+                let re2 = Regex::new(&anchored)
+                    .map_err(|e| self.err(&format!("re.fullmatch() invalid pattern: {}", e)))?;
                 match re2.find(&text) {
                     Some(m) => Ok(Value::Str(m.as_str().to_string())),
-                    None    => Ok(Value::Nil),
+                    None => Ok(Value::Nil),
                 }
             }
-            "search" => {
-                match re.find(&text) {
-                    Some(m) => Ok(Value::Str(m.as_str().to_string())),
-                    None    => Ok(Value::Nil),
-                }
-            }
+            "search" => match re.find(&text) {
+                Some(m) => Ok(Value::Str(m.as_str().to_string())),
+                None => Ok(Value::Nil),
+            },
             "findall" => {
-                let matches: Vec<Value> = re.find_iter(&text).map(|m| Value::Str(m.as_str().to_string())).collect();
+                let matches: Vec<Value> = re
+                    .find_iter(&text)
+                    .map(|m| Value::Str(m.as_str().to_string()))
+                    .collect();
                 Ok(Value::List(Rc::new(RefCell::new(matches))))
             }
             "sub" => {
@@ -3170,7 +3473,8 @@ class Stack:
                 Ok(Value::Str(re.replace_all(&text, repl.as_str()).to_string()))
             }
             "split" => {
-                let parts: Vec<Value> = re.split(&text).map(|s| Value::Str(s.to_string())).collect();
+                let parts: Vec<Value> =
+                    re.split(&text).map(|s| Value::Str(s.to_string())).collect();
                 Ok(Value::List(Rc::new(RefCell::new(parts))))
             }
             _ => Err(self.err(&format!("re has no function '{}'", name))),
@@ -3221,9 +3525,17 @@ class Stack:
                 Ok(Value::Float((bits >> 11) as f64 / (1u64 << 53) as f64))
             }
             "randint" => {
-                let a = match args.get(0) { Some(Value::Int(i)) => *i, _ => return Err(self.err("random.randint() requires integers")) };
-                let b = match args.get(1) { Some(Value::Int(i)) => *i, _ => return Err(self.err("random.randint() requires 2 integers")) };
-                if a > b { return Err(self.err("random.randint() a must be <= b")); }
+                let a = match args.get(0) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("random.randint() requires integers")),
+                };
+                let b = match args.get(1) {
+                    Some(Value::Int(i)) => *i,
+                    _ => return Err(self.err("random.randint() requires 2 integers")),
+                };
+                if a > b {
+                    return Err(self.err("random.randint() a must be <= b"));
+                }
                 let range = (b - a + 1) as u64;
                 let bits = self.xorshift64();
                 Ok(Value::Int(a + (bits % range) as i64))
@@ -3236,14 +3548,22 @@ class Stack:
                 Ok(Value::Float(a + t * (b - a)))
             }
             "choice" => {
-                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("random.choice() requires a list")) };
+                let lst = match args.into_iter().next() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err(self.err("random.choice() requires a list")),
+                };
                 let v = lst.borrow();
-                if v.is_empty() { return Err(self.err("random.choice() called on empty list")); }
+                if v.is_empty() {
+                    return Err(self.err("random.choice() called on empty list"));
+                }
                 let idx = (self.xorshift64() % v.len() as u64) as usize;
                 Ok(v[idx].clone())
             }
             "shuffle" => {
-                let lst = match args.into_iter().next() { Some(Value::List(l)) => l, _ => return Err(self.err("random.shuffle() requires a list")) };
+                let lst = match args.into_iter().next() {
+                    Some(Value::List(l)) => l,
+                    _ => return Err(self.err("random.shuffle() requires a list")),
+                };
                 let mut v = lst.borrow_mut();
                 let n = v.len();
                 for i in (1..n).rev() {
@@ -3253,7 +3573,11 @@ class Stack:
                 Ok(Value::Nil)
             }
             "seed" => {
-                let s = match args.into_iter().next() { Some(Value::Int(i)) => i as u64, Some(Value::Float(f)) => f as u64, _ => return Err(self.err("random.seed() requires a number")) };
+                let s = match args.into_iter().next() {
+                    Some(Value::Int(i)) => i as u64,
+                    Some(Value::Float(f)) => f as u64,
+                    _ => return Err(self.err("random.seed() requires a number")),
+                };
                 self.rng_state = if s == 0 { 1 } else { s };
                 Ok(Value::Nil)
             }
@@ -3277,21 +3601,31 @@ class Stack:
                 Ok(Value::Nil)
             }
             "clear" => {
-                execute!(std::io::stdout(),
+                execute!(
+                    std::io::stdout(),
                     crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
                     crossterm::cursor::MoveTo(0, 0)
-                ).map_err(|e| self.err(&format!("term.clear() error: {}", e)))?;
+                )
+                .map_err(|e| self.err(&format!("term.clear() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "clear_line" => {
-                execute!(std::io::stdout(),
+                execute!(
+                    std::io::stdout(),
                     crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
-                ).map_err(|e| self.err(&format!("term.clear_line() error: {}", e)))?;
+                )
+                .map_err(|e| self.err(&format!("term.clear_line() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "move_cursor" => {
-                let row = match args.get(0) { Some(Value::Int(n)) => (*n as u16).saturating_sub(1), _ => return Err(self.err("term.move_cursor(row, col) requires integers")) };
-                let col = match args.get(1) { Some(Value::Int(n)) => (*n as u16).saturating_sub(1), _ => return Err(self.err("term.move_cursor(row, col) requires integers")) };
+                let row = match args.get(0) {
+                    Some(Value::Int(n)) => (*n as u16).saturating_sub(1),
+                    _ => return Err(self.err("term.move_cursor(row, col) requires integers")),
+                };
+                let col = match args.get(1) {
+                    Some(Value::Int(n)) => (*n as u16).saturating_sub(1),
+                    _ => return Err(self.err("term.move_cursor(row, col) requires integers")),
+                };
                 execute!(std::io::stdout(), crossterm::cursor::MoveTo(col, row))
                     .map_err(|e| self.err(&format!("term.move_cursor() error: {}", e)))?;
                 Ok(Value::Nil)
@@ -3321,9 +3655,12 @@ class Stack:
                 Ok(Value::Nil)
             }
             "size" => {
-                let (w, h) = terminal::size()
-                    .map_err(|e| self.err(&format!("term.size() error: {}", e)))?;
-                Ok(Value::Tuple(Rc::new(vec![Value::Int(w as i64), Value::Int(h as i64)])))
+                let (w, h) =
+                    terminal::size().map_err(|e| self.err(&format!("term.size() error: {}", e)))?;
+                Ok(Value::Tuple(Rc::new(vec![
+                    Value::Int(w as i64),
+                    Value::Int(h as i64),
+                ])))
             }
             "get_char" => {
                 // Blocking read of one keypress
@@ -3493,6 +3830,206 @@ class Stack:
             BinOp::And | BinOp::Or | BinOp::In | BinOp::NotIn => unreachable!("handled above"),
         }
     }
+
+    // ── FFI helpers ──────────────────────────────────────────────────────────
+
+    fn call_ffi_builtin(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "open" => {
+                let path_str = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("ffi.open() requires a string path")),
+                };
+                let lib_path = self.resolve_ffi_lib(&path_str);
+                let lib = unsafe { libloading::Library::new(&lib_path) }
+                    .map_err(|e| self.err(&format!("ffi.open(\"{}\") failed: {}", lib_path, e)))?;
+                Ok(Value::FfiLib(FfiLibHandle(std::sync::Arc::new(lib))))
+            }
+            "func" => {
+                if args.len() < 3 {
+                    return Err(self.err(
+                        "ffi.func(lib, name, ret_type[, arg_types]) requires at least 3 args",
+                    ));
+                }
+                let lib = match &args[0] {
+                    Value::FfiLib(h) => h.clone(),
+                    _ => return Err(self.err("ffi.func(): first argument must be an ffi library")),
+                };
+                let sym_name = match &args[1] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(self.err("ffi.func(): second argument must be a string")),
+                };
+                let ret_type = match &args[2] {
+                    Value::Str(s) => s.clone(),
+                    _ => return Err(self.err("ffi.func(): third argument must be a type string")),
+                };
+                let arg_types: Vec<String> = if args.len() > 3 {
+                    match &args[3] {
+                        Value::List(lst) => lst
+                            .borrow()
+                            .iter()
+                            .map(|v| match v {
+                                Value::Str(s) => Ok(s.clone()),
+                                _ => {
+                                    Err(self.err("ffi.func(): arg_types list must contain strings"))
+                                }
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                        _ => return Err(self.err("ffi.func(): fourth argument must be a list")),
+                    }
+                } else {
+                    vec![]
+                };
+                // Resolve the symbol address now — fail fast if not found
+                let sym_addr: usize = unsafe {
+                    let sym: libloading::Symbol<*const ()> =
+                        lib.0.get(sym_name.as_bytes()).map_err(|e| {
+                            self.err(&format!(
+                                "ffi.func(): symbol '{}' not found: {}",
+                                sym_name, e
+                            ))
+                        })?;
+                    *sym as usize
+                };
+                Ok(Value::FfiFunc {
+                    lib,
+                    sym: sym_addr,
+                    name: sym_name,
+                    ret_type,
+                    arg_types,
+                })
+            }
+            other => Err(self.err(&format!("ffi.{}: unknown function", other))),
+        }
+    }
+
+    fn resolve_ffi_lib(&self, name: &str) -> String {
+        // If it already looks like a path or has an extension, use as-is
+        if name.contains('/') || name.contains('.') {
+            return name.to_string();
+        }
+        #[cfg(target_os = "macos")]
+        let candidates = [
+            format!("lib{}.dylib", name),
+            format!("{}.dylib", name),
+            format!("/usr/lib/lib{}.dylib", name),
+            format!("/usr/local/lib/lib{}.dylib", name),
+            format!("/opt/homebrew/lib/lib{}.dylib", name),
+        ];
+        #[cfg(target_os = "linux")]
+        let candidates = [
+            format!("lib{}.so", name),
+            format!("{}.so", name),
+            format!("/usr/lib/lib{}.so", name),
+            format!("/usr/local/lib/lib{}.so", name),
+            format!("/lib/x86_64-linux-gnu/lib{}.so", name),
+            format!("/lib/aarch64-linux-gnu/lib{}.so", name),
+        ];
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let candidates = [name.to_string()];
+
+        for c in &candidates {
+            if std::path::Path::new(c).exists() {
+                return c.clone();
+            }
+        }
+        // On macOS, system libraries (libm, libc, etc.) live in the dyld shared cache
+        // and are accessible by their logical name "libXYZ.dylib" even without a file on disk.
+        #[cfg(target_os = "macos")]
+        {
+            // Try "name.dylib" first (e.g. "libm.dylib" for input "libm")
+            let dylib_name = format!("{}.dylib", name);
+            return dylib_name;
+        }
+        #[cfg(not(target_os = "macos"))]
+        name.to_string()
+    }
+
+    fn invoke_ffi(
+        &mut self,
+        sym: usize,
+        ret_type: &str,
+        arg_types: &[String],
+        args: Vec<Value>,
+    ) -> Result<Value, String> {
+        if args.len() != arg_types.len() {
+            return Err(self.err(&format!(
+                "FFI call: expected {} args, got {}",
+                arg_types.len(),
+                args.len()
+            )));
+        }
+        // Convert each Cool value to a Slot, keeping CStrings alive for the call
+        let mut cstrings: Vec<std::ffi::CString> = Vec::new();
+        let mut slots: Vec<Slot> = Vec::with_capacity(args.len());
+        for (i, (v, ty)) in args.iter().zip(arg_types.iter()).enumerate() {
+            let slot = match ty.as_str() {
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "ptr" => {
+                    let n = match v {
+                        Value::Int(n) => *n,
+                        Value::Bool(b) => {
+                            if *b {
+                                1
+                            } else {
+                                0
+                            }
+                        }
+                        Value::Float(f) => *f as i64,
+                        _ => {
+                            return Err(self.err(&format!(
+                                "FFI arg {}: cannot convert {} to {}",
+                                i,
+                                v.type_name(),
+                                ty
+                            )))
+                        }
+                    };
+                    Slot::I(n)
+                }
+                "f32" | "f64" => {
+                    let f = match v {
+                        Value::Float(f) => *f,
+                        Value::Int(n) => *n as f64,
+                        Value::Bool(b) => {
+                            if *b {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        _ => {
+                            return Err(self.err(&format!(
+                                "FFI arg {}: cannot convert {} to {}",
+                                i,
+                                v.type_name(),
+                                ty
+                            )))
+                        }
+                    };
+                    Slot::F(f)
+                }
+                "str" => {
+                    let s = match v {
+                        Value::Str(s) => s.clone(),
+                        Value::Nil => String::new(),
+                        other => other.to_string(),
+                    };
+                    let cstr = std::ffi::CString::new(s)
+                        .map_err(|_| self.err("FFI: string argument contains null byte"))?;
+                    let ptr = cstr.as_ptr() as i64;
+                    cstrings.push(cstr); // keep alive for the duration of the call
+                    Slot::I(ptr)
+                }
+                other => return Err(self.err(&format!("FFI: unknown arg type '{}'", other))),
+            };
+            slots.push(slot);
+        }
+        // Perform the call; cstrings stay alive until after ffi_dispatch returns
+        let result =
+            unsafe { ffi_dispatch(sym, ret_type, arg_types, &slots) }.map_err(|e| self.err(&e))?;
+        drop(cstrings);
+        Ok(result)
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -3626,30 +4163,39 @@ fn key_to_string(key: KeyEvent) -> String {
         }
     }
     match key.code {
-        KeyCode::Char(c)  => c.to_string(),
-        KeyCode::Up       => "UP".to_string(),
-        KeyCode::Down     => "DOWN".to_string(),
-        KeyCode::Left     => "LEFT".to_string(),
-        KeyCode::Right    => "RIGHT".to_string(),
-        KeyCode::Enter    => "ENTER".to_string(),
-        KeyCode::Backspace=> "BACKSPACE".to_string(),
-        KeyCode::Delete   => "DELETE".to_string(),
-        KeyCode::Esc      => "ESC".to_string(),
-        KeyCode::Tab      => "TAB".to_string(),
-        KeyCode::Home     => "HOME".to_string(),
-        KeyCode::End      => "END".to_string(),
-        KeyCode::PageUp   => "PAGEUP".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Up => "UP".to_string(),
+        KeyCode::Down => "DOWN".to_string(),
+        KeyCode::Left => "LEFT".to_string(),
+        KeyCode::Right => "RIGHT".to_string(),
+        KeyCode::Enter => "ENTER".to_string(),
+        KeyCode::Backspace => "BACKSPACE".to_string(),
+        KeyCode::Delete => "DELETE".to_string(),
+        KeyCode::Esc => "ESC".to_string(),
+        KeyCode::Tab => "TAB".to_string(),
+        KeyCode::Home => "HOME".to_string(),
+        KeyCode::End => "END".to_string(),
+        KeyCode::PageUp => "PAGEUP".to_string(),
         KeyCode::PageDown => "PAGEDOWN".to_string(),
-        _                 => "UNKNOWN".to_string(),
+        _ => "UNKNOWN".to_string(),
     }
 }
 
 fn as_float_arg(args: &[Value], i: usize, method: &str) -> Result<f64, String> {
     match args.get(i) {
-        Some(Value::Int(n))   => Ok(*n as f64),
+        Some(Value::Int(n)) => Ok(*n as f64),
         Some(Value::Float(f)) => Ok(*f),
-        Some(other) => Err(format!("{}() argument {} must be a number, got {}", method, i + 1, other.type_name())),
-        None => Err(format!("{}() requires at least {} argument(s)", method, i + 1)),
+        Some(other) => Err(format!(
+            "{}() argument {} must be a number, got {}",
+            method,
+            i + 1,
+            other.type_name()
+        )),
+        None => Err(format!(
+            "{}() requires at least {} argument(s)",
+            method,
+            i + 1
+        )),
     }
 }
 
@@ -3657,39 +4203,50 @@ fn as_float_arg(args: &[Value], i: usize, method: &str) -> Result<f64, String> {
 
 fn json_dumps(v: &Value) -> String {
     match v {
-        Value::Nil         => "null".to_string(),
-        Value::Bool(b)     => if *b { "true".to_string() } else { "false".to_string() },
-        Value::Int(n)      => n.to_string(),
-        Value::Float(f)    => {
-            if f.is_nan() || f.is_infinite() { "null".to_string() }
-            else { format!("{}", f) }
+        Value::Nil => "null".to_string(),
+        Value::Bool(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
         }
-        Value::Str(s)      => {
+        Value::Int(n) => n.to_string(),
+        Value::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                "null".to_string()
+            } else {
+                format!("{}", f)
+            }
+        }
+        Value::Str(s) => {
             let mut out = String::from('"');
             for c in s.chars() {
                 match c {
-                    '"'  => out.push_str("\\\""),
+                    '"' => out.push_str("\\\""),
                     '\\' => out.push_str("\\\\"),
                     '\n' => out.push_str("\\n"),
                     '\r' => out.push_str("\\r"),
                     '\t' => out.push_str("\\t"),
-                    c    => out.push(c),
+                    c => out.push(c),
                 }
             }
             out.push('"');
             out
         }
-        Value::List(lst)   => {
+        Value::List(lst) => {
             let items: Vec<String> = lst.borrow().iter().map(json_dumps).collect();
             format!("[{}]", items.join(","))
         }
-        Value::Dict(map)   => {
-            let items: Vec<String> = map.borrow().iter().map(|(k, v)| {
-                format!("{}:{}", json_dumps(k), json_dumps(v))
-            }).collect();
+        Value::Dict(map) => {
+            let items: Vec<String> = map
+                .borrow()
+                .iter()
+                .map(|(k, v)| format!("{}:{}", json_dumps(k), json_dumps(v)))
+                .collect();
             format!("{{{}}}", items.join(","))
         }
-        Value::Tuple(t)    => {
+        Value::Tuple(t) => {
             let items: Vec<String> = t.iter().map(json_dumps).collect();
             format!("[{}]", items.join(","))
         }
@@ -3706,30 +4263,45 @@ fn json_parse(s: &str) -> Result<Value, String> {
 fn json_parse_value(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
     skip_ws(chars);
     match chars.peek() {
-        Some('"')  => json_parse_string(chars),
-        Some('{')  => json_parse_object(chars),
-        Some('[')  => json_parse_array(chars),
-        Some('t')  => { consume_literal(chars, "true")?;  Ok(Value::Bool(true)) }
-        Some('f')  => { consume_literal(chars, "false")?; Ok(Value::Bool(false)) }
-        Some('n')  => { consume_literal(chars, "null")?;  Ok(Value::Nil) }
+        Some('"') => json_parse_string(chars),
+        Some('{') => json_parse_object(chars),
+        Some('[') => json_parse_array(chars),
+        Some('t') => {
+            consume_literal(chars, "true")?;
+            Ok(Value::Bool(true))
+        }
+        Some('f') => {
+            consume_literal(chars, "false")?;
+            Ok(Value::Bool(false))
+        }
+        Some('n') => {
+            consume_literal(chars, "null")?;
+            Ok(Value::Nil)
+        }
         Some(c) if c.is_ascii_digit() || *c == '-' => json_parse_number(chars),
         Some(c) => Err(format!("unexpected JSON character '{}'", c)),
-        None    => Err("unexpected end of JSON".to_string()),
+        None => Err("unexpected end of JSON".to_string()),
     }
 }
 
 fn skip_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
-    while matches!(chars.peek(), Some(' ') | Some('\t') | Some('\n') | Some('\r')) {
+    while matches!(
+        chars.peek(),
+        Some(' ') | Some('\t') | Some('\n') | Some('\r')
+    ) {
         chars.next();
     }
 }
 
-fn consume_literal(chars: &mut std::iter::Peekable<std::str::Chars>, lit: &str) -> Result<(), String> {
+fn consume_literal(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    lit: &str,
+) -> Result<(), String> {
     for expected in lit.chars() {
         match chars.next() {
             Some(c) if c == expected => {}
             Some(c) => return Err(format!("expected '{}' but got '{}'", expected, c)),
-            None    => return Err(format!("unexpected end parsing '{}'", lit)),
+            None => return Err(format!("unexpected end parsing '{}'", lit)),
         }
     }
     Ok(())
@@ -3740,26 +4312,30 @@ fn json_parse_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result
     let mut s = String::new();
     loop {
         match chars.next() {
-            Some('"')  => break,
+            Some('"') => break,
             Some('\\') => match chars.next() {
-                Some('"')  => s.push('"'),
+                Some('"') => s.push('"'),
                 Some('\\') => s.push('\\'),
-                Some('/')  => s.push('/'),
-                Some('n')  => s.push('\n'),
-                Some('r')  => s.push('\r'),
-                Some('t')  => s.push('\t'),
-                Some('b')  => s.push('\x08'),
-                Some('f')  => s.push('\x0C'),
-                Some('u')  => {
+                Some('/') => s.push('/'),
+                Some('n') => s.push('\n'),
+                Some('r') => s.push('\r'),
+                Some('t') => s.push('\t'),
+                Some('b') => s.push('\x08'),
+                Some('f') => s.push('\x0C'),
+                Some('u') => {
                     let hex: String = (0..4).filter_map(|_| chars.next()).collect();
-                    let cp = u32::from_str_radix(&hex, 16).map_err(|_| format!("invalid \\u escape: {}", hex))?;
+                    let cp = u32::from_str_radix(&hex, 16)
+                        .map_err(|_| format!("invalid \\u escape: {}", hex))?;
                     s.push(char::from_u32(cp).unwrap_or('?'));
                 }
-                Some(c)  => { s.push('\\'); s.push(c); }
-                None     => return Err("unterminated string escape".to_string()),
+                Some(c) => {
+                    s.push('\\');
+                    s.push(c);
+                }
+                None => return Err("unterminated string escape".to_string()),
             },
-            Some(c)  => s.push(c),
-            None     => return Err("unterminated JSON string".to_string()),
+            Some(c) => s.push(c),
+            None => return Err("unterminated JSON string".to_string()),
         }
     }
     Ok(Value::Str(s))
@@ -3768,18 +4344,28 @@ fn json_parse_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result
 fn json_parse_number(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<Value, String> {
     let mut s = String::new();
     let mut is_float = false;
-    if chars.peek() == Some(&'-') { s.push(chars.next().unwrap()); }
-    while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) { s.push(chars.next().unwrap()); }
+    if chars.peek() == Some(&'-') {
+        s.push(chars.next().unwrap());
+    }
+    while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+        s.push(chars.next().unwrap());
+    }
     if chars.peek() == Some(&'.') {
         is_float = true;
         s.push(chars.next().unwrap());
-        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) { s.push(chars.next().unwrap()); }
+        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+            s.push(chars.next().unwrap());
+        }
     }
     if matches!(chars.peek(), Some('e') | Some('E')) {
         is_float = true;
         s.push(chars.next().unwrap());
-        if matches!(chars.peek(), Some('+') | Some('-')) { s.push(chars.next().unwrap()); }
-        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) { s.push(chars.next().unwrap()); }
+        if matches!(chars.peek(), Some('+') | Some('-')) {
+            s.push(chars.next().unwrap());
+        }
+        while matches!(chars.peek(), Some(c) if c.is_ascii_digit()) {
+            s.push(chars.next().unwrap());
+        }
     }
     if is_float {
         Ok(Value::Float(s.parse::<f64>().map_err(|e| e.to_string())?))
@@ -3792,15 +4378,18 @@ fn json_parse_array(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<
     chars.next(); // consume '['
     let mut items = Vec::new();
     skip_ws(chars);
-    if chars.peek() == Some(&']') { chars.next(); return Ok(Value::List(Rc::new(RefCell::new(items)))); }
+    if chars.peek() == Some(&']') {
+        chars.next();
+        return Ok(Value::List(Rc::new(RefCell::new(items))));
+    }
     loop {
         items.push(json_parse_value(chars)?);
         skip_ws(chars);
         match chars.next() {
             Some(']') => break,
             Some(',') => {}
-            Some(c)   => return Err(format!("expected ',' or ']' in JSON array, got '{}'", c)),
-            None      => return Err("unterminated JSON array".to_string()),
+            Some(c) => return Err(format!("expected ',' or ']' in JSON array, got '{}'", c)),
+            None => return Err("unterminated JSON array".to_string()),
         }
     }
     Ok(Value::List(Rc::new(RefCell::new(items))))
@@ -3810,21 +4399,417 @@ fn json_parse_object(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result
     chars.next(); // consume '{'
     let mut map = IndexedMap::new();
     skip_ws(chars);
-    if chars.peek() == Some(&'}') { chars.next(); return Ok(Value::Dict(Rc::new(RefCell::new(map)))); }
+    if chars.peek() == Some(&'}') {
+        chars.next();
+        return Ok(Value::Dict(Rc::new(RefCell::new(map))));
+    }
     loop {
         skip_ws(chars);
         let key = json_parse_string(chars)?;
         skip_ws(chars);
-        match chars.next() { Some(':') => {} Some(c) => return Err(format!("expected ':' in JSON object, got '{}'", c)), None => return Err("unterminated JSON object".to_string()) }
+        match chars.next() {
+            Some(':') => {}
+            Some(c) => return Err(format!("expected ':' in JSON object, got '{}'", c)),
+            None => return Err("unterminated JSON object".to_string()),
+        }
         let val = json_parse_value(chars)?;
         map.set(key, val);
         skip_ws(chars);
         match chars.next() {
             Some('}') => break,
             Some(',') => {}
-            Some(c)   => return Err(format!("expected ',' or '}}' in JSON object, got '{}'", c)),
-            None      => return Err("unterminated JSON object".to_string()),
+            Some(c) => return Err(format!("expected ',' or '}}' in JSON object, got '{}'", c)),
+            None => return Err("unterminated JSON object".to_string()),
         }
     }
     Ok(Value::Dict(Rc::new(RefCell::new(map))))
+}
+
+// ── FFI dispatch ──────────────────────────────────────────────────────────────
+
+/// Argument slot for FFI dispatch: either a 64-bit integer or a 64-bit float.
+#[derive(Copy, Clone)]
+pub enum Slot {
+    I(i64),
+    F(f64),
+}
+
+/// Dispatch a C function call via raw transmuted function pointer.
+///
+/// * `sym`       — raw symbol address obtained from `libloading`
+/// * `ret`       — declared return-type string (e.g. `"f64"`, `"i32"`, `"void"`)
+/// * `arg_types` — declared argument-type strings (drives slot interpretation)
+/// * `slots`     — coerced argument values (already converted from `Value`)
+#[allow(clippy::too_many_arguments)]
+unsafe fn ffi_dispatch(
+    sym: usize,
+    ret: &str,
+    arg_types: &[String],
+    slots: &[Slot],
+) -> Result<Value, String> {
+    use std::ffi::CStr;
+    use std::mem::transmute;
+    use std::os::raw::c_char;
+
+    // Helpers to extract typed values from slots
+    macro_rules! as_i {
+        ($idx:expr) => {
+            match slots[$idx] {
+                Slot::I(v) => v,
+                Slot::F(v) => v as i64,
+            }
+        };
+    }
+    macro_rules! as_f64 {
+        ($idx:expr) => {
+            match slots[$idx] {
+                Slot::F(v) => v,
+                Slot::I(v) => v as f64,
+            }
+        };
+    }
+    macro_rules! as_f32 {
+        ($idx:expr) => {
+            match slots[$idx] {
+                Slot::F(v) => v as f32,
+                Slot::I(v) => v as f32,
+            }
+        };
+    }
+
+    // Convert a raw i64 return value to the correctly sign/zero-extended width
+    macro_rules! int_ret {
+        ($raw:expr) => {
+            Ok(Value::Int(match ret {
+                "i8" => $raw as i8 as i64,
+                "i16" => $raw as i16 as i64,
+                "i32" => $raw as i32 as i64,
+                "u8" => $raw as u8 as i64,
+                "u16" => $raw as u16 as i64,
+                "u32" => $raw as u32 as i64,
+                _ => $raw, // i64, u64, ptr — use as-is
+            }))
+        };
+    }
+
+    let n = arg_types.len();
+    let is_float_ty = |t: &str| matches!(t, "f32" | "f64");
+
+    // ── 0 args ──────────────────────────────────────────────────────────────
+    if n == 0 {
+        return match ret {
+            "void" => {
+                transmute::<_, unsafe extern "C" fn()>(sym)();
+                Ok(Value::Nil)
+            }
+            "f32" => Ok(Value::Float(
+                transmute::<_, unsafe extern "C" fn() -> f32>(sym)() as f64,
+            )),
+            "f64" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn() -> f64>(
+                sym,
+            )())),
+            "str" => {
+                let p: *const c_char =
+                    transmute::<_, unsafe extern "C" fn() -> *const c_char>(sym)();
+                if p.is_null() {
+                    return Ok(Value::Nil);
+                }
+                Ok(Value::Str(CStr::from_ptr(p).to_string_lossy().into_owned()))
+            }
+            _ => {
+                let raw = transmute::<_, unsafe extern "C" fn() -> i64>(sym)();
+                int_ret!(raw)
+            }
+        };
+    }
+
+    // ── 1 arg ────────────────────────────────────────────────────────────────
+    if n == 1 {
+        let t0 = arg_types[0].as_str();
+        return if t0 == "f64" {
+            let a = as_f64!(0);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f64)>(sym)(a);
+                    Ok(Value::Nil)
+                }
+                "f32" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f64) -> f32>(sym)(a) as f64,
+                )),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f64) -> f64>(sym)(a),
+                )),
+                "str" => {
+                    let p: *const c_char =
+                        transmute::<_, unsafe extern "C" fn(f64) -> *const c_char>(sym)(a);
+                    if p.is_null() {
+                        return Ok(Value::Nil);
+                    }
+                    Ok(Value::Str(CStr::from_ptr(p).to_string_lossy().into_owned()))
+                }
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(f64) -> i64>(sym)(a);
+                    int_ret!(raw)
+                }
+            }
+        } else if t0 == "f32" {
+            let a = as_f32!(0);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f32)>(sym)(a);
+                    Ok(Value::Nil)
+                }
+                "f32" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f32) -> f32>(sym)(a) as f64,
+                )),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f32) -> f64>(sym)(a),
+                )),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(f32) -> i64>(sym)(a);
+                    int_ret!(raw)
+                }
+            }
+        } else {
+            // integer-class arg (i8..i64, u8..u64, ptr, str)
+            let a = as_i!(0);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(i64)>(sym)(a);
+                    Ok(Value::Nil)
+                }
+                "f32" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(i64) -> f32>(sym)(a) as f64,
+                )),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(i64) -> f64>(sym)(a),
+                )),
+                "str" => {
+                    // integer arg is a char pointer
+                    let p = a as *const c_char;
+                    let out: *const c_char = transmute::<
+                        _,
+                        unsafe extern "C" fn(*const c_char) -> *const c_char,
+                    >(sym)(p);
+                    if out.is_null() {
+                        return Ok(Value::Nil);
+                    }
+                    Ok(Value::Str(
+                        CStr::from_ptr(out).to_string_lossy().into_owned(),
+                    ))
+                }
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(i64) -> i64>(sym)(a);
+                    int_ret!(raw)
+                }
+            }
+        };
+    }
+
+    // ── 2 args ───────────────────────────────────────────────────────────────
+    if n == 2 {
+        let t0 = arg_types[0].as_str();
+        let t1 = arg_types[1].as_str();
+        return if t0 == "f64" && t1 == "f64" {
+            let a = as_f64!(0);
+            let b = as_f64!(1);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f64, f64)>(sym)(a, b);
+                    Ok(Value::Nil)
+                }
+                "f32" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f64, f64) -> f32>(sym)(a, b) as f64,
+                )),
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(f64, f64) -> f64,
+                >(sym)(a, b))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(f64, f64) -> i64>(sym)(a, b);
+                    int_ret!(raw)
+                }
+            }
+        } else if t0 == "f32" && t1 == "f32" {
+            let a = as_f32!(0);
+            let b = as_f32!(1);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f32, f32)>(sym)(a, b);
+                    Ok(Value::Nil)
+                }
+                "f32" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f32, f32) -> f32>(sym)(a, b) as f64,
+                )),
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(f32, f32) -> f64,
+                >(sym)(a, b))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(f32, f32) -> i64>(sym)(a, b);
+                    int_ret!(raw)
+                }
+            }
+        } else if t0 == "f64" && !is_float_ty(t1) {
+            let a = as_f64!(0);
+            let b = as_i!(1);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f64, i64)>(sym)(a, b);
+                    Ok(Value::Nil)
+                }
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(f64, i64) -> f64,
+                >(sym)(a, b))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(f64, i64) -> i64>(sym)(a, b);
+                    int_ret!(raw)
+                }
+            }
+        } else if !is_float_ty(t0) && t1 == "f64" {
+            let a = as_i!(0);
+            let b = as_f64!(1);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(i64, f64)>(sym)(a, b);
+                    Ok(Value::Nil)
+                }
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(i64, f64) -> f64,
+                >(sym)(a, b))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(i64, f64) -> i64>(sym)(a, b);
+                    int_ret!(raw)
+                }
+            }
+        } else {
+            // both integer-class
+            let a = as_i!(0);
+            let b = as_i!(1);
+            match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(i64, i64)>(sym)(a, b);
+                    Ok(Value::Nil)
+                }
+                "f32" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(i64, i64) -> f32>(sym)(a, b) as f64,
+                )),
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(i64, i64) -> f64,
+                >(sym)(a, b))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(i64, i64) -> i64>(sym)(a, b);
+                    int_ret!(raw)
+                }
+            }
+        };
+    }
+
+    // ── 3 args ───────────────────────────────────────────────────────────────
+    if n == 3 {
+        let t0 = arg_types[0].as_str();
+        let t1 = arg_types[1].as_str();
+        let t2 = arg_types[2].as_str();
+        if t0 == "f64" && t1 == "f64" && t2 == "f64" {
+            let a = as_f64!(0);
+            let b = as_f64!(1);
+            let c = as_f64!(2);
+            return match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f64, f64, f64)>(sym)(a, b, c);
+                    Ok(Value::Nil)
+                }
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(f64, f64, f64) -> f64,
+                >(sym)(a, b, c))),
+                _ => {
+                    let raw =
+                        transmute::<_, unsafe extern "C" fn(f64, f64, f64) -> i64>(sym)(a, b, c);
+                    int_ret!(raw)
+                }
+            };
+        }
+        if !is_float_ty(t0) && !is_float_ty(t1) && !is_float_ty(t2) {
+            let a = as_i!(0);
+            let b = as_i!(1);
+            let c = as_i!(2);
+            return match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(i64, i64, i64)>(sym)(a, b, c);
+                    Ok(Value::Nil)
+                }
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(i64, i64, i64) -> f64,
+                >(sym)(a, b, c))),
+                _ => {
+                    let raw =
+                        transmute::<_, unsafe extern "C" fn(i64, i64, i64) -> i64>(sym)(a, b, c);
+                    int_ret!(raw)
+                }
+            };
+        }
+    }
+
+    // ── 4 args ───────────────────────────────────────────────────────────────
+    if n == 4 {
+        let t0 = arg_types[0].as_str();
+        let t1 = arg_types[1].as_str();
+        let t2 = arg_types[2].as_str();
+        let t3 = arg_types[3].as_str();
+        if t0 == "f64" && t1 == "f64" && t2 == "f64" && t3 == "f64" {
+            let a = as_f64!(0);
+            let b = as_f64!(1);
+            let c = as_f64!(2);
+            let d = as_f64!(3);
+            return match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(f64, f64, f64, f64)>(sym)(a, b, c, d);
+                    Ok(Value::Nil)
+                }
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
+                >(sym)(a, b, c, d))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(f64, f64, f64, f64) -> i64>(sym)(
+                        a, b, c, d,
+                    );
+                    int_ret!(raw)
+                }
+            };
+        }
+        if !is_float_ty(t0) && !is_float_ty(t1) && !is_float_ty(t2) && !is_float_ty(t3) {
+            let a = as_i!(0);
+            let b = as_i!(1);
+            let c = as_i!(2);
+            let d = as_i!(3);
+            return match ret {
+                "void" => {
+                    transmute::<_, unsafe extern "C" fn(i64, i64, i64, i64)>(sym)(a, b, c, d);
+                    Ok(Value::Nil)
+                }
+                "f64" => Ok(Value::Float(transmute::<
+                    _,
+                    unsafe extern "C" fn(i64, i64, i64, i64) -> f64,
+                >(sym)(a, b, c, d))),
+                _ => {
+                    let raw = transmute::<_, unsafe extern "C" fn(i64, i64, i64, i64) -> i64>(sym)(
+                        a, b, c, d,
+                    );
+                    int_ret!(raw)
+                }
+            };
+        }
+    }
+
+    Err(format!(
+        "FFI: unsupported call signature ({}) -> {}",
+        arg_types.join(", "),
+        ret,
+    ))
 }

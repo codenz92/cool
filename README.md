@@ -1,8 +1,8 @@
 # Cool
 
-A Python-inspired scripting language and interactive OS shell, implemented in Cool.
+A Python-inspired scripting language with a native compiler, FFI, and an interactive OS shell — all implemented in Rust.
 
-Cool is a tree-walk interpreted language with Python-like syntax — indentation-based blocks, classes, closures, f-strings, list comprehensions, and more — built on a clean Rust runtime. It also ships with **Cool shell**, a fully-featured interactive shell written entirely in Cool itself.
+Cool is a tree-walk interpreted language with Python-like syntax — indentation-based blocks, classes, closures, f-strings, list comprehensions, and more — built on a clean Rust runtime. It also ships with a **bytecode VM**, an **LLVM native compiler**, a **foreign function interface**, and **Cool shell**, a fully-featured interactive shell written entirely in Cool itself.
 
 ---
 
@@ -24,6 +24,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 - `nonlocal` / `global`, `assert`, `with` / context managers
 - `import math`, `import os`, `import sys`
 - `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`
+- `import ffi` — call C functions from shared libraries at runtime
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
 - `runfile()` to execute another `.cool` file at runtime
@@ -41,11 +42,39 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 
 `.upper()`, `.lower()`, `.strip()`, `.lstrip()`, `.rstrip()`, `.split()`, `.join()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`, `.format()`
 
+### FFI — Call C from Cool
+
+Load any shared library and call its functions directly:
+
+```python
+import ffi
+
+libm = ffi.open("libm")
+sin_fn  = ffi.func(libm, "sin",  "f64", ["f64"])
+pow_fn  = ffi.func(libm, "pow",  "f64", ["f64", "f64"])
+
+print(sin_fn(3.14159 / 2.0))   # 1.0
+print(pow_fn(2.0, 10.0))       # 1024.0
+```
+
+Supported types: `"void"`, `"i8"`–`"i64"`, `"u8"`–`"u64"`, `"f32"`, `"f64"`, `"str"`, `"ptr"`.
+
+### Native Compiler (LLVM)
+
+Compile Cool programs to native binaries via an LLVM backend backed by a C runtime:
+
+```bash
+cool build hello.cool      # compiles → ./hello
+./hello                    # runs natively, no runtime needed
+```
+
+The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`, `break`/`continue`, functions (including recursion), and `print()`. Classes, lists, closures, and imports remain interpreter-only for now.
+
 ### Cool Shell (`coolapps/shell.cool`)
 
 A fully interactive shell written in Cool:
 
-```text
+```
 ls [path]          cd <path>          pwd
 cat <file>         mkdir <dir>        touch <file>
 rm <file>          mv <src> <dst>     cp <src> <dst>
@@ -65,21 +94,70 @@ clear
 
 ## Getting Started
 
-**Prerequisites:** Rust (stable, edition 2021)
+**Prerequisites:** Rust (stable, edition 2021). LLVM 17 is required only for native compilation.
 
 ```bash
 # Build
 cargo build --release
 
-# Run a file
+# Run a file (tree-walk interpreter)
 ./target/release/cool hello.cool
 
 # Start the REPL
 ./target/release/cool
 
+# Run with the bytecode VM
+./target/release/cool --vm hello.cool
+
+# Compile to a native binary (requires LLVM 17)
+./target/release/cool build hello.cool
+./hello
+
 # Launch Cool shell
 ./target/release/cool coolapps/shell.cool
+
+# Show all CLI options
+./target/release/cool help
 ```
+
+### Project workflow
+
+```bash
+# Scaffold a new project
+cool new myapp
+cd myapp
+
+# Interpret during development
+cool src/main.cool
+
+# Compile for release
+cool build          # reads cool.toml, produces ./myapp
+./myapp
+```
+
+`cool.toml` format:
+
+```toml
+name = "myapp"
+version = "0.1.0"
+main = "src/main.cool"
+output = "myapp"    # optional, defaults to name
+```
+
+---
+
+## CLI Reference
+
+| Command | Description |
+| ------- | ----------- |
+| `cool` | Start the REPL |
+| `cool <file.cool>` | Run a file with the tree-walk interpreter |
+| `cool --vm <file.cool>` | Run a file with the bytecode VM |
+| `cool --compile <file.cool>` | Compile to a native binary (LLVM) |
+| `cool build` | Build the project described by `cool.toml` |
+| `cool build <file.cool>` | Compile a single file to a native binary |
+| `cool new <name>` | Scaffold a new Cool project |
+| `cool help` | Show usage help |
 
 ---
 
@@ -117,6 +195,12 @@ evens = list(filter(lambda x: x % 2 == 0, range(10)))
 doubled = list(map(lambda x: x * 2, evens))
 pairs = list(zip(evens, doubled))
 print(pairs)
+
+# FFI — call libm directly
+import ffi
+libm = ffi.open("libm")
+sqrt_fn = ffi.func(libm, "sqrt", "f64", ["f64"])
+print(sqrt_fn(2.0))    # 1.4142135623730951
 ```
 
 More examples are in the [`examples/`](examples/) directory.
@@ -125,22 +209,26 @@ More examples are in the [`examples/`](examples/) directory.
 
 ## Project Structure
 
-```text
+```
 src/
-  lexer.rs        Token scanner with INDENT/DEDENT handling
-  parser.rs       Recursive descent parser → AST
-  ast.rs          AST node definitions
-  interpreter.rs  Tree-walk interpreter
-  main.rs         CLI entry point and REPL
+  lexer.rs          Token scanner with INDENT/DEDENT handling
+  parser.rs         Recursive descent parser → AST
+  ast.rs            AST node definitions
+  interpreter.rs    Tree-walk interpreter (+ FFI via libloading)
+  compiler.rs       AST → bytecode compiler
+  opcode.rs         Bytecode instruction set and VM value types
+  vm.rs             Bytecode virtual machine
+  llvm_codegen.rs   LLVM native compiler (with embedded C runtime)
+  main.rs           CLI entry point, REPL, build/new subcommands
 
 coolapps/
-  shell.cool      The Cool interactive shell
-  calc.cool       Calculator REPL
-  notes.cool      Note-taking app
-  top.cool        Process viewer
-  edit.cool       Text editor
-  snake.cool      Snake game
-  http.cool       HTTP client
+  shell.cool        The Cool interactive shell
+  calc.cool         Calculator REPL
+  notes.cool        Note-taking app
+  top.cool          Process viewer
+  edit.cool         Text editor
+  snake.cool        Snake game
+  http.cool         HTTP client
 
 examples/
   hello.cool            Variables, loops, functions — start here
@@ -149,6 +237,7 @@ examples/
   functional.cool       Closures, lambdas, map/filter, memoize
   errors_and_files.cool try/except/finally, file I/O, JSON, dirs
   stdlib.cool           math, random, re, json, time, collections
+  ffi_demo.cool         Calling C libraries (libm, libc) via FFI
 ```
 
 ---
@@ -164,7 +253,7 @@ examples/
 | 5 — Shell: more commands | ✅ Complete |
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
-| 8 — Bytecode VM / LLVM compiler | ⏳ Long term |
+| 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | 🔧 In progress |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

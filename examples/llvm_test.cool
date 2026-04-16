@@ -1,0 +1,220 @@
+# ── Basic literals & print ────────────────────────────────────────────────────
+print("=== literals ===")
+print(42)
+print(3.14)
+print(true)
+print(false)
+print(nil)
+
+# ── Variables & arithmetic ────────────────────────────────────────────────────
+print("=== arithmetic ===")
+x = 10
+y = 3
+print(x + y)
+print(x - y)
+print(x * y)
+print(x / y)
+print(x // y)
+print(x % y)
+print(x ** 2)
+
+# ── Float promotion ───────────────────────────────────────────────────────────
+print("=== float promotion ===")
+a = 7
+b = 2.0
+print(a + b)
+print(a * b)
+print(a / b)
+
+# ── String concatenation ──────────────────────────────────────────────────────
+print("=== strings ===")
+s1 = "hello"
+s2 = " world"
+print(s1 + s2)
+
+# ── Comparisons ───────────────────────────────────────────────────────────────
+print("=== comparisons ===")
+print(10 == 10)
+print(10 == 11)
+print(10 != 11)
+print(10 < 20)
+print(10 > 20)
+print(10 <= 10)
+print(10 >= 11)
+
+# ── Boolean logic (short-circuit) ─────────────────────────────────────────────
+print("=== boolean logic ===")
+print(true and true)
+print(true and false)
+print(false and true)
+print(false or true)
+print(false or false)
+print(not true)
+print(not false)
+
+# Short-circuit: result is the first falsy value for `and`
+flag = false
+result = flag and 99
+print(result)
+
+# Short-circuit: result is the first truthy value for `or`
+flag2 = true
+result2 = flag2 or 99
+print(result2)
+
+# ── Unary ops ─────────────────────────────────────────────────────────────────
+print("=== unary ===")
+n = 5
+print(-n)
+print(-3.14)
+
+# ── Bitwise ───────────────────────────────────────────────────────────────────
+print("=== bitwise ===")
+print(10 & 12)
+print(10 | 5)
+print(10 ^ 15)
+print(~0)
+print(1 << 4)
+print(256 >> 3)
+
+# ── Augmented assignment (+=, -=, *=, /= supported) ──────────────────────────
+print("=== augmented assign ===")
+v = 10
+v += 5
+print(v)
+v -= 3
+print(v)
+v *= 2
+print(v)
+v /= 4.0
+print(v)
+
+# ── if / elif / else ──────────────────────────────────────────────────────────
+print("=== if/elif/else ===")
+score = 75
+
+if score >= 90:
+    print("A")
+elif score >= 80:
+    print("B")
+elif score >= 70:
+    print("C")
+else:
+    print("D")
+
+# Nested if
+if true:
+    if false:
+        print("unreachable")
+    else:
+        print("nested else reached")
+
+# ── while loop ────────────────────────────────────────────────────────────────
+print("=== while ===")
+i = 0
+while i < 5:
+    print(i)
+    i += 1
+
+# Break
+print("=== break ===")
+j = 0
+while true:
+    if j >= 3:
+        break
+    print(j)
+    j += 1
+
+# Continue
+print("=== continue ===")
+k = 0
+while k < 6:
+    k += 1
+    if k % 2 == 0:
+        continue
+    print(k)
+
+# ── Functions ─────────────────────────────────────────────────────────────────
+print("=== functions ===")
+
+def add(a, b):
+    return a + b
+
+def factorial(n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+def fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def greet(name):
+    print("Hello, " + name + "!")
+
+def max2(a, b):
+    if a > b:
+        return a
+    return b
+
+def abs_val(x):
+    if x < 0:
+        return -x
+    return x
+
+print(add(3, 4))
+print(add(1.5, 2.5))
+print(factorial(5))
+print(factorial(10))
+print(fib(0))
+print(fib(1))
+print(fib(7))
+greet("Cool")
+print(max2(10, 20))
+print(max2(99, -1))
+print(abs_val(-42))
+print(abs_val(7))
+
+# Function with no explicit return → returns nil
+def do_nothing():
+    pass
+
+result3 = do_nothing()
+print(result3)
+
+# ── Mutual recursion (forward declarations enable this) ───────────────────────
+print("=== mutual recursion ===")
+
+def is_even(n):
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n):
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+print(is_even(4))
+print(is_odd(7))
+
+# ── assert ────────────────────────────────────────────────────────────────────
+print("=== assert ===")
+assert 1 == 1
+assert 2 + 2 == 4
+assert not false
+print("all assertions passed")
+
+# ── Complex expressions ───────────────────────────────────────────────────────
+print("=== complex exprs ===")
+print(2 + 3 * 4)
+print((2 + 3) * 4)
+print(10 - 2 - 3)
+
+# ── Multiple print args ────────────────────────────────────────────────────────
+print("=== multi-arg print ===")
+print("a =", add(1, 2), "b =", factorial(4))
+print(true, false, nil, 42, 3.14, "str")
+
+print("=== done ===")
