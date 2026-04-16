@@ -1,16 +1,17 @@
-mod lexer;
 mod ast;
-mod parser;
-mod interpreter;
-mod opcode;
 mod compiler;
+mod interpreter;
+mod lexer;
+mod llvm_codegen;
+mod opcode;
+mod parser;
 mod vm;
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
-use interpreter::Interpreter;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 fn run_source(source: &str, source_dir: PathBuf) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
@@ -35,8 +36,18 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
     machine.run(&chunk)
 }
 
+fn compile_to_native(source: &str, output_path: &Path) -> Result<(), String> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize()?;
+
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program()?;
+
+    llvm_codegen::compile_program(&program, output_path)
+}
+
 fn repl() {
-    use std::io::{self, Write, BufRead};
+    use std::io::{self, BufRead, Write};
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     println!("Cool 0.2.0 — type 'exit' to quit");
     let stdin = io::stdin();
@@ -48,7 +59,9 @@ fn repl() {
         if stdin.lock().read_line(&mut line).is_err() || line.trim() == "exit" {
             break;
         }
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         if let Err(e) = run_source(&line, cwd.clone()) {
             eprintln!("Error: {}", e);
         }
@@ -58,9 +71,12 @@ fn repl() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    // Check for --vm flag anywhere in args.
     let use_vm = args.iter().any(|a| a == "--vm");
-    let file_args: Vec<&String> = args[1..].iter().filter(|a| *a != "--vm").collect();
+    let use_compile = args.iter().any(|a| a == "--compile");
+    let file_args: Vec<&String> = args[1..]
+        .iter()
+        .filter(|a| *a != "--vm" && *a != "--compile")
+        .collect();
 
     match file_args.len() {
         0 => repl(),
@@ -70,9 +86,25 @@ fn main() {
                 eprintln!("cool: file not found: {}", path);
                 std::process::exit(1);
             }
-            let source = fs::read_to_string(path)
-                .unwrap_or_else(|e| { eprintln!("cool: {}", e); std::process::exit(1); });
-            let source_dir = Path::new(path).parent()
+            let source = fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("cool: {}", e);
+                std::process::exit(1);
+            });
+
+            if use_compile {
+                let out = Path::new(path).with_extension("");
+                match compile_to_native(&source, &out) {
+                    Ok(()) => println!("Compiled to {}", out.display()),
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+
+            let source_dir = Path::new(path)
+                .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."));
             let result = if use_vm {
@@ -86,7 +118,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("Usage: cool [--vm] [file.cool]");
+            eprintln!("Usage: cool [--vm] [--compile] [file.cool]");
             std::process::exit(1);
         }
     }
