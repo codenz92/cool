@@ -1,4 +1,16 @@
+# Rust build artifacts
 /target/
-.DS_Store
+**/*.rs.bk
+
+# OS/Build Specific
+*.bin
+*.iso
+*.img
+*.elf
+*.o
+
+# Editor
 .vscode/
-.idea/
+
+# macOS
+.DS_Store

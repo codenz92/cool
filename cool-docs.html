@@ -4,15 +4,19 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Official documentation for Cool — a Python-inspired scripting language and interactive OS shell implemented in Rust. Learn syntax, closures, classes, f-strings, and the CoolOS shell.">
+    <meta name="description"
+      content="Official documentation for Cool — a Python-inspired scripting language and interactive OS shell implemented in Rust. Learn syntax, closures, classes, f-strings, and the Cool shell.">
     <meta name="robots" content="index, follow">
     <meta property="og:title" content="Cool Language — Documentation">
-    <meta property="og:description" content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
+    <meta property="og:description"
+      content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Cool Language — Documentation">
-    <meta name="twitter:description" content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄</text></svg>">
+    <meta name="twitter:description"
+      content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
+    <link rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄</text></svg>">
     <title>Cool Language — Documentation</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link
@@ -696,16 +700,24 @@
         transform-origin: center;
       }
 
-      .menu-toggle.is-open span:nth-child(1) { transform: translateY(6.5px) rotate(45deg); }
-      .menu-toggle.is-open span:nth-child(2) { opacity: 0; }
-      .menu-toggle.is-open span:nth-child(3) { transform: translateY(-6.5px) rotate(-45deg); }
+      .menu-toggle.is-open span:nth-child(1) {
+        transform: translateY(6.5px) rotate(45deg);
+      }
+
+      .menu-toggle.is-open span:nth-child(2) {
+        opacity: 0;
+      }
+
+      .menu-toggle.is-open span:nth-child(3) {
+        transform: translateY(-6.5px) rotate(-45deg);
+      }
 
       /* ── SIDEBAR OVERLAY ── */
       .sidebar-overlay {
         display: none;
         position: fixed;
         inset: 0;
-        background: rgba(0,0,0,0.5);
+        background: rgba(0, 0, 0, 0.5);
         z-index: 99;
         backdrop-filter: blur(2px);
       }
@@ -843,9 +855,9 @@
         <a href="#builtins">Built-in Functions</a>
         <a href="#stdlib">Standard Library</a>
 
-        <span class="nav-group-label">CoolOS</span>
-        <a href="#coolos-shell">Shell</a>
-        <a href="#coolos-apps">Applications</a>
+        <span class="nav-group-label">Cool</span>
+        <a href="#Cool-shell">Shell</a>
+        <a href="#Cool-apps">Applications</a>
 
         <span class="nav-group-label">Project</span>
         <a href="#structure">Project Structure</a>
@@ -853,7 +865,8 @@
       </nav>
 
       <div class="sidebar-footer">
-        <a href="https://github.com/codenz92/cool" target="_blank" rel="noopener noreferrer">github.com/codenz92/cool</a><br>
+        <a href="https://github.com/codenz92/cool" target="_blank"
+          rel="noopener noreferrer">github.com/codenz92/cool</a><br>
         MIT License &mdash; created by codenz92
       </div>
     </aside>
@@ -868,7 +881,8 @@
           syntax, closures, classes, f-strings, and a fully-featured shell — all in one.</p>
         <div class="hero-actions">
           <a href="#getting-started" class="btn btn-primary">Get Started</a>
-          <a href="https://github.com/codenz92/cool" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">View on GitHub</a>
+          <a href="https://github.com/codenz92/cool" target="_blank" rel="noopener noreferrer"
+            class="btn btn-ghost">View on GitHub</a>
         </div>
       </div>
 
@@ -876,7 +890,7 @@
       <section class="doc-section" id="introduction">
         <h2>Introduction</h2>
         <p>Cool is a tree-walk interpreted language with Python-like syntax built on a clean Rust runtime. It ships with
-          <strong>CoolOS</strong> — a fully interactive OS shell written entirely in Cool itself.
+          <strong>Cool</strong> — a fully interactive OS shell written entirely in Cool itself.
         </p>
 
         <div class="feature-grid">
@@ -901,7 +915,7 @@
             <div class="fc-desc">math, json, re, time, random, collections, term.</div>
           </div>
           <div class="feature-card">
-            <div class="fc-title">CoolOS Shell</div>
+            <div class="fc-title">Cool Shell</div>
             <div class="fc-desc">Full interactive shell. Pipes, env vars, tab complete.</div>
           </div>
           <div class="feature-card">
@@ -920,7 +934,8 @@
         <h2>Getting Started</h2>
 
         <h3>Prerequisites</h3>
-        <p>You need <a href="https://rustup.rs" target="_blank" rel="noopener noreferrer">Rust</a> (stable, edition 2021) installed. No other
+        <p>You need <a href="https://rustup.rs" target="_blank" rel="noopener noreferrer">Rust</a> (stable, edition
+          2021) installed. No other
           dependencies.</p>
 
         <h3>Build from Source</h3>
@@ -952,8 +967,8 @@ cargo build --release</code></pre>
                 <td>Run a Cool script</td>
               </tr>
               <tr>
-                <td><code>./target/release/cool coolos/shell.cool</code></td>
-                <td>Launch CoolOS shell</td>
+                <td><code>./target/release/cool Cool/shell.cool</code></td>
+                <td>Launch Cool shell</td>
               </tr>
             </tbody>
           </table>
@@ -2018,9 +2033,10 @@ term.clear()        # clear screen</code></pre>
         </div>
 
         <div class="callout">
-          <strong>Used by CoolOS apps</strong> — the text editor, snake game, and top viewer all rely on
+          <strong>Used by Cool apps</strong> — the text editor, snake game, and top viewer all rely on
           <code>term</code> for real-time key input and cursor positioning. Powered by the <a
-            href="https://crates.io/crates/crossterm" target="_blank" rel="noopener noreferrer">crossterm</a> Rust crate.
+            href="https://crates.io/crates/crossterm" target="_blank" rel="noopener noreferrer">crossterm</a> Rust
+          crate.
         </div>
 
         <h3>Package System</h3>
@@ -2308,15 +2324,15 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
         </div>
       </section>
 
-      <!-- COOLOS SHELL -->
-      <section class="doc-section" id="coolos-shell">
-        <h2>CoolOS Shell</h2>
-        <p>CoolOS is a fully interactive shell written entirely in Cool. It runs on top of the Cool interpreter and
+      <!-- Cool SHELL -->
+      <section class="doc-section" id="Cool-shell">
+        <h2>Cool Shell</h2>
+        <p>Cool is a fully interactive shell written entirely in Cool. It runs on top of the Cool interpreter and
           provides a Unix-like command-line environment.</p>
 
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">./target/release/cool coolos/shell.cool</code></pre>
+          <pre><code class="language-bash">./target/release/cool Cool/shell.cool</code></pre>
         </div>
 
         <h3>File System Commands</h3>
@@ -2451,7 +2467,7 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
               </tr>
               <tr>
                 <td><span class="cmd">exit / quit</span></td>
-                <td>Exit CoolOS.</td>
+                <td>Exit Cool.</td>
               </tr>
             </tbody>
           </table>
@@ -2460,7 +2476,7 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
         <h3>Pipes</h3>
         <p>Chain commands together with <code>|</code>:</p>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-bash">ls | grep .cool
 cat README.md | head 20
 cat file.txt | grep "error" | wc</code></pre>
@@ -2468,7 +2484,7 @@ cat file.txt | grep "error" | wc</code></pre>
 
         <h3>Environment Variables</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-bash">set NAME=Alice
 set PORT=3000
 echo $NAME          # Alice
@@ -2478,7 +2494,7 @@ set PATH=/usr/local/bin</code></pre>
 
         <h3>Aliases</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-bash">alias ll=ls -la
 alias cls=clear
 alias reload=source ~/.coolrc</code></pre>
@@ -2495,7 +2511,7 @@ run build.cool
 echo Done.</code></pre>
         </div>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-bash">source deploy.cool</code></pre>
         </div>
 
@@ -2504,15 +2520,15 @@ echo Done.</code></pre>
           through previous commands.</p>
       </section>
 
-      <!-- COOLOS APPS -->
-      <section class="doc-section" id="coolos-apps">
-        <h2>CoolOS Applications</h2>
-        <p>CoolOS ships with several built-in applications, all written entirely in Cool.</p>
+      <!-- Cool APPS -->
+      <section class="doc-section" id="Cool-apps">
+        <h2>Cool Applications</h2>
+        <p>Cool ships with several built-in applications, all written entirely in Cool.</p>
 
         <h3>calc — Calculator REPL</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolos/calc.cool</code></pre>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run Cool/calc.cool</code></pre>
         </div>
         <p>Interactive calculator with persistent variables and full <code>math</code> library support.</p>
         <div class="code-wrap">
@@ -2528,8 +2544,8 @@ echo Done.</code></pre>
 
         <h3>notes — Note-taking App</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolos/notes.cool</code></pre>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run Cool/notes.cool</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -2566,16 +2582,16 @@ echo Done.</code></pre>
 
         <h3>top — Process Viewer</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolos/top.cool</code></pre>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run Cool/top.cool</code></pre>
         </div>
         <p>Displays running processes and system statistics using <code>os.popen("ps aux")</code>. Updates in real time.
         </p>
 
         <h3>edit — Text Editor</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolos/edit.cool filename.txt</code></pre>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run Cool/edit.cool filename.txt</code></pre>
         </div>
         <p>A nano-like terminal text editor powered by <code>import term</code>.</p>
         <div class="table-wrap">
@@ -2605,16 +2621,16 @@ echo Done.</code></pre>
 
         <h3>snake — Snake Game</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolos/snake.cool</code></pre>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run Cool/snake.cool</code></pre>
         </div>
         <p>ASCII Snake game with real-time arrow key input via <code>import term</code>. Runs entirely in the terminal.
         </p>
 
         <h3>http — HTTP Client</h3>
         <div class="code-wrap">
-          <div class="code-header"><span class="code-lang">coolos</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolos/http.cool</code></pre>
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">run Cool/http.cool</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -2665,8 +2681,8 @@ echo Done.</code></pre>
 │   ├── compiler.rs       # AST → bytecode compiler
 │   └── vm.rs             # Bytecode virtual machine
 │
-├── coolos/
-│   ├── shell.cool        # Main CoolOS interactive shell
+├── Cool/
+│   ├── shell.cool        # Main Cool interactive shell
 │   ├── calc.cool         # Calculator REPL
 │   ├── notes.cool        # Note-taking application
 │   ├── top.cool          # Process viewer
@@ -2700,8 +2716,10 @@ echo Done.</code></pre>
         </ol>
         <p>Phase 8 adds a compiler backend alongside the interpreter:</p>
         <ol>
-          <li><strong>Compiler</strong> (<code>compiler.rs</code>) — translates the AST into a flat bytecode instruction sequence.</li>
-          <li><strong>VM</strong> (<code>vm.rs</code>) — stack-based virtual machine that executes bytecode. Defined opcodes live in <code>opcode.rs</code>.</li>
+          <li><strong>Compiler</strong> (<code>compiler.rs</code>) — translates the AST into a flat bytecode instruction
+            sequence.</li>
+          <li><strong>VM</strong> (<code>vm.rs</code>) — stack-based virtual machine that executes bytecode. Defined
+            opcodes live in <code>opcode.rs</code>.</li>
         </ol>
       </section>
 
@@ -2731,7 +2749,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>3</td>
-                <td>CoolOS shell — interactive shell written in Cool</td>
+                <td>Cool shell — interactive shell written in Cool</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -2751,7 +2769,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>7</td>
-                <td>CoolOS applications — calc, notes, top, edit, snake, http</td>
+                <td>Cool applications — calc, notes, top, edit, snake, http</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -2769,9 +2787,12 @@ echo Done.</code></pre>
         </div>
 
         <h3>Phase 8 — Compiler</h3>
-        <p>The goal is to compile Cool to native binaries, enabling self-hosting and OS-level use. The bytecode VM is complete; the LLVM backend is next.</p>
+        <p>The goal is to compile Cool to native binaries, enabling self-hosting and OS-level use. The bytecode VM is
+          complete; the LLVM backend is next.</p>
         <ul>
-          <li>✅ Bytecode VM — compile AST to bytecode, run on a stack-based virtual machine (<code>compiler.rs</code>, <code>vm.rs</code>, <code>opcode.rs</code>)</li>
+          <li>✅ Bytecode VM — compile AST to bytecode, run on a stack-based virtual machine (<code>compiler.rs</code>,
+            <code>vm.rs</code>, <code>opcode.rs</code>)
+          </li>
           <li>LLVM backend — compile Cool → LLVM IR → native binary</li>
           <li>FFI — call C functions from Cool code</li>
           <li>Inline assembly — <code>asm { ... }</code> blocks</li>
@@ -2787,20 +2808,21 @@ echo Done.</code></pre>
           <li>VGA / framebuffer text output</li>
           <li>Keyboard and filesystem drivers</li>
           <li>Cool interpreter embedded in the kernel</li>
-          <li>CoolOS shell boots as PID 1</li>
-          <li>Self-hosting — CoolOS can run <code>cool build</code> to recompile itself</li>
+          <li>Cool shell boots as PID 1</li>
+          <li>Self-hosting — Cool can run <code>cool build</code> to recompile itself</li>
         </ul>
 
         <div class="callout">
-          See <a href="https://github.com/codenz92/cool/blob/master/ROADMAP.md" target="_blank" rel="noopener noreferrer">ROADMAP.md</a> for the
+          See <a href="https://github.com/codenz92/cool/blob/master/ROADMAP.md" target="_blank"
+            rel="noopener noreferrer">ROADMAP.md</a> for the
           full phase-by-phase breakdown with individual task tracking.
         </div>
       </section>
 
       <hr>
       <p style="color:var(--muted); font-family:var(--font-mono); font-size:0.78rem; padding-bottom:32px;">
-        Cool Language &mdash; MIT License &mdash; Created by <a href="https://github.com/codenz92"
-          target="_blank" rel="noopener noreferrer">codenz92</a>
+        Cool Language &mdash; MIT License &mdash; Created by <a href="https://github.com/codenz92" target="_blank"
+          rel="noopener noreferrer">codenz92</a>
       </p>
 
     </main>

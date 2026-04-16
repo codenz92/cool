@@ -1,4 +1,4 @@
-# Cool Language & CoolOS Roadmap
+# Cool Language Roadmap
 
 ## Legend
 
@@ -65,7 +65,7 @@
 
 ---
 
-## Phase 3 — CoolOS Shell ✅
+## Phase 3 — Cool Shell ✅
 
 > Goal: a working interactive shell written entirely in Cool
 
@@ -115,7 +115,7 @@
 
 ---
 
-## Phase 5 — CoolOS Shell: More Commands ✅
+## Phase 5 — Cool Shell: More Commands ✅
 
 > Goal: a shell powerful enough for real use
 
@@ -149,9 +149,9 @@
 
 ---
 
-## Phase 7 — CoolOS Applications ✅
+## Phase 7 — Cool Applications ✅
 
-> Goal: write real apps entirely in Cool that run inside CoolOS
+> Goal: write real apps entirely in Cool
 
 - [x] `calc` — calculator REPL with persistent variables, full math library support
 - [x] `notes` — note-taking app (new, show, append, delete, search commands)
@@ -164,7 +164,7 @@
 
 ## Phase 8 — Cool Language: Compiler (Long Term)
 
-> Goal: compile Cool to native binaries so CoolOS can be self-hosted
+> Goal: compile Cool to native binaries so Cool can be self-hosted
 
 - [x] Bytecode VM (compile AST to bytecode, run on a VM)
 - [ ] LLVM backend (compile Cool to LLVM IR → native binary)
@@ -175,32 +175,15 @@
 
 ---
 
-## Phase 9 — CoolOS: Real Kernel (Very Long Term)
-
-> Goal: a real OS that boots on bare metal and runs Cool as its shell
-
-- [ ] Bootloader (GRUB or custom)
-- [ ] Kernel written in Rust (memory management, interrupts, scheduler)
-- [ ] VGA / framebuffer text output
-- [ ] Keyboard driver
-- [ ] Filesystem driver (read/write disk)
-- [ ] Process scheduler
-- [ ] Cool interpreter embedded in the kernel
-- [ ] CoolOS shell boots as PID 1
-- [ ] Self-hosting: CoolOS can run `cool build` to recompile itself
-
----
-
 ## Summary
 
 | Phase | Status |
 | ----- | ------ |
 | 1 — Core Interpreter | ✅ Complete |
 | 2 — Real Language Features | ✅ Complete |
-| 3 — CoolOS Shell | ✅ Complete |
+| 3 — Cool Shell | ✅ Complete |
 | 4 — Quality of Life | ✅ Complete |
 | 5 — Shell: More Commands | ✅ Complete |
 | 6 — Standard Library | ✅ Complete |
-| 7 — CoolOS Applications | ✅ Complete |
+| 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler | 🔧 In progress |
-| 9 — Real Kernel | ⏳ Very long term |

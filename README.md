@@ -2,7 +2,7 @@
 
 A Python-inspired scripting language and interactive OS shell, implemented in Rust.
 
-Cool is a tree-walk interpreted language with Python-like syntax — indentation-based blocks, classes, closures, f-strings, list comprehensions, and more — built on a clean Rust runtime. It also ships with **CoolOS**, a fully-featured interactive shell written entirely in Cool itself.
+Cool is a tree-walk interpreted language with Python-like syntax — indentation-based blocks, classes, closures, f-strings, list comprehensions, and more — built on a clean Rust runtime. It also ships with **Cool shell**, a fully-featured interactive shell written entirely in Cool itself.
 
 ---
 
@@ -41,7 +41,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 
 `.upper()`, `.lower()`, `.strip()`, `.lstrip()`, `.rstrip()`, `.split()`, `.join()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`, `.format()`
 
-### CoolOS Shell (`coolos/shell.cool`)
+### Cool Shell (`coolapps/shell.cool`)
 
 A fully interactive shell written in Cool:
 
@@ -77,8 +77,8 @@ cargo build --release
 # Start the REPL
 ./target/release/cool
 
-# Launch CoolOS shell
-./target/release/cool coolos/shell.cool
+# Launch Cool shell
+./target/release/cool coolapps/shell.cool
 ```
 
 ---
@@ -133,8 +133,8 @@ src/
   interpreter.rs  Tree-walk interpreter
   main.rs         CLI entry point and REPL
 
-coolos/
-  shell.cool      The CoolOS interactive shell
+coolapps/
+  shell.cool      The Cool interactive shell
   calc.cool       Calculator REPL
   notes.cool      Note-taking app
   top.cool        Process viewer
@@ -159,13 +159,12 @@ examples/
 | ----- | ------ |
 | 1 — Core interpreter | ✅ Complete |
 | 2 — Real language features | ✅ Complete |
-| 3 — CoolOS shell | ✅ Complete |
+| 3 — Cool shell | ✅ Complete |
 | 4 — Quality of life (f-strings, lambdas, comprehensions…) | ✅ Complete |
 | 5 — Shell: more commands | ✅ Complete |
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
-| 7 — CoolOS applications (editor, calculator, snake…) | ✅ Complete |
+| 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Bytecode VM / LLVM compiler | ⏳ Long term |
-| 9 — Real kernel (bare-metal, self-hosting) | ⏳ Very long term |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
