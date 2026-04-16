@@ -1,6 +1,6 @@
 # Cool
 
-A Python-inspired scripting language and interactive OS shell, implemented in Rust.
+A Python-inspired scripting language and interactive OS shell, implemented in Cool.
 
 Cool is a tree-walk interpreted language with Python-like syntax — indentation-based blocks, classes, closures, f-strings, list comprehensions, and more — built on a clean Rust runtime. It also ships with **Cool shell**, a fully-featured interactive shell written entirely in Cool itself.
 
