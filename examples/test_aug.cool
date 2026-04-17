@@ -1,0 +1,7 @@
+# Test augmented assignment
+total = 0
+i = 0
+total += i
+i = 1
+total += i
+print(total)

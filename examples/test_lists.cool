@@ -1,0 +1,6 @@
+# Test lists in LLVM
+lst = [1, 2, 3]
+print(lst)
+for x in [1, 2, 3]:
+    print(x)
+print([1, 2] + [3, 4])
