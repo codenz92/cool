@@ -1,6 +1,0 @@
-# Test: simple variable update and use
-y = 0
-y = y + 1
-print(y)
-y = y + 1
-print(y)

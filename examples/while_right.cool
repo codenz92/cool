@@ -1,5 +1,0 @@
-# Test while: variable on right only
-y = 3
-while y > 0:
-    print(y)
-    y -= 1
