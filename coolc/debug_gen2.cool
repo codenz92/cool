@@ -1,0 +1,40 @@
+# Debug gen_expr
+
+def get_type(t):
+    if type(t) == "tuple" and len(t) > 0:
+        return t[0]
+    return t
+
+expr = ("PLUS", ("NUM", 1), ("NUM", 2))
+print("expr: " + str(expr))
+print("expr[0]: " + str(expr[0]))
+print("get_type(expr): " + str(get_type(expr)))
+print("expr[0] == 'PLUS': " + str(expr[0] == "PLUS"))
+
+# Now try with a simple case in gen_expr logic
+typ = get_type(expr)
+print("\nIn gen_expr:")
+print("typ = get_type(expr) = " + str(typ))
+print("typ == 'NUM': " + str(typ == "NUM"))
+
+# Check each condition
+print("\nChecking conditions:")
+if expr == nil:
+    print("  expr == nil: TRUE")
+else:
+    print("  expr == nil: FALSE")
+    
+if typ == "NUM":
+    print("  typ == 'NUM': TRUE")
+else:
+    print("  typ == 'NUM': FALSE")
+    
+if expr[0] == "VAR":
+    print("  expr[0] == 'VAR': TRUE")
+else:
+    print("  expr[0] == 'VAR': FALSE")
+    
+if expr[0] == "PLUS":
+    print("  expr[0] == 'PLUS': TRUE")
+else:
+    print("  expr[0] == 'PLUS': FALSE")

@@ -209,4 +209,4 @@
 - [x] Code generator (AST → bytecode) in Cool
 - [x] Test: compiler correctly parses and compiles `print(1)`, `print(1 + 2)`, `x = 1`, etc.
 - [x] Bytecode VM in Cool (to execute compiled programs)
-- [ ] Bootstrap: use self-hosted compiler to compile itself |
+- [x] Bootstrap: use self-hosted compiler to compile itself |

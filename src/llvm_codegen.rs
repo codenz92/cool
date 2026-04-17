@@ -92,6 +92,7 @@ CoolVal cool_list_make(int64_t);
 CoolVal cool_list_len(CoolVal);
 CoolVal cool_list_get(CoolVal, CoolVal);
 CoolVal cool_list_push(CoolVal, CoolVal);
+CoolVal cool_list_concat(CoolVal, CoolVal);
 void cool_print(int32_t, ...);
 
 /* ── bit-pattern helpers ──────────────────────────────────────────────── */
@@ -131,7 +132,6 @@ int32_t cool_truthy(CoolVal v) {
 
 /* ── arithmetic ───────────────────────────────────────────────────────── */
 CoolVal cool_add(CoolVal a, CoolVal b) {
-    fprintf(stderr, "cool_add CALLED: a.tag=%d a.payload=%lld b.tag=%d b.payload=%lld\n", a.tag, (long long)a.payload, b.tag, (long long)b.payload);
     if (a.tag == TAG_STR && b.tag == TAG_STR) {
         const char* sa = (const char*)(intptr_t)a.payload;
         const char* sb = (const char*)(intptr_t)b.payload;
@@ -140,6 +140,8 @@ CoolVal cool_add(CoolVal a, CoolVal b) {
         memcpy(r, sa, la); memcpy(r + la, sb, lb); r[la + lb] = '\0';
         return cv_str(r);
     }
+    if (a.tag == TAG_LIST && b.tag == TAG_LIST)
+        return cool_list_concat(a, b);
     if (a.tag == TAG_FLOAT || b.tag == TAG_FLOAT)
         return cv_float(cv_to_float(a) + cv_to_float(b));
     return cv_int(a.payload + b.payload);
@@ -450,13 +452,11 @@ CoolVal cool_list_concat(CoolVal a, CoolVal b) {
 
 /* ── print ────────────────────────────────────────────────────────────── */
 void cool_print(int32_t n, ...) {
-    fprintf(stderr, "cool_print called with n=%d\n", n);
     va_list ap;
     va_start(ap, n);
     for (int32_t i = 0; i < n; i++) {
         if (i > 0) putchar(' ');
         CoolVal v = va_arg(ap, CoolVal);
-        fprintf(stderr, "  arg[%d]: tag=%d payload=%lld\n", i, v.tag, (long long)v.payload);
         switch (v.tag) {
             case TAG_NIL:   fputs("nil",  stdout); break;
             case TAG_INT:   printf("%lld", (long long)v.payload); break;

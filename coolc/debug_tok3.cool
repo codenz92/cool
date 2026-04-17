@@ -1,0 +1,53 @@
+# Check tokens for "print(1)"
+
+def is_ident(c):
+    return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_')
+
+class Lexer:
+    def __init__(self, src):
+        self.src = src
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.src):
+            return self.src[self.pos]
+        return nil
+
+    def next(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+        return c
+
+    def tokenize(self):
+        out = []
+        while self.peek() != nil:
+            c = self.peek()
+            if c == ' ' or c == '\n' or c == '\t':
+                self.next()
+            elif c >= '0' and c <= '9':
+                n = ""
+                while self.peek() != nil and self.peek() >= '0' and self.peek() <= '9':
+                    n += self.next()
+                out.append(("NUM", int(n)))
+            elif c == '(':
+                self.next()
+                out.append("LPAREN")
+            elif c == ')':
+                self.next()
+                out.append("RPAREN")
+            elif is_ident(c):
+                s = ""
+                while self.peek() != nil and is_ident(self.peek()):
+                    s += self.next()
+                out.append(s)
+            else:
+                self.next()
+        out.append("EOF")
+        return out
+
+src = "print(1)"
+print("Source: " + src)
+lexer = Lexer(src)
+tokens = lexer.tokenize()
+print("Tokens: " + str(tokens))

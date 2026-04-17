@@ -1,0 +1,35 @@
+# Debug VM execution manually
+
+stack = []
+code = [("PRINT", 1), ("CONST", 1), ("ADD",), ("HALT",)]
+ip = 0
+
+print("Manual VM test...")
+print("Code: " + str(code))
+
+while ip < len(code):
+    op = code[ip]
+    print("ip=" + str(ip) + ", op=" + str(op))
+    ip += 1
+    
+    t = op[0]
+    if t == "CONST":
+        stack.append(op[1])
+        print("  pushed " + str(op[1]))
+    elif t == "ADD":
+        b = stack.pop()
+        a = stack.pop()
+        result = a + b
+        stack.append(result)
+        print("  added: " + str(result))
+    elif t == "PRINT":
+        n = op[1]
+        args = []
+        for i in range(n):
+            if len(stack) > 0:
+                args.insert(0, stack.pop())
+        print("  print: " + str(args))
+    elif t == "HALT":
+        print("  halt!")
+
+print("Stack: " + str(stack))

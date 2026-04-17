@@ -1,0 +1,34 @@
+# Debug VM execution
+
+print("Testing VM step by step...")
+
+code = [('CONST', 1), ('CONST', 2), ('ADD',), ('PRINT', 1)]
+print("Code: " + str(code))
+
+stack = []
+ip = 0
+
+while ip < len(code):
+    op = code[ip]
+    print("ip=" + str(ip) + ", op=" + str(op) + ", stack before=" + str(stack))
+    ip += 1
+    
+    t = op[0]
+    if t == 'CONST':
+        stack.append(op[1])
+        print("  -> pushed " + str(op[1]))
+    elif t == 'ADD':
+        b = stack.pop()
+        a = stack.pop()
+        result = a + b
+        stack.append(result)
+        print("  -> added " + str(a) + " + " + str(b) + " = " + str(result))
+    elif t == 'PRINT':
+        n = op[1]
+        args = []
+        for i in range(n):
+            if len(stack) > 0:
+                args.insert(0, stack.pop())
+        print("  -> print: " + str(args))
+
+print("Final stack: " + str(stack))

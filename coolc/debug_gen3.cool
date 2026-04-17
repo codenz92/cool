@@ -1,0 +1,47 @@
+# Debug gen_stmt
+
+print("Testing generator...")
+
+def get_type(t):
+    if type(t) == "tuple" and len(t) > 0:
+        return t[0]
+    return t
+
+ast = [("PRINT", [("NUM", 1)])]
+print("AST: " + str(ast))
+
+class Generator:
+    def __init__(self, ast):
+        self.ast = ast
+        self.code = []
+
+    def generate(self):
+        for stmt in self.ast:
+            self.gen_stmt(stmt)
+        self.code.append(("HALT",))
+        return self.code
+
+    def gen_stmt(self, stmt):
+        print("gen_stmt: " + str(stmt))
+        t = stmt[0]
+        if t == "PRINT":
+            print("  -> PRINT case, stmt[1]=" + str(stmt[1]))
+            self.code.append(("PRINT", len(stmt[1])))
+            for arg in stmt[1]:
+                print("  -> gen_expr for " + str(arg))
+                self.gen_expr(arg)
+
+    def gen_expr(self, expr):
+        print("gen_expr: " + str(expr))
+        if expr == nil:
+            self.code.append(("CONST", nil))
+            return
+        typ = get_type(expr)
+        print("  typ=" + str(typ))
+        if typ == "NUM":
+            print("  -> NUM case, value=" + str(expr[1]))
+            self.code.append(("CONST", expr[1]))
+
+gen = Generator(ast)
+code = gen.generate()
+print("\nGenerated code: " + str(code))

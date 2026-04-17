@@ -1123,3 +1123,36 @@ void cool_print(int32_t n, ...) {
     }
     va_end(ap); putchar('\n');
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   COMPAT WRAPPERS — old names / signatures used by the LLVM codegen
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* cool_list_make: codegen passes a CoolVal(int) as capacity hint — ignore it */
+CoolVal cool_list_make(CoolVal cap_hint) { (void)cap_hint; return cool_list_new(); }
+/* cool_list_push: old name for cool_list_append */
+CoolVal cool_list_push(CoolVal list, CoolVal val) { return cool_list_append(list, val); }
+/* cool_list_concat: concatenate two lists into a new one */
+CoolVal cool_list_concat(CoolVal a, CoolVal b) {
+    CoolVal res = cool_list_copy(a);
+    cool_list_extend(res, b);
+    return res;
+}
+/* cool_range: 3-arg wrapper */
+CoolVal cool_range(CoolVal start, CoolVal stop, CoolVal step) {
+    return cool_range3(start, stop, step);
+}
+/* cool_setitem: unified obj[key] = val for lists and dicts */
+CoolVal cool_setitem(CoolVal obj, CoolVal key, CoolVal val) {
+    if (obj.tag == TAG_LIST) return cool_list_set(obj, key, val);
+    if (obj.tag == TAG_DICT) return cool_dict_set(obj, key, val);
+    fprintf(stderr, "TypeError: object does not support item assignment\n"); exit(1);
+}
+/* cool_dispatch_v: variadic wrapper so codegen can call methods without argv array */
+CoolVal cool_dispatch_v(CoolVal self, const char* name, int32_t argc, ...) {
+    CoolVal argv[64];
+    va_list ap; va_start(ap, argc);
+    for (int32_t i = 0; i < argc && i < 64; i++) argv[i] = va_arg(ap, CoolVal);
+    va_end(ap);
+    return cool_dispatch(self, name, argc, argv);
+}

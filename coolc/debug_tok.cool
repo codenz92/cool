@@ -1,0 +1,15 @@
+# Debug: checking token names
+
+def get_type(t):
+    if type(t) == "tuple" and len(t) > 0:
+        return t[0]
+    return t
+
+# Check what the PLUS operation looks like
+expr = ("PLUS", ("NUM", 1), ("NUM", 2))
+print("expr[0] = " + str(expr[0]))
+print("expr[0] == 'PLUS': " + str(expr[0] == "PLUS"))
+print("expr[0] == '+': " + str(expr[0] == "+"))
+
+# It's "PLUS" not "+"!
+# Fix needed in the generator
