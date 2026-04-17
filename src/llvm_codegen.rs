@@ -131,6 +131,7 @@ int32_t cool_truthy(CoolVal v) {
 
 /* ── arithmetic ───────────────────────────────────────────────────────── */
 CoolVal cool_add(CoolVal a, CoolVal b) {
+    fprintf(stderr, "cool_add CALLED: a.tag=%d a.payload=%lld b.tag=%d b.payload=%lld\n", a.tag, (long long)a.payload, b.tag, (long long)b.payload);
     if (a.tag == TAG_STR && b.tag == TAG_STR) {
         const char* sa = (const char*)(intptr_t)a.payload;
         const char* sb = (const char*)(intptr_t)b.payload;
@@ -449,11 +450,13 @@ CoolVal cool_list_concat(CoolVal a, CoolVal b) {
 
 /* ── print ────────────────────────────────────────────────────────────── */
 void cool_print(int32_t n, ...) {
+    fprintf(stderr, "cool_print called with n=%d\n", n);
     va_list ap;
     va_start(ap, n);
     for (int32_t i = 0; i < n; i++) {
         if (i > 0) putchar(' ');
         CoolVal v = va_arg(ap, CoolVal);
+        fprintf(stderr, "  arg[%d]: tag=%d payload=%lld\n", i, v.tag, (long long)v.payload);
         switch (v.tag) {
             case TAG_NIL:   fputs("nil",  stdout); break;
             case TAG_INT:   printf("%lld", (long long)v.payload); break;
@@ -810,15 +813,8 @@ impl<'ctx> Compiler<'ctx> {
         a: StructValue<'ctx>,
         b: StructValue<'ctx>,
     ) -> Result<StructValue<'ctx>, String> {
-        // Special case: list + list concatenation
-        match op {
-            BinOp::Add => {
-                return Ok(self.call_binop_fn(self.rt.cool_list_concat, a, b, "list_concat"))
-            }
-            _ => {}
-        }
         let fn_val = match op {
-            BinOp::Add => unreachable!(), // handled above
+            BinOp::Add => self.rt.cool_add,
             BinOp::Sub => self.rt.cool_sub,
             BinOp::Mul => self.rt.cool_mul,
             BinOp::Div => self.rt.cool_div,

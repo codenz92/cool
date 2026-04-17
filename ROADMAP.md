@@ -180,6 +180,7 @@
 - [x] List concatenation in LLVM (`a + b`)
 - [x] Function calls in LLVM
 - [x] Recursion in LLVM
+- [x] Variable assignment with expressions (bug fix: `x = 1 + 1` now returns correct value)
 
 ---
 
