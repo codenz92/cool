@@ -39,6 +39,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_FLOAT 2
 #define TAG_BOOL  3
 #define TAG_STR   4
+#define TAG_LIST  5
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -180,7 +181,33 @@ CoolVal cool_bitnot(CoolVal a)           { return cv_int(~(int64_t)a.payload); }
 CoolVal cool_lshift(CoolVal a, CoolVal b){ return cv_int((int64_t)a.payload << (int)b.payload); }
 CoolVal cool_rshift(CoolVal a, CoolVal b){ return cv_int((int64_t)a.payload >> (int)b.payload); }
 
-/* ── to_str ───────────────────────────────────────────────────────────── */
+/* ── list operations ─────────────────────────────────────────────────────── */
+typedef struct {
+    int32_t tag;
+    int64_t length;
+    int64_t capacity;
+    void* data;
+} CoolList;
+
+CoolVal cool_list_make(int64_t n) {
+    /* LIST MAKE: create empty list, capacity = n */
+    CoolList* lst = (CoolList*)malloc(sizeof(CoolList));
+    if (!lst) return cv_nil();
+    lst->tag = TAG_LIST;
+    lst->length = 0;
+    lst->capacity = n > 0 ? n : 1;
+    lst->data = malloc(lst->capacity * sizeof(CoolVal));
+    if (!lst->data) {
+        free(lst);
+        return cv_nil();
+    }
+    CoolVal v;
+    v.tag = TAG_LIST;
+    v.payload = (int64_t)(intptr_t)lst;
+    return v;
+}
+
+/* ── to_str ─────────���─────────────────────────────────────────────────── */
 char* cool_to_str(CoolVal v) {
     if (v.tag == TAG_STR) return (char*)(intptr_t)v.payload;
     char* buf = (char*)malloc(64);
@@ -190,6 +217,23 @@ char* cool_to_str(CoolVal v) {
         case TAG_INT:   snprintf(buf, 64, "%lld", (long long)v.payload);      break;
         case TAG_FLOAT: snprintf(buf, 64, "%g",   cv_as_float(v));            break;
         case TAG_BOOL:  snprintf(buf, 64, "%s",   v.payload ? "true":"false"); break;
+        case TAG_LIST: {
+            CoolList* lst = (CoolList*)(intptr_t)v.payload;
+            if (!lst || !lst->data) { snprintf(buf, 64, "[]"); break; }
+            char* p = buf;
+            *p++ = '[';
+            for (int64_t i = 0; i < lst->length; i++) {
+                if (i > 0) *p++ = ',';
+                char* elem = cool_to_str(((CoolVal*)lst->data)[i]);
+                size_t len = strlen(elem);
+                if (p - buf + len > 62) { *p++ = '.'; *p++ = '.'; *p++ = '.'; break; }
+                memcpy(p, elem, len);
+                p += len;
+            }
+            *p++ = ']';
+            *p = '\0';
+            break;
+        }
         default:        snprintf(buf, 64, "<unknown>");                        break;
     }
     return buf;
@@ -243,6 +287,114 @@ CoolVal cool_write_str(CoolVal addr_val, CoolVal str_val) {
     return cv_nil();
 }
 
+/* ── list operations (continued) ───────────────────────────────────────── */
+CoolVal cool_list_len(CoolVal v) {
+    if (v.tag != TAG_LIST) return cv_int(0);
+    CoolList* lst = (CoolList*)(intptr_t)v.payload;
+    return cv_int(lst->length);
+}
+CoolVal cool_list_get(CoolVal list_val, CoolVal idx_val) {
+    if (list_val.tag != TAG_LIST) return cv_nil();
+    int64_t idx = idx_val.payload;
+    CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
+    if (idx < 0) idx += lst->length;
+    if (idx < 0 || idx >= lst->length) return cv_nil();
+    return ((CoolVal*)lst->data)[idx];
+}
+CoolVal cool_list_set(CoolVal list_val, CoolVal idx_val, CoolVal val) {
+    if (list_val.tag != TAG_LIST) return cv_nil();
+    int64_t idx = idx_val.payload;
+    CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
+    if (idx < 0) idx += lst->length;
+    if (idx < 0 || idx >= lst->length) return cv_nil();
+    ((CoolVal*)lst->data)[idx] = val;
+    return cv_nil();
+}
+CoolVal cool_list_push(CoolVal list_val, CoolVal val) {
+    if (list_val.tag != TAG_LIST) return cv_nil();
+    CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
+    if (lst->length >= lst->capacity) {
+        int64_t new_cap = lst->capacity * 2;
+        void* new_data = realloc(lst->data, new_cap * sizeof(CoolVal));
+        if (!new_data) return cv_nil();
+        lst->data = new_data;
+        lst->capacity = new_cap;
+    }
+    ((CoolVal*)lst->data)[lst->length++] = val;
+    return cv_nil();
+}
+CoolVal cool_list_pop(CoolVal list_val) {
+    if (list_val.tag != TAG_LIST) return cv_nil();
+    CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
+    if (lst->length <= 0) return cv_nil();
+    return ((CoolVal*)lst->data)[--lst->length];
+}
+/* ── len() ──────────────────────────────────────────────────────────────── */
+CoolVal cool_len(CoolVal v) {
+    switch (v.tag) {
+        case TAG_STR: return cv_int(strlen((const char*)(intptr_t)v.payload));
+        case TAG_LIST: {
+            CoolList* lst = (CoolList*)(intptr_t)v.payload;
+            return cv_int(lst->length);
+        }
+        default: return cv_int(0);
+    }
+}
+
+/* ── range() ──────────────────────────────────────────────────────────────── */
+/* RANGE: create list from start to stop with step */
+CoolVal cool_range(CoolVal start_val, CoolVal stop_val, CoolVal step_val) {
+    int64_t start = start_val.payload;
+    int64_t stop = stop_val.payload;
+    int64_t step = step_val.payload;
+    if (step == 0) step = 1;
+    int64_t n = 0;
+    if (step > 0) {
+        for (int64_t i = start; i < stop; i += step) n++;
+    } else {
+        for (int64_t i = start; i > stop; i += step) n++;
+    }
+    CoolList* lst = (CoolList*)malloc(sizeof(CoolList));
+    if (!lst) return cv_nil();
+    lst->tag = TAG_LIST;
+    lst->length = 0;
+    lst->capacity = n > 0 ? n : 1;
+    lst->data = malloc(n * sizeof(CoolVal));
+    if (!lst->data) { free(lst); return cv_nil(); }
+    for (int64_t i = start; step > 0 ? i < stop : i > stop; i += step) {
+        ((CoolVal*)lst->data)[lst->length++] = cv_int(i);
+    }
+    CoolVal v;
+    v.tag = TAG_LIST;
+    v.payload = (int64_t)(intptr_t)lst;
+    return v;
+}
+
+/* ── list concatenation ───────────────────────────────────────────────── */
+CoolVal cool_list_concat(CoolVal a, CoolVal b) {
+    if (a.tag != TAG_LIST || b.tag != TAG_LIST) return cv_nil();
+    CoolList* la = (CoolList*)(intptr_t)a.payload;
+    CoolList* lb = (CoolList*)(intptr_t)b.payload;
+    int64_t n = la->length + lb->length;
+    CoolList* r = (CoolList*)malloc(sizeof(CoolList));
+    if (!r) return cv_nil();
+    r->tag = TAG_LIST;
+    r->length = 0;
+    r->capacity = n > 0 ? n : 1;
+    r->data = malloc(n * sizeof(CoolVal));
+    if (!r->data) { free(r); return cv_nil(); }
+    for (int64_t i = 0; i < la->length; i++) {
+        ((CoolVal*)r->data)[r->length++] = ((CoolVal*)la->data)[i];
+    }
+    for (int64_t i = 0; i < lb->length; i++) {
+        ((CoolVal*)r->data)[r->length++] = ((CoolVal*)lb->data)[i];
+    }
+    CoolVal v;
+    v.tag = TAG_LIST;
+    v.payload = (int64_t)(intptr_t)r;
+    return v;
+}
+
 /* ── print ────────────────────────────────────────────────────────────── */
 void cool_print(int32_t n, ...) {
     va_list ap;
@@ -256,6 +408,18 @@ void cool_print(int32_t n, ...) {
             case TAG_FLOAT: printf("%g",   cv_as_float(v));       break;
             case TAG_BOOL:  fputs(v.payload ? "true" : "false", stdout); break;
             case TAG_STR:   fputs((const char*)(intptr_t)v.payload, stdout); break;
+            case TAG_LIST: {
+                CoolList* lst = (CoolList*)(intptr_t)v.payload;
+                if (!lst || !lst->data) { fputs("[]", stdout); break; }
+                putchar('[');
+                for (int64_t i = 0; i < lst->length; i++) {
+                    if (i > 0) { putchar(','); putchar(' '); }
+                    char* elem = cool_to_str(((CoolVal*)lst->data)[i]);
+                    fputs(elem, stdout);
+                }
+                putchar(']');
+                break;
+            }
             default:        fputs("<unknown>", stdout); break;
         }
     }
@@ -309,6 +473,18 @@ struct RuntimeFns<'ctx> {
     cool_write_f64: FunctionValue<'ctx>,
     cool_read_str: FunctionValue<'ctx>,
     cool_write_str: FunctionValue<'ctx>,
+    // list operations
+    cool_list_make: FunctionValue<'ctx>,
+    cool_list_len: FunctionValue<'ctx>,
+    cool_list_get: FunctionValue<'ctx>,
+    cool_list_set: FunctionValue<'ctx>,
+    cool_list_push: FunctionValue<'ctx>,
+    cool_list_pop: FunctionValue<'ctx>,
+    cool_list_concat: FunctionValue<'ctx>,
+    // range
+    cool_range: FunctionValue<'ctx>,
+    // stdlib
+    cool_len: FunctionValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -417,16 +593,28 @@ impl<'ctx> Compiler<'ctx> {
             cool_print: decl!("cool_print", voidt.fn_type(&[i32m], true)),
             abort_fn: decl!("abort", voidt.fn_type(&[], false)),
             // raw memory — all take CoolVal(s) and return CoolVal
-            cool_malloc:     decl!("cool_malloc",     cv_type.fn_type(&[cv], false)),
-            cool_free:       decl!("cool_free",       cv_type.fn_type(&[cv], false)),
-            cool_read_byte:  decl!("cool_read_byte",  cv_type.fn_type(&[cv], false)),
+            cool_malloc: decl!("cool_malloc", cv_type.fn_type(&[cv], false)),
+            cool_free: decl!("cool_free", cv_type.fn_type(&[cv], false)),
+            cool_read_byte: decl!("cool_read_byte", cv_type.fn_type(&[cv], false)),
             cool_write_byte: decl!("cool_write_byte", cv_type.fn_type(&[cv, cv], false)),
-            cool_read_i64:   decl!("cool_read_i64",   cv_type.fn_type(&[cv], false)),
-            cool_write_i64:  decl!("cool_write_i64",  cv_type.fn_type(&[cv, cv], false)),
-            cool_read_f64:   decl!("cool_read_f64",   cv_type.fn_type(&[cv], false)),
-            cool_write_f64:  decl!("cool_write_f64",  cv_type.fn_type(&[cv, cv], false)),
-            cool_read_str:   decl!("cool_read_str",   cv_type.fn_type(&[cv], false)),
-            cool_write_str:  decl!("cool_write_str",  cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i64: decl!("cool_read_i64", cv_type.fn_type(&[cv], false)),
+            cool_write_i64: decl!("cool_write_i64", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_f64: decl!("cool_read_f64", cv_type.fn_type(&[cv], false)),
+            cool_write_f64: decl!("cool_write_f64", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_str: decl!("cool_read_str", cv_type.fn_type(&[cv], false)),
+            cool_write_str: decl!("cool_write_str", cv_type.fn_type(&[cv, cv], false)),
+            // list operations
+            cool_list_make: decl!("cool_list_make", cv_type.fn_type(&[i64m], false)),
+            cool_list_len: decl!("cool_list_len", cv_type.fn_type(&[cv], false)),
+            cool_list_get: decl!("cool_list_get", cv_type.fn_type(&[cv, cv], false)),
+            cool_list_set: decl!("cool_list_set", cv_type.fn_type(&[cv, cv, cv], false)),
+            cool_list_push: decl!("cool_list_push", cv_type.fn_type(&[cv, cv], false)),
+            cool_list_pop: decl!("cool_list_pop", cv_type.fn_type(&[cv], false)),
+            cool_list_concat: decl!("cool_list_concat", cv_type.fn_type(&[cv, cv], false)),
+            // range(start, stop, step)
+            cool_range: decl!("cool_range", cv_type.fn_type(&[cv, cv, cv], false)),
+            // len(obj)
+            cool_len: decl!("cool_len", cv_type.fn_type(&[cv], false)),
         }
     }
 
@@ -570,8 +758,15 @@ impl<'ctx> Compiler<'ctx> {
         a: StructValue<'ctx>,
         b: StructValue<'ctx>,
     ) -> Result<StructValue<'ctx>, String> {
+        // Special case: list + list concatenation
+        match op {
+            BinOp::Add => {
+                return Ok(self.call_binop_fn(self.rt.cool_list_concat, a, b, "list_concat"))
+            }
+            _ => {}
+        }
         let fn_val = match op {
-            BinOp::Add => self.rt.cool_add,
+            BinOp::Add => unreachable!(), // handled above
             BinOp::Sub => self.rt.cool_sub,
             BinOp::Mul => self.rt.cool_mul,
             BinOp::Div => self.rt.cool_div,
@@ -697,6 +892,11 @@ impl<'ctx> Compiler<'ctx> {
                 self.compile_while(condition, body)?;
             }
 
+            // ── for var in iterable ────────────────────────────────────────────────
+            Stmt::For { var, iter, body } => {
+                self.compile_for(var, iter, body)?;
+            }
+
             // ── function definition ───────────────────────────────────────────
             Stmt::FnDef { name, params, body } => {
                 self.compile_fndef(name, params, body)?;
@@ -800,6 +1000,67 @@ impl<'ctx> Compiler<'ctx> {
         self.compile_stmts(body)?;
         if !self.current_block_terminated() {
             self.builder.build_unconditional_branch(cond_bb).unwrap();
+        }
+        self.loop_stack.pop();
+
+        self.builder.position_at_end(after_bb);
+        Ok(())
+    }
+
+    // ── for var in iterable ─────────────────────────────────────────────────
+    fn compile_for(&mut self, var: &str, iter: &Expr, body: &[Stmt]) -> Result<(), String> {
+        let fn_val = self.current_fn.unwrap();
+        let body_bb = self.context.append_basic_block(fn_val, "for_body");
+        let after_bb = self.context.append_basic_block(fn_val, "for_after");
+        let update_bb = self.context.append_basic_block(fn_val, "for_update");
+
+        // Compile the iterable into an index variable
+        let iter_val = self.compile_expr(iter)?;
+        let idx_ptr = self.builder.build_alloca(self.cv_type, "for_idx").unwrap();
+        let zero = self.build_int(0);
+        self.builder.build_store(idx_ptr, zero).unwrap();
+
+        // Allocate the loop variable
+        let var_ptr = self.builder.build_alloca(self.cv_type, var).unwrap();
+        self.locals.insert(var.to_string(), var_ptr);
+
+        // Get length of list (computed but not needed at runtime yet)
+        let _len_for_unused = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "len");
+
+        // Jump to condition check
+        self.builder.build_unconditional_branch(update_bb).unwrap();
+
+        // Update: check idx < len
+        self.builder.position_at_end(update_bb);
+        let idx_cv = self
+            .builder
+            .build_load(self.cv_type, idx_ptr, "idx_load")
+            .unwrap()
+            .into_struct_value();
+        let len_i64 = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "len");
+        let cmp = self.call_binop_fn(self.rt.cool_lt, idx_cv, len_i64, "lt");
+        let i1 = self.truthy_i1(cmp);
+        self.builder
+            .build_conditional_branch(i1, body_bb, after_bb)
+            .unwrap();
+
+        // Body: get element at idx and execute body
+        self.builder.position_at_end(body_bb);
+        self.loop_stack.push((update_bb, after_bb));
+        let elem = self.call_binop_fn(self.rt.cool_list_get, iter_val.clone(), idx_cv, "get");
+        self.builder.build_store(var_ptr, elem).unwrap();
+        self.compile_stmts(body)?;
+        if !self.current_block_terminated() {
+            // Increment index
+            let one = self.build_int(1);
+            let old_idx = self
+                .builder
+                .build_load(self.cv_type, idx_ptr, "old_idx")
+                .unwrap()
+                .into_struct_value();
+            let new_idx = self.call_binop_fn(self.rt.cool_add, old_idx, one, "add");
+            self.builder.build_store(idx_ptr, new_idx).unwrap();
+            self.builder.build_unconditional_branch(update_bb).unwrap();
         }
         self.loop_stack.pop();
 
@@ -936,6 +1197,24 @@ impl<'ctx> Compiler<'ctx> {
 
             Expr::Call { callee, args, .. } => self.compile_call(callee, args),
 
+            // list literal: [a, b, c]
+            Expr::List(elems) => {
+                let n_i64 = self.build_int(elems.len() as i64);
+                let list_val = self.call_unop_fn(self.rt.cool_list_make, n_i64, "list");
+                for elem in elems {
+                    let elem_val = self.compile_expr(elem)?;
+                    self.call_binop_fn(self.rt.cool_list_push, list_val, elem_val, "push");
+                }
+                Ok(list_val)
+            }
+
+            // index access: obj[i]
+            Expr::Index { object, index } => {
+                let obj_val = self.compile_expr(object)?;
+                let idx_val = self.compile_expr(index)?;
+                Ok(self.call_binop_fn(self.rt.cool_list_get, obj_val, idx_val, "index"))
+            }
+
             other => Err(format!("unsupported expression in LLVM backend: {other:?}")),
         }
     }
@@ -1052,7 +1331,9 @@ impl<'ctx> Compiler<'ctx> {
         // ── asm("template" [, "constraints" [, args...]]) ──
         if name == "asm" {
             if args.is_empty() {
-                return Err("asm() requires at least one argument (assembly template string)".into());
+                return Err(
+                    "asm() requires at least one argument (assembly template string)".into(),
+                );
             }
             let template = match &args[0] {
                 Expr::Str(s) => s.clone(),
@@ -1061,7 +1342,11 @@ impl<'ctx> Compiler<'ctx> {
             let (constraints, operand_start) = if args.len() > 1 {
                 match &args[1] {
                     Expr::Str(s) => (s.clone(), 2),
-                    _ => return Err("asm() second argument must be a string literal (constraints)".into()),
+                    _ => {
+                        return Err(
+                            "asm() second argument must be a string literal (constraints)".into(),
+                        )
+                    }
                 }
             } else {
                 (String::new(), 1)
@@ -1107,12 +1392,12 @@ impl<'ctx> Compiler<'ctx> {
         // ── raw memory builtins ──
         {
             let unary_mem_fn = match name.as_str() {
-                "malloc"    => Some(self.rt.cool_malloc),
-                "free"      => Some(self.rt.cool_free),
+                "malloc" => Some(self.rt.cool_malloc),
+                "free" => Some(self.rt.cool_free),
                 "read_byte" => Some(self.rt.cool_read_byte),
-                "read_i64"  => Some(self.rt.cool_read_i64),
-                "read_f64"  => Some(self.rt.cool_read_f64),
-                "read_str"  => Some(self.rt.cool_read_str),
+                "read_i64" => Some(self.rt.cool_read_i64),
+                "read_f64" => Some(self.rt.cool_read_f64),
+                "read_str" => Some(self.rt.cool_read_str),
                 _ => None,
             };
             if let Some(fn_val) = unary_mem_fn {
@@ -1124,9 +1409,9 @@ impl<'ctx> Compiler<'ctx> {
             }
             let binary_mem_fn = match name.as_str() {
                 "write_byte" => Some(self.rt.cool_write_byte),
-                "write_i64"  => Some(self.rt.cool_write_i64),
-                "write_f64"  => Some(self.rt.cool_write_f64),
-                "write_str"  => Some(self.rt.cool_write_str),
+                "write_i64" => Some(self.rt.cool_write_i64),
+                "write_f64" => Some(self.rt.cool_write_f64),
+                "write_str" => Some(self.rt.cool_write_str),
                 _ => None,
             };
             if let Some(fn_val) = binary_mem_fn {
@@ -1137,6 +1422,42 @@ impl<'ctx> Compiler<'ctx> {
                 let b = self.compile_expr(&args[1])?;
                 return Ok(self.call_binop_fn(fn_val, a, b, &name));
             }
+        }
+
+        // ── range(start, stop, step=1) ────────────────────────────────────────────
+        if name == "range" {
+            let n = args.len();
+            if n < 2 || n > 3 {
+                return Err("range() takes 2 or 3 arguments".into());
+            }
+            let start = self.compile_expr(&args[0])?;
+            let stop = self.compile_expr(&args[1])?;
+            let step = if n == 3 {
+                self.compile_expr(&args[2])?
+            } else {
+                self.build_int(1)
+            };
+            return Ok(self
+                .builder
+                .build_call(
+                    self.rt.cool_range,
+                    &[start.into(), stop.into(), step.into()],
+                    "range",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value());
+        }
+
+        // ── len(obj) ────────────────────────────────────────────────────────
+        if name == "len" {
+            if args.len() != 1 {
+                return Err("len() takes exactly 1 argument".into());
+            }
+            let a = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_len, a, "len"));
         }
 
         // ── user-defined function ──

@@ -173,6 +173,12 @@
 - [x] `cool new` command (scaffold a new Cool project with `cool.toml`)
 - [x] Inline assembly (`asm("template")`)
 - [x] Pointer types / raw memory access (`malloc`, `free`, `read_i64`, `write_i64`, etc.)
+- [x] Lists in LLVM (`[1,2,3]`)
+- [x] `for` loops in LLVM
+- [x] `range()` in LLVM
+- [x] `len()` in LLVM
+- [x] List concatenation in LLVM (`a + b`)
+- [~] Function calls in LLVM (partial: works for variable assignment, broken for expressions)
 
 ---
 
