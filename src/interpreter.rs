@@ -620,7 +620,7 @@ impl Interpreter {
                             let idx = self.eval(index, env)?;
                             match obj {
                                 Value::List(lst) => {
-                                    let i = to_list_index(&lst.borrow(), idx)?;
+                                    let i = to_list_index(&lst.borrow(), idx, self.current_line)?;
                                     lst.borrow_mut()[i] = val;
                                 }
                                 Value::Dict(map) => {
@@ -663,7 +663,7 @@ impl Interpreter {
                 let val = self.eval(value, env)?;
                 match obj {
                     Value::List(lst) => {
-                        let i = to_list_index(&lst.borrow(), idx)?;
+                        let i = to_list_index(&lst.borrow(), idx, self.current_line)?;
                         lst.borrow_mut()[i] = val;
                     }
                     Value::Dict(map) => {
@@ -1540,12 +1540,12 @@ class Stack:
     fn eval_index(&self, obj: Value, idx: Value) -> Result<Value, String> {
         match obj {
             Value::List(lst) => {
-                let i = to_list_index(&lst.borrow(), idx)?;
+                let i = to_list_index(&lst.borrow(), idx, self.current_line)?;
                 Ok(lst.borrow()[i].clone())
             }
             Value::Str(s) => {
                 let chars: Vec<char> = s.chars().collect();
-                let i = index_into(chars.len(), &idx)?;
+                let i = index_into(chars.len(), &idx, self.current_line)?;
                 Ok(Value::Str(chars[i].to_string()))
             }
             Value::Dict(map) => map
@@ -1553,7 +1553,7 @@ class Stack:
                 .get(&idx)
                 .ok_or_else(|| self.err(&format!("key {} not found in dict", repr(&idx)))),
             Value::Tuple(t) => {
-                let i = index_into(t.len(), &idx)?;
+                let i = index_into(t.len(), &idx, self.current_line)?;
                 Ok(t[i].clone())
             }
             other => Err(self.err(&format!("cannot index into {}", other.type_name()))),
@@ -1751,7 +1751,7 @@ class Stack:
             "pop" => {
                 let mut v = lst.borrow_mut();
                 if let Some(idx) = args.first() {
-                    let i = index_into(v.len(), idx)?;
+                    let i = index_into(v.len(), idx, self.current_line)?;
                     Ok(v.remove(i))
                 } else {
                     v.pop().ok_or_else(|| self.err("pop() on empty list"))
@@ -3827,21 +3827,21 @@ fn compare_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, String> {
     }
 }
 
-fn to_list_index(lst: &[Value], idx: Value) -> Result<usize, String> {
-    index_into(lst.len(), &idx)
+fn to_list_index(lst: &[Value], idx: Value, line: usize) -> Result<usize, String> {
+    index_into(lst.len(), &idx, line)
 }
 
-fn index_into(len: usize, idx: &Value) -> Result<usize, String> {
+fn index_into(len: usize, idx: &Value, line: usize) -> Result<usize, String> {
     match idx {
         Value::Int(i) => {
             let i = if *i < 0 { len as i64 + i } else { *i };
             if i < 0 || i as usize >= len {
-                Err(format!("index {} out of range (length {})", i, len))
+                Err(format!("line {}: index {} out of range (length {})", line, i, len))
             } else {
                 Ok(i as usize)
             }
         }
-        other => Err(format!("index must be int, got {}", other.type_name())),
+        other => Err(format!("line {}: index must be int, got {}", line, other.type_name())),
     }
 }
 fn req_str_arg(args: &[Value], i: usize, method: &str) -> Result<String, String> {
