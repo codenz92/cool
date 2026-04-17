@@ -20,7 +20,7 @@ use inkwell::types::StructType;
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue,
 };
-use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
+use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -195,6 +195,54 @@ char* cool_to_str(CoolVal v) {
     return buf;
 }
 
+/* ── raw memory ───────────────────────────────────────────────────────── */
+CoolVal cool_malloc(CoolVal size_val) {
+    size_t n = (size_t)(uintptr_t)size_val.payload;
+    void* p = malloc(n);
+    return cv_int((int64_t)(intptr_t)p);
+}
+CoolVal cool_free(CoolVal ptr_val) {
+    free((void*)(intptr_t)ptr_val.payload);
+    return cv_nil();
+}
+CoolVal cool_read_byte(CoolVal addr_val) {
+    uint8_t* p = (uint8_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_byte(CoolVal addr_val, CoolVal val) {
+    uint8_t* p = (uint8_t*)(intptr_t)addr_val.payload;
+    *p = (uint8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i64(CoolVal addr_val) {
+    int64_t* p = (int64_t*)(intptr_t)addr_val.payload;
+    return cv_int(*p);
+}
+CoolVal cool_write_i64(CoolVal addr_val, CoolVal val) {
+    int64_t* p = (int64_t*)(intptr_t)addr_val.payload;
+    *p = val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_f64(CoolVal addr_val) {
+    double* p = (double*)(intptr_t)addr_val.payload;
+    return cv_float(*p);
+}
+CoolVal cool_write_f64(CoolVal addr_val, CoolVal val) {
+    double* p = (double*)(intptr_t)addr_val.payload;
+    *p = cv_to_float(val);
+    return cv_nil();
+}
+CoolVal cool_read_str(CoolVal addr_val) {
+    char* p = (char*)(intptr_t)addr_val.payload;
+    return cv_str(p);
+}
+CoolVal cool_write_str(CoolVal addr_val, CoolVal str_val) {
+    char* dst = (char*)(intptr_t)addr_val.payload;
+    const char* src = (const char*)(intptr_t)str_val.payload;
+    strcpy(dst, src);
+    return cv_nil();
+}
+
 /* ── print ────────────────────────────────────────────────────────────── */
 void cool_print(int32_t n, ...) {
     va_list ap;
@@ -250,6 +298,17 @@ struct RuntimeFns<'ctx> {
     cool_print: FunctionValue<'ctx>,
     /// void abort(void)
     abort_fn: FunctionValue<'ctx>,
+    // raw memory
+    cool_malloc: FunctionValue<'ctx>,
+    cool_free: FunctionValue<'ctx>,
+    cool_read_byte: FunctionValue<'ctx>,
+    cool_write_byte: FunctionValue<'ctx>,
+    cool_read_i64: FunctionValue<'ctx>,
+    cool_write_i64: FunctionValue<'ctx>,
+    cool_read_f64: FunctionValue<'ctx>,
+    cool_write_f64: FunctionValue<'ctx>,
+    cool_read_str: FunctionValue<'ctx>,
+    cool_write_str: FunctionValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -357,6 +416,17 @@ impl<'ctx> Compiler<'ctx> {
             // void cool_print(i32 n, ...)  — is_var_arg = true
             cool_print: decl!("cool_print", voidt.fn_type(&[i32m], true)),
             abort_fn: decl!("abort", voidt.fn_type(&[], false)),
+            // raw memory — all take CoolVal(s) and return CoolVal
+            cool_malloc:     decl!("cool_malloc",     cv_type.fn_type(&[cv], false)),
+            cool_free:       decl!("cool_free",       cv_type.fn_type(&[cv], false)),
+            cool_read_byte:  decl!("cool_read_byte",  cv_type.fn_type(&[cv], false)),
+            cool_write_byte: decl!("cool_write_byte", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i64:   decl!("cool_read_i64",   cv_type.fn_type(&[cv], false)),
+            cool_write_i64:  decl!("cool_write_i64",  cv_type.fn_type(&[cv, cv], false)),
+            cool_read_f64:   decl!("cool_read_f64",   cv_type.fn_type(&[cv], false)),
+            cool_write_f64:  decl!("cool_write_f64",  cv_type.fn_type(&[cv, cv], false)),
+            cool_read_str:   decl!("cool_read_str",   cv_type.fn_type(&[cv], false)),
+            cool_write_str:  decl!("cool_write_str",  cv_type.fn_type(&[cv, cv], false)),
         }
     }
 
@@ -979,6 +1049,46 @@ impl<'ctx> Compiler<'ctx> {
             }
         };
 
+        // ── asm("template" [, "constraints" [, args...]]) ──
+        if name == "asm" {
+            if args.is_empty() {
+                return Err("asm() requires at least one argument (assembly template string)".into());
+            }
+            let template = match &args[0] {
+                Expr::Str(s) => s.clone(),
+                _ => return Err("asm() first argument must be a string literal".into()),
+            };
+            let (constraints, operand_start) = if args.len() > 1 {
+                match &args[1] {
+                    Expr::Str(s) => (s.clone(), 2),
+                    _ => return Err("asm() second argument must be a string literal (constraints)".into()),
+                }
+            } else {
+                (String::new(), 1)
+            };
+            // Compile any extra operand args (only present when constraints were given)
+            let operands: Vec<BasicMetadataValueEnum<'ctx>> = args[operand_start..]
+                .iter()
+                .map(|a| self.compile_expr(a).map(|v| v.into()))
+                .collect::<Result<_, _>>()?;
+            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
+                operands.iter().map(|_| self.cv_type.into()).collect();
+            let void_fn_type = self.context.void_type().fn_type(&param_types, false);
+            let asm_ptr = self.context.create_inline_asm(
+                void_fn_type,
+                template,
+                constraints,
+                true,
+                false,
+                Some(InlineAsmDialect::ATT),
+                false,
+            );
+            self.builder
+                .build_indirect_call(void_fn_type, asm_ptr, &operands, "asm")
+                .unwrap();
+            return Ok(self.build_nil());
+        }
+
         // ── print(...) ──
         if name == "print" {
             let n = args.len() as u64;
@@ -992,6 +1102,41 @@ impl<'ctx> Compiler<'ctx> {
                 .build_call(self.rt.cool_print, &call_args, "")
                 .unwrap();
             return Ok(self.build_nil());
+        }
+
+        // ── raw memory builtins ──
+        {
+            let unary_mem_fn = match name.as_str() {
+                "malloc"    => Some(self.rt.cool_malloc),
+                "free"      => Some(self.rt.cool_free),
+                "read_byte" => Some(self.rt.cool_read_byte),
+                "read_i64"  => Some(self.rt.cool_read_i64),
+                "read_f64"  => Some(self.rt.cool_read_f64),
+                "read_str"  => Some(self.rt.cool_read_str),
+                _ => None,
+            };
+            if let Some(fn_val) = unary_mem_fn {
+                if args.len() != 1 {
+                    return Err(format!("{name}() takes exactly 1 argument"));
+                }
+                let a = self.compile_expr(&args[0])?;
+                return Ok(self.call_unop_fn(fn_val, a, &name));
+            }
+            let binary_mem_fn = match name.as_str() {
+                "write_byte" => Some(self.rt.cool_write_byte),
+                "write_i64"  => Some(self.rt.cool_write_i64),
+                "write_f64"  => Some(self.rt.cool_write_f64),
+                "write_str"  => Some(self.rt.cool_write_str),
+                _ => None,
+            };
+            if let Some(fn_val) = binary_mem_fn {
+                if args.len() != 2 {
+                    return Err(format!("{name}() takes exactly 2 arguments"));
+                }
+                let a = self.compile_expr(&args[0])?;
+                let b = self.compile_expr(&args[1])?;
+                return Ok(self.call_binop_fn(fn_val, a, b, &name));
+            }
         }
 
         // ── user-defined function ──

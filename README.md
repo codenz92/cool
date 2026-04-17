@@ -68,7 +68,43 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`, `break`/`continue`, functions (including recursion), and `print()`. Classes, lists, closures, and imports remain interpreter-only for now.
+The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`, `break`/`continue`, functions (including recursion), `print()`, inline assembly, and raw memory operations. Classes, lists, closures, and imports remain interpreter-only for now.
+
+### Inline Assembly (LLVM backend)
+
+Emit AT&T-syntax inline assembly directly from Cool:
+
+```python
+asm("nop")                       # single instruction, no I/O
+asm("syscall", "")               # with explicit (empty) constraint string
+```
+
+`asm()` is only valid in compiled programs (`cool build`).
+
+### Raw Memory (LLVM backend)
+
+Allocate and manipulate memory directly:
+
+```python
+buf = malloc(8)          # allocate 8 bytes, returns address as int
+write_i64(buf, 99)       # store a 64-bit integer
+val = read_i64(buf)      # load it back  →  99
+
+write_f64(buf, 1.5)      # store a double
+f = read_f64(buf)        # load it back  →  1.5
+
+write_byte(buf, 0xFF)    # store one byte
+b = read_byte(buf)       # load it back  →  255
+
+sbuf = malloc(64)
+write_str(sbuf, "hi")    # write a null-terminated string
+s = read_str(sbuf)       # read it back  →  "hi"
+
+free(buf)                # release memory
+free(sbuf)
+```
+
+Memory functions are LLVM-backend only. Pointers are plain integers (the address); use them with FFI or other memory functions.
 
 ### Cool Shell (`coolapps/shell.cool`)
 
@@ -253,7 +289,7 @@ examples/
 | 5 — Shell: more commands | ✅ Complete |
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
-| 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | 🔧 In progress |
+| 8 — Compiler (bytecode VM, LLVM, FFI, build tooling, inline asm, raw memory) | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

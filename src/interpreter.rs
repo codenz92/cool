@@ -113,6 +113,18 @@ impl Env {
             "set",
             "set_completions",
             "eval",
+            // LLVM-only builtins (give a helpful error in the interpreter)
+            "asm",
+            "malloc",
+            "free",
+            "read_byte",
+            "write_byte",
+            "read_i64",
+            "write_i64",
+            "read_f64",
+            "write_f64",
+            "read_str",
+            "write_str",
         ] {
             data.vars
                 .insert(name.to_string(), Value::BuiltinFn(name.to_string()));
@@ -2950,6 +2962,13 @@ class Stack:
                         Ok(default)
                     }
                 }
+            }
+            "asm" | "malloc" | "free" | "read_byte" | "write_byte" | "read_i64" |
+            "write_i64" | "read_f64" | "write_f64" | "read_str" | "write_str" => {
+                Err(self.err(&format!(
+                    "'{}' is only supported in the LLVM backend — compile with `cool build`",
+                    name
+                )))
             }
             _ => Err(self.err(&format!("unknown builtin '{}'", name))),
         }

@@ -1,0 +1,35 @@
+# Test inline asm and raw memory builtins
+
+# ── inline assembly ──────────────────────────────────────────
+asm("nop")          # no-op, verifies asm() works
+print("asm: ok")
+
+# ── raw memory: allocate, write, read, free ──────────────────
+
+# write and read a 64-bit integer
+buf = malloc(8)
+write_i64(buf, 12345)
+val = read_i64(buf)
+print("i64 roundtrip:", val)    # 12345
+
+# write and read individual bytes
+write_byte(buf, 0xAB)
+b = read_byte(buf)
+print("byte roundtrip:", b)     # 171
+
+# write and read a 64-bit float
+fbuf = malloc(8)
+write_f64(fbuf, 3.14)
+f = read_f64(fbuf)
+print("f64 roundtrip:", f)      # 3.14
+
+# write and read a string
+sbuf = malloc(64)
+write_str(sbuf, "hello from raw memory")
+s = read_str(sbuf)
+print("str roundtrip:", s)
+
+free(buf)
+free(fbuf)
+free(sbuf)
+print("done")

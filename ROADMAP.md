@@ -171,8 +171,8 @@
 - [x] FFI (`import ffi` — load shared libs, call C functions from Cool)
 - [x] `cool build` command (compile a `.cool` project to a native binary)
 - [x] `cool new` command (scaffold a new Cool project with `cool.toml`)
-- [ ] Inline assembly (`asm { ... }`)
-- [ ] Pointer types / raw memory access
+- [x] Inline assembly (`asm("template")`)
+- [x] Pointer types / raw memory access (`malloc`, `free`, `read_i64`, `write_i64`, etc.)
 
 ---
 
@@ -187,4 +187,4 @@
 | 5 — Shell: More Commands | ✅ Complete |
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
-| 8 — Compiler | 🔧 In progress (LLVM + FFI + build done; asm/ptrs remaining) |
+| 8 — Compiler | ✅ Complete |
