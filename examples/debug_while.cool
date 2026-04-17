@@ -1,0 +1,6 @@
+# Test while: both variables
+x = 2
+y = 0
+while y < x:
+    print(y)
+    y += 1

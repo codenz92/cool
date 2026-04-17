@@ -1,0 +1,9 @@
+# Debug: compile both values first
+x = 3
+y = 0
+# Reorder to use working pattern  
+y_temp = y
+x_temp = x
+while y_temp < x_temp:
+    print(y_temp)
+    y_temp += 1
