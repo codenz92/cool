@@ -208,5 +208,5 @@
 - [x] Recursive descent parser in Cool
 - [x] Code generator (AST → bytecode) in Cool
 - [x] Test: compiler correctly parses and compiles `print(1)`, `print(1 + 2)`, `x = 1`, etc.
-- [ ] Bytecode VM in Cool (to execute compiled programs)
+- [x] Bytecode VM in Cool (to execute compiled programs)
 - [ ] Bootstrap: use self-hosted compiler to compile itself |

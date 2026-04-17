@@ -1,0 +1,617 @@
+# Self-hosted Cool compiler with VM
+
+print("Cool Compiler + VM v1.0")
+
+# Helper functions
+def is_ident_char(c):
+    return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_')
+
+def is_str(t):
+    return type(t) == "str"
+
+def is_tuple(t):
+    return type(t) == "tuple" and len(t) > 0
+
+def tok_type(t):
+    if is_tuple(t):
+        return t[0]
+    return t
+
+def is_rparen(t):
+    return t == ')'
+
+# Lexer
+class Lexer:
+    def __init__(self, src):
+        self.src = src
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.src):
+            return self.src[self.pos]
+        return nil
+
+    def next(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+        return c
+
+    def tokenize(self):
+        out = []
+        while self.peek() != nil:
+            c = self.peek()
+            if c == ' ' or c == '\n' or c == '\t':
+                self.next()
+            elif c >= '0' and c <= '9':
+                n = ""
+                while self.peek() != nil and self.peek() >= '0' and self.peek() <= '9':
+                    n += self.next()
+                out.append(("NUM", int(n)))
+            elif c == '"':
+                self.next()
+                s = ""
+                while self.peek() != nil and self.peek() != '"':
+                    s += self.next()
+                self.next()
+                out.append(("STR", s))
+            elif is_ident_char(c):
+                s = ""
+                while self.peek() != nil and is_ident_char(self.peek()):
+                    s += self.next()
+                out.append(s)
+            elif c == '(':
+                self.next()
+                out.append('(')
+            elif c == ')':
+                self.next()
+                out.append(')')
+            elif c == '[':
+                self.next()
+                out.append('[')
+            elif c == ']':
+                self.next()
+                out.append(']')
+            elif c == ',':
+                self.next()
+                out.append(',')
+            elif c == '+':
+                self.next()
+                out.append('+')
+            elif c == '*':
+                self.next()
+                out.append('*')
+            elif c == '-':
+                self.next()
+                out.append('-')
+            elif c == '/':
+                self.next()
+                out.append('/')
+            elif c == '=':
+                self.next()
+                if self.peek() == '=':
+                    self.next()
+                    out.append('==')
+                else:
+                    out.append('=')
+            elif c == '!':
+                self.next()
+                if self.peek() == '=':
+                    self.next()
+                    out.append('!=')
+                else:
+                    out.append('!')
+            elif c == '<':
+                self.next()
+                if self.peek() == '=':
+                    self.next()
+                    out.append('<=')
+                else:
+                    out.append('<')
+            elif c == '>':
+                self.next()
+                if self.peek() == '=':
+                    self.next()
+                    out.append('>=')
+                else:
+                    out.append('>')
+            else:
+                self.next()
+        out.append('EOF')
+        return out
+
+# Parser
+class Parser:
+    def __init__(self, toks):
+        self.toks = toks
+        self.i = 0
+
+    def peek(self):
+        if self.i < len(self.toks):
+            return self.toks[self.i]
+        return 'EOF'
+
+    def consume(self):
+        if self.i < len(self.toks):
+            t = self.toks[self.i]
+            self.i += 1
+            return t
+        return 'EOF'
+
+    def parse(self):
+        stmts = []
+        while true:
+            t = self.peek()
+            if t == 'EOF':
+                break
+            s = self.stmt()
+            if s != nil:
+                stmts.append(s)
+        return stmts
+
+    def stmt(self):
+        t = self.peek()
+        if t == 'print':
+            return self.print_stmt()
+        elif t == 'def':
+            return self.def_stmt()
+        elif t == 'if':
+            return self.if_stmt()
+        elif t == 'while':
+            return self.while_stmt()
+        elif t == 'return':
+            return self.return_stmt()
+        elif t == 'for':
+            return self.for_stmt()
+        elif t == 'break':
+            self.consume()
+            return ('BREAK',)
+        elif t == 'continue':
+            self.consume()
+            return ('CONTINUE',)
+        elif is_str(t) and is_ident_char(t):
+            name = self.consume()
+            if self.peek() == '=':
+                self.consume()
+                val = self.expr()
+                return ('ASSIGN', name, val)
+            return ('EXPR', ('VAR', name))
+        self.consume()
+        return nil
+
+    def print_stmt(self):
+        self.consume()
+        if self.peek() == '(':
+            self.consume()
+            args = []
+            while not is_rparen(self.peek()):
+                args.append(self.expr())
+                if self.peek() == ',':
+                    self.consume()
+            if self.peek() == ')':
+                self.consume()
+        return ('PRINT', args)
+
+    def def_stmt(self):
+        self.consume()
+        name = self.consume()
+        if self.peek() == '(':
+            self.consume()
+            params = []
+            while not is_rparen(self.peek()):
+                params.append(self.consume())
+                if self.peek() == ',':
+                    self.consume()
+            if self.peek() == ')':
+                self.consume()
+        return ('DEF', name, params)
+
+    def if_stmt(self):
+        self.consume()
+        cond = self.expr()
+        return ('IF', cond)
+
+    def while_stmt(self):
+        self.consume()
+        cond = self.expr()
+        return ('WHILE', cond)
+
+    def for_stmt(self):
+        self.consume()
+        var = self.consume()
+        self.consume()  # in
+        iter_expr = self.expr()
+        return ('FOR', var, iter_expr)
+
+    def return_stmt(self):
+        self.consume()
+        val = self.expr()
+        return ('RETURN', val)
+
+    def expr(self):
+        return self.add()
+
+    def add(self):
+        left = self.cmp()
+        while true:
+            t = self.peek()
+            if t == '+' or t == '-':
+                self.consume()
+                right = self.cmp()
+                left = (t, left, right)
+            else:
+                break
+        return left
+
+    def cmp(self):
+        left = self.mul()
+        while true:
+            t = self.peek()
+            if t == '==' or t == '!=' or t == '<' or t == '>' or t == '<=' or t == '>=':
+                self.consume()
+                right = self.mul()
+                left = (t, left, right)
+            else:
+                break
+        return left
+
+    def mul(self):
+        left = self.unary()
+        while true:
+            t = self.peek()
+            if t == '*' or t == '/':
+                self.consume()
+                right = self.unary()
+                left = (t, left, right)
+            else:
+                break
+        return left
+
+    def unary(self):
+        t = self.peek()
+        if t == '-':
+            self.consume()
+            return ('NEG', self.unary())
+        if t == 'not':
+            self.consume()
+            return ('NOT', self.unary())
+        return self.primary()
+
+    def primary(self):
+        t = self.peek()
+        # Don't consume operators - let parent handle them (return nil without consuming)
+        if t == '(':
+            self.consume()
+            e = self.expr()
+            if self.peek() == ')':
+                self.consume()
+            return e
+        if t == '[':
+            return self.list_literal()
+        # For operators, just return nil WITHOUT consuming
+        if t == '==' or t == '!=' or t == '<' or t == '>' or t == '<=' or t == '>=':
+            return nil
+        if t == '+' or t == '-' or t == '*' or t == '/':
+            return nil
+        if tok_type(t) == 'NUM':
+            n = self.consume()
+            return n
+        if tok_type(t) == 'STR':
+            s = self.consume()
+            return s
+        if is_str(t) and is_ident_char(t):
+            name = self.consume()
+            if self.peek() == '(':
+                self.consume()
+                args = []
+                while not is_rparen(self.peek()):
+                    args.append(self.expr())
+                    if self.peek() == ',':
+                        self.consume()
+                if self.peek() == ')':
+                    self.consume()
+                return ('CALL', name, args)
+            if self.peek() == '[':
+                self.consume()
+                idx = self.expr()
+                if self.peek() == ']':
+                    self.consume()
+                return ('INDEX', name, idx)
+            return ('VAR', name)
+        # For any other token, consume and return nil
+        self.consume()
+        return nil
+
+    def list_literal(self):
+        self.consume()  # [
+        elems = []
+        while self.peek() != ']':
+            elems.append(self.expr())
+            if self.peek() == ',':
+                self.consume()
+        self.consume()  # ]
+        return ('LIST', elems)
+
+# Code generator
+class Generator:
+    def __init__(self, ast):
+        self.ast = ast
+        self.code = []
+        self.functions = {}
+
+    def generate(self):
+        for stmt in self.ast:
+            self.gen_stmt(stmt)
+        self.code.append(('HALT',))
+        return self.code
+
+    def gen_stmt(self, stmt):
+        t = stmt[0]
+        if t == 'PRINT':
+            # Generate arguments FIRST, then the PRINT instruction
+            for arg in stmt[1]:
+                self.gen_expr(arg)
+            self.code.append(('PRINT', len(stmt[1])))
+        elif t == 'ASSIGN':
+            self.gen_expr(stmt[2])
+            self.code.append(('STORE', stmt[1]))
+        elif t == 'DEF':
+            self.code.append(('DEF', stmt[1], len(stmt[2])))
+        elif t == 'EXPR':
+            self.gen_expr(stmt[1])
+        elif t == 'RETURN':
+            self.gen_expr(stmt[1])
+            self.code.append(('RETURN',))
+        elif t == 'BREAK':
+            self.code.append(('BREAK',))
+        elif t == 'CONTINUE':
+            self.code.append(('CONTINUE',))
+
+    def gen_expr(self, expr):
+        # Don't generate code for nil expressions
+        if expr == nil:
+            return
+        typ = tok_type(expr)
+        if typ == 'NUM':
+            self.code.append(('CONST', expr[1]))
+        elif typ == 'STR':
+            self.code.append(('CONST', expr[1]))
+        elif expr[0] == 'VAR':
+            self.code.append(('LOAD', expr[1]))
+        elif expr[0] == 'CALL':
+            for arg in expr[2]:
+                self.gen_expr(arg)
+            self.code.append(('CALL', expr[1], len(expr[2])))
+        elif expr[0] == 'LIST':
+            # Generate elements FIRST, then LIST instruction
+            for elem in expr[1]:
+                self.gen_expr(elem)
+            self.code.append(('LIST', len(expr[1])))
+        elif expr[0] == 'INDEX':
+            self.code.append(('LOAD', expr[1]))
+            self.gen_expr(expr[2])
+            self.code.append(('INDEX',))
+        elif expr[0] == '+':
+            self.gen_expr(expr[1])
+            self.gen_expr(expr[2])
+            self.code.append(('ADD',))
+        elif expr[0] == '-':
+            self.gen_expr(expr[1])
+            self.gen_expr(expr[2])
+            self.code.append(('SUB',))
+        elif expr[0] == '*':
+            self.gen_expr(expr[1])
+            self.gen_expr(expr[2])
+            self.code.append(('MUL',))
+        elif expr[0] == '/':
+            self.gen_expr(expr[1])
+            self.gen_expr(expr[2])
+            self.code.append(('DIV',))
+        elif expr[0] == 'NEG':
+            self.gen_expr(expr[1])
+            self.code.append(('NEG',))
+        elif expr[0] == 'NOT':
+            self.gen_expr(expr[1])
+            self.code.append(('NOT',))
+        elif expr[0] == '==' or expr[0] == '!=' or expr[0] == '<' or expr[0] == '>' or expr[0] == '<=' or expr[0] == '>=':
+            self.gen_expr(expr[1])
+            self.gen_expr(expr[2])
+            self.code.append((expr[0],))
+
+# Bytecode VM
+class VM:
+    def __init__(self, code):
+        self.code = code
+        self.ip = 0
+        self.stack = []
+        self.globals = {}
+        self.functions = {}
+        self.call_stack = []
+
+    def run(self):
+        while self.ip < len(self.code):
+            op = self.code[self.ip]
+            self.ip += 1
+            self.exec(op)
+            if self.ip >= len(self.code):
+                break
+
+    def exec(self, op):
+        t = tok_type(op)
+        
+        if t == 'HALT':
+            self.ip = len(self.code)
+        
+        elif t == 'CONST':
+            self.stack.append(op[1])
+        
+        elif t == 'LOAD':
+            name = op[1]
+            if self.globals.get(name) != nil:
+                self.stack.append(self.globals[name])
+            else:
+                self.stack.append(nil)
+        
+        elif t == 'STORE':
+            val = self.pop()
+            name = op[1]
+            self.globals[name] = val
+        
+        elif t == 'ADD':
+            b = self.pop()
+            a = self.pop()
+            if type(a) == "str" and type(b) == "str":
+                self.stack.append(a + b)
+            elif type(a) == "list" and type(b) == "list":
+                self.stack.append(a + b)
+            else:
+                self.stack.append(a + b)
+        
+        elif t == 'SUB':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a - b)
+        
+        elif t == 'MUL':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a * b)
+        
+        elif t == 'DIV':
+            b = self.pop()
+            a = self.pop()
+            if b == 0:
+                self.stack.append(0)
+            else:
+                self.stack.append(int(a / b))
+        
+        elif t == 'NEG':
+            a = self.pop()
+            self.stack.append(-a)
+        
+        elif t == 'NOT':
+            a = self.pop()
+            self.stack.append(not a)
+        
+        elif t == '==':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a == b)
+        
+        elif t == '!=':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a != b)
+        
+        elif t == '<':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a < b)
+        
+        elif t == '>':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a > b)
+        
+        elif t == '<=':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a <= b)
+        
+        elif t == '>=':
+            b = self.pop()
+            a = self.pop()
+            self.stack.append(a >= b)
+        
+        elif t == 'PRINT':
+            n = op[1]
+            args = []
+            for i in range(n):
+                args.insert(0, self.pop())
+            print(args)
+        
+        elif t == 'LIST':
+            n = op[1]
+            elems = []
+            for i in range(n):
+                elems.insert(0, self.pop())
+            self.stack.append(elems)
+        
+        elif t == 'INDEX':
+            idx = self.pop()
+            lst = self.pop()
+            if type(lst) == "list" and idx >= 0 and idx < len(lst):
+                self.stack.append(lst[idx])
+            else:
+                self.stack.append(nil)
+        
+        elif t == 'CALL':
+            name = op[1]
+            nargs = op[2]
+            args = []
+            for i in range(nargs):
+                args.insert(0, self.pop())
+            
+            if name == 'len':
+                if len(args) == 1 and type(args[0]) == "list":
+                    self.stack.append(len(args[0]))
+                else:
+                    self.stack.append(0)
+            elif name == 'str':
+                self.stack.append(str(args[0]) if len(args) > 0 else "")
+            elif name == 'int':
+                self.stack.append(int(args[0]) if len(args) > 0 else 0)
+            elif name == 'range':
+                if len(args) == 1:
+                    self.stack.append(range(args[0]))
+                elif len(args) == 2:
+                    self.stack.append(range(args[0], args[1]))
+                else:
+                    self.stack.append(range(0))
+            else:
+                self.stack.append(nil)
+
+    def pop(self):
+        if len(self.stack) > 0:
+            return self.stack.pop()
+        return nil
+
+# Test
+tests = [
+    'print(1)',
+    'print(1 + 2)',
+    'print(10 - 3)',
+    'print(2 * 5)',
+    'print(10 / 3)',
+    'print(1 == 1)',
+    'print(1 != 2)',
+    'print(1 < 2)',
+    'print(3 > 2)',
+    'x = 10',
+    'print(x)',
+    'print(1 + 2 * 3)',
+    'print([1, 2, 3])',
+    'lst = [1, 2, 3]',
+    'print(lst[0])',
+    # Combined test - variables across statements
+    'x = 42\nprint(x)\na = 5\nb = 3\nprint(a + b)\nprint(a < b)',
+    'print("hello")',
+    's = "world"',
+    'print(s)',
+]
+
+for src in tests:
+    print("\n=== " + src + " ===")
+    lexer = Lexer(src)
+    tokens = lexer.tokenize()
+    
+    parser = Parser(tokens)
+    ast = parser.parse()
+    
+    gen = Generator(ast)
+    code = gen.generate()
+    
+    vm = VM(code)
+    vm.run()
+
+print("\nAll tests done!")
