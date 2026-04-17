@@ -68,9 +68,18 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, `for` loops, `while` loops, `range()`, inline assembly, and raw memory operations. **Classes now work in LLVM!** Closures and imports remain interpreter-only.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, `for` loops, `range()`, `len()`, inline assembly, and raw memory operations.
 
-**LLVM backend:** All core features work: literals, arithmetic, comparisons, lists, `for` loops, `range()`, functions, recursion, `if`/`else`, variable assignment with expressions.
+**LLVM limitations:** Closures, `import`, and `try`/`except` are interpreter/VM-only for now. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
+
+| Feature | Interpreter | Bytecode VM | LLVM |
+|---------|:-----------:|:-----------:|:----:|
+| Classes | ✅ | ✅ | ✅ |
+| Closures | ✅ | ✅ | ❌ |
+| `import` | ✅ | ✅ | ❌ |
+| `try` / `except` | ✅ | ✅ | ❌ |
+| Inline assembly | ❌ | ❌ | ✅ |
+| Raw memory | ❌ | ❌ | ✅ |
 
 ### Inline Assembly (LLVM backend)
 
@@ -102,11 +111,11 @@ sbuf = malloc(64)
 write_str(sbuf, "hi")    # write a null-terminated string
 s = read_str(sbuf)       # read it back  →  "hi"
 
-free(buf)                # release memory
+free(buf)
 free(sbuf)
 ```
 
-Memory functions are LLVM-backend only. Pointers are plain integers (the address); use them with FFI or other memory functions.
+Memory functions are LLVM-backend only. Pointers are plain integers (the address).
 
 ### Cool Shell (`coolapps/shell.cool`)
 
@@ -132,7 +141,7 @@ clear
 
 ## Getting Started
 
-**Prerequisites:** Rust (stable, edition 2021). LLVM 17 is required only for native compilation.
+**Prerequisites:** Rust (stable, edition 2021). LLVM 17 is required only for native compilation (`cool build`).
 
 ```bash
 # Build
@@ -268,6 +277,9 @@ coolapps/
   snake.cool        Snake game
   http.cool         HTTP client
 
+coolc/
+  compiler_vm.cool  Self-hosted compiler (in progress)
+
 examples/
   hello.cool            Variables, loops, functions — start here
   data_structures.cool  Lists, dicts, tuples, comprehensions
@@ -291,37 +303,18 @@ examples/
 | 5 — Shell: more commands | ✅ Complete |
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
-| 8 — Compiler (bytecode VM, LLVM, FFI, build tooling, inline asm, raw memory) | ✅ Complete |
-| 9 — Self-hosted compiler | ✅ Complete |
+| 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
+| 9 — Self-hosted compiler | 🔧 In Progress |
+
+See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
 ---
 
 ## Self-Hosted Compiler
 
-Cool can now compile itself! A working compiler written entirely in Cool lives in `coolc/`:
+A proof-of-concept self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself. It currently handles expressions, variable assignment, arithmetic, comparisons, lists, and multi-statement programs.
 
-```bash
-# Run the self-hosted compiler (self-hosting complete!)
-./target/debug/cool coolc/compiler_vm.cool
-```
-
-The self-hosted compiler includes:
-- Lexer (tokenizer with proper handling of identifiers, numbers, strings, operators, multi-char ops)
-- Recursive descent parser with correct operator precedence
-- Code generator producing bytecode
-- Bytecode VM that executes the compiled programs
-- **Full bootstrap** — compiles and runs its own test suite
-
-**Features:**
-- `print(<expr>)`
-- Variable assignment (`x = 1`)
-- Arithmetic (`+`, `-`, `*`, `/`)
-- Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`)
-- Lists (`[1, 2, 3]`)
-- Strings
-- Multi-statement programs
-
-See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
+Full self-hosting (control flow with bodies, functions, classes, and eventually compiling itself) is the active next milestone. See Phase 9 in the roadmap.
 
 ---
 

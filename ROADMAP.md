@@ -3,12 +3,12 @@
 ## Legend
 
 - [x] Done
-- [~] Partial / needs more work
+- [~] Partial / in progress
 - [ ] Not started
 
 ---
 
-## Phase 1 — Cool Language: Core Interpreter ✅
+## Phase 1 — Core Interpreter ✅
 
 > Goal: a working tree-walk interpreter that can run real programs
 
@@ -33,7 +33,7 @@
 
 ---
 
-## Phase 2 — Cool Language: Real Language Features ✅
+## Phase 2 — Real Language Features ✅
 
 > Goal: enough features to write real programs
 
@@ -85,12 +85,10 @@
 - [x] `history` — show command history
 - [x] `clear` — clear screen (ANSI escape)
 - [x] `exit` / `quit` — exit the shell
-- [x] Dict-based command dispatcher
-- [x] Relative path resolution (`join_path`)
 
 ---
 
-## Phase 4 — Cool Language: Quality of Life ✅
+## Phase 4 — Quality of Life ✅
 
 > Goal: remove rough edges, make the language more pleasant to use
 
@@ -115,7 +113,7 @@
 
 ---
 
-## Phase 5 — Cool Shell: More Commands ✅
+## Phase 5 — Shell: More Commands ✅
 
 > Goal: a shell powerful enough for real use
 
@@ -133,13 +131,13 @@
 
 ---
 
-## Phase 6 — Cool Language: Standard Library ✅
+## Phase 6 — Standard Library ✅
 
 > Goal: a built-in library written in Cool itself
 
-- [x] `string` module — `import string` with `split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`
-- [x] `list` module — `import list` with `sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`
-- [x] `math` module (expanded) — added `gcd`, `lcm`, `factorial`, `hypot`, `degrees`, `radians`, `trunc`, `exp`, `exp2`, `sinh`, `cosh`, `tanh`, `isnan`, `isinf`, `isfinite`, `tau` constant
+- [x] `string` module — `split`, `join`, `strip`, `upper`, `lower`, `replace`, etc.
+- [x] `list` module — `sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`
+- [x] `math` module (expanded) — `gcd`, `lcm`, `factorial`, `hypot`, `degrees`, `radians`, `sinh`, `cosh`, `tanh`, etc.
 - [x] `json` module — `json.loads()` / `json.dumps()` with full JSON support
 - [x] `re` module — `re.match()`, `re.search()`, `re.fullmatch()`, `re.findall()`, `re.sub()`, `re.split()`
 - [x] `time` module — `time.time()`, `time.sleep()`, `time.monotonic()`
@@ -162,26 +160,72 @@
 
 ---
 
-## Phase 8 — Cool Language: Compiler (Long Term)
+## Phase 8 — Compiler ✅
 
-> Goal: compile Cool to native binaries so Cool can be self-hosted
+> Goal: compile Cool to native binaries
 
 - [x] Bytecode VM (compile AST to bytecode, run on a VM)
-- [x] LLVM backend (compile Cool to LLVM IR → native binary via C runtime)
+- [x] LLVM backend (compile Cool to LLVM IR → native binary via embedded C runtime)
 - [x] FFI (`import ffi` — load shared libs, call C functions from Cool)
 - [x] `cool build` command (compile a `.cool` project to a native binary)
 - [x] `cool new` command (scaffold a new Cool project with `cool.toml`)
-- [x] Inline assembly (`asm("template")`)
-- [x] Pointer types / raw memory access (`malloc`, `free`, `read_i64`, `write_i64`, etc.)
-- [x] Lists in LLVM (`[1,2,3]`)
+- [x] Inline assembly (`asm("template")`) — LLVM only
+- [x] Raw memory access (`malloc`, `free`, `read_i64`, `write_i64`, etc.) — LLVM only
+- [x] Lists in LLVM
 - [x] `for` loops in LLVM
 - [x] `range()` in LLVM
 - [x] `len()` in LLVM
-- [x] List concatenation in LLVM (`a + b`)
-- [x] Function calls in LLVM
-- [x] Recursion in LLVM
-- [x] Variable assignment with expressions (bug fix: `x = 1 + 1` now returns correct value)
-- [x] **Classes in LLVM** (`class`, `__init__`, methods, attribute access via `obj.attr`)
+- [x] List concatenation in LLVM
+- [x] Functions and recursion in LLVM
+- [x] Classes in LLVM (`class`, `__init__`, methods, attribute access)
+
+### Known LLVM Limitations
+
+The LLVM backend covers the core language. The following features remain interpreter/VM-only for now:
+
+| Feature | Interpreter | Bytecode VM | LLVM |
+|---------|:-----------:|:-----------:|:----:|
+| Classes | ✅ | ✅ | ✅ |
+| Closures | ✅ | ✅ | ❌ |
+| `import` | ✅ | ✅ | ❌ |
+| `try` / `except` | ✅ | ✅ | ❌ |
+| Inline assembly | ❌ | ❌ | ✅ |
+| Raw memory | ❌ | ❌ | ✅ |
+
+---
+
+## Phase 9 — Self-Hosted Compiler 🔧 In Progress
+
+> Goal: write the Cool compiler in Cool itself, capable of compiling real Cool programs
+
+A proof-of-concept lives in `coolc/compiler_vm.cool`. It demonstrates the architecture — lexer, parser, code generator, and bytecode VM — all written in Cool. Currently it handles a subset of the language.
+
+### What works
+
+- [x] Lexer — identifiers, numbers, strings, operators, multi-char ops
+- [x] Recursive descent parser with correct operator precedence
+- [x] Code generator (AST → bytecode)
+- [x] Bytecode VM that executes the compiled output
+- [x] `print(<expr>)`
+- [x] Variable assignment (`x = 1`)
+- [x] Arithmetic (`+`, `-`, `*`, `/`)
+- [x] Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+- [x] Lists (`[1, 2, 3]`)
+- [x] Strings
+- [x] Multi-statement programs
+
+### What's left to reach genuine self-hosting
+
+- [ ] Indentation / INDENT / DEDENT handling in the self-hosted lexer
+- [ ] `if` / `elif` / `else` with compileable bodies
+- [ ] `while` and `for` loops with compileable bodies
+- [ ] `break` / `continue` (jump patching)
+- [ ] `def` with a real function body and call frames
+- [ ] `return` values
+- [ ] Closures / upvalue capture
+- [ ] Classes and method dispatch
+- [ ] Compile a non-trivial Cool program end-to-end
+- [ ] Bootstrap: compile `compiler_vm.cool` with itself
 
 ---
 
@@ -196,18 +240,5 @@
 | 5 — Shell: More Commands | ✅ Complete |
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
-| 8 — Compiler | ✅ Complete |
-| 9 — Self-Hosted Compiler | ✅ Complete |
-
----
-
-## Phase 9 — Self-Hosted Compiler
-
-> Goal: write the compiler in Cool itself, so Cool can compile itself
-
-- [x] Lexer in Cool (`coolc/compiler_vm.cool`)
-- [x] Recursive descent parser in Cool
-- [x] Code generator (AST → bytecode) in Cool
-- [x] Test: compiler correctly parses and compiles `print(1)`, `print(1 + 2)`, `x = 1`, etc.
-- [x] Bytecode VM in Cool (to execute compiled programs)
-- [x] Bootstrap: use self-hosted compiler to compile itself |
+| 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
+| 9 — Self-Hosted Compiler | 🔧 In Progress |
