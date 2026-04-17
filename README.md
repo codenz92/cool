@@ -36,7 +36,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 
 ### Built-in Functions
 
-`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `pow()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `assert`, `exit()`
+`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `assert`, `exit()`
 
 ### String Methods
 
@@ -73,7 +73,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 **LLVM limitations:** Closures, `import`, `try`/`except`, dicts, and tuples are interpreter/VM-only for now. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
 
 | Feature | Interpreter | Bytecode VM | LLVM |
-|---------|:-----------:|:-----------:|:----:|
+| ------- | :---------: | :---------: | :--: |
 | Variables, arithmetic, comparisons | ✅ | ✅ | ✅ |
 | `if`/`elif`/`else`, `while`/`for` loops | ✅ | ✅ | ✅ |
 | `break`/`continue` | ✅ | ✅ | ✅ |
@@ -128,7 +128,7 @@ Memory functions are LLVM-backend only. Pointers are plain integers (the address
 
 A fully interactive shell written in Cool:
 
-```
+```text
 ls [path]          cd <path>          pwd
 cat <file>         mkdir <dir>        touch <file>
 rm <file>          mv <src> <dst>     cp <src> <dst>
@@ -263,7 +263,7 @@ More examples are in the [`examples/`](examples/) directory.
 
 ## Project Structure
 
-```
+```text
 src/
   lexer.rs          Token scanner with INDENT/DEDENT handling
   parser.rs         Recursive descent parser → AST
@@ -322,6 +322,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 The self-hosted compiler lives in `coolc/compiler_vm.cool` — a full lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
 
 It supports:
+
 - Full language: INDENT/DEDENT, if/elif/else, while/for loops, break/continue
 - Functions with def/return, closures with upvalue capture
 - Classes with inheritance and method dispatch
