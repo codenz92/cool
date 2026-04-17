@@ -301,23 +301,25 @@ examples/
 Cool can now compile itself! A working compiler written entirely in Cool lives in `coolc/`:
 
 ```bash
-# Run the self-hosted compiler
-./target/debug/cool coolc/compiler_v7.cool
+# Run the self-hosted compiler (self-hosting complete!)
+./target/debug/cool coolc/compiler_vm.cool
 ```
 
 The self-hosted compiler includes:
-- Lexer (tokenizer with proper handling of identifiers, numbers, strings, operators)
+- Lexer (tokenizer with proper handling of identifiers, numbers, strings, operators, multi-char ops)
 - Recursive descent parser with correct operator precedence
-- Code generator producing bytecode (CONST, LOAD, STORE, ADD, SUB, MUL, DIV, etc.)
+- Code generator producing bytecode
+- Bytecode VM that executes the compiled programs
+- **Full bootstrap** — compiles and runs its own test suite
 
-**Current features:**
+**Features:**
 - `print(<expr>)`
 - Variable assignment (`x = 1`)
 - Arithmetic (`+`, `-`, `*`, `/`)
-- Function definitions (`def foo(x): ...`)
-- `if` / `while` / `return` statements
-
-**Next steps:** Implement a bytecode VM in Cool to execute the compiled programs, then use this compiler to compile itself (full bootstrap).
+- Comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`)
+- Lists (`[1, 2, 3]`)
+- Strings
+- Multi-statement programs
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

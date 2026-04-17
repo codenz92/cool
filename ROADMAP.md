@@ -204,7 +204,7 @@
 
 > Goal: write the compiler in Cool itself, so Cool can compile itself
 
-- [x] Lexer in Cool (`coolc/compiler_v7.cool`)
+- [x] Lexer in Cool (`coolc/compiler_vm.cool`)
 - [x] Recursive descent parser in Cool
 - [x] Code generator (AST → bytecode) in Cool
 - [x] Test: compiler correctly parses and compiles `print(1)`, `print(1 + 2)`, `x = 1`, etc.
