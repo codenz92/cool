@@ -1,0 +1,3 @@
+# Test: assign to temp then print
+x = 1 + 1
+print(x)

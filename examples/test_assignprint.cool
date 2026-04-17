@@ -1,0 +1,3 @@
+# Test: assign then print
+y = 5
+print(y)

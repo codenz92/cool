@@ -1,0 +1,4 @@
+# Simple print of literal
+x = 1 + 1
+print(x)
+print(x + 0)

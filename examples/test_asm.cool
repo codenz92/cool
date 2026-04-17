@@ -1,0 +1,2 @@
+# Test: call variadic from C via asm
+asm("movq $42, %rax", "=r")
