@@ -68,9 +68,9 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`, `break`/`continue`, functions (non-recursive), `print()`, lists, `for` loops, `range()`, inline assembly, and raw memory operations. Classes, closures, recursive functions, and imports remain interpreter-only for now.
+The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`, `break`/`continue`, functions (including recursion), `print()`, lists, `for` loops, `range()`, inline assembly, and raw memory operations. Classes, closures, and imports remain interpreter-only for now.
 
-**New in LLVM backend:** Lists (`[1,2,3]`), list operations (`len()`, `+` concatenation), `for` loops, `range()`.
+**LLVM backend:** Lists (`[1,2,3]`), list operations (`len()`, `+` concatenation), `for` loops, `range()`, functions, recursion.
 
 ### Inline Assembly (LLVM backend)
 

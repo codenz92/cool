@@ -178,7 +178,8 @@
 - [x] `range()` in LLVM
 - [x] `len()` in LLVM
 - [x] List concatenation in LLVM (`a + b`)
-- [~] Function calls in LLVM (partial: works for variable assignment, broken for expressions)
+- [x] Function calls in LLVM
+- [x] Recursion in LLVM
 
 ---
 

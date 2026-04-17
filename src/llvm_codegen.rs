@@ -51,6 +51,48 @@ typedef struct {
     int64_t payload;
 } CoolVal;
 
+/* Forward declaration for list */
+typedef struct {
+    int32_t tag;
+    int64_t length;
+    int64_t capacity;
+    void* data;
+} CoolList;
+
+/* Forward declarations for runtime functions */
+CoolVal cv_nil(void);
+CoolVal cv_int(int64_t);
+CoolVal cv_float(double);
+CoolVal cv_bool(int32_t);
+CoolVal cv_str(const char*);
+int32_t cool_truthy(CoolVal);
+CoolVal cool_add(CoolVal, CoolVal);
+CoolVal cool_sub(CoolVal, CoolVal);
+CoolVal cool_mul(CoolVal, CoolVal);
+CoolVal cool_div(CoolVal, CoolVal);
+CoolVal cool_mod(CoolVal, CoolVal);
+CoolVal cool_pow(CoolVal, CoolVal);
+CoolVal cool_floordiv(CoolVal, CoolVal);
+CoolVal cool_neg(CoolVal);
+CoolVal cool_eq(CoolVal, CoolVal);
+CoolVal cool_neq(CoolVal, CoolVal);
+CoolVal cool_lt(CoolVal, CoolVal);
+CoolVal cool_lteq(CoolVal, CoolVal);
+CoolVal cool_gt(CoolVal, CoolVal);
+CoolVal cool_gteq(CoolVal, CoolVal);
+CoolVal cool_not(CoolVal);
+CoolVal cool_bitand(CoolVal, CoolVal);
+CoolVal cool_bitor(CoolVal, CoolVal);
+CoolVal cool_bitxor(CoolVal, CoolVal);
+CoolVal cool_bitnot(CoolVal);
+CoolVal cool_lshift(CoolVal, CoolVal);
+CoolVal cool_rshift(CoolVal, CoolVal);
+CoolVal cool_list_make(int64_t);
+CoolVal cool_list_len(CoolVal);
+CoolVal cool_list_get(CoolVal, CoolVal);
+CoolVal cool_list_push(CoolVal, CoolVal);
+void cool_print(int32_t, ...);
+
 /* ── bit-pattern helpers ──────────────────────────────────────────────── */
 static double cv_as_float(CoolVal v) {
     double d;
@@ -182,13 +224,6 @@ CoolVal cool_lshift(CoolVal a, CoolVal b){ return cv_int((int64_t)a.payload << (
 CoolVal cool_rshift(CoolVal a, CoolVal b){ return cv_int((int64_t)a.payload >> (int)b.payload); }
 
 /* ── list operations ─────────────────────────────────────────────────────── */
-typedef struct {
-    int32_t tag;
-    int64_t length;
-    int64_t capacity;
-    void* data;
-} CoolList;
-
 CoolVal cool_list_make(int64_t n) {
     /* LIST MAKE: create empty list, capacity = n */
     CoolList* lst = (CoolList*)malloc(sizeof(CoolList));

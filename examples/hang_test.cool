@@ -1,0 +1,5 @@
+# Test while true loop - should not exit
+while true:
+    print("looping")
+    break
+print("done")
