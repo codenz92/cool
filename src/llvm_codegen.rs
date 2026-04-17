@@ -38,6 +38,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_LIST   5
 #define TAG_OBJECT 6
 #define TAG_CLASS  7
+#define TAG_DICT   8
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -59,6 +60,15 @@ typedef struct {
     int64_t capacity;
     void* data;
 } CoolList;
+
+/* ── Dict (CoolVal-keyed hashmap) ───────────────────────────────────── */
+typedef struct {
+    int32_t tag;
+    int64_t len;
+    int64_t cap;
+    CoolVal* keys;
+    CoolVal* vals;
+} CoolDict;
 
 /* ── Simple hashmap for object attributes ───────────────────────────── */
 typedef struct AttrNode {
@@ -187,8 +197,16 @@ CoolVal cool_list_make(int64_t);
 CoolVal cool_list_len(CoolVal);
 CoolVal cool_type(CoolVal);
 CoolVal cool_list_get(CoolVal, CoolVal);
+CoolVal cool_list_set(CoolVal, CoolVal, CoolVal);
 CoolVal cool_list_push(CoolVal, CoolVal);
 CoolVal cool_list_concat(CoolVal, CoolVal);
+CoolVal cool_dict_new(void);
+CoolVal cool_dict_get(CoolVal, CoolVal);
+CoolVal cool_dict_set(CoolVal, CoolVal, CoolVal);
+CoolVal cool_dict_len(CoolVal);
+CoolVal cool_dict_contains(CoolVal, CoolVal);
+CoolVal cool_index(CoolVal, CoolVal);
+CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
 void cool_print(int32_t, ...);
 
 /* ── class / object support ─────────────────────────────────────────── */
@@ -515,6 +533,10 @@ CoolVal cool_len(CoolVal v) {
             CoolList* lst = (CoolList*)(intptr_t)v.payload;
             return cv_int(lst->length);
         }
+        case TAG_DICT: {
+            CoolDict* d = (CoolDict*)(intptr_t)v.payload;
+            return cv_int(d->len);
+        }
         default: return cv_int(0);
     }
 }
@@ -723,6 +745,75 @@ CoolVal cool_is_instance(CoolVal obj, const char* class_name) {
     return cv_bool(strcmp((const char*)(intptr_t)o->class->name, class_name) == 0);
 }
 
+/* ── Dict runtime ────────────────────────────────────────────────────── */
+
+CoolVal cool_dict_new(void) {
+    CoolDict* d = (CoolDict*)malloc(sizeof(CoolDict));
+    d->tag = TAG_DICT;
+    d->len = 0;
+    d->cap = 8;
+    d->keys = (CoolVal*)malloc(8 * sizeof(CoolVal));
+    d->vals = (CoolVal*)malloc(8 * sizeof(CoolVal));
+    CoolVal v;
+    v.tag = TAG_DICT;
+    v.payload = (int64_t)(intptr_t)d;
+    return v;
+}
+
+CoolVal cool_dict_set(CoolVal dict_v, CoolVal key, CoolVal val) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    for (int64_t i = 0; i < d->len; i++) {
+        if (cv_eq_raw(d->keys[i], key)) { d->vals[i] = val; return dict_v; }
+    }
+    if (d->len == d->cap) {
+        d->cap *= 2;
+        d->keys = (CoolVal*)realloc(d->keys, d->cap * sizeof(CoolVal));
+        d->vals = (CoolVal*)realloc(d->vals, d->cap * sizeof(CoolVal));
+    }
+    d->keys[d->len] = key;
+    d->vals[d->len] = val;
+    d->len++;
+    return dict_v;
+}
+
+CoolVal cool_dict_get(CoolVal dict_v, CoolVal key) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    for (int64_t i = 0; i < d->len; i++) {
+        if (cv_eq_raw(d->keys[i], key)) return d->vals[i];
+    }
+    fprintf(stderr, "KeyError\n"); exit(1);
+}
+
+CoolVal cool_dict_len(CoolVal dict_v) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    CoolVal v; v.tag = TAG_INT; v.payload = d->len; return v;
+}
+
+CoolVal cool_dict_contains(CoolVal dict_v, CoolVal key) {
+    if (dict_v.tag != TAG_DICT) return cv_bool(0);
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    for (int64_t i = 0; i < d->len; i++)
+        if (cv_eq_raw(d->keys[i], key)) return cv_bool(1);
+    return cv_bool(0);
+}
+
+/* Unified index: dispatches list vs dict */
+CoolVal cool_index(CoolVal obj, CoolVal idx) {
+    if (obj.tag == TAG_LIST) return cool_list_get(obj, idx);
+    if (obj.tag == TAG_DICT) return cool_dict_get(obj, idx);
+    fprintf(stderr, "TypeError: not subscriptable\n"); exit(1);
+}
+
+/* Unified setindex: dispatches list vs dict */
+CoolVal cool_setindex(CoolVal obj, CoolVal idx, CoolVal val) {
+    if (obj.tag == TAG_LIST) return cool_list_set(obj, idx, val);
+    if (obj.tag == TAG_DICT) return cool_dict_set(obj, idx, val);
+    fprintf(stderr, "TypeError: not subscriptable\n"); exit(1);
+}
+
 static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
     if (list.tag != TAG_LIST) return cv_bool(0);
     CoolList* l = (CoolList*)(intptr_t)list.payload;
@@ -733,6 +824,7 @@ static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
 
 CoolVal cool_contains(CoolVal container, CoolVal item) {
     if (container.tag == TAG_LIST) return cool_list_contains_local(container, item);
+    if (container.tag == TAG_DICT) return cool_dict_contains(container, item);
     if (container.tag == TAG_STR && item.tag == TAG_STR) {
         const char* haystack = (const char*)(intptr_t)container.payload;
         const char* needle   = (const char*)(intptr_t)item.payload;
@@ -817,6 +909,12 @@ struct RuntimeFns<'ctx> {
     #[allow(dead_code)]
     cool_is_instance: FunctionValue<'ctx>,
     cool_contains: FunctionValue<'ctx>,
+    // dict operations
+    cool_dict_new: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_dict_len: FunctionValue<'ctx>,
+    cool_index: FunctionValue<'ctx>,
+    cool_setindex: FunctionValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -967,6 +1065,11 @@ impl<'ctx> Compiler<'ctx> {
             cool_set_global_arg: decl!("cool_set_global_arg", voidt.fn_type(&[i32m, cv], false)),
             cool_is_instance: decl!("cool_is_instance", cv_type.fn_type(&[cv, ptrm], false)),
             cool_contains: decl!("cool_contains", cv_type.fn_type(&[cv, cv], false)),
+            // dict operations
+            cool_dict_new: decl!("cool_dict_new", cv_type.fn_type(&[], false)),
+            cool_dict_len: decl!("cool_dict_len", cv_type.fn_type(&[cv], false)),
+            cool_index: decl!("cool_index", cv_type.fn_type(&[cv, cv], false)),
+            cool_setindex: decl!("cool_setindex", cv_type.fn_type(&[cv, cv, cv], false)),
         }
     }
 
@@ -1079,6 +1182,24 @@ impl<'ctx> Compiler<'ctx> {
     ) -> StructValue<'ctx> {
         self.builder
             .build_call(fn_val, &[a.into(), b.into()], name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
+    // Call a ternary runtime function (three CoolVal args, returns CoolVal).
+    fn call_triop_fn(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        a: StructValue<'ctx>,
+        b: StructValue<'ctx>,
+        c: StructValue<'ctx>,
+        name: &str,
+    ) -> StructValue<'ctx> {
+        self.builder
+            .build_call(fn_val, &[a.into(), b.into(), c.into()], name)
             .unwrap()
             .try_as_basic_value()
             .left()
@@ -1264,6 +1385,14 @@ impl<'ctx> Compiler<'ctx> {
             // ── assert ────────────────────────────────────────────────────────
             Stmt::Assert { condition, message } => {
                 self.compile_assert(condition, message.as_ref())?;
+            }
+
+            // ── item assignment: obj[idx] = value ────────────────────────────
+            Stmt::SetItem { object, index, value } => {
+                let obj_val = self.compile_expr(object)?;
+                let idx_val = self.compile_expr(index)?;
+                let val = self.compile_expr(value)?;
+                self.call_triop_fn(self.rt.cool_setindex, obj_val, idx_val, val, "setindex");
             }
 
             other => {
@@ -1945,11 +2074,11 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(result)
             }
 
-            // index access: obj[i]
+            // index access: obj[i] — works for lists and dicts
             Expr::Index { object, index } => {
                 let obj_val = self.compile_expr(object)?;
                 let idx_val = self.compile_expr(index)?;
-                Ok(self.call_binop_fn(self.rt.cool_list_get, obj_val, idx_val, "index"))
+                Ok(self.call_binop_fn(self.rt.cool_index, obj_val, idx_val, "index"))
             }
 
             // attribute access: obj.attr
@@ -2082,6 +2211,27 @@ impl<'ctx> Compiler<'ctx> {
                 }
 
                 Ok(self.builder.build_load(self.cv_type, result_ptr, "lc_final").unwrap().into_struct_value())
+            }
+
+            // dict literal: {k: v, ...}
+            Expr::Dict(pairs) => {
+                let dict_val = self.builder
+                    .build_call(self.rt.cool_dict_new, &[], "dict")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+                let dict_ptr = self.builder.build_alloca(self.cv_type, "dict_tmp").unwrap();
+                self.builder.build_store(dict_ptr, dict_val).unwrap();
+                for (k_expr, v_expr) in pairs {
+                    let k_val = self.compile_expr(k_expr)?;
+                    let v_val = self.compile_expr(v_expr)?;
+                    let cur = self.builder.build_load(self.cv_type, dict_ptr, "dict_cur").unwrap().into_struct_value();
+                    let updated = self.call_triop_fn(self.rt.cool_setindex, cur, k_val, v_val, "dict_set");
+                    self.builder.build_store(dict_ptr, updated).unwrap();
+                }
+                Ok(self.builder.build_load(self.cv_type, dict_ptr, "dict_final").unwrap().into_struct_value())
             }
 
             other => Err(format!("unsupported expression in LLVM backend: {other:?}")),
