@@ -1,4 +1,0 @@
-print("hello from Cool compiler!")
-print(42)
-print(3.14)
-print("x =", 99)
