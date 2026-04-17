@@ -8,7 +8,7 @@
 //   3. compile_program() writes the runtime to /tmp, compiles it with `cc`,
 //      emits the LLVM module to a .o file, then links both together.
 
-use crate::ast::{BinOp, Expr, Program, Stmt, UnaryOp};
+use crate::ast::{BinOp, Expr, FStringPart, Program, Stmt, UnaryOp};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -733,6 +733,7 @@ struct RuntimeFns<'ctx> {
     cv_float: FunctionValue<'ctx>,
     cv_bool: FunctionValue<'ctx>,
     cv_str: FunctionValue<'ctx>,
+    cool_to_str: FunctionValue<'ctx>,
     cool_truthy: FunctionValue<'ctx>,
     cool_add: FunctionValue<'ctx>,
     cool_sub: FunctionValue<'ctx>,
@@ -886,6 +887,7 @@ impl<'ctx> Compiler<'ctx> {
             cv_float: decl!("cv_float", cv_type.fn_type(&[f64m], false)),
             cv_bool: decl!("cv_bool", cv_type.fn_type(&[i32m], false)),
             cv_str: decl!("cv_str", cv_type.fn_type(&[ptrm], false)),
+            cool_to_str: decl!("cool_to_str", ptr_t.fn_type(&[cv], false)),
             cool_truthy: decl!("cool_truthy", i32t.fn_type(&[cv], false)),
             cool_add: decl!("cool_add", cv_type.fn_type(&[cv, cv], false)),
             cool_sub: decl!("cool_sub", cv_type.fn_type(&[cv, cv], false)),
@@ -1861,6 +1863,65 @@ impl<'ctx> Compiler<'ctx> {
                     self.call_binop_fn(self.rt.cool_list_push, list_val, elem_val, "push");
                 }
                 Ok(list_val)
+            }
+
+            // f-string: f"Hello {name}!"
+            Expr::FString(parts) => {
+                // Create empty string as starting point
+                let empty_str_ptr = self.builder.build_global_string_ptr("", "empty").unwrap();
+                let mut result = self
+                    .builder
+                    .build_call(self.rt.cv_str, &[empty_str_ptr.as_pointer_value().into()], "cv_str")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+
+                for part in parts {
+                    match part {
+                        FStringPart::Literal(s) => {
+                            // Create string literal value
+                            let str_ptr = self
+                                .builder
+                                .build_global_string_ptr(s, &format!("lit_{}", self.str_counter))
+                                .unwrap();
+                            self.str_counter += 1;
+                            let str_val = self
+                                .builder
+                                .build_call(self.rt.cv_str, &[str_ptr.as_pointer_value().into()], "cv_str")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap()
+                                .into_struct_value();
+                            // Concatenate with result using +
+                            result = self.call_binop_fn(self.rt.cool_add, result, str_val, "add");
+                        }
+                        FStringPart::Expr(e) => {
+                            // Evaluate expression
+                            let expr_val = self.compile_expr(e)?;
+                            // Convert to string
+                            let str_ptr_call = self
+                                .builder
+                                .build_call(self.rt.cool_to_str, &[expr_val.into()], "to_str")
+                                .unwrap();
+                            let str_ptr = str_ptr_call.try_as_basic_value().left().unwrap().into_pointer_value();
+                            // Create CoolVal from string pointer
+                            let str_val = self
+                                .builder
+                                .build_call(self.rt.cv_str, &[str_ptr.into()], "cv_str")
+                                .unwrap()
+                                .try_as_basic_value()
+                                .left()
+                                .unwrap()
+                                .into_struct_value();
+                            // Concatenate
+                            result = self.call_binop_fn(self.rt.cool_add, result, str_val, "add");
+                        }
+                    }
+                }
+                Ok(result)
             }
 
             // index access: obj[i]
