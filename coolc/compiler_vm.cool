@@ -1,37 +1,64 @@
-# Self-hosted Cool compiler with VM
+# Self-hosted Cool compiler + bytecode VM
+# Phase 9: full INDENT/DEDENT, if/elif/else, while/for, def/return,
+#           closures, classes, method dispatch, bootstrap attempt
 
-print("Cool Compiler + VM v1.0")
+# ─── Helpers ────────────────────────────────────────────────────────────────
 
-# Helper functions
-def is_ident_char(c):
-    return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_')
+def is_alpha(c):
+    return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_')
 
-def is_str(t):
-    return type(t) == "str"
+def is_digit(c):
+    return c != nil and c >= '0' and c <= '9'
 
-def is_tuple(t):
-    return type(t) == "tuple" and len(t) > 0
+def is_alnum(c):
+    return is_alpha(c) or is_digit(c)
 
-def tok_type(t):
-    if is_tuple(t):
-        return t[0]
-    return t
+def is_str(v):
+    return type(v) == "str"
 
-def is_rparen(t):
-    return t == ')'
+def is_list(v):
+    return type(v) == "list"
 
-# Lexer
+def is_dict(v):
+    return type(v) == "dict"
+
+def is_int(v):
+    return type(v) == "int"
+
+def is_bool(v):
+    return type(v) == "bool"
+
+def op_type(op):
+    if is_list(op) and len(op) > 0:
+        return op[0]
+    if is_str(op):
+        return op
+    return nil
+
+def is_truthy(v):
+    if v == nil or v == false or v == 0:
+        return false
+    if is_str(v) and len(v) == 0:
+        return false
+    if is_list(v) and len(v) == 0:
+        return false
+    return true
+
+# ─── Lexer ───────────────────────────────────────────────────────────────────
+
 class Lexer:
     def __init__(self, src):
         self.src = src
         self.pos = 0
+        self.indent_stack = [0]
+        self.at_line_start = true
 
     def peek(self):
         if self.pos < len(self.src):
             return self.src[self.pos]
         return nil
 
-    def next(self):
+    def advance(self):
         c = self.peek()
         if c != nil:
             self.pos += 1
@@ -39,92 +66,170 @@ class Lexer:
 
     def tokenize(self):
         out = []
-        while self.peek() != nil:
+        while true:
+            # ── Start-of-line: handle indentation ──
+            if self.at_line_start:
+                self.at_line_start = false
+                indent = 0
+                while self.peek() == ' ':
+                    indent += 1
+                    self.advance()
+                # blank line
+                if self.peek() == '\n':
+                    self.advance()
+                    self.at_line_start = true
+                    continue
+                # comment-only line
+                if self.peek() == '#':
+                    while self.peek() != nil and self.peek() != '\n':
+                        self.advance()
+                    if self.peek() == '\n':
+                        self.advance()
+                    self.at_line_start = true
+                    continue
+                # end of source
+                if self.peek() == nil:
+                    break
+                # emit INDENT / DEDENTs
+                curr = self.indent_stack[-1]
+                if indent > curr:
+                    self.indent_stack.append(indent)
+                    out.append('INDENT')
+                elif indent < curr:
+                    while len(self.indent_stack) > 1 and self.indent_stack[-1] > indent:
+                        self.indent_stack.pop()
+                        out.append('DEDENT')
+                # same indent → no token; fall through to tokenise
+
             c = self.peek()
-            if c == ' ' or c == '\n' or c == '\t':
-                self.next()
-            elif c >= '0' and c <= '9':
+            if c == nil:
+                break
+
+            # newline
+            if c == '\n':
+                self.advance()
+                self.at_line_start = true
+                continue
+
+            # inline comment
+            if c == '#':
+                while self.peek() != nil and self.peek() != '\n':
+                    self.advance()
+                continue
+
+            # whitespace
+            if c == ' ' or c == '\t' or c == '\r':
+                self.advance()
+                continue
+
+            # number
+            if is_digit(c):
                 n = ""
-                while self.peek() != nil and self.peek() >= '0' and self.peek() <= '9':
-                    n += self.next()
-                out.append(("NUM", int(n)))
-            elif c == '"':
-                self.next()
+                while self.peek() != nil and is_digit(self.peek()):
+                    n += self.advance()
+                out.append(['NUM', int(n)])
+                continue
+
+            # string
+            if c == '"' or c == "'":
+                quote = self.advance()
                 s = ""
-                while self.peek() != nil and self.peek() != '"':
-                    s += self.next()
-                self.next()
-                out.append(("STR", s))
-            elif is_ident_char(c):
-                s = ""
-                while self.peek() != nil and is_ident_char(self.peek()):
-                    s += self.next()
-                out.append(s)
-            elif c == '(':
-                self.next()
-                out.append('(')
-            elif c == ')':
-                self.next()
-                out.append(')')
-            elif c == '[':
-                self.next()
-                out.append('[')
-            elif c == ']':
-                self.next()
-                out.append(']')
-            elif c == ',':
-                self.next()
-                out.append(',')
-            elif c == '+':
-                self.next()
-                out.append('+')
-            elif c == '*':
-                self.next()
-                out.append('*')
-            elif c == '-':
-                self.next()
-                out.append('-')
-            elif c == '/':
-                self.next()
-                out.append('/')
-            elif c == '=':
-                self.next()
-                if self.peek() == '=':
-                    self.next()
-                    out.append('==')
-                else:
-                    out.append('=')
-            elif c == '!':
-                self.next()
-                if self.peek() == '=':
-                    self.next()
-                    out.append('!=')
-                else:
-                    out.append('!')
-            elif c == '<':
-                self.next()
-                if self.peek() == '=':
-                    self.next()
-                    out.append('<=')
-                else:
-                    out.append('<')
-            elif c == '>':
-                self.next()
-                if self.peek() == '=':
-                    self.next()
-                    out.append('>=')
-                else:
-                    out.append('>')
-            else:
-                self.next()
+                while self.peek() != nil and self.peek() != quote:
+                    ch = self.advance()
+                    if ch == '\\':
+                        esc = self.advance()
+                        if esc == 'n':
+                            s += '\n'
+                        elif esc == 't':
+                            s += '\t'
+                        elif esc == '\\':
+                            s += '\\'
+                        elif esc == '"':
+                            s += '"'
+                        elif esc == "'":
+                            s += "'"
+                        else:
+                            s += esc
+                    else:
+                        s += ch
+                self.advance()  # closing quote
+                out.append(['STR', s])
+                continue
+
+            # identifier / keyword
+            if is_alpha(c):
+                w = ""
+                while self.peek() != nil and is_alnum(self.peek()):
+                    w += self.advance()
+                out.append(w)
+                continue
+
+            # two-char operators
+            if c == '=' and self.src[self.pos + 1 if self.pos + 1 < len(self.src) else self.pos] == '=':
+                self.advance()
+                self.advance()
+                out.append('==')
+                continue
+            if c == '!' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+                self.advance()
+                self.advance()
+                out.append('!=')
+                continue
+            if c == '<' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+                self.advance()
+                self.advance()
+                out.append('<=')
+                continue
+            if c == '>' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+                self.advance()
+                self.advance()
+                out.append('>=')
+                continue
+            if c == '+' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+                self.advance()
+                self.advance()
+                out.append('+=')
+                continue
+            if c == '-' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+                self.advance()
+                self.advance()
+                out.append('-=')
+                continue
+            if c == '*' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+                self.advance()
+                self.advance()
+                out.append('*=')
+                continue
+            if c == '/' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '/':
+                self.advance()
+                self.advance()
+                out.append('//')
+                continue
+            if c == '*' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '*':
+                self.advance()
+                self.advance()
+                out.append('**')
+                continue
+
+            # single-char
+            self.advance()
+            out.append(c)
+
+        # trailing DEDENTs
+        while len(self.indent_stack) > 1:
+            self.indent_stack.pop()
+            out.append('DEDENT')
+
         out.append('EOF')
         return out
 
-# Parser
+# ─── Parser ──────────────────────────────────────────────────────────────────
+
 class Parser:
     def __init__(self, toks):
         self.toks = toks
         self.i = 0
+        self._tmp = 0  # unique id for generated temp names
 
     def peek(self):
         if self.i < len(self.toks):
@@ -132,125 +237,248 @@ class Parser:
         return 'EOF'
 
     def consume(self):
-        if self.i < len(self.toks):
-            t = self.toks[self.i]
-            self.i += 1
-            return t
-        return 'EOF'
+        t = self.peek()
+        self.i += 1
+        return t
+
+    def expect(self, tok):
+        t = self.consume()
+        return t
+
+    def tmp_name(self):
+        self._tmp += 1
+        return "__t" + str(self._tmp) + "__"
+
+    # ── top-level ──
 
     def parse(self):
         stmts = []
-        while true:
-            t = self.peek()
-            if t == 'EOF':
-                break
+        while self.peek() != 'EOF':
             s = self.stmt()
             if s != nil:
                 stmts.append(s)
         return stmts
 
+    def parse_block(self):
+        self.expect('INDENT')
+        stmts = []
+        while self.peek() != 'DEDENT' and self.peek() != 'EOF':
+            s = self.stmt()
+            if s != nil:
+                stmts.append(s)
+        self.expect('DEDENT')
+        return stmts
+
+    # ── statements ──
+
     def stmt(self):
         t = self.peek()
+        if t == 'def':
+            return self.def_stmt()
+        if t == 'class':
+            return self.class_stmt()
+        if t == 'if':
+            return self.if_stmt()
+        if t == 'while':
+            return self.while_stmt()
+        if t == 'for':
+            return self.for_stmt()
+        if t == 'return':
+            self.consume()
+            if self.peek() == 'DEDENT' or self.peek() == 'EOF':
+                return ['RETURN', ['NIL']]
+            return ['RETURN', self.expr()]
+        if t == 'break':
+            self.consume()
+            return ['BREAK']
+        if t == 'continue':
+            self.consume()
+            return ['CONTINUE']
+        if t == 'pass':
+            self.consume()
+            return ['PASS']
         if t == 'print':
             return self.print_stmt()
-        elif t == 'def':
-            return self.def_stmt()
-        elif t == 'if':
-            return self.if_stmt()
-        elif t == 'while':
-            return self.while_stmt()
-        elif t == 'return':
-            return self.return_stmt()
-        elif t == 'for':
-            return self.for_stmt()
-        elif t == 'break':
-            self.consume()
-            return ('BREAK',)
-        elif t == 'continue':
-            self.consume()
-            return ('CONTINUE',)
-        elif is_str(t) and is_ident_char(t):
-            name = self.consume()
-            if self.peek() == '=':
-                self.consume()
-                val = self.expr()
-                return ('ASSIGN', name, val)
-            return ('EXPR', ('VAR', name))
+        if is_str(t) and is_alpha(t[0]):
+            return self.assign_or_call()
+        # skip unknown
         self.consume()
         return nil
 
-    def print_stmt(self):
-        self.consume()
-        if self.peek() == '(':
-            self.consume()
-            args = []
-            while not is_rparen(self.peek()):
-                args.append(self.expr())
-                if self.peek() == ',':
-                    self.consume()
-            if self.peek() == ')':
-                self.consume()
-        return ('PRINT', args)
-
     def def_stmt(self):
-        self.consume()
+        self.consume()  # def
         name = self.consume()
+        self.expect('(')
+        params = []
+        while self.peek() != ')' and self.peek() != 'EOF':
+            p = self.consume()
+            params.append(p)
+            if self.peek() == ',':
+                self.consume()
+        self.expect(')')
+        self.expect(':')
+        body = self.parse_block()
+        return ['DEF', name, params, body]
+
+    def class_stmt(self):
+        self.consume()  # class
+        name = self.consume()
+        parent = nil
         if self.peek() == '(':
             self.consume()
-            params = []
-            while not is_rparen(self.peek()):
-                params.append(self.consume())
-                if self.peek() == ',':
-                    self.consume()
-            if self.peek() == ')':
-                self.consume()
-        return ('DEF', name, params)
+            if self.peek() != ')':
+                parent = self.consume()
+            self.expect(')')
+        self.expect(':')
+        self.expect('INDENT')
+        methods = []
+        while self.peek() != 'DEDENT' and self.peek() != 'EOF':
+            s = self.stmt()
+            if s != nil:
+                methods.append(s)
+        self.expect('DEDENT')
+        return ['CLASS', name, parent, methods]
 
     def if_stmt(self):
-        self.consume()
+        self.consume()  # if
         cond = self.expr()
-        return ('IF', cond)
+        self.expect(':')
+        body = self.parse_block()
+        elifs = []
+        else_body = nil
+        while self.peek() == 'elif':
+            self.consume()
+            ec = self.expr()
+            self.expect(':')
+            eb = self.parse_block()
+            elifs.append([ec, eb])
+        if self.peek() == 'else':
+            self.consume()
+            self.expect(':')
+            else_body = self.parse_block()
+        return ['IF', cond, body, elifs, else_body]
 
     def while_stmt(self):
-        self.consume()
+        self.consume()  # while
         cond = self.expr()
-        return ('WHILE', cond)
+        self.expect(':')
+        body = self.parse_block()
+        return ['WHILE', cond, body]
 
     def for_stmt(self):
-        self.consume()
+        self.consume()  # for
         var = self.consume()
         self.consume()  # in
-        iter_expr = self.expr()
-        return ('FOR', var, iter_expr)
+        iterable = self.expr()
+        self.expect(':')
+        body = self.parse_block()
+        return ['FOR', var, iterable, body]
 
-    def return_stmt(self):
-        self.consume()
-        val = self.expr()
-        return ('RETURN', val)
+    def print_stmt(self):
+        self.consume()  # print
+        self.expect('(')
+        args = []
+        while self.peek() != ')' and self.peek() != 'EOF':
+            args.append(self.expr())
+            if self.peek() == ',':
+                self.consume()
+        self.expect(')')
+        return ['PRINT', args]
+
+    def assign_or_call(self):
+        # parse full lhs expression
+        lhs = self.lhs_expr()
+        op = self.peek()
+
+        if op == '=':
+            self.consume()
+            rhs = self.expr()
+            return self.make_assign(lhs, rhs)
+
+        if op == '+=':
+            self.consume()
+            rhs = self.expr()
+            return self.make_assign(lhs, ['+', lhs, rhs])
+
+        if op == '-=':
+            self.consume()
+            rhs = self.expr()
+            return self.make_assign(lhs, ['-', lhs, rhs])
+
+        if op == '*=':
+            self.consume()
+            rhs = self.expr()
+            return self.make_assign(lhs, ['*', lhs, rhs])
+
+        return ['EXPR', lhs]
+
+    def make_assign(self, lhs, rhs):
+        t = lhs[0]
+        if t == 'VAR':
+            return ['ASSIGN', lhs[1], rhs]
+        if t == 'GET_ATTR':
+            return ['SET_ATTR', lhs[1], lhs[2], rhs]
+        if t == 'SUBSCRIPT':
+            return ['SET_ITEM', lhs[1], lhs[2], rhs]
+        return ['EXPR', rhs]
+
+    # ── expressions ──
+
+    def lhs_expr(self):
+        return self.primary_with_trailers()
 
     def expr(self):
-        return self.add()
+        return self.bool_or()
+
+    def bool_or(self):
+        left = self.bool_and()
+        while self.peek() == 'or':
+            self.consume()
+            right = self.bool_and()
+            left = ['OR', left, right]
+        return left
+
+    def bool_and(self):
+        left = self.not_expr()
+        while self.peek() == 'and':
+            self.consume()
+            right = self.not_expr()
+            left = ['AND', left, right]
+        return left
+
+    def not_expr(self):
+        if self.peek() == 'not':
+            self.consume()
+            return ['NOT', self.not_expr()]
+        return self.comparison()
+
+    def comparison(self):
+        left = self.add()
+        t = self.peek()
+        if t == '==' or t == '!=' or t == '<' or t == '>' or t == '<=' or t == '>=':
+            self.consume()
+            right = self.add()
+            return [t, left, right]
+        if t == 'in':
+            self.consume()
+            right = self.add()
+            return ['IN', left, right]
+        if t == 'not':
+            # not in
+            self.consume()
+            self.consume()  # in
+            right = self.add()
+            return ['NOT_IN', left, right]
+        return left
 
     def add(self):
-        left = self.cmp()
+        left = self.mul()
         while true:
             t = self.peek()
             if t == '+' or t == '-':
                 self.consume()
-                right = self.cmp()
-                left = (t, left, right)
-            else:
-                break
-        return left
-
-    def cmp(self):
-        left = self.mul()
-        while true:
-            t = self.peek()
-            if t == '==' or t == '!=' or t == '<' or t == '>' or t == '<=' or t == '>=':
-                self.consume()
                 right = self.mul()
-                left = (t, left, right)
+                left = [t, left, right]
             else:
                 break
         return left
@@ -259,10 +487,10 @@ class Parser:
         left = self.unary()
         while true:
             t = self.peek()
-            if t == '*' or t == '/':
+            if t == '*' or t == '/' or t == '//' or t == '%' or t == '**':
                 self.consume()
                 right = self.unary()
-                left = (t, left, right)
+                left = [t, left, right]
             else:
                 break
         return left
@@ -271,347 +499,1370 @@ class Parser:
         t = self.peek()
         if t == '-':
             self.consume()
-            return ('NEG', self.unary())
-        if t == 'not':
+            return ['NEG', self.unary()]
+        if t == '~':
             self.consume()
-            return ('NOT', self.unary())
-        return self.primary()
+            return ['BITNOT', self.unary()]
+        return self.primary_with_trailers()
 
-    def primary(self):
+    def primary_with_trailers(self):
+        e = self.atom()
+        while true:
+            t = self.peek()
+            if t == '.':
+                self.consume()
+                attr = self.consume()
+                if self.peek() == '(':
+                    self.consume()
+                    args = self.arg_list()
+                    e = ['CALL_ATTR', e, attr, args]
+                else:
+                    e = ['GET_ATTR', e, attr]
+            elif t == '[':
+                self.consume()
+                idx = self.expr()
+                self.expect(']')
+                e = ['SUBSCRIPT', e, idx]
+            elif t == '(':
+                self.consume()
+                args = self.arg_list()
+                e = ['CALL_EXPR', e, args]
+            else:
+                break
+        return e
+
+    def arg_list(self):
+        args = []
+        while self.peek() != ')' and self.peek() != 'EOF':
+            args.append(self.expr())
+            if self.peek() == ',':
+                self.consume()
+        self.expect(')')
+        return args
+
+    def atom(self):
         t = self.peek()
-        # Don't consume operators - let parent handle them (return nil without consuming)
+
         if t == '(':
             self.consume()
             e = self.expr()
-            if self.peek() == ')':
-                self.consume()
+            self.expect(')')
             return e
+
         if t == '[':
-            return self.list_literal()
-        # For operators, just return nil WITHOUT consuming
-        if t == '==' or t == '!=' or t == '<' or t == '>' or t == '<=' or t == '>=':
-            return nil
-        if t == '+' or t == '-' or t == '*' or t == '/':
-            return nil
-        if tok_type(t) == 'NUM':
-            n = self.consume()
-            return n
-        if tok_type(t) == 'STR':
-            s = self.consume()
-            return s
-        if is_str(t) and is_ident_char(t):
-            name = self.consume()
-            if self.peek() == '(':
-                self.consume()
-                args = []
-                while not is_rparen(self.peek()):
-                    args.append(self.expr())
-                    if self.peek() == ',':
-                        self.consume()
-                if self.peek() == ')':
+            self.consume()
+            elems = []
+            while self.peek() != ']' and self.peek() != 'EOF':
+                elems.append(self.expr())
+                if self.peek() == ',':
                     self.consume()
-                return ('CALL', name, args)
-            if self.peek() == '[':
-                self.consume()
-                idx = self.expr()
-                if self.peek() == ']':
+            self.expect(']')
+            return ['LIST', elems]
+
+        if t == '{':
+            self.consume()
+            pairs = []
+            while self.peek() != '}' and self.peek() != 'EOF':
+                k = self.expr()
+                self.expect(':')
+                v = self.expr()
+                pairs.append([k, v])
+                if self.peek() == ',':
                     self.consume()
-                return ('INDEX', name, idx)
-            return ('VAR', name)
-        # For any other token, consume and return nil
+            self.expect('}')
+            return ['DICT', pairs]
+
+        if is_list(t) and t[0] == 'NUM':
+            self.consume()
+            return ['NUM', t[1]]
+
+        if is_list(t) and t[0] == 'STR':
+            self.consume()
+            return ['STR', t[1]]
+
+        if is_str(t) and is_alpha(t[0]):
+            self.consume()
+            if t == 'true':
+                return ['BOOL', true]
+            if t == 'false':
+                return ['BOOL', false]
+            if t == 'nil' or t == 'None':
+                return ['NIL']
+            return ['VAR', t]
+
+        # Skip unrecognised token and return nil
         self.consume()
-        return nil
+        return ['NIL']
 
-    def list_literal(self):
-        self.consume()  # [
-        elems = []
-        while self.peek() != ']':
-            elems.append(self.expr())
-            if self.peek() == ',':
-                self.consume()
-        self.consume()  # ]
-        return ('LIST', elems)
+# ─── Code Generator ──────────────────────────────────────────────────────────
 
-# Code generator
 class Generator:
     def __init__(self, ast):
         self.ast = ast
-        self.code = []
-        self.functions = {}
+        self.code = []        # list of ['OPCODE', ...] instructions
+        self.loop_stack = []  # [{break_patches, continue_target}]
+        self.func_depth = 0
+
+    def emit(self, op):
+        self.code.append(op)
+        return len(self.code) - 1  # index of emitted instruction
+
+    def patch(self, idx, addr):
+        self.code[idx][1] = addr
+
+    def current_addr(self):
+        return len(self.code)
 
     def generate(self):
-        for stmt in self.ast:
-            self.gen_stmt(stmt)
-        self.code.append(('HALT',))
+        for s in self.ast:
+            self.gen_stmt(s)
+        self.emit(['HALT'])
         return self.code
 
-    def gen_stmt(self, stmt):
-        t = stmt[0]
-        if t == 'PRINT':
-            # Generate arguments FIRST, then the PRINT instruction
-            for arg in stmt[1]:
-                self.gen_expr(arg)
-            self.code.append(('PRINT', len(stmt[1])))
-        elif t == 'ASSIGN':
-            self.gen_expr(stmt[2])
-            self.code.append(('STORE', stmt[1]))
-        elif t == 'DEF':
-            self.code.append(('DEF', stmt[1], len(stmt[2])))
-        elif t == 'EXPR':
-            self.gen_expr(stmt[1])
-        elif t == 'RETURN':
-            self.gen_expr(stmt[1])
-            self.code.append(('RETURN',))
-        elif t == 'BREAK':
-            self.code.append(('BREAK',))
-        elif t == 'CONTINUE':
-            self.code.append(('CONTINUE',))
+    # ── statements ──
 
-    def gen_expr(self, expr):
-        # Don't generate code for nil expressions
-        if expr == nil:
+    def gen_stmt(self, s):
+        if s == nil:
             return
-        typ = tok_type(expr)
-        if typ == 'NUM':
-            self.code.append(('CONST', expr[1]))
-        elif typ == 'STR':
-            self.code.append(('CONST', expr[1]))
-        elif expr[0] == 'VAR':
-            self.code.append(('LOAD', expr[1]))
-        elif expr[0] == 'CALL':
-            for arg in expr[2]:
-                self.gen_expr(arg)
-            self.code.append(('CALL', expr[1], len(expr[2])))
-        elif expr[0] == 'LIST':
-            # Generate elements FIRST, then LIST instruction
-            for elem in expr[1]:
-                self.gen_expr(elem)
-            self.code.append(('LIST', len(expr[1])))
-        elif expr[0] == 'INDEX':
-            self.code.append(('LOAD', expr[1]))
-            self.gen_expr(expr[2])
-            self.code.append(('INDEX',))
-        elif expr[0] == '+':
-            self.gen_expr(expr[1])
-            self.gen_expr(expr[2])
-            self.code.append(('ADD',))
-        elif expr[0] == '-':
-            self.gen_expr(expr[1])
-            self.gen_expr(expr[2])
-            self.code.append(('SUB',))
-        elif expr[0] == '*':
-            self.gen_expr(expr[1])
-            self.gen_expr(expr[2])
-            self.code.append(('MUL',))
-        elif expr[0] == '/':
-            self.gen_expr(expr[1])
-            self.gen_expr(expr[2])
-            self.code.append(('DIV',))
-        elif expr[0] == 'NEG':
-            self.gen_expr(expr[1])
-            self.code.append(('NEG',))
-        elif expr[0] == 'NOT':
-            self.gen_expr(expr[1])
-            self.code.append(('NOT',))
-        elif expr[0] == '==' or expr[0] == '!=' or expr[0] == '<' or expr[0] == '>' or expr[0] == '<=' or expr[0] == '>=':
-            self.gen_expr(expr[1])
-            self.gen_expr(expr[2])
-            self.code.append((expr[0],))
+        t = s[0]
 
-# Bytecode VM
+        if t == 'ASSIGN':
+            self.gen_expr(s[2])
+            self.emit(['STORE', s[1]])
+
+        elif t == 'SET_ATTR':
+            self.gen_expr(s[1])   # object
+            self.gen_expr(s[3])   # value
+            self.emit(['STORE_ATTR', s[2]])
+
+        elif t == 'SET_ITEM':
+            self.gen_expr(s[1])   # object
+            self.gen_expr(s[2])   # index
+            self.gen_expr(s[3])   # value
+            self.emit(['STORE_ITEM'])
+
+        elif t == 'PRINT':
+            for a in s[1]:
+                self.gen_expr(a)
+            self.emit(['PRINT', len(s[1])])
+
+        elif t == 'EXPR':
+            self.gen_expr(s[1])
+            self.emit(['POP'])
+
+        elif t == 'RETURN':
+            self.gen_expr(s[1])
+            self.emit(['RET'])
+
+        elif t == 'BREAK':
+            idx = self.emit(['JMP', -1])
+            if len(self.loop_stack) > 0:
+                self.loop_stack[-1][0].append(idx)
+
+        elif t == 'CONTINUE':
+            if len(self.loop_stack) > 0:
+                target = self.loop_stack[-1][1]
+                if target >= 0:
+                    self.emit(['JMP', target])
+                else:
+                    # target not yet known — patch later
+                    idx = self.emit(['JMP', -1])
+                    self.loop_stack[-1][2].append(idx)
+
+        elif t == 'PASS':
+            pass
+
+        elif t == 'IF':
+            self.gen_if(s)
+
+        elif t == 'WHILE':
+            self.gen_while(s)
+
+        elif t == 'FOR':
+            self.gen_for(s)
+
+        elif t == 'DEF':
+            self.gen_def(s)
+
+        elif t == 'CLASS':
+            self.gen_class(s)
+
+    def gen_if(self, s):
+        # s = ['IF', cond, body, elifs, else_body]
+        end_patches = []
+
+        # main if
+        self.gen_expr(s[1])
+        jf = self.emit(['JMP_IF_FALSE', -1])
+        for stmt in s[2]:
+            self.gen_stmt(stmt)
+        end_patches.append(self.emit(['JMP', -1]))
+        self.patch(jf, self.current_addr())
+
+        # elifs
+        for pair in s[3]:
+            self.gen_expr(pair[0])
+            jf2 = self.emit(['JMP_IF_FALSE', -1])
+            for stmt in pair[1]:
+                self.gen_stmt(stmt)
+            end_patches.append(self.emit(['JMP', -1]))
+            self.patch(jf2, self.current_addr())
+
+        # else
+        if s[4] != nil:
+            for stmt in s[4]:
+                self.gen_stmt(stmt)
+
+        end_addr = self.current_addr()
+        for idx in end_patches:
+            self.patch(idx, end_addr)
+
+    def gen_while(self, s):
+        # s = ['WHILE', cond, body]
+        loop_top = self.current_addr()
+        break_patches = []
+        cont_patches = []
+        self.loop_stack.append([break_patches, loop_top, cont_patches])
+
+        self.gen_expr(s[1])
+        jf = self.emit(['JMP_IF_FALSE', -1])
+
+        for stmt in s[2]:
+            self.gen_stmt(stmt)
+
+        self.emit(['JMP', loop_top])
+        end_addr = self.current_addr()
+        self.patch(jf, end_addr)
+
+        for idx in break_patches:
+            self.patch(idx, end_addr)
+        for idx in cont_patches:
+            self.patch(idx, loop_top)
+
+        self.loop_stack.pop()
+
+    def gen_for(self, s):
+        # s = ['FOR', var, iterable, body]
+        # Compiles to: iter = iterable; idx = -1; while true: idx+=1; if idx>=len: break; var=iter[idx]; body
+        iter_name = "__iter" + str(len(self.loop_stack)) + "__"
+        idx_name = "__idx" + str(len(self.loop_stack)) + "__"
+
+        self.gen_expr(s[2])
+        self.emit(['STORE', iter_name])
+        self.emit(['CONST', -1])
+        self.emit(['STORE', idx_name])
+
+        loop_top = self.current_addr()
+        break_patches = []
+        cont_patches = []
+        # continue target = loop_top (idx incremented at top)
+        self.loop_stack.append([break_patches, loop_top, cont_patches])
+
+        # idx += 1
+        self.emit(['LOAD', idx_name])
+        self.emit(['CONST', 1])
+        self.emit(['ADD'])
+        self.emit(['STORE', idx_name])
+
+        # if idx >= len(iter): break
+        self.emit(['LOAD', idx_name])
+        self.emit(['LOAD', iter_name])
+        self.emit(['CALL_BUILTIN', 'len', 1])
+        self.emit(['>='])
+        jf = self.emit(['JMP_IF_TRUE', -1])
+
+        # var = iter[idx]
+        self.emit(['LOAD', iter_name])
+        self.emit(['LOAD', idx_name])
+        self.emit(['LOAD_ITEM'])
+        self.emit(['STORE', s[1]])
+
+        for stmt in s[3]:
+            self.gen_stmt(stmt)
+
+        self.emit(['JMP', loop_top])
+        end_addr = self.current_addr()
+        self.patch(jf, end_addr)
+
+        for idx in break_patches:
+            self.patch(idx, end_addr)
+        for idx in cont_patches:
+            self.patch(idx, loop_top)
+
+        self.loop_stack.pop()
+
+    def gen_def(self, s):
+        # s = ['DEF', name, params, body]
+        jmp_over = self.emit(['JMP', -1])
+        func_start = self.current_addr()
+
+        self.func_depth += 1
+        for stmt in s[3]:
+            self.gen_stmt(stmt)
+        # implicit nil return
+        self.emit(['CONST', nil])
+        self.emit(['RET'])
+        self.func_depth -= 1
+
+        self.patch(jmp_over, self.current_addr())
+        self.emit(['MAKE_FUNC', s[1], func_start, s[2]])
+        self.emit(['STORE', s[1]])
+
+    def gen_class(self, s):
+        # s = ['CLASS', name, parent, methods]
+        # Emit each method as a function, collect into class
+        method_names = []
+        for m in s[3]:
+            if m[0] == 'DEF':
+                self.gen_def(m)
+                method_names.append(m[1])
+        self.emit(['MAKE_CLASS', s[1], s[2], method_names])
+        self.emit(['STORE', s[1]])
+
+    # ── expressions ──
+
+    def gen_expr(self, e):
+        if e == nil:
+            self.emit(['CONST', nil])
+            return
+        t = e[0]
+
+        if t == 'NIL':
+            self.emit(['CONST', nil])
+        elif t == 'BOOL':
+            self.emit(['CONST', e[1]])
+        elif t == 'NUM':
+            self.emit(['CONST', e[1]])
+        elif t == 'STR':
+            self.emit(['CONST', e[1]])
+        elif t == 'VAR':
+            self.emit(['LOAD', e[1]])
+
+        elif t == 'LIST':
+            for elem in e[1]:
+                self.gen_expr(elem)
+            self.emit(['BUILD_LIST', len(e[1])])
+
+        elif t == 'DICT':
+            for pair in e[1]:
+                self.gen_expr(pair[0])
+                self.gen_expr(pair[1])
+            self.emit(['BUILD_DICT', len(e[1])])
+
+        elif t == 'GET_ATTR':
+            self.gen_expr(e[1])
+            self.emit(['LOAD_ATTR', e[2]])
+
+        elif t == 'SUBSCRIPT':
+            self.gen_expr(e[1])
+            self.gen_expr(e[2])
+            self.emit(['LOAD_ITEM'])
+
+        elif t == 'CALL_ATTR':
+            # e = ['CALL_ATTR', obj, attr, args]
+            self.gen_expr(e[1])
+            for a in e[3]:
+                self.gen_expr(a)
+            self.emit(['CALL_ATTR', e[2], len(e[3])])
+
+        elif t == 'CALL_EXPR':
+            # e = ['CALL_EXPR', func_expr, args]
+            # Optimise: simple name call → CALL (handles builtins)
+            if e[1][0] == 'VAR':
+                for a in e[2]:
+                    self.gen_expr(a)
+                self.emit(['CALL', e[1][1], len(e[2])])
+            else:
+                self.gen_expr(e[1])
+                for a in e[2]:
+                    self.gen_expr(a)
+                self.emit(['CALL_EXPR', len(e[2])])
+
+        elif t == 'CALL':
+            # plain function call by name
+            for a in e[2]:
+                self.gen_expr(a)
+            self.emit(['CALL', e[1], len(e[2])])
+
+        elif t == 'AND':
+            self.gen_expr(e[1])
+            self.emit(['DUP'])
+            jf = self.emit(['JMP_IF_FALSE', -1])
+            self.emit(['POP'])
+            self.gen_expr(e[2])
+            self.patch(jf, self.current_addr())
+
+        elif t == 'OR':
+            self.gen_expr(e[1])
+            self.emit(['DUP'])
+            jt = self.emit(['JMP_IF_TRUE', -1])
+            self.emit(['POP'])
+            self.gen_expr(e[2])
+            self.patch(jt, self.current_addr())
+
+        elif t == 'NOT':
+            self.gen_expr(e[1])
+            self.emit(['NOT'])
+
+        elif t == 'NEG':
+            self.gen_expr(e[1])
+            self.emit(['NEG'])
+
+        elif t == 'BITNOT':
+            self.gen_expr(e[1])
+            self.emit(['BITNOT'])
+
+        elif t == 'IN':
+            self.gen_expr(e[1])
+            self.gen_expr(e[2])
+            self.emit(['IN'])
+
+        elif t == 'NOT_IN':
+            self.gen_expr(e[1])
+            self.gen_expr(e[2])
+            self.emit(['IN'])
+            self.emit(['NOT'])
+
+        elif t == '+' or t == '-' or t == '*' or t == '/' or t == '//' or t == '%' or t == '**':
+            self.gen_expr(e[1])
+            self.gen_expr(e[2])
+            self.emit([t])
+
+        elif t == '==' or t == '!=' or t == '<' or t == '>' or t == '<=' or t == '>=':
+            self.gen_expr(e[1])
+            self.gen_expr(e[2])
+            self.emit([t])
+
+        else:
+            self.emit(['CONST', nil])
+
+# ─── VM ──────────────────────────────────────────────────────────────────────
+
 class VM:
     def __init__(self, code):
         self.code = code
         self.ip = 0
         self.stack = []
         self.globals = {}
-        self.functions = {}
-        self.call_stack = []
+        self.call_frames = []   # [{return_ip, locals, stack_base}]
+        self.locals = {}
 
     def run(self):
         while self.ip < len(self.code):
             op = self.code[self.ip]
             self.ip += 1
-            self.exec(op)
-            if self.ip >= len(self.code):
-                break
+            self.exec_op(op)
 
-    def exec(self, op):
-        t = tok_type(op)
-        
-        if t == 'HALT':
-            self.ip = len(self.code)
-        
-        elif t == 'CONST':
-            self.stack.append(op[1])
-        
-        elif t == 'LOAD':
-            name = op[1]
-            if self.globals.get(name) != nil:
-                self.stack.append(self.globals[name])
-            else:
-                self.stack.append(nil)
-        
-        elif t == 'STORE':
-            val = self.pop()
-            name = op[1]
-            self.globals[name] = val
-        
-        elif t == 'ADD':
-            b = self.pop()
-            a = self.pop()
-            if type(a) == "str" and type(b) == "str":
-                self.stack.append(a + b)
-            elif type(a) == "list" and type(b) == "list":
-                self.stack.append(a + b)
-            else:
-                self.stack.append(a + b)
-        
-        elif t == 'SUB':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a - b)
-        
-        elif t == 'MUL':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a * b)
-        
-        elif t == 'DIV':
-            b = self.pop()
-            a = self.pop()
-            if b == 0:
-                self.stack.append(0)
-            else:
-                self.stack.append(int(a / b))
-        
-        elif t == 'NEG':
-            a = self.pop()
-            self.stack.append(-a)
-        
-        elif t == 'NOT':
-            a = self.pop()
-            self.stack.append(not a)
-        
-        elif t == '==':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a == b)
-        
-        elif t == '!=':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a != b)
-        
-        elif t == '<':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a < b)
-        
-        elif t == '>':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a > b)
-        
-        elif t == '<=':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a <= b)
-        
-        elif t == '>=':
-            b = self.pop()
-            a = self.pop()
-            self.stack.append(a >= b)
-        
-        elif t == 'PRINT':
-            n = op[1]
-            args = []
-            for i in range(n):
-                args.insert(0, self.pop())
-            print(args)
-        
-        elif t == 'LIST':
-            n = op[1]
-            elems = []
-            for i in range(n):
-                elems.insert(0, self.pop())
-            self.stack.append(elems)
-        
-        elif t == 'INDEX':
-            idx = self.pop()
-            lst = self.pop()
-            if type(lst) == "list" and idx >= 0 and idx < len(lst):
-                self.stack.append(lst[idx])
-            else:
-                self.stack.append(nil)
-        
-        elif t == 'CALL':
-            name = op[1]
-            nargs = op[2]
-            args = []
-            for i in range(nargs):
-                args.insert(0, self.pop())
-            
-            if name == 'len':
-                if len(args) == 1 and type(args[0]) == "list":
-                    self.stack.append(len(args[0]))
-                else:
-                    self.stack.append(0)
-            elif name == 'str':
-                self.stack.append(str(args[0]) if len(args) > 0 else "")
-            elif name == 'int':
-                self.stack.append(int(args[0]) if len(args) > 0 else 0)
-            elif name == 'range':
-                if len(args) == 1:
-                    self.stack.append(range(args[0]))
-                elif len(args) == 2:
-                    self.stack.append(range(args[0], args[1]))
-                else:
-                    self.stack.append(range(0))
-            else:
-                self.stack.append(nil)
+    def push(self, v):
+        self.stack.append(v)
 
     def pop(self):
         if len(self.stack) > 0:
             return self.stack.pop()
         return nil
 
-# Compile and run function - allows the compiler to compile and execute code
+    def peek_top(self):
+        if len(self.stack) > 0:
+            return self.stack[-1]
+        return nil
+
+    def load_var(self, name):
+        # check locals first (deepest frame)
+        if self.locals.get(name) != nil:
+            return self.locals[name]
+        # check captured env in current frame
+        if len(self.call_frames) > 0:
+            frame = self.call_frames[-1]
+            captured = frame.get('captured')
+            if captured != nil and captured.get(name) != nil:
+                return captured[name]
+        if self.globals.get(name) != nil:
+            return self.globals[name]
+        return nil
+
+    def store_var(self, name, val):
+        if len(self.call_frames) > 0:
+            self.locals[name] = val
+        else:
+            self.globals[name] = val
+
+    def do_user_call(self, func, args, is_init):
+        params = func.get('params')
+        addr = func.get('addr')
+        captured = func.get('captured')
+        new_locals = {}
+        if captured != nil:
+            for k in captured:
+                new_locals[k] = captured[k]
+        if params != nil:
+            for i in range(len(params)):
+                if i < len(args):
+                    new_locals[params[i]] = args[i]
+                else:
+                    new_locals[params[i]] = nil
+        frame = {'return_ip': self.ip, 'saved_locals': self.locals, 'stack_base': len(self.stack), 'is_init': is_init}
+        self.call_frames.append(frame)
+        self.locals = new_locals
+        self.ip = addr
+
+    def exec_op(self, op):
+        t = op[0]
+
+        if t == 'HALT':
+            self.ip = len(self.code)
+
+        elif t == 'CONST':
+            self.push(op[1])
+
+        elif t == 'LOAD':
+            self.push(self.load_var(op[1]))
+
+        elif t == 'STORE':
+            self.store_var(op[1], self.pop())
+
+        elif t == 'POP':
+            self.pop()
+
+        elif t == 'DUP':
+            v = self.peek_top()
+            self.push(v)
+
+        elif t == 'JMP':
+            self.ip = op[1]
+
+        elif t == 'JMP_IF_FALSE':
+            v = self.pop()
+            if not is_truthy(v):
+                self.ip = op[1]
+
+        elif t == 'JMP_IF_TRUE':
+            v = self.pop()
+            if is_truthy(v):
+                self.ip = op[1]
+
+        elif t == 'LOAD_ATTR':
+            obj = self.pop()
+            attr = op[1]
+            val = self.get_attr(obj, attr)
+            self.push(val)
+
+        elif t == 'STORE_ATTR':
+            val = self.pop()
+            obj = self.pop()
+            attr = op[1]
+            self.set_attr(obj, attr, val)
+
+        elif t == 'LOAD_ITEM':
+            idx = self.pop()
+            obj = self.pop()
+            self.push(self.get_item(obj, idx))
+
+        elif t == 'STORE_ITEM':
+            val = self.pop()
+            idx = self.pop()
+            obj = self.pop()
+            self.set_item(obj, idx, val)
+
+        elif t == 'CALL_ATTR':
+            attr = op[1]
+            nargs = op[2]
+            args = []
+            for i in range(nargs):
+                args.insert(0, self.pop())
+            obj = self.pop()
+            if is_list(obj):
+                self.push(self.call_list_method(obj, attr, args))
+            elif is_str(obj):
+                self.push(self.call_str_method(obj, attr, args))
+            elif is_dict(obj):
+                cls = obj.get('__class__')
+                m = nil
+                if cls != nil:
+                    m = self.lookup_method(cls, attr)
+                if m == nil:
+                    m = obj.get(attr)
+                if m != nil and is_dict(m) and m.get('__type__') == 'func':
+                    self.do_user_call(m, [obj] + args, false)
+                    # RET will push result
+                else:
+                    self.push(nil)
+            else:
+                self.push(nil)
+
+        elif t == 'CALL_EXPR':
+            nargs = op[1]
+            args = []
+            for i in range(nargs):
+                args.insert(0, self.pop())
+            func = self.pop()
+            if func != nil and is_dict(func):
+                ft = func.get('__type__')
+                if ft == 'func':
+                    self.do_user_call(func, args, false)
+                elif ft == 'class':
+                    inst = {'__type__': 'inst', '__class__': func}
+                    init_m = self.lookup_method(func, '__init__')
+                    if init_m != nil:
+                        self.push(inst)
+                        self.do_user_call(init_m, [inst] + args, true)
+                    else:
+                        self.push(inst)
+                elif ft == 'bound':
+                    f = func.get('func')
+                    s = func.get('self')
+                    self.do_user_call(f, [s] + args, false)
+                else:
+                    self.push(nil)
+            else:
+                self.push(nil)
+
+        elif t == 'CALL':
+            name = op[1]
+            nargs = op[2]
+            args = []
+            for i in range(nargs):
+                args.insert(0, self.pop())
+            func = self.load_var(name)
+            if func == nil:
+                func = self.globals.get(name)
+            if func != nil and is_dict(func):
+                ft = func.get('__type__')
+                if ft == 'func':
+                    self.do_user_call(func, args, false)
+                elif ft == 'class':
+                    inst = {'__type__': 'inst', '__class__': func}
+                    init_m = self.lookup_method(func, '__init__')
+                    if init_m != nil:
+                        self.push(inst)
+                        self.do_user_call(init_m, [inst] + args, true)
+                    else:
+                        self.push(inst)
+                elif ft == 'bound':
+                    f = func.get('func')
+                    s = func.get('self')
+                    self.do_user_call(f, [s] + args, false)
+                else:
+                    self.push(self.call_builtin(name, args))
+            else:
+                self.push(self.call_builtin(name, args))
+
+        elif t == 'CALL_BUILTIN':
+            name = op[1]
+            nargs = op[2]
+            args = []
+            for i in range(nargs):
+                args.insert(0, self.pop())
+            self.push(self.call_builtin(name, args))
+
+        elif t == 'RET':
+            val = self.pop()
+            if len(self.call_frames) > 0:
+                frame = self.call_frames.pop()
+                self.ip = frame['return_ip']
+                self.locals = frame['saved_locals']
+                base = frame['stack_base']
+                while len(self.stack) > base:
+                    self.stack.pop()
+                if not frame.get('is_init'):
+                    self.push(val)
+                # is_init: instance already sits below stack_base
+            else:
+                self.push(val)
+                self.ip = len(self.code)
+
+        elif t == 'MAKE_FUNC':
+            name = op[1]
+            addr = op[2]
+            params = op[3]
+            # capture current env snapshot for closures
+            captured = {}
+            for k in self.locals:
+                captured[k] = self.locals[k]
+            func = {'__type__': 'func', 'name': name, 'addr': addr, 'params': params, 'captured': captured}
+            self.push(func)
+
+        elif t == 'MAKE_CLASS':
+            name = op[1]
+            parent_name = op[2]
+            method_names = op[3]
+            methods = {}
+            # methods were already stored as globals by MAKE_FUNC+STORE
+            for mn in method_names:
+                f = self.globals.get(mn)
+                if f == nil:
+                    f = self.locals.get(mn)
+                if f != nil:
+                    methods[mn] = f
+            parent = nil
+            if parent_name != nil:
+                parent = self.globals.get(parent_name)
+            cls = {'__type__': 'class', '__name__': name, '__methods__': methods, '__parent__': parent}
+            self.push(cls)
+
+        elif t == 'BUILD_LIST':
+            n = op[1]
+            elems = []
+            for i in range(n):
+                elems.insert(0, self.pop())
+            self.push(elems)
+
+        elif t == 'BUILD_DICT':
+            n = op[1]
+            d = {}
+            pairs = []
+            for i in range(n):
+                pairs.insert(0, [self.pop(), self.pop()])
+            for pair in pairs:
+                k = pair[1]  # popped val then key, reversed
+                v = pair[0]
+                d[k] = v
+            self.push(d)
+
+        elif t == 'PRINT':
+            n = op[1]
+            args = []
+            for i in range(n):
+                args.insert(0, self.pop())
+            parts = []
+            for a in args:
+                parts.append(self.to_str(a))
+            print(" ".join(parts))
+
+        elif t == 'NOT':
+            self.push(not is_truthy(self.pop()))
+
+        elif t == 'NEG':
+            v = self.pop()
+            self.push(-v)
+
+        elif t == 'BITNOT':
+            self.push(~self.pop())
+
+        elif t == 'IN':
+            container = self.pop()
+            item = self.pop()
+            self.push(self.val_in(item, container))
+
+        elif t == '+':
+            b = self.pop()
+            a = self.pop()
+            self.push(a + b)
+
+        elif t == '-':
+            b = self.pop()
+            a = self.pop()
+            self.push(a - b)
+
+        elif t == '*':
+            b = self.pop()
+            a = self.pop()
+            self.push(a * b)
+
+        elif t == '/':
+            b = self.pop()
+            a = self.pop()
+            if b == 0:
+                self.push(0)
+            else:
+                self.push(int(a / b))
+
+        elif t == '//':
+            b = self.pop()
+            a = self.pop()
+            if b == 0:
+                self.push(0)
+            else:
+                self.push(int(a / b))
+
+        elif t == '%':
+            b = self.pop()
+            a = self.pop()
+            self.push(a % b)
+
+        elif t == '**':
+            b = self.pop()
+            a = self.pop()
+            self.push(a ** b)
+
+        elif t == '==':
+            b = self.pop()
+            a = self.pop()
+            self.push(a == b)
+
+        elif t == '!=':
+            b = self.pop()
+            a = self.pop()
+            self.push(a != b)
+
+        elif t == '<':
+            b = self.pop()
+            a = self.pop()
+            self.push(a < b)
+
+        elif t == '>':
+            b = self.pop()
+            a = self.pop()
+            self.push(a > b)
+
+        elif t == '<=':
+            b = self.pop()
+            a = self.pop()
+            self.push(a <= b)
+
+        elif t == '>=':
+            b = self.pop()
+            a = self.pop()
+            self.push(a >= b)
+
+    # ── Object model helpers ─────────────────────────────────────────────────
+
+    def get_attr(self, obj, attr):
+        if obj == nil:
+            return nil
+        if is_dict(obj):
+            # check instance field
+            v = obj.get(attr)
+            if v != nil:
+                return v
+            # check class methods
+            cls = obj.get('__class__')
+            if cls != nil:
+                m = self.lookup_method(cls, attr)
+                if m != nil:
+                    return {'__type__': 'bound', 'self': obj, 'func': m}
+            return nil
+        if is_list(obj):
+            return self.list_method(obj, attr)
+        if is_str(obj):
+            return self.str_method_obj(obj, attr)
+        return nil
+
+    def set_attr(self, obj, attr, val):
+        if is_dict(obj):
+            obj[attr] = val
+
+    def get_item(self, obj, idx):
+        if is_list(obj) or is_str(obj):
+            if is_int(idx):
+                if idx < 0:
+                    idx = len(obj) + idx
+                if idx >= 0 and idx < len(obj):
+                    return obj[idx]
+        if is_dict(obj):
+            return obj.get(idx)
+        return nil
+
+    def set_item(self, obj, idx, val):
+        if is_list(obj) and is_int(idx):
+            if idx < 0:
+                idx = len(obj) + idx
+            obj[idx] = val
+        elif is_dict(obj):
+            obj[idx] = val
+
+    def val_in(self, item, container):
+        if is_list(container) or is_str(container):
+            for x in container:
+                if x == item:
+                    return true
+            return false
+        if is_dict(container):
+            return container.get(item) != nil
+        return false
+
+    def lookup_method(self, cls, name):
+        if cls == nil:
+            return nil
+        methods = cls.get('__methods__')
+        if methods != nil:
+            m = methods.get(name)
+            if m != nil:
+                return m
+        parent = cls.get('__parent__')
+        if parent != nil:
+            return self.lookup_method(parent, name)
+        return nil
+
+    def call_method(self, obj, attr, args):
+        if obj == nil:
+            return nil
+
+        # Built-in list methods
+        if is_list(obj):
+            return self.call_list_method(obj, attr, args)
+
+        # Built-in string methods
+        if is_str(obj):
+            return self.call_str_method(obj, attr, args)
+
+        # Instance method dispatch
+        if is_dict(obj):
+            v = obj.get(attr)
+            if v != nil and is_dict(v) and v.get('__type__') == 'func':
+                return self.call_func_obj(v, [obj] + args)
+            # check class
+            cls = obj.get('__class__')
+            if cls != nil:
+                m = self.lookup_method(cls, attr)
+                if m != nil:
+                    return self.call_func_obj(m, [obj] + args)
+        return nil
+
+    def call_list_method(self, lst, attr, args):
+        if attr == 'append':
+            lst.append(args[0])
+            return nil
+        if attr == 'pop':
+            if len(args) > 0:
+                idx = args[0]
+                if idx < 0:
+                    idx = len(lst) + idx
+                v = lst[idx]
+                lst.pop(idx)
+                return v
+            return lst.pop()
+        if attr == 'insert':
+            lst.insert(args[0], args[1])
+            return nil
+        if attr == 'remove':
+            for i in range(len(lst)):
+                if lst[i] == args[0]:
+                    lst.pop(i)
+                    return nil
+            return nil
+        if attr == 'index':
+            for i in range(len(lst)):
+                if lst[i] == args[0]:
+                    return i
+            return -1
+        if attr == 'sort':
+            lst.sort()
+            return nil
+        if attr == 'reverse':
+            lst.reverse()
+            return nil
+        if attr == 'extend':
+            for x in args[0]:
+                lst.append(x)
+            return nil
+        if attr == 'count':
+            n = 0
+            for x in lst:
+                if x == args[0]:
+                    n += 1
+            return n
+        return nil
+
+    def call_str_method(self, s, attr, args):
+        if attr == 'upper':
+            return s.upper()
+        if attr == 'lower':
+            return s.lower()
+        if attr == 'strip':
+            return s.strip()
+        if attr == 'lstrip':
+            return s.lstrip()
+        if attr == 'rstrip':
+            return s.rstrip()
+        if attr == 'split':
+            if len(args) > 0:
+                return s.split(args[0])
+            return s.split()
+        if attr == 'join':
+            parts = []
+            for x in args[0]:
+                parts.append(str(x))
+            return s.join(parts)
+        if attr == 'replace':
+            return s.replace(args[0], args[1])
+        if attr == 'startswith':
+            return s.startswith(args[0])
+        if attr == 'endswith':
+            return s.endswith(args[0])
+        if attr == 'find':
+            return s.find(args[0])
+        if attr == 'count':
+            return s.count(args[0])
+        if attr == 'format':
+            result = ""
+            i = 0
+            arg_i = 0
+            while i < len(s):
+                if s[i] == '{' and i + 1 < len(s) and s[i + 1] == '}':
+                    if arg_i < len(args):
+                        result += self.to_str(args[arg_i])
+                        arg_i += 1
+                    i += 2
+                else:
+                    result += s[i]
+                    i += 1
+            return result
+        return nil
+
+    def list_method(self, lst, attr):
+        return nil
+
+    def str_method_obj(self, s, attr):
+        return nil
+
+    def call_by_name(self, name, nargs, args):
+        # builtins first
+        result = self.call_builtin(name, args)
+        if result != nil or name == 'print' or name == 'len' or name == 'type' or name == 'str' or name == 'int' or name == 'float' or name == 'bool' or name == 'range' or name == 'list' or name == 'dict' or name == 'repr' or name == 'abs' or name == 'min' or name == 'max' or name == 'sum' or name == 'input' or name == 'isinstance' or name == 'hasattr' or name == 'getattr':
+            return result
+
+        # user-defined function
+        func = self.load_var(name)
+        if func == nil:
+            func = self.globals.get(name)
+        if func != nil:
+            return self.call_func_obj(func, args)
+        return nil
+
+    def call_func_obj(self, func, args):
+        if func == nil:
+            return nil
+
+        # Bound method
+        if is_dict(func) and func.get('__type__') == 'bound':
+            actual_func = func.get('func')
+            self_obj = func.get('self')
+            return self.call_func_obj(actual_func, [self_obj] + args)
+
+        # Class instantiation
+        if is_dict(func) and func.get('__type__') == 'class':
+            inst = {'__type__': 'inst', '__class__': func}
+            # inherit parent fields? not needed
+            init_m = self.lookup_method(func, '__init__')
+            if init_m != nil:
+                self.call_func_obj(init_m, [inst] + args)
+            return inst
+
+        # User function
+        if is_dict(func) and func.get('__type__') == 'func':
+            params = func.get('params')
+            addr = func.get('addr')
+            captured = func.get('captured')
+
+            new_locals = {}
+            # bind captured env
+            if captured != nil:
+                for k in captured:
+                    new_locals[k] = captured[k]
+            # bind params
+            if params != nil:
+                for i in range(len(params)):
+                    if i < len(args):
+                        new_locals[params[i]] = args[i]
+                    else:
+                        new_locals[params[i]] = nil
+
+            frame = {'return_ip': self.ip, 'saved_locals': self.locals, 'stack_base': len(self.stack)}
+            self.call_frames.append(frame)
+            self.locals = new_locals
+            self.ip = addr
+            return nil  # result pushed when RET executes
+
+        return nil
+
+    def call_builtin(self, name, args):
+        if name == 'len':
+            if len(args) == 1:
+                v = args[0]
+                if is_dict(v):
+                    n = 0
+                    for k in v:
+                        n += 1
+                    return n
+                return len(v)
+            return 0
+
+        if name == 'str':
+            return self.to_str(args[0]) if len(args) > 0 else ""
+
+        if name == 'int':
+            if len(args) > 0:
+                v = args[0]
+                if is_int(v):
+                    return v
+                if is_str(v):
+                    return int(v)
+                if type(v) == "float":
+                    return int(v)
+            return 0
+
+        if name == 'float':
+            if len(args) > 0:
+                v = args[0]
+                if type(v) == "float":
+                    return v
+                if is_int(v):
+                    return float(v)
+                if is_str(v):
+                    return float(v)
+            return 0.0
+
+        if name == 'bool':
+            return is_truthy(args[0]) if len(args) > 0 else false
+
+        if name == 'type':
+            if len(args) > 0:
+                return type(args[0])
+            return "nil"
+
+        if name == 'repr':
+            return self.to_repr(args[0]) if len(args) > 0 else "nil"
+
+        if name == 'abs':
+            if len(args) > 0 and is_int(args[0]):
+                v = args[0]
+                if v < 0:
+                    return -v
+                return v
+            return 0
+
+        if name == 'range':
+            if len(args) == 1:
+                return range(args[0])
+            if len(args) == 2:
+                return range(args[0], args[1])
+            if len(args) == 3:
+                return range(args[0], args[1], args[2])
+            return range(0)
+
+        if name == 'list':
+            if len(args) == 0:
+                return []
+            v = args[0]
+            if is_list(v):
+                return v
+            result = []
+            for x in v:
+                result.append(x)
+            return result
+
+        if name == 'dict':
+            return {} if len(args) == 0 else args[0]
+
+        if name == 'min':
+            if len(args) == 1 and is_list(args[0]):
+                lst = args[0]
+                if len(lst) == 0:
+                    return nil
+                m = lst[0]
+                for x in lst:
+                    if x < m:
+                        m = x
+                return m
+            if len(args) >= 2:
+                if args[0] < args[1]:
+                    return args[0]
+                return args[1]
+            return nil
+
+        if name == 'max':
+            if len(args) == 1 and is_list(args[0]):
+                lst = args[0]
+                if len(lst) == 0:
+                    return nil
+                m = lst[0]
+                for x in lst:
+                    if x > m:
+                        m = x
+                return m
+            if len(args) >= 2:
+                if args[0] > args[1]:
+                    return args[0]
+                return args[1]
+            return nil
+
+        if name == 'sum':
+            if len(args) == 1 and is_list(args[0]):
+                total = 0
+                for x in args[0]:
+                    total += x
+                return total
+            return 0
+
+        if name == 'sorted':
+            if len(args) >= 1 and is_list(args[0]):
+                copy = []
+                for x in args[0]:
+                    copy.append(x)
+                copy.sort()
+                return copy
+            return []
+
+        if name == 'reversed':
+            if len(args) >= 1 and is_list(args[0]):
+                copy = []
+                for x in args[0]:
+                    copy.append(x)
+                copy.reverse()
+                return copy
+            return []
+
+        if name == 'enumerate':
+            if len(args) >= 1 and is_list(args[0]):
+                result = []
+                for i in range(len(args[0])):
+                    result.append([i, args[0][i]])
+                return result
+            return []
+
+        if name == 'zip':
+            if len(args) >= 2:
+                result = []
+                n = len(args[0])
+                if len(args[1]) < n:
+                    n = len(args[1])
+                for i in range(n):
+                    result.append([args[0][i], args[1][i]])
+                return result
+            return []
+
+        if name == 'isinstance':
+            if len(args) >= 2:
+                obj = args[0]
+                cls_name = args[1]
+                if is_str(cls_name):
+                    return type(obj) == cls_name
+                if is_dict(obj) and obj.get('__class__') != nil:
+                    c = obj.get('__class__')
+                    if is_dict(cls_name) and c.get('__name__') == cls_name.get('__name__'):
+                        return true
+            return false
+
+        if name == 'hasattr':
+            if len(args) >= 2:
+                obj = args[0]
+                attr = args[1]
+                if is_dict(obj):
+                    return obj.get(attr) != nil
+            return false
+
+        if name == 'getattr':
+            if len(args) >= 2:
+                return self.get_attr(args[0], args[1])
+            return nil
+
+        if name == 'print':
+            parts = []
+            for a in args:
+                parts.append(self.to_str(a))
+            print(" ".join(parts))
+            return nil
+
+        if name == 'input':
+            if len(args) > 0:
+                return input(self.to_str(args[0]))
+            return input("")
+
+        return nil
+
+    def to_str(self, v):
+        if v == nil:
+            return "nil"
+        if is_bool(v):
+            if v:
+                return "true"
+            return "false"
+        if is_list(v):
+            parts = []
+            for x in v:
+                parts.append(self.to_repr(x))
+            return "[" + ", ".join(parts) + "]"
+        if is_dict(v):
+            if v.get('__type__') == 'inst':
+                cls = v.get('__class__')
+                if cls != nil:
+                    return "<" + cls.get('__name__') + " instance>"
+            if v.get('__type__') == 'func':
+                return "<func " + str(v.get('name')) + ">"
+            if v.get('__type__') == 'class':
+                return "<class " + str(v.get('__name__')) + ">"
+            return str(v)
+        return str(v)
+
+    def to_repr(self, v):
+        if is_str(v):
+            return '"' + v + '"'
+        return self.to_str(v)
+
+# ─── Pipeline ────────────────────────────────────────────────────────────────
+
 def compile_and_run(src):
     lexer = Lexer(src)
-    tokens = lexer.tokenize()
-    parser = Parser(tokens)
+    toks = lexer.tokenize()
+    parser = Parser(toks)
     ast = parser.parse()
     gen = Generator(ast)
     code = gen.generate()
     vm = VM(code)
     vm.run()
 
-# Test cases
-tests = [
-    'print(1)',
-    'print(1 + 2)',
-    'print(10 - 3)',
-    'print(2 * 5)',
-    'print(10 / 3)',
-    'print(1 == 1)',
-    'print(1 != 2)',
-    'print(1 < 2)',
-    'print(3 > 2)',
-    'print(1 + 2 * 3)',
-    'print([1, 2, 3])',
-    'x = 42\nprint(x)\na = 5\nb = 3\nprint(a + b)\nprint(a < b)',
-    'print("hello")',
-]
+# ─── Tests ───────────────────────────────────────────────────────────────────
 
-# Bootstrap test - compiler compiles and runs its own test suite
-print("=== Bootstrap Test ===")
-print("Running self-hosted compiler tests...\n")
+print("=== Self-Hosted Compiler v2.0 ===")
+print("")
 
-for src in tests:
-    print("\n=== " + src + " ===")
-    compile_and_run(src)
+# Basic expressions
+print("-- Arithmetic --")
+compile_and_run('print(1 + 2)')
+compile_and_run('print(10 - 3)')
+compile_and_run('print(3 * 4)')
+compile_and_run('print(10 / 3)')
+compile_and_run('print(2 ** 8)')
+compile_and_run('print(10 % 3)')
 
-print("\nAll tests done!")
-print("\n=== Bootstrap Complete ===")
-print("Self-hosted compiler successfully ran all tests!")
+print("")
+print("-- Variables --")
+compile_and_run('x = 42\nprint(x)')
+compile_and_run('a = 5\nb = 3\nprint(a + b)')
+
+print("")
+print("-- If/elif/else --")
+compile_and_run('x = 10\nif x > 5:\n    print("big")\nelse:\n    print("small")')
+compile_and_run('x = 3\nif x == 1:\n    print("one")\nelif x == 2:\n    print("two")\nelif x == 3:\n    print("three")\nelse:\n    print("other")')
+
+print("")
+print("-- While loop --")
+compile_and_run('i = 0\nwhile i < 5:\n    i += 1\nprint(i)')
+
+print("")
+print("-- For loop --")
+compile_and_run('total = 0\nfor i in range(5):\n    total += i\nprint(total)')
+
+print("")
+print("-- Break/continue --")
+compile_and_run('i = 0\nwhile i < 10:\n    i += 1\n    if i == 5:\n        break\nprint(i)')
+compile_and_run('total = 0\nfor i in range(10):\n    if i % 2 == 0:\n        continue\n    total += i\nprint(total)')
+
+print("")
+print("-- Functions --")
+compile_and_run('def add(a, b):\n    return a + b\nprint(add(3, 4))')
+compile_and_run('def fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\nprint(fib(10))')
+
+print("")
+print("-- Closures --")
+compile_and_run('def make_adder(n):\n    def adder(x):\n        return x + n\n    return adder\nadd5 = make_adder(5)\nprint(add5(3))')
+
+print("")
+print("-- Lists --")
+compile_and_run('lst = [1, 2, 3]\nlst.append(4)\nprint(len(lst))\nprint(lst[0])\nprint(lst[-1])')
+
+print("")
+print("-- Classes --")
+compile_and_run('class Counter:\n    def __init__(self):\n        self.count = 0\n    def inc(self):\n        self.count += 1\n    def get(self):\n        return self.count\nc = Counter()\nc.inc()\nc.inc()\nc.inc()\nprint(c.get())')
+
+print("")
+print("-- Inheritance --")
+compile_and_run('class Animal:\n    def __init__(self, name):\n        self.name = name\n    def speak(self):\n        return "..."\nclass Dog(Animal):\n    def speak(self):\n        return "Woof"\nd = Dog("Rex")\nprint(d.name)\nprint(d.speak())')
+
+print("")
+print("-- Non-trivial program: FizzBuzz --")
+fizzbuzz = 'i = 1\nwhile i <= 20:\n    if i % 15 == 0:\n        print("FizzBuzz")\n    elif i % 3 == 0:\n        print("Fizz")\n    elif i % 5 == 0:\n        print("Buzz")\n    else:\n        print(i)\n    i += 1'
+compile_and_run(fizzbuzz)
+
+print("")
+print("=== All tests complete ===")
