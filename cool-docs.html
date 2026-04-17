@@ -967,7 +967,7 @@ cargo build --release</code></pre>
                 <td>Run a Cool script</td>
               </tr>
               <tr>
-                <td><code>./target/release/cool Cool/shell.cool</code></td>
+                <td><code>./target/release/cool coolapps/shell.cool</code></td>
                 <td>Launch Cool shell</td>
               </tr>
             </tbody>
@@ -1883,7 +1883,8 @@ import re
 import time
 import random
 import collections
-import term</code></pre>
+import term
+import ffi</code></pre>
         </div>
 
         <h3>math</h3>
@@ -2037,6 +2038,79 @@ term.clear()        # clear screen</code></pre>
           <code>term</code> for real-time key input and cursor positioning. Powered by the <a
             href="https://crates.io/crates/crossterm" target="_blank" rel="noopener noreferrer">crossterm</a> Rust
           crate.
+        </div>
+
+        <h3>ffi (Foreign Function Interface)</h3>
+        <p>Call native C functions from shared libraries. This enables low-level systems programming and access to
+          native libraries.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import ffi
+
+# Open a shared library
+libm = ffi.open("libm")           # math library on Unix
+libc = ffi.open("libc")          # C standard library
+
+# Define a function: ffi.func(lib, name, return_type, [arg_types])
+sqrt_fn = ffi.func(libm, "sqrt", "f64", ["f64"])
+abs_fn  = ffi.func(libc, "abs",  "i32", ["i32"])
+
+# Call the native function
+sqrt_fn(2.0)    # 1.414213...
+abs_fn(-42)     # 42</code></pre>
+        </div>
+
+        <h4>Supported Types</h4>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>FFI Type</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>"i8"</code>, <code>"i16"</code>, <code>"i32"</code>, <code>"i64"</code></td>
+                <td>Signed integers</td>
+              </tr>
+              <tr>
+                <td><code>"u8"</code>, <code>"u16"</code>, <code>"u32"</code>, <code>"u64"</code></td>
+                <td>Unsigned integers</td>
+              </tr>
+              <tr>
+                <td><code>"f32"</code>, <code>"f64"</code></td>
+                <td>Floating point</td>
+              </tr>
+              <tr>
+                <td><code>"void"</code></td>
+                <td>Noreturn value</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Memory Access</h4>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import ffi
+
+# Allocate and free memory
+ptr = ffi.malloc(1024)           # allocate 1024 bytes
+ffi.free(ptr)                   # free memory
+
+# Read/write raw memory
+ptr = ffi.malloc(8)
+ffi.write_i64(ptr, 0, 42)       # write i64 value at offset 0
+value = ffi.read_i64(ptr, 0)    # read i64 value
+print(value)                    # 42
+ffi.free(ptr)</code></pre>
+        </div>
+
+        <div class="callout">
+          <strong>Example:</strong> See <code>examples/ffi_demo.cool</code> for a complete example calling
+          <code>sin</code>, <code>cos</code>, <code>sqrt</code>, <code>pow</code>, <code>atan2</code>, and
+          <code>abs</code> from the C standard library.
         </div>
 
         <h3>Package System</h3>
@@ -2332,7 +2406,7 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
 
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">./target/release/cool Cool/shell.cool</code></pre>
+          <pre><code class="language-bash">./target/release/cool coolapps/shell.cool</code></pre>
         </div>
 
         <h3>File System Commands</h3>
@@ -2528,7 +2602,7 @@ echo Done.</code></pre>
         <h3>calc — Calculator REPL</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run Cool/calc.cool</code></pre>
+          <pre><code class="language-bash">run coolapps/calc.cool</code></pre>
         </div>
         <p>Interactive calculator with persistent variables and full <code>math</code> library support.</p>
         <div class="code-wrap">
@@ -2545,7 +2619,7 @@ echo Done.</code></pre>
         <h3>notes — Note-taking App</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run Cool/notes.cool</code></pre>
+          <pre><code class="language-bash">run coolapps/notes.cool</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -2583,7 +2657,7 @@ echo Done.</code></pre>
         <h3>top — Process Viewer</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run Cool/top.cool</code></pre>
+          <pre><code class="language-bash">run coolapps/top.cool</code></pre>
         </div>
         <p>Displays running processes and system statistics using <code>os.popen("ps aux")</code>. Updates in real time.
         </p>
@@ -2591,7 +2665,7 @@ echo Done.</code></pre>
         <h3>edit — Text Editor</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run Cool/edit.cool filename.txt</code></pre>
+          <pre><code class="language-bash">run coolapps/edit.cool filename.txt</code></pre>
         </div>
         <p>A nano-like terminal text editor powered by <code>import term</code>.</p>
         <div class="table-wrap">
@@ -2622,7 +2696,7 @@ echo Done.</code></pre>
         <h3>snake — Snake Game</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run Cool/snake.cool</code></pre>
+          <pre><code class="language-bash">run coolapps/snake.cool</code></pre>
         </div>
         <p>ASCII Snake game with real-time arrow key input via <code>import term</code>. Runs entirely in the terminal.
         </p>
@@ -2630,7 +2704,7 @@ echo Done.</code></pre>
         <h3>http — HTTP Client</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run Cool/http.cool</code></pre>
+          <pre><code class="language-bash">run coolapps/http.cool</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -2670,7 +2744,7 @@ echo Done.</code></pre>
 
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool/
+          <pre><code class="language-bash">cool-lang/
 ├── src/
 │   ├── main.rs           # CLI entry point and REPL loop
 │   ├── lexer.rs          # Token scanner — INDENT/DEDENT handling
@@ -2681,7 +2755,7 @@ echo Done.</code></pre>
 │   ├── compiler.rs       # AST → bytecode compiler
 │   └── vm.rs             # Bytecode virtual machine
 │
-├── Cool/
+├── coolapps/
 │   ├── shell.cool        # Main Cool interactive shell
 │   ├── calc.cool         # Calculator REPL
 │   ├── notes.cool        # Note-taking application
@@ -2696,7 +2770,11 @@ echo Done.</code></pre>
 │   ├── oop.cool                # Classes, inheritance, operator overloading
 │   ├── functional.cool         # Closures, lambdas, map/filter, memoize
 │   ├── errors_and_files.cool   # try/except/finally, file I/O, JSON
-│   └── stdlib.cool             # math, random, re, json, time, collections
+│   ├── stdlib.cool             # math, random, re, json, time, collections
+│   └── ffi_demo.cool           # FFI — call C functions from shared libraries
+│
+├── coolc/
+│   └── compiler_vm.cool   # Self-hosted compiler (written in Cool!)
 │
 ├── Cargo.toml
 ├── Cargo.lock
@@ -2775,41 +2853,39 @@ echo Done.</code></pre>
               <tr>
                 <td>8</td>
                 <td>Bytecode VM / LLVM compiler</td>
-                <td><span class="badge badge-wip">In Progress</span></td>
+                <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
                 <td>9</td>
-                <td>Real kernel — bare-metal boot, self-hosting</td>
-                <td><span class="badge badge-todo">Very Long Term</span></td>
+                <td>Self-Hosted Compiler — compiler written in Cool itself</td>
+                <td><span class="badge badge-done">Complete</span></td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <h3>Phase 8 — Compiler</h3>
-        <p>The goal is to compile Cool to native binaries, enabling self-hosting and OS-level use. The bytecode VM is
-          complete; the LLVM backend is next.</p>
+        <p>The compiler backend compiles Cool to native binaries, enabling self-hosting and OS-level use.</p>
         <ul>
           <li>✅ Bytecode VM — compile AST to bytecode, run on a stack-based virtual machine (<code>compiler.rs</code>,
             <code>vm.rs</code>, <code>opcode.rs</code>)
           </li>
-          <li>LLVM backend — compile Cool → LLVM IR → native binary</li>
-          <li>FFI — call C functions from Cool code</li>
-          <li>Inline assembly — <code>asm { ... }</code> blocks</li>
-          <li>Pointer types and raw memory access</li>
-          <li><code>cool build</code> command for compiling projects</li>
+          <li>✅ LLVM backend — compile Cool → LLVM IR → native binary</li>
+          <li>✅ FFI — call C functions from Cool code via <code>import ffi</code></li>
+          <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
+          <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
+          <li>✅ <code>cool build</code> command for compiling projects</li>
+          <li>✅ Classes in LLVM — <code>class</code>, <code>__init__</code>, methods, attribute access</li>
         </ul>
 
-        <h3>Phase 9 — Real Kernel</h3>
-        <p>The very long-term goal: a real OS that boots on bare metal with Cool as its shell.</p>
+        <h3>Phase 9 — Self-Hosted Compiler</h3>
+        <p>The compiler is now written entirely in Cool itself, enabling Cool to compile itself!</p>
         <ul>
-          <li>Bootloader (GRUB or custom)</li>
-          <li>Rust kernel — memory management, interrupts, process scheduler</li>
-          <li>VGA / framebuffer text output</li>
-          <li>Keyboard and filesystem drivers</li>
-          <li>Cool interpreter embedded in the kernel</li>
-          <li>Cool shell boots as PID 1</li>
-          <li>Self-hosting — Cool can run <code>cool build</code> to recompile itself</li>
+          <li>✅ Lexer in Cool (<code>coolc/compiler_vm.cool</code>)</li>
+          <li>✅ Recursive descent parser in Cool</li>
+          <li>✅ Code generator (AST → bytecode) in Cool</li>
+          <li>✅ Bytecode VM in Cool (to execute compiled programs)</li>
+          <li>✅ Bootstrap: self-hosted compiler compiles itself</li>
         </ul>
 
         <div class="callout">
