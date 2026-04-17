@@ -174,6 +174,7 @@ impl VM {
         self.stack.last().expect("stack underflow")
     }
 
+    #[allow(dead_code)]
     fn peek_mut(&mut self) -> &mut VmValue {
         self.stack.last_mut().expect("stack underflow")
     }

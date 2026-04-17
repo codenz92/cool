@@ -288,6 +288,7 @@ pub enum Value {
     FfiLib(FfiLibHandle),
     /// A callable C function with resolved symbol address and type info
     FfiFunc {
+        #[allow(dead_code)]
         lib: FfiLibHandle,
         sym: usize,
         name: String,

@@ -731,6 +731,7 @@ CoolVal cool_is_instance(CoolVal obj, const char* class_name) {
 // ── Runtime function table ────────────────────────────────────────────────────
 
 struct RuntimeFns<'ctx> {
+    #[allow(dead_code)]
     cv_nil: FunctionValue<'ctx>,
     cv_int: FunctionValue<'ctx>,
     cv_float: FunctionValue<'ctx>,
@@ -777,9 +778,12 @@ struct RuntimeFns<'ctx> {
     cool_list_make: FunctionValue<'ctx>,
     cool_list_len: FunctionValue<'ctx>,
     cool_list_get: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_list_set: FunctionValue<'ctx>,
     cool_list_push: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_list_pop: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_list_concat: FunctionValue<'ctx>,
     // range
     cool_range: FunctionValue<'ctx>,
@@ -794,6 +798,7 @@ struct RuntimeFns<'ctx> {
     cool_call_method_vararg: FunctionValue<'ctx>,
     cool_get_arg: FunctionValue<'ctx>,
     cool_set_global_arg: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_is_instance: FunctionValue<'ctx>,
 }
 
@@ -824,8 +829,10 @@ struct ClassInfo<'ctx> {
     /// The class constructor function (returns CoolVal)
     constructor: FunctionValue<'ctx>,
     /// Method names and their function values
+    #[allow(dead_code)]
     methods: HashMap<String, FunctionValue<'ctx>>,
     /// Attribute default values (compiled)
+    #[allow(dead_code)]
     attributes: Vec<(String, Expr)>,
 }
 
@@ -1673,7 +1680,7 @@ impl<'ctx> Compiler<'ctx> {
 
         // Call __init__ if present
         if has_init {
-            if let Some(body) = init_body {
+            if let Some(_body) = init_body {
                 let params = init_params.unwrap_or_default();
 
                 if let Some(&init_fn) = methods.get("__init__") {
@@ -1718,10 +1725,10 @@ impl<'ctx> Compiler<'ctx> {
 
         // Create a global variable to hold the class reference
         let global_name = format!("__class_{}", name);
-        let global = self.module.add_global(self.cv_type, None, &global_name);
+        let _global = self.module.add_global(self.cv_type, None, &global_name);
         
         // At runtime, we need to initialize this - for now, just store constructor ref
-        let constructor_holder = self.builder.build_alloca(self.cv_type, &format!("{}_holder", name)).unwrap();
+        let _constructor_holder = self.builder.build_alloca(self.cv_type, &format!("{}_holder", name)).unwrap();
         
         // Store class info for later instantiation
         Ok(())

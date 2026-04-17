@@ -1,0 +1,16 @@
+# Example cool.toml - Cool project configuration
+# Place this file in the root of your Cool project
+
+[project]
+name = "myapp"
+version = "0.1.0"
+main = "src/main.cool"
+
+# Optional: output binary name (defaults to name if not specified)
+# output = "myapp"
+
+# Optional: additional source directories
+# sources = ["src", "lib"]
+
+# Optional: dependencies (loaded from source directories)
+# dependencies = ["utils", "math"]

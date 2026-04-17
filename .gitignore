@@ -31,8 +31,20 @@
 /examples/errors_and_files
 /examples/stdlib
 
+# coolapps compiled binaries
+/coolapps/shell
+/coolapps/calc
+/coolapps/notes
+/coolapps/top
+/coolapps/edit
+/coolapps/snake
+/coolapps/http
+
 # Compiled Cool bytecode files
 *.cb
 
 # cool build output directory
 /dist
+
+# Temp test file
+/temp_cool_test.cool

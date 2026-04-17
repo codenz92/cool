@@ -100,6 +100,7 @@ pub enum Op {
     /// Pop TOS and raise it as an exception.
     Raise,
     /// Re-raise the current exception (bare `raise` inside except).
+    #[allow(dead_code)]
     RaiseFrom,
     /// Peek TOS (exception); check if it matches the class whose name is names[idx].
     /// Pushes a Bool result WITHOUT consuming TOS.
@@ -216,6 +217,7 @@ impl UpvalueCell {
     pub fn open(slot: usize) -> Self {
         UpvalueCell(Rc::new(RefCell::new(UpvalueCellInner::Open(slot))))
     }
+    #[allow(dead_code)]
     pub fn closed(val: VmValue) -> Self {
         UpvalueCell(Rc::new(RefCell::new(UpvalueCellInner::Closed(val))))
     }
@@ -311,6 +313,7 @@ pub enum VmIter {
     List { items: Rc<RefCell<Vec<VmValue>>>, idx: usize },
     Tuple { items: Rc<Vec<VmValue>>, idx: usize },
     Str { chars: Vec<char>, idx: usize },
+    #[allow(dead_code)]
     Range { current: i64, stop: i64, step: i64 },
     DictKeys { dict: Rc<RefCell<VmDict>>, idx: usize },
 }
