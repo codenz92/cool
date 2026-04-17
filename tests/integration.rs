@@ -144,14 +144,9 @@ fn test_tuple_unpacking() {
 }
 
 #[test]
-#[ignore] // Known: try/except exception propagation needs verification
 fn test_try_except() {
-    // Test that except catches errors - currently requires interpreter fix
-    let result = run_cool("try:\n\tx = 1 / 0\nexcept:\n\tprint(\"caught\")");
-    // Accept either success with "caught" or the raw error (if exception not propagating)
-    if result.is_ok() {
-        assert!(result.unwrap().contains("caught"));
-    }
+    let result = run_cool("try:\n\tx = 1 / 0\nexcept:\n\tprint(\"caught\")").unwrap();
+    assert!(result.contains("caught"));
 }
 
 #[test]

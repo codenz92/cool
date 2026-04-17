@@ -798,12 +798,14 @@ impl Interpreter {
             } => {
                 // exec_block may return Err("__raise__") when an exception crossed
                 // a call boundary — recover the value from pending_raise.
-                let block_result = match self.exec_block(body, env) {
+                let block_result: Result<Signal, String> = match self.exec_block(body, env) {
                     Err(e) if e == "__raise__" => {
                         let v = self.pending_raise.take().unwrap_or(Value::Nil);
                         Ok(Signal::Raise(v))
                     }
-                    other => other,
+                    // Also catch plain Err (e.g., "division by zero") from same scope
+                    Err(msg) => Ok(Signal::Raise(Value::Str(msg))),
+                    Ok(sig) => Ok(sig),
                 };
                 let result = block_result?;
                 let sig = match result {
