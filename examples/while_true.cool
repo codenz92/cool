@@ -1,4 +1,0 @@
-# While true loop with break
-while true:
-    print("loop")
-    break

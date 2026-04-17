@@ -1,4 +1,4 @@
-# While loop with i < 3
+# Debug while loop - print during iteration
 i = 0
 while i < 3:
     print(i)
