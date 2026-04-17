@@ -278,7 +278,7 @@ coolapps/
   http.cool         HTTP client
 
 coolc/
-  compiler_vm.cool  Self-hosted compiler (in progress)
+  compiler_vm.cool  Self-hosted compiler
 
 examples/
   hello.cool            Variables, loops, functions — start here
@@ -304,7 +304,7 @@ examples/
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
-| 9 — Self-hosted compiler | 🔧 In Progress |
+| 9 — Self-hosted compiler | ✅ Complete (bootstrap pending) |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
@@ -312,9 +312,15 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
 ## Self-Hosted Compiler
 
-A proof-of-concept self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself. It currently handles expressions, variable assignment, arithmetic, comparisons, lists, and multi-statement programs.
+The self-hosted compiler lives in `coolc/compiler_vm.cool` — a full lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
 
-Full self-hosting (control flow with bodies, functions, classes, and eventually compiling itself) is the active next milestone. See Phase 9 in the roadmap.
+It supports:
+- Full language: INDENT/DEDENT, if/elif/else, while/for loops, break/continue
+- Functions with def/return, closures with upvalue capture
+- Classes with inheritance and method dispatch
+- Full test suite including FizzBuzz, fibonacci, closures, and OOP
+
+Run `./target/release/cool coolc/compiler_vm.cool` to execute the self-hosted compiler test suite.
 
 ---
 

@@ -213,19 +213,19 @@ A proof-of-concept lives in `coolc/compiler_vm.cool`. It demonstrates the archit
 - [x] Lists (`[1, 2, 3]`)
 - [x] Strings
 - [x] Multi-statement programs
+- [x] Indentation / INDENT / DEDENT handling in the self-hosted lexer
+- [x] `if` / `elif` / `else` with compileable bodies
+- [x] `while` and `for` loops with compileable bodies
+- [x] `break` / `continue` (jump patching)
+- [x] `def` with a real function body and call frames
+- [x] `return` values
+- [x] Closures / upvalue capture
+- [x] Classes and method dispatch
+- [x] Full test suite: arithmetic, variables, if/elif/else, while, for, break/continue, functions, closures, lists, classes, inheritance, FizzBuzz
 
 ### What's left to reach genuine self-hosting
 
-- [ ] Indentation / INDENT / DEDENT handling in the self-hosted lexer
-- [ ] `if` / `elif` / `else` with compileable bodies
-- [ ] `while` and `for` loops with compileable bodies
-- [ ] `break` / `continue` (jump patching)
-- [ ] `def` with a real function body and call frames
-- [ ] `return` values
-- [ ] Closures / upvalue capture
-- [ ] Classes and method dispatch
-- [ ] Compile a non-trivial Cool program end-to-end
-- [ ] Bootstrap: compile `compiler_vm.cool` with itself
+- [ ] Bootstrap: compile `compiler_vm.cool` with itself (full self-hosting)
 
 ---
 
