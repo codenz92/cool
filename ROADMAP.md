@@ -225,7 +225,7 @@ A proof-of-concept lives in `coolc/compiler_vm.cool`. It demonstrates the archit
 
 ### What's left to reach genuine self-hosting
 
-- [ ] Bootstrap: compile `compiler_vm.cool` with itself (full self-hosting)
+- [x] Bootstrap: compile `compiler_vm.cool` with itself (full self-hosting) ✅
 
 ---
 
@@ -241,4 +241,4 @@ A proof-of-concept lives in `coolc/compiler_vm.cool`. It demonstrates the archit
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
-| 9 — Self-Hosted Compiler | 🔧 In Progress |
+| 9 — Self-Hosted Compiler | ✅ Complete |

@@ -2943,7 +2943,16 @@ impl VM {
                 }
             }
             "sys" => {
-                let argv: Vec<VmValue> = std::env::args().map(|a| VmValue::Str(a)).collect();
+                let mut argv: Vec<VmValue> = std::env::args().map(|a| VmValue::Str(a)).collect();
+                if argv.len() > 1 {
+                    if let Ok(extra) = std::env::var("COOL_PROGRAM_ARGS") {
+                        if !extra.is_empty() {
+                            for arg in extra.split("\x1F") {
+                                argv.push(VmValue::Str(arg.to_string()));
+                            }
+                        }
+                    }
+                }
                 set(&mut d, "argv", VmValue::List(Rc::new(RefCell::new(argv))));
                 set(&mut d, "exit", bf("exit"));
             }

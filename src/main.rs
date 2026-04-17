@@ -351,6 +351,11 @@ fn main() {
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| PathBuf::from("."));
 
+            let program_args: Vec<String> = file_args[1..].iter().map(|s| (*s).clone()).collect();
+            if !program_args.is_empty() {
+                std::env::set_var("COOL_PROGRAM_ARGS", program_args.join("\x1F"));
+            }
+
             let result = if use_vm {
                 run_source_vm(&source, source_dir)
             } else {
@@ -364,9 +369,37 @@ fn main() {
         }
 
         _ => {
-            eprintln!("cool: too many arguments");
-            eprintln!("Run `cool help` for usage.");
-            std::process::exit(1);
+            // Multiple args: first is file, rest are program args
+            let path = file_args[0];
+            if !Path::new(path.as_str()).exists() {
+                eprintln!("cool: file not found: {}", path);
+                std::process::exit(1);
+            }
+            let source = fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("cool: {e}");
+                std::process::exit(1);
+            });
+
+            let source_dir = Path::new(path.as_str())
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from("."));
+
+            let program_args: Vec<String> = file_args[1..].iter().map(|s| (*s).clone()).collect();
+            if !program_args.is_empty() {
+                std::env::set_var("COOL_PROGRAM_ARGS", program_args.join("\x1F"));
+            }
+
+            let result = if use_vm {
+                run_source_vm(&source, source_dir)
+            } else {
+                run_source(&source, source_dir)
+            };
+
+            if let Err(e) = result {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
         }
     }
 }

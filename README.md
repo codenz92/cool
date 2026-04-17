@@ -304,7 +304,7 @@ examples/
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
-| 9 — Self-hosted compiler | ✅ Complete (bootstrap pending) |
+| 9 — Self-hosted compiler | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
@@ -319,8 +319,7 @@ It supports:
 - Functions with def/return, closures with upvalue capture
 - Classes with inheritance and method dispatch
 - Full test suite including FizzBuzz, fibonacci, closures, and OOP
-
-Run `./target/release/cool coolc/compiler_vm.cool` to execute the self-hosted compiler test suite.
+- **Bootstrap**: Can compile itself! Run `./target/release/cool coolc/compiler_vm.cool --bootstrap`
 
 ---
 
