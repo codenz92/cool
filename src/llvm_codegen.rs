@@ -39,6 +39,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_OBJECT 6
 #define TAG_CLASS  7
 #define TAG_DICT   8
+#define TAG_TUPLE  9
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -194,6 +195,7 @@ CoolVal cool_bitnot(CoolVal);
 CoolVal cool_lshift(CoolVal, CoolVal);
 CoolVal cool_rshift(CoolVal, CoolVal);
 CoolVal cool_list_make(int64_t);
+CoolVal cool_tuple_make(int64_t);
 CoolVal cool_list_len(CoolVal);
 CoolVal cool_type(CoolVal);
 CoolVal cool_list_get(CoolVal, CoolVal);
@@ -385,6 +387,18 @@ CoolVal cool_list_make(int64_t n) {
     return v;
 }
 
+CoolVal cool_tuple_make(int64_t n) {
+    CoolList* lst = (CoolList*)malloc(sizeof(CoolList));
+    if (!lst) return cv_nil();
+    lst->tag = TAG_TUPLE;
+    lst->length = 0;
+    lst->capacity = n > 0 ? n : 1;
+    lst->data = malloc(lst->capacity * sizeof(CoolVal));
+    if (!lst->data) { free(lst); return cv_nil(); }
+    CoolVal v; v.tag = TAG_TUPLE; v.payload = (int64_t)(intptr_t)lst;
+    return v;
+}
+
 /* ── to_str ─────────���─────────────────────────────────────────────────── */
 char* cool_to_str(CoolVal v) {
     if (v.tag == TAG_STR) return (char*)(intptr_t)v.payload;
@@ -490,7 +504,7 @@ CoolVal cool_type(CoolVal v) {
 }
 
 CoolVal cool_list_get(CoolVal list_val, CoolVal idx_val) {
-    if (list_val.tag != TAG_LIST) return cv_nil();
+    if (list_val.tag != TAG_LIST && list_val.tag != TAG_TUPLE) return cv_nil();
     int64_t idx = idx_val.payload;
     CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
     if (idx < 0) idx += lst->length;
@@ -507,7 +521,7 @@ CoolVal cool_list_set(CoolVal list_val, CoolVal idx_val, CoolVal val) {
     return cv_nil();
 }
 CoolVal cool_list_push(CoolVal list_val, CoolVal val) {
-    if (list_val.tag != TAG_LIST) return cv_nil();
+    if (list_val.tag != TAG_LIST && list_val.tag != TAG_TUPLE) return cv_nil();
     CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
     if (lst->length >= lst->capacity) {
         int64_t new_cap = lst->capacity * 2;
@@ -529,7 +543,8 @@ CoolVal cool_list_pop(CoolVal list_val) {
 CoolVal cool_len(CoolVal v) {
     switch (v.tag) {
         case TAG_STR: return cv_int(strlen((const char*)(intptr_t)v.payload));
-        case TAG_LIST: {
+        case TAG_LIST:
+        case TAG_TUPLE: {
             CoolList* lst = (CoolList*)(intptr_t)v.payload;
             return cv_int(lst->length);
         }
@@ -800,9 +815,9 @@ CoolVal cool_dict_contains(CoolVal dict_v, CoolVal key) {
     return cv_bool(0);
 }
 
-/* Unified index: dispatches list vs dict */
+/* Unified index: dispatches list, tuple, dict */
 CoolVal cool_index(CoolVal obj, CoolVal idx) {
-    if (obj.tag == TAG_LIST) return cool_list_get(obj, idx);
+    if (obj.tag == TAG_LIST || obj.tag == TAG_TUPLE) return cool_list_get(obj, idx);
     if (obj.tag == TAG_DICT) return cool_dict_get(obj, idx);
     fprintf(stderr, "TypeError: not subscriptable\n"); exit(1);
 }
@@ -815,7 +830,7 @@ CoolVal cool_setindex(CoolVal obj, CoolVal idx, CoolVal val) {
 }
 
 static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
-    if (list.tag != TAG_LIST) return cv_bool(0);
+    if (list.tag != TAG_LIST && list.tag != TAG_TUPLE) return cv_bool(0);
     CoolList* l = (CoolList*)(intptr_t)list.payload;
     for (int64_t i = 0; i < l->length; i++)
         if (cv_eq_raw(((CoolVal*)l->data)[i], item)) return cv_bool(1);
@@ -823,7 +838,7 @@ static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
 }
 
 CoolVal cool_contains(CoolVal container, CoolVal item) {
-    if (container.tag == TAG_LIST) return cool_list_contains_local(container, item);
+    if (container.tag == TAG_LIST || container.tag == TAG_TUPLE) return cool_list_contains_local(container, item);
     if (container.tag == TAG_DICT) return cool_dict_contains(container, item);
     if (container.tag == TAG_STR && item.tag == TAG_STR) {
         const char* haystack = (const char*)(intptr_t)container.payload;
@@ -882,8 +897,9 @@ struct RuntimeFns<'ctx> {
     cool_write_f64: FunctionValue<'ctx>,
     cool_read_str: FunctionValue<'ctx>,
     cool_write_str: FunctionValue<'ctx>,
-    // list operations
+    // list/tuple operations
     cool_list_make: FunctionValue<'ctx>,
+    cool_tuple_make: FunctionValue<'ctx>,
     cool_list_len: FunctionValue<'ctx>,
     cool_list_get: FunctionValue<'ctx>,
     #[allow(dead_code)]
@@ -1044,6 +1060,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_write_str: decl!("cool_write_str", cv_type.fn_type(&[cv, cv], false)),
             // list operations
             cool_list_make: decl!("cool_list_make", cv_type.fn_type(&[i64m], false)),
+            cool_tuple_make: decl!("cool_tuple_make", cv_type.fn_type(&[i64m], false)),
             cool_list_len: decl!("cool_list_len", cv_type.fn_type(&[cv], false)),
             cool_list_get: decl!("cool_list_get", cv_type.fn_type(&[cv, cv], false)),
             cool_list_set: decl!("cool_list_set", cv_type.fn_type(&[cv, cv, cv], false)),
@@ -1385,6 +1402,26 @@ impl<'ctx> Compiler<'ctx> {
             // ── assert ────────────────────────────────────────────────────────
             Stmt::Assert { condition, message } => {
                 self.compile_assert(condition, message.as_ref())?;
+            }
+
+            // ── tuple unpack: a, b, c = expr ─────────────────────────────────
+            Stmt::Unpack { names, value } => {
+                let seq = self.compile_expr(value)?;
+                let seq_ptr = self.builder.build_alloca(self.cv_type, "unpack_seq").unwrap();
+                self.builder.build_store(seq_ptr, seq).unwrap();
+                for (i, name) in names.iter().enumerate() {
+                    let idx_val = self.build_int(i as i64);
+                    let seq_cur = self.builder.build_load(self.cv_type, seq_ptr, "unpack_seq").unwrap().into_struct_value();
+                    let elem = self.call_binop_fn(self.rt.cool_index, seq_cur, idx_val, "unpack_elem");
+                    let ptr = if let Some(&p) = self.locals.get(name) {
+                        p
+                    } else {
+                        let p = self.builder.build_alloca(self.cv_type, name).unwrap();
+                        self.locals.insert(name.clone(), p);
+                        p
+                    };
+                    self.builder.build_store(ptr, elem).unwrap();
+                }
             }
 
             // ── item assignment: obj[idx] = value ────────────────────────────
@@ -2211,6 +2248,17 @@ impl<'ctx> Compiler<'ctx> {
                 }
 
                 Ok(self.builder.build_load(self.cv_type, result_ptr, "lc_final").unwrap().into_struct_value())
+            }
+
+            // tuple literal: (a, b, c)
+            Expr::Tuple(elems) => {
+                let n_i64 = self.build_int(elems.len() as i64);
+                let tup_val = self.call_unop_fn(self.rt.cool_tuple_make, n_i64, "tuple");
+                for elem_expr in elems {
+                    let elem_val = self.compile_expr(elem_expr)?;
+                    self.call_binop_fn(self.rt.cool_list_push, tup_val, elem_val, "tup_push");
+                }
+                Ok(tup_val)
             }
 
             // dict literal: {k: v, ...}

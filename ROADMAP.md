@@ -182,6 +182,7 @@
 - [x] List comprehensions in LLVM (`[expr for x in iter if cond]`)
 - [x] `in` / `not in` in LLVM (lists and strings)
 - [x] Dicts in LLVM (`{k: v}`, `d[k]`, `d[k] = v`, `k in d`, `len(d)`)
+- [x] Tuples in LLVM (literals, indexing, unpacking, `in`/`not in`, `len()`)
 
 ### Known LLVM Limitations
 
@@ -194,10 +195,10 @@ The LLVM backend covers the core language. The following features remain interpr
 | List comprehensions | ✅ | ✅ | ✅ |
 | `in` / `not in` | ✅ | ✅ | ✅ |
 | Dicts | ✅ | ✅ | ✅ |
+| Tuples | ✅ | ✅ | ✅ |
 | Closures | ✅ | ✅ | ❌ |
 | `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
-| Tuples | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory | ❌ | ❌ | ✅ |
 

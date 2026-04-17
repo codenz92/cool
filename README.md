@@ -68,9 +68,9 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, dicts, `range()`, `len()`, f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, dicts, tuples, `range()`, `len()`, f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
-**LLVM limitations:** Closures, `import`, `try`/`except`, and tuples are interpreter/VM-only for now. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
+**LLVM limitations:** Closures, `import`, and `try`/`except` are interpreter/VM-only for now. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :---------: | :---------: | :--: |
@@ -81,6 +81,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | Classes with `__init__`, methods | ✅ | ✅ | ✅ |
 | Lists, indexing, `len()`, `range()` | ✅ | ✅ | ✅ |
 | Dicts (`{k:v}`, `d[k]`, `d[k]=v`, `in`) | ✅ | ✅ | ✅ |
+| Tuples (literals, index, unpack, `in`) | ✅ | ✅ | ✅ |
 | f-strings | ✅ | ✅ | ✅ |
 | Ternary expressions | ✅ | ✅ | ✅ |
 | List comprehensions | ✅ | ✅ | ✅ |
@@ -88,7 +89,6 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | Closures | ✅ | ✅ | ❌ |
 | `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
-| Tuples | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory access | ❌ | ❌ | ✅ |
 
