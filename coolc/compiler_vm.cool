@@ -785,7 +785,7 @@ class Generator:
         # idx += 1
         self.emit(['LOAD', idx_name])
         self.emit(['CONST', 1])
-        self.emit(['ADD'])
+        self.emit(['+'])
         self.emit(['STORE', idx_name])
 
         # if idx >= len(iter): break
