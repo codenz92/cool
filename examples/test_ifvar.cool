@@ -1,0 +1,6 @@
+# Test simple var in if
+x = 5
+if x:
+    print("truthy")
+else:
+    print("falsy")
