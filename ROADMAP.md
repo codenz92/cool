@@ -181,6 +181,7 @@
 - [x] Function calls in LLVM
 - [x] Recursion in LLVM
 - [x] Variable assignment with expressions (bug fix: `x = 1 + 1` now returns correct value)
+- [x] **Classes in LLVM** (`class`, `__init__`, methods, attribute access via `obj.attr`)
 
 ---
 

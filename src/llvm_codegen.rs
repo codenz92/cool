@@ -34,13 +34,14 @@ const RUNTIME_C: &str = r#"
 #include <stdarg.h>
 #include <stdint.h>
 
-#define TAG_NIL   0
-#define TAG_INT   1
-#define TAG_FLOAT 2
-#define TAG_BOOL  3
-#define TAG_STR   4
-#define TAG_LIST  5
+#define TAG_NIL    0
+#define TAG_INT    1
+#define TAG_FLOAT  2
+#define TAG_BOOL   3
+#define TAG_STR    4
+#define TAG_LIST   5
 #define TAG_OBJECT 6
+#define TAG_CLASS  7
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -52,6 +53,9 @@ typedef struct {
     int64_t payload;
 } CoolVal;
 
+/* Forward declaration for cv_nil (needed by hashmap functions) */
+CoolVal cv_nil(void);
+
 /* Forward declaration for list */
 typedef struct {
     int32_t tag;
@@ -59,6 +63,101 @@ typedef struct {
     int64_t capacity;
     void* data;
 } CoolList;
+
+/* ── Simple hashmap for object attributes ───────────────────────────── */
+typedef struct AttrNode {
+    int64_t key;
+    CoolVal value;
+    struct AttrNode* next;
+} AttrNode;
+
+typedef struct {
+    AttrNode** buckets;
+    int64_t count;
+    int64_t capacity;
+} AttrMap;
+
+static AttrMap* attrmap_create(void) {
+    AttrMap* m = (AttrMap*)malloc(sizeof(AttrMap));
+    if (!m) return NULL;
+    m->capacity = 16;
+    m->count = 0;
+    m->buckets = (AttrNode**)calloc(16, sizeof(AttrNode*));
+    return m;
+}
+
+static void attrmap_destroy(AttrMap* m) {
+    if (!m) return;
+    for (int64_t i = 0; i < m->capacity; i++) {
+        AttrNode* n = m->buckets[i];
+        while (n) { AttrNode* next = n->next; free(n); n = next; }
+    }
+    free(m->buckets);
+    free(m);
+}
+
+/* Hash based on string content */
+static int64_t attrmap_hash_str(const char* s, int64_t cap) {
+    int64_t h = 0;
+    while (*s) {
+        h = h * 31 + *s;
+        s++;
+    }
+    return (h & 0x7FFFFFFF) & (cap - 1);
+}
+
+/* Compare strings for equality */
+static int attrmap_str_eq(int64_t a, int64_t b) {
+    const char* sa = (const char*)(intptr_t)a;
+    const char* sb = (const char*)(intptr_t)b;
+    return strcmp(sa, sb) == 0;
+}
+
+static void attrmap_set(AttrMap* m, const char* key, CoolVal val) {
+    if (!m) return;
+    int64_t key_int = (int64_t)(intptr_t)key;
+    int64_t idx = attrmap_hash_str(key, m->capacity);
+    AttrNode* n = m->buckets[idx];
+    while (n) {
+        if (attrmap_str_eq(n->key, key_int)) { n->value = val; return; }
+        n = n->next;
+    }
+    AttrNode* new_node = (AttrNode*)malloc(sizeof(AttrNode));
+    if (!new_node) return;
+    new_node->key = key_int;
+    new_node->value = val;
+    new_node->next = m->buckets[idx];
+    m->buckets[idx] = new_node;
+    m->count++;
+}
+
+static CoolVal attrmap_get(AttrMap* m, const char* key) {
+    if (!m) return cv_nil();
+    int64_t key_int = (int64_t)(intptr_t)key;
+    int64_t idx = attrmap_hash_str(key, m->capacity);
+    AttrNode* n = m->buckets[idx];
+    while (n) {
+        if (attrmap_str_eq(n->key, key_int)) return n->value;
+        n = n->next;
+    }
+    return cv_nil();
+}
+
+/* ── Class definition ────────────────────────────────────────────────── */
+typedef struct {
+    int32_t tag;       /* TAG_CLASS */
+    int64_t name;      /* const char* */
+    int64_t method_count;
+    /* Flexible array: [name1, ptr1, name2, ptr2, ...] (pairs) */
+    int64_t methods[];  
+} CoolClass;
+
+/* ── Object (instance) ───────────────────────────────────────────────── */
+typedef struct {
+    int32_t tag;       /* TAG_OBJECT */
+    CoolClass* class;
+    AttrMap* attrs;
+} CoolObject;
 
 /* Forward declarations for runtime functions */
 CoolVal cv_nil(void);
@@ -90,10 +189,20 @@ CoolVal cool_lshift(CoolVal, CoolVal);
 CoolVal cool_rshift(CoolVal, CoolVal);
 CoolVal cool_list_make(int64_t);
 CoolVal cool_list_len(CoolVal);
+CoolVal cool_type(CoolVal);
 CoolVal cool_list_get(CoolVal, CoolVal);
 CoolVal cool_list_push(CoolVal, CoolVal);
 CoolVal cool_list_concat(CoolVal, CoolVal);
 void cool_print(int32_t, ...);
+
+/* ── class / object support ─────────────────────────────────────────── */
+CoolVal cool_class_new(const char*, int64_t, int64_t*);
+CoolVal cool_object_new(CoolVal);
+CoolVal cool_get_attr(CoolVal, const char*);
+CoolVal cool_set_attr(CoolVal, const char*, CoolVal);
+CoolVal cool_call_method_vararg(CoolVal, const char*, int32_t, ...);
+CoolVal cool_get_arg(int32_t);
+CoolVal cool_is_instance(CoolVal, const char*);
 
 /* ── bit-pattern helpers ──────────────────────────────────────────────── */
 static double cv_as_float(CoolVal v) {
@@ -348,6 +457,24 @@ CoolVal cool_list_len(CoolVal v) {
     CoolList* lst = (CoolList*)(intptr_t)v.payload;
     return cv_int(lst->length);
 }
+
+const char* cool_type_name(int32_t tag) {
+    switch(tag) {
+        case TAG_NIL:    return "nil";
+        case TAG_INT:    return "int";
+        case TAG_FLOAT:  return "float";
+        case TAG_BOOL:   return "bool";
+        case TAG_STR:    return "str";
+        case TAG_LIST:   return "list";
+        case TAG_OBJECT: return "object";
+        default:         return "unknown";
+    }
+}
+
+CoolVal cool_type(CoolVal v) {
+    return cv_str(cool_type_name(v.tag));
+}
+
 CoolVal cool_list_get(CoolVal list_val, CoolVal idx_val) {
     if (list_val.tag != TAG_LIST) return cv_nil();
     int64_t idx = idx_val.payload;
@@ -481,6 +608,124 @@ void cool_print(int32_t n, ...) {
     va_end(ap);
     putchar('\n');
 }
+
+/* ── class operations ─────────────────────────────────────────────────── */
+CoolVal cool_class_new(const char* name, int64_t method_count, int64_t* method_ptrs) {
+    CoolClass* cls = (CoolClass*)malloc(sizeof(CoolClass) + 2 * method_count * sizeof(int64_t));
+    if (!cls) return cv_nil();
+    cls->tag = TAG_CLASS;
+    cls->name = (int64_t)(intptr_t)name;
+    cls->method_count = method_count;
+    for (int64_t i = 0; i < method_count; i++) {
+        cls->methods[i * 2] = method_ptrs[i * 2];     /* name pointer */
+        cls->methods[i * 2 + 1] = method_ptrs[i * 2 + 1]; /* function pointer */
+    }
+    CoolVal v;
+    v.tag = TAG_CLASS;
+    v.payload = (int64_t)(intptr_t)cls;
+    return v;
+}
+
+CoolVal cool_object_new(CoolVal class_val) {
+    if (class_val.tag != TAG_CLASS) return cv_nil();
+    CoolClass* cls = (CoolClass*)(intptr_t)class_val.payload;
+    CoolObject* obj = (CoolObject*)malloc(sizeof(CoolObject));
+    if (!obj) return cv_nil();
+    obj->tag = TAG_OBJECT;
+    obj->class = cls;
+    obj->attrs = attrmap_create();
+    CoolVal v;
+    v.tag = TAG_OBJECT;
+    v.payload = (int64_t)(intptr_t)obj;
+    return v;
+}
+
+CoolVal cool_get_attr(CoolVal obj, const char* name) {
+    if (obj.tag != TAG_OBJECT) return cv_nil();
+    CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
+    if (!o->attrs) return cv_nil();
+    return attrmap_get(o->attrs, name);
+}
+
+CoolVal cool_set_attr(CoolVal obj, const char* name, CoolVal value) {
+    if (obj.tag != TAG_OBJECT) return cv_nil();
+    CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
+    if (!o->attrs) return cv_nil();
+    attrmap_set(o->attrs, name, value);
+    return value;
+}
+
+int64_t cool_get_method_ptr(CoolVal class_val, const char* name) {
+    if (class_val.tag != TAG_CLASS) return 0;
+    CoolClass* cls = (CoolClass*)(intptr_t)class_val.payload;
+    for (int64_t i = 0; i < cls->method_count; i++) {
+        const char* mname = (const char*)(intptr_t)cls->methods[i * 2];
+        if (mname && strcmp(mname, name) == 0) {
+            return cls->methods[i * 2 + 1];
+        }
+    }
+    return 0;
+}
+
+/* Global for passing method arguments */
+static CoolVal g_method_args[32];
+static int g_method_arg_count = 0;
+
+CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
+    if (obj.tag != TAG_OBJECT) return cv_nil();
+    CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
+    if (!o->class) return cv_nil();
+    
+    // Look up method from class structure
+    int64_t method_ptr = 0;
+    CoolClass* cls = o->class;
+    
+    for (int64_t i = 0; i < cls->method_count; i++) {
+        const char* mname = (const char*)(intptr_t)cls->methods[i * 2];
+        if (mname && strcmp(mname, name) == 0) {
+            method_ptr = cls->methods[i * 2 + 1];
+            break;
+        }
+    }
+    
+    if (method_ptr == 0) {
+        fprintf(stderr, "AttributeError: '%s' object has no attribute '%s'\n",
+                (const char*)(intptr_t)o->class->name, name);
+        exit(1);
+    }
+    
+    va_list ap;
+    va_start(ap, nargs);
+    g_method_args[0] = obj;  /* self */
+    for (int32_t i = 0; i < nargs && i < 31; i++) {
+        g_method_args[i + 1] = va_arg(ap, CoolVal);
+    }
+    g_method_arg_count = nargs + 1;
+    va_end(ap);
+    
+    typedef CoolVal (*CoolFn)(void);
+    CoolFn fn = (CoolFn)(intptr_t)method_ptr;
+    return fn();
+}
+
+CoolVal cool_get_arg(int32_t idx) {
+    if (idx < 0 || idx >= g_method_arg_count) return cv_nil();
+    return g_method_args[idx];
+}
+
+/* Set a global argument for constructor/method calls */
+void cool_set_global_arg(int32_t idx, CoolVal val) {
+    if (idx < 0 || idx >= 32) return;
+    g_method_args[idx] = val;
+    if (idx >= g_method_arg_count) g_method_arg_count = idx + 1;
+}
+
+CoolVal cool_is_instance(CoolVal obj, const char* class_name) {
+    if (obj.tag != TAG_OBJECT) return cv_bool(0);
+    CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
+    if (!o->class) return cv_bool(0);
+    return cv_bool(strcmp((const char*)(intptr_t)o->class->name, class_name) == 0);
+}
 "#;
 
 // ── Runtime function table ────────────────────────────────────────────────────
@@ -540,6 +785,16 @@ struct RuntimeFns<'ctx> {
     cool_range: FunctionValue<'ctx>,
     // stdlib
     cool_len: FunctionValue<'ctx>,
+    cool_type: FunctionValue<'ctx>,
+    // class operations
+    cool_class_new: FunctionValue<'ctx>,
+    cool_object_new: FunctionValue<'ctx>,
+    cool_get_attr: FunctionValue<'ctx>,
+    cool_set_attr: FunctionValue<'ctx>,
+    cool_call_method_vararg: FunctionValue<'ctx>,
+    cool_get_arg: FunctionValue<'ctx>,
+    cool_set_global_arg: FunctionValue<'ctx>,
+    cool_is_instance: FunctionValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -555,11 +810,23 @@ struct Compiler<'ctx> {
     locals: HashMap<String, PointerValue<'ctx>>,
     /// Top-level user-defined functions (name → FunctionValue).
     functions: HashMap<String, FunctionValue<'ctx>>,
+    /// Top-level user-defined classes (name → ClassInfo).
+    classes: HashMap<String, ClassInfo<'ctx>>,
     str_counter: usize,
     /// (continue_target, break_target) for each enclosing loop.
     loop_stack: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>)>,
     /// The function currently being compiled (Some(main_fn) at top level).
     current_fn: Option<FunctionValue<'ctx>>,
+}
+
+/// Information about a compiled class
+struct ClassInfo<'ctx> {
+    /// The class constructor function (returns CoolVal)
+    constructor: FunctionValue<'ctx>,
+    /// Method names and their function values
+    methods: HashMap<String, FunctionValue<'ctx>>,
+    /// Attribute default values (compiled)
+    attributes: Vec<(String, Expr)>,
 }
 
 // ── Constructor & runtime declarations ───────────────────────────────────────
@@ -586,6 +853,7 @@ impl<'ctx> Compiler<'ctx> {
             rt,
             locals: HashMap::new(),
             functions: HashMap::new(),
+            classes: HashMap::new(),
             str_counter: 0,
             loop_stack: Vec::new(),
             current_fn: None,
@@ -670,6 +938,16 @@ impl<'ctx> Compiler<'ctx> {
             cool_range: decl!("cool_range", cv_type.fn_type(&[cv, cv, cv], false)),
             // len(obj)
             cool_len: decl!("cool_len", cv_type.fn_type(&[cv], false)),
+            cool_type: decl!("cool_type", cv_type.fn_type(&[cv], false)),
+            // class operations
+            cool_class_new: decl!("cool_class_new", cv_type.fn_type(&[ptrm, i64m, ptrm], false)),
+            cool_object_new: decl!("cool_object_new", cv_type.fn_type(&[cv], false)),
+            cool_get_attr: decl!("cool_get_attr", cv_type.fn_type(&[cv, ptrm], false)),
+            cool_set_attr: decl!("cool_set_attr", cv_type.fn_type(&[cv, ptrm, cv], false)),
+            cool_call_method_vararg: decl!("cool_call_method_vararg", cv_type.fn_type(&[cv, ptrm, i32m], true)),
+            cool_get_arg: decl!("cool_get_arg", cv_type.fn_type(&[i32m], false)),
+            cool_set_global_arg: decl!("cool_set_global_arg", voidt.fn_type(&[i32m, cv], false)),
+            cool_is_instance: decl!("cool_is_instance", cv_type.fn_type(&[cv, ptrm], false)),
         }
     }
 
@@ -894,6 +1172,16 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_store(ptr, result).unwrap();
             }
 
+            // ── attribute assignment: obj.attr = value ────────────────────────
+            Stmt::SetAttr { object, name, value } => {
+                let obj_val = self.compile_expr(object)?;
+                let val = self.compile_expr(value)?;
+                let attr_name_ptr = self.builder.build_global_string_ptr(name, &format!("attr_{}", name)).unwrap();
+                self.builder
+                    .build_call(self.rt.cool_set_attr, &[obj_val.into(), attr_name_ptr.as_pointer_value().into(), val.into()], "set_attr")
+                    .unwrap();
+            }
+
             // ── return ────────────────────────────────────────────────────────
             Stmt::Return(opt_expr) => {
                 if self.is_main() {
@@ -948,6 +1236,11 @@ impl<'ctx> Compiler<'ctx> {
             // ── function definition ───────────────────────────────────────────
             Stmt::FnDef { name, params, body } => {
                 self.compile_fndef(name, params, body)?;
+            }
+
+            // ── class definition ────────────────────────────────────────────
+            Stmt::Class { name, parent, body } => {
+                self.compile_class(name, parent.as_deref(), body)?;
             }
 
             // ── assert ────────────────────────────────────────────────────────
@@ -1177,6 +1470,263 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    // ── class definition ─────────────────────────────────────────────────────
+
+    fn compile_class(
+        &mut self,
+        name: &str,
+        _parent: Option<&str>,
+        body: &[Stmt],
+    ) -> Result<(), String> {
+        if !self.is_main() {
+            return Err("class definitions are only allowed at the top level".into());
+        }
+
+        // Collect method names and check for __init__
+        let mut methods: HashMap<String, FunctionValue<'ctx>> = HashMap::new();
+        let mut has_init = false;
+        let mut init_body: Option<Vec<Stmt>> = None;
+        let mut init_params: Option<Vec<crate::ast::Param>> = None;
+        let mut attributes: Vec<(String, Expr)> = Vec::new();
+
+        for stmt in body {
+            match stmt {
+                Stmt::FnDef { name: mname, params, body: mbody } => {
+                    if mname == "__init__" {
+                        has_init = true;
+                        init_body = Some(mbody.clone());
+                        init_params = Some(params.clone());
+                    }
+                    // Methods will be compiled after we register the class
+                }
+                Stmt::Assign { name: aname, value } => {
+                    // Instance attribute assignment - strip "self." prefix for storage
+                    let attr_name = if aname.starts_with("self.") {
+                        aname.strip_prefix("self.").unwrap().to_string()
+                    } else {
+                        aname.clone()
+                    };
+                    attributes.push((attr_name, value.clone()));
+                }
+                _ => {}
+            }
+        }
+
+        // Create a global string for the class name
+        let name_ptr = self.builder.build_global_string_ptr(name, &format!("class_name_{}", name)).unwrap();
+
+        // First, declare stub functions for all methods
+        for stmt in body {
+            if let Stmt::FnDef { name: mname, params, .. } = stmt {
+                let fn_name = format!("{}#{}.{}", name, mname, name);
+                let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                    params.iter().map(|_| self.cv_type.into()).collect();
+                let fn_type = self.cv_type.fn_type(&param_types, false);
+                let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                methods.insert(mname.clone(), fn_val);
+            }
+        }
+
+        // Now compile the methods with self type
+        for stmt in body {
+            if let Stmt::FnDef { name: mname, params, body: mbody } = stmt {
+                if let Some(&fn_val) = methods.get(mname) {
+                    // Save state
+                    let saved_bb = self.builder.get_insert_block();
+                    let saved_locals = std::mem::take(&mut self.locals);
+                    let saved_fn = self.current_fn.replace(fn_val);
+                    let saved_loops = std::mem::take(&mut self.loop_stack);
+
+                    // Build entry
+                    let entry = self.context.append_basic_block(fn_val, "entry");
+                    self.builder.position_at_end(entry);
+
+                    // Bind self as first param (or from cool_get_arg(0) for variadic call)
+                    let self_ptr = self.builder.build_alloca(self.cv_type, "self").unwrap();
+                    let i32t = self.context.i32_type();
+                    
+                    // Load self from global args buffer
+                    let self_val = self.builder
+                        .build_call(self.rt.cool_get_arg, &[i32t.const_int(0, false).into()], "get_self")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_struct_value();
+                    self.builder.build_store(self_ptr, self_val).unwrap();
+                    self.locals.insert("self".to_string(), self_ptr);
+
+                    // Bind other params
+                    for (i, param) in params.iter().enumerate() {
+                        if param.is_vararg || param.is_kwarg {
+                            return Err("*args / **kwargs not supported in methods".into());
+                        }
+                        if let Some(param_val) = fn_val.get_nth_param(i as u32) {
+                            let alloca = self.builder.build_alloca(self.cv_type, &param.name).unwrap();
+                            self.builder.build_store(alloca, param_val).unwrap();
+                            self.locals.insert(param.name.clone(), alloca);
+                        }
+                    }
+
+                    // Compile body
+                    self.compile_stmts(mbody)?;
+
+                    // Implicit return nil
+                    if !self.current_block_terminated() {
+                        let nil = self.build_nil();
+                        self.builder.build_return(Some(&nil)).unwrap();
+                    }
+
+                    // Restore state
+                    self.locals = saved_locals;
+                    self.current_fn = saved_fn;
+                    self.loop_stack = saved_loops;
+                    if let Some(bb) = saved_bb {
+                        self.builder.position_at_end(bb);
+                    }
+                }
+            }
+        }
+
+        // Build the constructor function
+        let ctor_name = format!("{}#constructor.{}", name, name);
+        let ctor_type = self.cv_type.fn_type(&[], false);
+        let constructor = self.module.add_function(&ctor_name, ctor_type, None);
+
+        // Build constructor body
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_fn = self.current_fn.replace(constructor);
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+
+        let entry = self.context.append_basic_block(constructor, "entry");
+        self.builder.position_at_end(entry);
+
+        // Build method data array: [name_ptr1, fn_ptr1, name_ptr2, fn_ptr2, ...]
+        let method_count = methods.len() as i64;
+        
+        // Allocate array for method data (2 i64 values per method: name ptr and fn ptr)
+        let method_data_size = method_count * 2 * 8; // 2 * i64 per method
+        let method_data_ptr = self.builder
+            .build_call(self.rt.cool_malloc, &[self.context.i64_type().const_int(method_data_size as u64, false).into()], "method_data_ptr")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+        
+        // Get the raw pointer
+        let method_data_int = self.builder.build_extract_value(method_data_ptr, 1, "method_data_int").unwrap().into_int_value();
+        let method_data_i8ptr = self.builder.build_int_to_ptr(method_data_int, self.context.i8_type().ptr_type(inkwell::AddressSpace::default()), "method_data_i8ptr").unwrap();
+        
+        // Fill in method data
+        for (i, (method_name, &fn_val)) in methods.iter().enumerate() {
+            let idx = i as u64;
+            
+            // Store name pointer at offset idx * 16
+            let name_offset = self.context.i64_type().const_int(idx * 16, false);
+            let name_ptr_pos = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), method_data_i8ptr, &[name_offset], "name_ptr_pos").unwrap() };
+            let name_ptr_cast = self.builder.build_pointer_cast(name_ptr_pos, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "name_ptr_cast").unwrap();
+            let attr_name = format!("method_{}", method_name);
+            let method_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
+            let name_as_int = self.builder.build_ptr_to_int(method_name_ptr.as_pointer_value(), self.context.i64_type(), "name_int").unwrap();
+            self.builder.build_store(name_ptr_cast, name_as_int).unwrap();
+            
+            // Store function pointer at offset idx * 16 + 8
+            let fn_offset = self.context.i64_type().const_int(idx * 16 + 8, false);
+            let fn_ptr_pos = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), method_data_i8ptr, &[fn_offset], "fn_ptr_pos").unwrap() };
+            let fn_ptr_cast = self.builder.build_pointer_cast(fn_ptr_pos, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "fn_ptr_cast").unwrap();
+            let fn_ptr = fn_val.as_global_value().as_pointer_value();
+            let fn_as_int = self.builder.build_ptr_to_int(fn_ptr, self.context.i64_type(), "fn_int").unwrap();
+            self.builder.build_store(fn_ptr_cast, fn_as_int).unwrap();
+        }
+        
+        // Create class with method data
+        let method_data_int2 = self.builder.build_ptr_to_int(method_data_i8ptr, self.context.i64_type(), "method_data_int2").unwrap();
+        let class_val = self.builder
+            .build_call(self.rt.cool_class_new, &[
+                name_ptr.as_pointer_value().into(),
+                self.context.i64_type().const_int(method_count as u64, false).into(),
+                method_data_int2.into(),
+            ], "class")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+
+        let obj_val = self.builder
+            .build_call(self.rt.cool_object_new, &[class_val.into()], "obj")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+
+        // Store object in a temporary for __init__ call
+        let obj_ptr = self.builder.build_alloca(self.cv_type, "obj_tmp").unwrap();
+        self.builder.build_store(obj_ptr, obj_val).unwrap();
+
+        // Allocate self pointer for __init__ and attribute setting
+        let self_ptr = self.builder.build_alloca(self.cv_type, "self_for_init").unwrap();
+        self.builder.build_store(self_ptr, obj_val).unwrap();
+
+        // Call __init__ if present
+        if has_init {
+            if let Some(body) = init_body {
+                let params = init_params.unwrap_or_default();
+
+                if let Some(&init_fn) = methods.get("__init__") {
+                    // Call init with self as first arg
+                    let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![obj_val.into()];
+                    // Skip first param (self) when building args
+                    for (i, param) in params.iter().skip(1).enumerate() {
+                        // Get from global args buffer
+                        let idx = self.context.i32_type().const_int((i + 1) as u64, false);
+                        let arg_val = self.builder
+                            .build_call(self.rt.cool_get_arg, &[idx.into()], &param.name)
+                            .unwrap()
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_struct_value();
+                        args.push(arg_val.into());
+                    }
+                    self.builder.build_call(init_fn, &args, "").unwrap();
+                }
+            }
+        }
+
+        // Return the object
+        let result = self.builder.build_load(self.cv_type, obj_ptr, "result").unwrap().into_struct_value();
+        self.builder.build_return(Some(&result)).unwrap();
+
+        // Restore state
+        self.locals = saved_locals;
+        self.current_fn = saved_fn;
+        self.loop_stack = saved_loops;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        // Store class info
+        self.classes.insert(name.to_string(), ClassInfo {
+            constructor,
+            methods,
+            attributes,
+        });
+
+        // Create a global variable to hold the class reference
+        let global_name = format!("__class_{}", name);
+        let global = self.module.add_global(self.cv_type, None, &global_name);
+        
+        // At runtime, we need to initialize this - for now, just store constructor ref
+        let constructor_holder = self.builder.build_alloca(self.cv_type, &format!("{}_holder", name)).unwrap();
+        
+        // Store class info for later instantiation
+        Ok(())
+    }
+
     // ── assert ────────────────────────────────────────────────────────────────
 
     fn compile_assert(&mut self, condition: &Expr, message: Option<&Expr>) -> Result<(), String> {
@@ -1261,6 +1811,19 @@ impl<'ctx> Compiler<'ctx> {
                 let obj_val = self.compile_expr(object)?;
                 let idx_val = self.compile_expr(index)?;
                 Ok(self.call_binop_fn(self.rt.cool_list_get, obj_val, idx_val, "index"))
+            }
+
+            // attribute access: obj.attr
+            Expr::Attr { object, name } => {
+                let obj_val = self.compile_expr(object)?;
+                let attr_name_ptr = self.builder.build_global_string_ptr(name, &format!("attr_{}", name)).unwrap();
+                Ok(self.builder
+                    .build_call(self.rt.cool_get_attr, &[obj_val.into(), attr_name_ptr.as_pointer_value().into()], "get_attr")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value())
             }
 
             other => Err(format!("unsupported expression in LLVM backend: {other:?}")),
@@ -1366,7 +1929,30 @@ impl<'ctx> Compiler<'ctx> {
     // ── Function call ─────────────────────────────────────────────────────────
 
     fn compile_call(&mut self, callee: &Expr, args: &[Expr]) -> Result<StructValue<'ctx>, String> {
-        // Only simple identifier callees are supported
+        // Handle method calls: obj.method(args)
+        if let Expr::Attr { object, name: method_name } = callee {
+            let obj_val = self.compile_expr(object)?;
+            let attr_name = format!("method_{}", method_name);
+            let attr_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
+            
+            // Call method - the runtime looks up the method from the class structure
+            let i32t = self.context.i32_type();
+            let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
+            
+            return Ok(self.builder
+                .build_call(self.rt.cool_call_method_vararg, &[
+                    obj_val.into(),
+                    attr_name_ptr.as_pointer_value().into(),
+                    nargs_i32.into(),
+                ], "call_method")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value());
+        }
+
+        // Simple function call: name(args)
         let name = match callee {
             Expr::Ident(n) => n.clone(),
             other => {
@@ -1375,6 +1961,35 @@ impl<'ctx> Compiler<'ctx> {
                 ))
             }
         };
+
+        // ── Check for class instantiation ───────────────────────────────
+        if self.classes.contains_key(&name) {
+            // Extract constructor first to avoid borrow conflict
+            let constructor = {
+                let class_info = self.classes.get(&name).unwrap();
+                class_info.constructor
+            };
+            
+            // Compile arguments and store to global buffer for constructor
+            let i32t = self.context.i32_type();
+            for (i, arg) in args.iter().enumerate() {
+                let cv = self.compile_expr(arg)?;
+                let idx_val = i32t.const_int(i as u64, false);
+                // Store arg to global method args buffer
+                self.builder
+                    .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), cv.into()], "set_global_arg")
+                    .unwrap();
+            }
+            
+            // Call the constructor (which reads args from global buffer)
+            return Ok(self.builder
+                .build_call(constructor, &[], "instantiate")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value());
+        }
 
         // ── asm("template" [, "constraints" [, args...]]) ──
         if name == "asm" {
@@ -1506,6 +2121,15 @@ impl<'ctx> Compiler<'ctx> {
             }
             let a = self.compile_expr(&args[0])?;
             return Ok(self.call_unop_fn(self.rt.cool_len, a, "len"));
+        }
+
+        // ── type(obj) ────────────────────────────────────────────────────────
+        if name == "type" {
+            if args.len() != 1 {
+                return Err("type() takes exactly 1 argument".into());
+            }
+            let a = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_type, a, "type"));
         }
 
         // ── user-defined function ──
