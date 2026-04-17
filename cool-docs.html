@@ -862,11 +862,13 @@
         <span class="nav-group-label">Project</span>
         <a href="#structure">Project Structure</a>
         <a href="#roadmap">Roadmap</a>
+        <a href="#changelog">Changelog</a>
+        <a href="#license">License</a>
       </nav>
 
       <div class="sidebar-footer">
-        <a href="https://github.com/codenz92/cool" target="_blank"
-          rel="noopener noreferrer">github.com/codenz92/cool</a><br>
+        <a href="https://github.com/codenz92/cool-lang" target="_blank"
+          rel="noopener noreferrer">github.com/codenz92/cool-lang</a><br>
         MIT License &mdash; created by codenz92
       </div>
     </aside>
@@ -881,7 +883,7 @@
           syntax, closures, classes, f-strings, and a fully-featured shell — all in one.</p>
         <div class="hero-actions">
           <a href="#getting-started" class="btn btn-primary">Get Started</a>
-          <a href="https://github.com/codenz92/cool" target="_blank" rel="noopener noreferrer"
+          <a href="https://github.com/codenz92/cool-lang" target="_blank" rel="noopener noreferrer"
             class="btn btn-ghost">View on GitHub</a>
         </div>
       </div>
@@ -941,7 +943,7 @@
         <h3>Build from Source</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">git clone https://github.com/codenz92/cool
+          <pre><code class="language-bash">git clone https://github.com/codenz92/cool-lang
 cd cool
 cargo build --release</code></pre>
         </div>
@@ -2889,15 +2891,51 @@ echo Done.</code></pre>
         </ul>
 
         <div class="callout">
-          See <a href="https://github.com/codenz92/cool/blob/master/ROADMAP.md" target="_blank"
-            rel="noopener noreferrer">ROADMAP.md</a> for the
+          See <a href="https://github.com/codenz92/cool-lang/blob/master/ROADMAP.md" target="_blank"
+            rel="noopener noreferrer">ROADMAP.md</a> and <a href="https://github.com/codenz92/cool-lang/blob/master/CHANGELOG.md" target="_blank"
+            rel="noopener noreferrer">CHANGELOG.md</a> for the
           full phase-by-phase breakdown with individual task tracking.
         </div>
       </section>
 
+      <!-- CHANGELOG -->
+      <section class="doc-section" id="changelog">
+        <h2>Changelog</h2>
+        <p>See <a href="https://github.com/codenz92/cool-lang/blob/master/CHANGELOG.md" target="_blank"
+            rel="noopener noreferrer">CHANGELOG.md</a> for the complete history.</p>
+
+        <h3>v1.0.0 - The Complete Language</h3>
+        <p>All 9 phases are now complete!</p>
+        <ul>
+          <li>Phase 8: Bytecode VM, LLVM backend, FFI, inline assembly, raw memory</li>
+          <li>Phase 9: Self-hosted compiler written entirely in Cool</li>
+          <li><strong>Breaking:</strong> <code>Cool/</code> directory renamed to <code>coolapps/</code></li>
+        </ul>
+
+        <h3>Migration: Cool/ to coolapps/</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash"># Old (deprecated)
+cool Cool/shell.cool
+run Cool/snake.cool
+
+# New
+cool coolapps/shell.cool
+run coolapps/snake.cool</code></pre>
+        </div>
+      </section>
+
+      <!-- LICENSE -->
+      <section class="doc-section" id="license">
+        <h2>License</h2>
+        <p>Cool Language is released under the <strong>MIT License</strong>.</p>
+        <p>See <a href="https://github.com/codenz92/cool-lang" target="_blank"
+            rel="noopener noreferrer">github.com/codenz92/cool-lang</a>.</p>
+      </section>
+
       <hr>
       <p style="color:var(--muted); font-family:var(--font-mono); font-size:0.78rem; padding-bottom:32px;">
-        Cool Language &mdash; MIT License &mdash; Created by <a href="https://github.com/codenz92" target="_blank"
+        Cool Language &mdash; MIT License &mdash; Created by <a href="https://github.com/codenz92/cool-lang" target="_blank"
           rel="noopener noreferrer">codenz92</a>
       </p>
 
