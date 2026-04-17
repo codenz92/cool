@@ -209,10 +209,26 @@ CoolVal cool_neq(CoolVal a, CoolVal b)  { return cv_bool(!cv_eq_raw(a,b)); }
                               (const char*)(intptr_t)b.payload) op 0); \
     return cv_bool(cv_to_float(a) op cv_to_float(b))
 
-CoolVal cool_lt(CoolVal a, CoolVal b)   { STR_CMP(<);  }
-CoolVal cool_lteq(CoolVal a, CoolVal b) { STR_CMP(<=); }
-CoolVal cool_gt(CoolVal a, CoolVal b)   { STR_CMP(>);  }
-CoolVal cool_gteq(CoolVal a, CoolVal b) { STR_CMP(>=); }
+CoolVal cool_lt(CoolVal a, CoolVal b)   { 
+    if (a.tag == TAG_INT && b.tag == TAG_INT) return cv_bool(a.payload < b.payload);
+    if (a.tag == TAG_STR && b.tag == TAG_STR) return cv_bool(strcmp((const char*)(intptr_t)a.payload, (const char*)(intptr_t)b.payload) < 0);
+    return cv_bool(cv_to_float(a) < cv_to_float(b));
+}
+CoolVal cool_lteq(CoolVal a, CoolVal b) { 
+    if (a.tag == TAG_INT && b.tag == TAG_INT) return cv_bool(a.payload <= b.payload);
+    if (a.tag == TAG_STR && b.tag == TAG_STR) return cv_bool(strcmp((const char*)(intptr_t)a.payload, (const char*)(intptr_t)b.payload) <= 0);
+    return cv_bool(cv_to_float(a) <= cv_to_float(b));
+}
+CoolVal cool_gt(CoolVal a, CoolVal b)   { 
+    if (a.tag == TAG_INT && b.tag == TAG_INT) return cv_bool(a.payload > b.payload);
+    if (a.tag == TAG_STR && b.tag == TAG_STR) return cv_bool(strcmp((const char*)(intptr_t)a.payload, (const char*)(intptr_t)b.payload) > 0);
+    return cv_bool(cv_to_float(a) > cv_to_float(b));
+}
+CoolVal cool_gteq(CoolVal a, CoolVal b) { 
+    if (a.tag == TAG_INT && b.tag == TAG_INT) return cv_bool(a.payload >= b.payload);
+    if (a.tag == TAG_STR && b.tag == TAG_STR) return cv_bool(strcmp((const char*)(intptr_t)a.payload, (const char*)(intptr_t)b.payload) >= 0);
+    return cv_bool(cv_to_float(a) >= cv_to_float(b));
+}
 
 /* ── logic / bitwise ──────────────────────────────────────────────────── */
 CoolVal cool_not(CoolVal a)              { return cv_bool(!cool_truthy(a)); }
