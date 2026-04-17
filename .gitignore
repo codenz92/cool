@@ -1,3 +1,6 @@
+# Agent/Skill tooling (local development)
+.minimax/
+
 # Rust build artifacts
 /target/
 **/*.rs.bk
