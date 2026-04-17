@@ -722,6 +722,25 @@ CoolVal cool_is_instance(CoolVal obj, const char* class_name) {
     if (!o->class) return cv_bool(0);
     return cv_bool(strcmp((const char*)(intptr_t)o->class->name, class_name) == 0);
 }
+
+static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
+    if (list.tag != TAG_LIST) return cv_bool(0);
+    CoolList* l = (CoolList*)(intptr_t)list.payload;
+    for (int64_t i = 0; i < l->length; i++)
+        if (cv_eq_raw(((CoolVal*)l->data)[i], item)) return cv_bool(1);
+    return cv_bool(0);
+}
+
+CoolVal cool_contains(CoolVal container, CoolVal item) {
+    if (container.tag == TAG_LIST) return cool_list_contains_local(container, item);
+    if (container.tag == TAG_STR && item.tag == TAG_STR) {
+        const char* haystack = (const char*)(intptr_t)container.payload;
+        const char* needle   = (const char*)(intptr_t)item.payload;
+        return cv_bool(strstr(haystack, needle) != NULL);
+    }
+    fprintf(stderr, "TypeError: 'in' not supported for this type\n");
+    exit(1);
+}
 "#;
 
 // ── Runtime function table ────────────────────────────────────────────────────
@@ -797,6 +816,7 @@ struct RuntimeFns<'ctx> {
     cool_set_global_arg: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_is_instance: FunctionValue<'ctx>,
+    cool_contains: FunctionValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -946,6 +966,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_get_arg: decl!("cool_get_arg", cv_type.fn_type(&[i32m], false)),
             cool_set_global_arg: decl!("cool_set_global_arg", voidt.fn_type(&[i32m, cv], false)),
             cool_is_instance: decl!("cool_is_instance", cv_type.fn_type(&[cv, ptrm], false)),
+            cool_contains: decl!("cool_contains", cv_type.fn_type(&[cv, cv], false)),
         }
     }
 
@@ -1107,7 +1128,7 @@ impl<'ctx> Compiler<'ctx> {
                 return Err("and/or cannot be used in augmented assignment".into());
             }
             BinOp::In | BinOp::NotIn => {
-                return Err("'in'/'not in' not supported in LLVM backend".into());
+                return Err("'in'/'not in' not supported in augmented assignment".into());
             }
         };
         Ok(self.call_binop_fn(fn_val, a, b, "binop"))
@@ -1952,6 +1973,117 @@ impl<'ctx> Compiler<'ctx> {
                     .into_struct_value())
             }
 
+            Expr::Ternary { condition, then_expr, else_expr } => {
+                let fn_val = self.current_fn.unwrap();
+                let then_bb = self.context.append_basic_block(fn_val, "tern_then");
+                let else_bb = self.context.append_basic_block(fn_val, "tern_else");
+                let done_bb = self.context.append_basic_block(fn_val, "tern_done");
+
+                let cond_cv = self.compile_expr(condition)?;
+                let i1 = self.truthy_i1(cond_cv);
+                self.builder.build_conditional_branch(i1, then_bb, else_bb).unwrap();
+
+                self.builder.position_at_end(then_bb);
+                let then_val = self.compile_expr(then_expr)?;
+                let then_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(else_bb);
+                let else_val = self.compile_expr(else_expr)?;
+                let else_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let phi = self.builder.build_phi(self.cv_type, "tern").unwrap();
+                phi.add_incoming(&[(&then_val, then_end), (&else_val, else_end)]);
+                Ok(phi.as_basic_value().into_struct_value())
+            }
+
+            Expr::ListComp { expr, var, iter, condition } => {
+                let fn_val = self.current_fn.unwrap();
+
+                // Allocate result list
+                let result_ptr = self.builder.build_alloca(self.cv_type, "lc_result").unwrap();
+                let zero_val = self.build_int(0);
+                let empty_list = self.call_unop_fn(self.rt.cool_list_make, zero_val, "lc_list");
+                self.builder.build_store(result_ptr, empty_list).unwrap();
+
+                // Compile the iterable
+                let iter_val = self.compile_expr(iter)?;
+                let idx_ptr = self.builder.build_alloca(self.cv_type, "lc_idx").unwrap();
+                let idx_zero = self.build_int(0);
+                self.builder.build_store(idx_ptr, idx_zero).unwrap();
+
+                let var_ptr = self.builder.build_alloca(self.cv_type, var).unwrap();
+                let saved_var = self.locals.get(var).copied();
+                self.locals.insert(var.clone(), var_ptr);
+
+                let cond_bb = self.context.append_basic_block(fn_val, "lc_cond");
+                let body_bb = self.context.append_basic_block(fn_val, "lc_body");
+                let after_bb = self.context.append_basic_block(fn_val, "lc_after");
+
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                // Condition: idx < len
+                self.builder.position_at_end(cond_bb);
+                let idx_cv = self.builder.build_load(self.cv_type, idx_ptr, "lc_idx_load").unwrap().into_struct_value();
+                let len_cv = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "lc_len");
+                let lt = self.call_binop_fn(self.rt.cool_lt, idx_cv, len_cv, "lc_lt");
+                let i1 = self.truthy_i1(lt);
+                self.builder.build_conditional_branch(i1, body_bb, after_bb).unwrap();
+
+                // Body: optionally filter, then push expr
+                self.builder.position_at_end(body_bb);
+                let elem = self.call_binop_fn(self.rt.cool_list_get, iter_val.clone(), idx_cv, "lc_elem");
+                self.builder.build_store(var_ptr, elem).unwrap();
+
+                let push_bb = if let Some(cond_expr) = condition {
+                    let skip_bb = self.context.append_basic_block(fn_val, "lc_skip");
+                    let push_bb = self.context.append_basic_block(fn_val, "lc_push");
+                    let cond_cv = self.compile_expr(cond_expr)?;
+                    let ci1 = self.truthy_i1(cond_cv);
+                    self.builder.build_conditional_branch(ci1, push_bb, skip_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
+                    // Increment idx and loop back
+                    let old_idx = self.builder.build_load(self.cv_type, idx_ptr, "lc_skip_idx").unwrap().into_struct_value();
+                    let one_skip = self.build_int(1);
+                    let new_idx = self.call_binop_fn(self.rt.cool_add, old_idx, one_skip, "lc_inc");
+                    self.builder.build_store(idx_ptr, new_idx).unwrap();
+                    self.builder.build_unconditional_branch(cond_bb).unwrap();
+                    push_bb
+                } else {
+                    body_bb
+                };
+
+                self.builder.position_at_end(push_bb);
+                let push_elem = if condition.is_some() {
+                    // re-load var (it was stored before the filter branch)
+                    self.builder.build_load(self.cv_type, var_ptr, "lc_var").unwrap().into_struct_value();
+                    self.compile_expr(expr)?
+                } else {
+                    self.compile_expr(expr)?
+                };
+                let result_cv = self.builder.build_load(self.cv_type, result_ptr, "lc_res_load").unwrap().into_struct_value();
+                self.call_binop_fn(self.rt.cool_list_push, result_cv, push_elem, "lc_push");
+
+                // Increment idx
+                let old_idx2 = self.builder.build_load(self.cv_type, idx_ptr, "lc_old_idx").unwrap().into_struct_value();
+                let one_inc = self.build_int(1);
+                let new_idx2 = self.call_binop_fn(self.rt.cool_add, old_idx2, one_inc, "lc_inc2");
+                self.builder.build_store(idx_ptr, new_idx2).unwrap();
+                self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+                self.builder.position_at_end(after_bb);
+
+                // Restore shadowed variable if any
+                match saved_var {
+                    Some(ptr) => { self.locals.insert(var.clone(), ptr); }
+                    None => { self.locals.remove(var); }
+                }
+
+                Ok(self.builder.build_load(self.cv_type, result_ptr, "lc_final").unwrap().into_struct_value())
+            }
+
             other => Err(format!("unsupported expression in LLVM backend: {other:?}")),
         }
     }
@@ -1963,7 +2095,14 @@ impl<'ctx> Compiler<'ctx> {
             BinOp::And => return self.compile_and(left, right),
             BinOp::Or => return self.compile_or(left, right),
             BinOp::In | BinOp::NotIn => {
-                return Err("'in'/'not in' not supported in LLVM backend".into());
+                let container = self.compile_expr(right)?;
+                let item = self.compile_expr(left)?;
+                let result = self.call_binop_fn(self.rt.cool_contains, container, item, "contains");
+                return if matches!(op, BinOp::NotIn) {
+                    Ok(self.call_unop_fn(self.rt.cool_not, result, "not"))
+                } else {
+                    Ok(result)
+                };
             }
             _ => {}
         }

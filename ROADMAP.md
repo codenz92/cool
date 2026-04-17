@@ -178,14 +178,20 @@
 - [x] List concatenation in LLVM
 - [x] Functions and recursion in LLVM
 - [x] Classes in LLVM (`class`, `__init__`, methods, attribute access)
+- [x] Ternary expressions in LLVM (`x if cond else y`)
+- [x] List comprehensions in LLVM (`[expr for x in iter if cond]`)
+- [x] `in` / `not in` in LLVM (lists and strings)
 
 ### Known LLVM Limitations
 
 The LLVM backend covers the core language. The following features remain interpreter/VM-only for now:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
-|---------|:-----------:|:-----------:|:----:|
+| ------- | :-----------: | :-----------: | :----: |
 | Classes | ✅ | ✅ | ✅ |
+| Ternary expressions | ✅ | ✅ | ✅ |
+| List comprehensions | ✅ | ✅ | ✅ |
+| `in` / `not in` | ✅ | ✅ | ✅ |
 | Closures | ✅ | ✅ | ❌ |
 | `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |

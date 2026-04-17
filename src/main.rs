@@ -278,7 +278,8 @@ NOTES:
     The LLVM backend (--compile / build) supports:
     integers, floats, strings, booleans, variables, arithmetic,
     comparisons, if/elif/else, while/for loops, break/continue,
-    functions, lists, classes, print(), range(), len().
+    functions, lists, classes, list comprehensions, ternary expressions,
+    in/not in, print(), range(), len().
     Closures, import, and try/except require the interpreter or bytecode VM.
 "
     );
