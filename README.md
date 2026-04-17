@@ -68,7 +68,7 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, `for` loops, `range()`, inline assembly, and raw memory operations. **Classes now work in LLVM!** Closures, while loops (use `for` instead), and imports remain interpreter-only.
+The compiler supports: integers, floats, strings, booleans, variables, all arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, `for` loops, `while` loops, `range()`, inline assembly, and raw memory operations. **Classes now work in LLVM!** Closures and imports remain interpreter-only.
 
 **LLVM backend:** All core features work: literals, arithmetic, comparisons, lists, `for` loops, `range()`, functions, recursion, `if`/`else`, variable assignment with expressions.
 

@@ -75,6 +75,12 @@ fn test_while_loop() {
 }
 
 #[test]
+fn test_while_loop_basic() {
+    let result = run_cool("count = 0\nwhile count < 5:\n\tcount = count + 1\nprint(count)").unwrap();
+    assert!(result.contains("5"));
+}
+
+#[test]
 fn test_for_loop() {
     let result = run_cool("for i in range(3):\n\tprint(i)").unwrap();
     assert!(result.contains("0"));
