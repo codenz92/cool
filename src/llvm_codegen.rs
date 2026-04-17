@@ -40,6 +40,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_BOOL  3
 #define TAG_STR   4
 #define TAG_LIST  5
+#define TAG_OBJECT 6
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
