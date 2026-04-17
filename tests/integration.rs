@@ -9,25 +9,25 @@ static TEMP_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
 fn run_cool(source: &str) -> Result<String, String> {
     let mut path_guard = TEMP_FILE.lock().unwrap();
-    
+
     // Create temp file in current directory to avoid permission issues
     let temp = std::path::PathBuf::from("temp_cool_test.cool");
     let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(source.as_bytes()).map_err(|e| e.to_string())?;
     drop(file);
     *path_guard = Some(temp.clone());
-    
+
     let output = Command::new("./target/debug/cool")
         .arg(&temp)
         .output()
         .map_err(|e| e.to_string())?;
-    
+
     // Clean up
     let _ = std::fs::remove_file(&temp);
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    
+
     if output.status.success() {
         Ok(stdout)
     } else {
@@ -108,7 +108,9 @@ fn test_function() {
 
 #[test]
 fn test_function_default_args() {
-    let result = run_cool("def greet(name, greeting=\"Hello\"):\n\treturn greeting + \", \" + name\nprint(greet(\"World\"))").unwrap();
+    let result =
+        run_cool("def greet(name, greeting=\"Hello\"):\n\treturn greeting + \", \" + name\nprint(greet(\"World\"))")
+            .unwrap();
     assert!(result.contains("Hello, World"));
 }
 
@@ -163,7 +165,10 @@ fn test_lambda() {
 
 #[test]
 fn test_closure() {
-    let result = run_cool("def make_adder(n):\n\tdef adder(x):\n\t\treturn x + n\n\treturn adder\nadd5 = make_adder(5)\nprint(add5(10))").unwrap();
+    let result = run_cool(
+        "def make_adder(n):\n\tdef adder(x):\n\t\treturn x + n\n\treturn adder\nadd5 = make_adder(5)\nprint(add5(10))",
+    )
+    .unwrap();
     assert!(result.contains("15"));
 }
 
@@ -181,6 +186,8 @@ fn test_import() {
 
 #[test]
 fn test_break_continue() {
-    let result = run_cool("result = []\nfor i in range(10):\n\tif i == 5:\n\t\tbreak\n\tresult.append(i)\nprint(len(result))").unwrap();
+    let result =
+        run_cool("result = []\nfor i in range(10):\n\tif i == 5:\n\t\tbreak\n\tresult.append(i)\nprint(len(result))")
+            .unwrap();
     assert!(result.contains("5"));
 }

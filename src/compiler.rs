@@ -63,7 +63,11 @@ impl FnScope {
     fn add_local(&mut self, name: &str) -> usize {
         let slot = self.next_slot;
         self.next_slot += 1;
-        self.locals.push(Local { name: name.to_string(), slot, is_captured: false });
+        self.locals.push(Local {
+            name: name.to_string(),
+            slot,
+            is_captured: false,
+        });
         slot
     }
 
@@ -78,7 +82,10 @@ impl FnScope {
             return i;
         }
         let idx = self.upvalues.len();
-        self.upvalues.push(Upvalue { name: name.to_string(), capture });
+        self.upvalues.push(Upvalue {
+            name: name.to_string(),
+            capture,
+        });
         idx
     }
 }
@@ -230,7 +237,9 @@ impl Compiler {
     /// Returns the upvalue index in the current scope, or None if not found
     /// in any enclosing function scope (globals are handled elsewhere).
     fn resolve_upvalue(&mut self, name: &str, depth: usize) -> Option<usize> {
-        if depth == 0 { return None; }
+        if depth == 0 {
+            return None;
+        }
         let parent = depth - 1;
         if parent == 0 {
             // Parent is global scope; don't create upvalues for globals.
@@ -380,7 +389,9 @@ impl Compiler {
             Stmt::Return(expr) => {
                 match expr {
                     Some(e) => self.compile_expr(e)?,
-                    None => { self.emit(Op::Nil); }
+                    None => {
+                        self.emit(Op::Nil);
+                    }
                 }
                 self.emit(Op::Return);
             }
@@ -389,7 +400,12 @@ impl Compiler {
 
             Stmt::Break => {
                 // If breaking out of a for-loop, pop the iterator off the stack first.
-                let has_iter = self.scopes.last().unwrap().loop_stack.last()
+                let has_iter = self
+                    .scopes
+                    .last()
+                    .unwrap()
+                    .loop_stack
+                    .last()
                     .map(|l| l.has_iter_on_stack)
                     .ok_or_else(|| "break outside loop".to_string())?;
                 if has_iter {
@@ -404,13 +420,23 @@ impl Compiler {
             }
 
             Stmt::Continue => {
-                let target = self.scopes.last().unwrap().loop_stack.last()
+                let target = self
+                    .scopes
+                    .last()
+                    .unwrap()
+                    .loop_stack
+                    .last()
                     .map(|l| l.continue_target)
                     .ok_or_else(|| "continue outside loop".to_string())?;
                 self.emit(Op::Jump(target));
             }
 
-            Stmt::If { condition, then_body, elif_clauses, else_body } => {
+            Stmt::If {
+                condition,
+                then_body,
+                elif_clauses,
+                else_body,
+            } => {
                 // Compile: if cond { then } elif ... else { else }
                 // We collect the patch points for the "jump past the whole if" at
                 // the end of each branch.
@@ -421,7 +447,9 @@ impl Compiler {
 
                 // Then branch.
                 self.emit(Op::Pop); // pop the condition
-                for s in then_body { self.compile_stmt(s)?; }
+                for s in then_body {
+                    self.compile_stmt(s)?;
+                }
                 end_patches.push(self.emit_jump(Op::Jump));
 
                 // Each elif.
@@ -431,7 +459,9 @@ impl Compiler {
                     self.compile_expr(cond)?;
                     next_patch = self.emit_jump(Op::JumpIfFalse);
                     self.emit(Op::Pop);
-                    for s in body { self.compile_stmt(s)?; }
+                    for s in body {
+                        self.compile_stmt(s)?;
+                    }
                     end_patches.push(self.emit_jump(Op::Jump));
                 }
 
@@ -439,11 +469,15 @@ impl Compiler {
                 self.patch(next_patch);
                 self.emit(Op::Pop); // pop condition
                 if let Some(eb) = else_body {
-                    for s in eb { self.compile_stmt(s)?; }
+                    for s in eb {
+                        self.compile_stmt(s)?;
+                    }
                 }
 
                 // Patch all end-of-branch jumps.
-                for p in end_patches { self.patch(p); }
+                for p in end_patches {
+                    self.patch(p);
+                }
             }
 
             Stmt::While { condition, body } => {
@@ -458,7 +492,9 @@ impl Compiler {
                 let exit_patch = self.emit_jump(Op::JumpIfFalse);
                 self.emit(Op::Pop); // pop truthy condition
 
-                for s in body { self.compile_stmt(s)?; }
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
 
                 self.emit(Op::Jump(loop_start));
 
@@ -467,7 +503,9 @@ impl Compiler {
 
                 let info = self.scopes.last_mut().unwrap().loop_stack.pop().unwrap();
                 let after = self.chunk().current_ip();
-                for p in info.break_patches { self.chunk().patch_jump(p, after); }
+                for p in info.break_patches {
+                    self.chunk().patch_jump(p, after);
+                }
             }
 
             Stmt::For { var, iter, body } => {
@@ -487,14 +525,18 @@ impl Compiler {
                 let set_op = self.resolve_set(var);
                 self.emit(set_op);
 
-                for s in body { self.compile_stmt(s)?; }
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
 
                 self.emit(Op::Jump(loop_start));
                 self.patch(exit_patch);
 
                 let info = self.scopes.last_mut().unwrap().loop_stack.pop().unwrap();
                 let after = self.chunk().current_ip();
-                for p in info.break_patches { self.chunk().patch_jump(p, after); }
+                for p in info.break_patches {
+                    self.chunk().patch_jump(p, after);
+                }
             }
 
             Stmt::FnDef { name, params, body } => {
@@ -537,7 +579,11 @@ impl Compiler {
                 // We use DupTop + SetAttr for each method or class variable.
                 for stmt in body {
                     match stmt {
-                        Stmt::FnDef { name: method_name, params, body: method_body } => {
+                        Stmt::FnDef {
+                            name: method_name,
+                            params,
+                            body: method_body,
+                        } => {
                             self.emit(Op::DupTop); // duplicate the class so we can SetAttr on it
                             let (proto, refs) = self.compile_fn_with_refs(method_name, params, method_body)?;
                             let ci = self.add_constant(VmValue::Proto(Rc::new(proto)));
@@ -567,14 +613,21 @@ impl Compiler {
                 self.emit(op);
             }
 
-            Stmt::Try { body, handlers, else_body, finally_body } => {
+            Stmt::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
                 self.compile_try(body, handlers, else_body.as_deref(), finally_body.as_deref())?;
             }
 
             Stmt::Raise(expr) => {
                 match expr {
                     Some(e) => self.compile_expr(e)?,
-                    None => { self.emit(Op::Nil); } // bare raise — VM will re-raise current
+                    None => {
+                        self.emit(Op::Nil);
+                    } // bare raise — VM will re-raise current
                 }
                 self.emit(Op::Raise);
             }
@@ -609,11 +662,15 @@ impl Compiler {
                     self.emit(Op::Pop);
                 }
                 // TODO: proper __exit__ on exception; for now just compile body
-                for s in body { self.compile_stmt(s)?; }
+                for s in body {
+                    self.compile_stmt(s)?;
+                }
                 // Call __exit__(None, None, None)
                 let exit_idx = self.add_name("__exit__");
                 self.emit(Op::GetAttr(exit_idx));
-                self.emit(Op::Nil); self.emit(Op::Nil); self.emit(Op::Nil);
+                self.emit(Op::Nil);
+                self.emit(Op::Nil);
+                self.emit(Op::Nil);
                 self.emit(Op::Call(3, vec![]));
                 self.emit(Op::Pop);
             }
@@ -674,13 +731,17 @@ impl Compiler {
         let setup_idx = self.emit_jump(Op::SetupExcept);
 
         // Try body.
-        for s in body { self.compile_stmt(s)?; }
+        for s in body {
+            self.compile_stmt(s)?;
+        }
 
         self.emit(Op::PopExcept);
 
         // Else body (runs if no exception).
         if let Some(eb) = else_body {
-            for s in eb { self.compile_stmt(s)?; }
+            for s in eb {
+                self.compile_stmt(s)?;
+            }
         }
 
         let end_jump = self.emit_jump(Op::Jump);
@@ -724,7 +785,9 @@ impl Compiler {
                 self.emit(Op::Pop);
             }
 
-            for s in &handler.body { self.compile_stmt(s)?; }
+            for s in &handler.body {
+                self.compile_stmt(s)?;
+            }
 
             // Jump past remaining handlers to end.
             done_patches.push(self.emit_jump(Op::Jump));
@@ -735,7 +798,7 @@ impl Compiler {
             let lf = *last_fail;
             self.patch(lf);
             self.emit(Op::Pop); // pop false bool
-            // Stack: [..., exc]; raise it.
+                                // Stack: [..., exc]; raise it.
             self.emit(Op::Raise);
         }
 
@@ -743,11 +806,15 @@ impl Compiler {
         self.patch(end_jump);
 
         // Patch all handler-body done-jumps to end.
-        for p in &done_patches { self.patch(*p); }
+        for p in &done_patches {
+            self.patch(*p);
+        }
 
         // Finally body (always runs).
         if let Some(fb) = finally_body {
-            for s in fb { self.compile_stmt(s)?; }
+            for s in fb {
+                self.compile_stmt(s)?;
+            }
         }
 
         Ok(())
@@ -786,7 +853,9 @@ impl Compiler {
             self.scopes.last_mut().unwrap().add_local(&kname);
         }
 
-        for s in body { self.compile_stmt(s)?; }
+        for s in body {
+            self.compile_stmt(s)?;
+        }
 
         // Implicit return nil.
         self.emit(Op::Nil);
@@ -800,9 +869,10 @@ impl Compiler {
         let local_count = scope.next_slot;
 
         // Pre-evaluate default parameter values.
-        let defaults: Vec<Option<VmValue>> = params.iter().map(|p| {
-            p.default.as_ref().map(|expr| Self::eval_const_expr(expr))
-        }).collect();
+        let defaults: Vec<Option<VmValue>> = params
+            .iter()
+            .map(|p| p.default.as_ref().map(|expr| Self::eval_const_expr(expr)))
+            .collect();
 
         let proto = FnProto {
             name: name.to_string(),
@@ -820,39 +890,29 @@ impl Compiler {
     /// Only handles simple literals; complex expressions return Nil.
     fn eval_const_expr(expr: &Expr) -> VmValue {
         match expr {
-            Expr::Int(n)    => VmValue::Int(*n),
-            Expr::Float(f)  => VmValue::Float(*f),
-            Expr::Str(s)    => VmValue::Str(s.clone()),
-            Expr::Bool(b)   => VmValue::Bool(*b),
-            Expr::Nil       => VmValue::Nil,
-            Expr::List(items) if items.is_empty() => {
-                VmValue::List(Rc::new(std::cell::RefCell::new(Vec::new())))
-            }
-            Expr::Dict(pairs) if pairs.is_empty() => {
-                VmValue::Dict(Rc::new(std::cell::RefCell::new(VmDict::new())))
-            }
-            Expr::Tuple(items) if items.is_empty() => {
-                VmValue::Tuple(Rc::new(Vec::new()))
-            }
+            Expr::Int(n) => VmValue::Int(*n),
+            Expr::Float(f) => VmValue::Float(*f),
+            Expr::Str(s) => VmValue::Str(s.clone()),
+            Expr::Bool(b) => VmValue::Bool(*b),
+            Expr::Nil => VmValue::Nil,
+            Expr::List(items) if items.is_empty() => VmValue::List(Rc::new(std::cell::RefCell::new(Vec::new()))),
+            Expr::Dict(pairs) if pairs.is_empty() => VmValue::Dict(Rc::new(std::cell::RefCell::new(VmDict::new()))),
+            Expr::Tuple(items) if items.is_empty() => VmValue::Tuple(Rc::new(Vec::new())),
             // Unary minus on a literal
-            Expr::UnaryOp { op: UnaryOp::Neg, expr: operand } => {
-                match Self::eval_const_expr(operand) {
-                    VmValue::Int(n)   => VmValue::Int(-n),
-                    VmValue::Float(f) => VmValue::Float(-f),
-                    _                 => VmValue::Nil,
-                }
-            }
+            Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                expr: operand,
+            } => match Self::eval_const_expr(operand) {
+                VmValue::Int(n) => VmValue::Int(-n),
+                VmValue::Float(f) => VmValue::Float(-f),
+                _ => VmValue::Nil,
+            },
             _ => VmValue::Nil, // non-constant; will be Nil at call time
         }
     }
 
     /// Unused wrapper kept for API compatibility.
-    fn compile_fn(
-        &mut self,
-        name: &str,
-        params: &[Param],
-        body: &[Stmt],
-    ) -> Result<FnProto, String> {
+    fn compile_fn(&mut self, name: &str, params: &[Param], body: &[Stmt]) -> Result<FnProto, String> {
         let (proto, _) = self.compile_fn_with_refs(name, params, body)?;
         Ok(proto)
     }
@@ -910,17 +970,26 @@ impl Compiler {
                 self.compile_expr(left)?;
                 self.compile_expr(right)?;
                 let bin_op = match op {
-                    BinOp::Add => Op::Add, BinOp::Sub => Op::Sub,
-                    BinOp::Mul => Op::Mul, BinOp::Div => Op::Div,
-                    BinOp::Mod => Op::Mod, BinOp::Pow => Op::Pow,
+                    BinOp::Add => Op::Add,
+                    BinOp::Sub => Op::Sub,
+                    BinOp::Mul => Op::Mul,
+                    BinOp::Div => Op::Div,
+                    BinOp::Mod => Op::Mod,
+                    BinOp::Pow => Op::Pow,
                     BinOp::FloorDiv => Op::FloorDiv,
-                    BinOp::Eq => Op::Eq, BinOp::NotEq => Op::NotEq,
-                    BinOp::Lt => Op::Lt, BinOp::LtEq => Op::LtEq,
-                    BinOp::Gt => Op::Gt, BinOp::GtEq => Op::GtEq,
-                    BinOp::In => Op::In, BinOp::NotIn => Op::NotIn,
-                    BinOp::BitAnd => Op::BitAnd, BinOp::BitOr => Op::BitOr,
+                    BinOp::Eq => Op::Eq,
+                    BinOp::NotEq => Op::NotEq,
+                    BinOp::Lt => Op::Lt,
+                    BinOp::LtEq => Op::LtEq,
+                    BinOp::Gt => Op::Gt,
+                    BinOp::GtEq => Op::GtEq,
+                    BinOp::In => Op::In,
+                    BinOp::NotIn => Op::NotIn,
+                    BinOp::BitAnd => Op::BitAnd,
+                    BinOp::BitOr => Op::BitOr,
                     BinOp::BitXor => Op::BitXor,
-                    BinOp::LShift => Op::LShift, BinOp::RShift => Op::RShift,
+                    BinOp::LShift => Op::LShift,
+                    BinOp::RShift => Op::RShift,
                     BinOp::And | BinOp::Or => unreachable!(),
                 };
                 self.emit(bin_op);
@@ -939,9 +1008,13 @@ impl Compiler {
             Expr::Call { callee, args, kwargs } => {
                 self.compile_expr(callee)?;
                 let positional_count = args.len();
-                for a in args { self.compile_expr(a)?; }
+                for a in args {
+                    self.compile_expr(a)?;
+                }
                 let kwarg_names: Vec<String> = kwargs.iter().map(|(k, _)| k.clone()).collect();
-                for (_, v) in kwargs { self.compile_expr(v)?; }
+                for (_, v) in kwargs {
+                    self.compile_expr(v)?;
+                }
                 self.emit(Op::Call(positional_count, kwarg_names));
             }
 
@@ -953,8 +1026,18 @@ impl Compiler {
 
             Expr::Slice { object, start, stop } => {
                 self.compile_expr(object)?;
-                match start { Some(e) => self.compile_expr(e)?, None => { self.emit(Op::Nil); } }
-                match stop  { Some(e) => self.compile_expr(e)?, None => { self.emit(Op::Nil); } }
+                match start {
+                    Some(e) => self.compile_expr(e)?,
+                    None => {
+                        self.emit(Op::Nil);
+                    }
+                }
+                match stop {
+                    Some(e) => self.compile_expr(e)?,
+                    None => {
+                        self.emit(Op::Nil);
+                    }
+                }
                 self.emit(Op::GetSlice);
             }
 
@@ -965,7 +1048,9 @@ impl Compiler {
             }
 
             Expr::List(items) => {
-                for item in items { self.compile_expr(item)?; }
+                for item in items {
+                    self.compile_expr(item)?;
+                }
                 self.emit(Op::BuildList(items.len()));
             }
 
@@ -978,7 +1063,9 @@ impl Compiler {
             }
 
             Expr::Tuple(items) => {
-                for item in items { self.compile_expr(item)?; }
+                for item in items {
+                    self.compile_expr(item)?;
+                }
                 self.emit(Op::BuildTuple(items.len()));
             }
 
@@ -1007,12 +1094,17 @@ impl Compiler {
             }
 
             Expr::Lambda { params, body } => {
-                let (proto, refs) = self.compile_fn_with_refs("<lambda>", params, &[Stmt::Return(Some(*body.clone()))])?;
+                let (proto, refs) =
+                    self.compile_fn_with_refs("<lambda>", params, &[Stmt::Return(Some(*body.clone()))])?;
                 let ci = self.add_constant(VmValue::Proto(Rc::new(proto)));
                 self.emit(Op::MakeClosure(ci, refs));
             }
 
-            Expr::Ternary { condition, then_expr, else_expr } => {
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 self.compile_expr(condition)?;
                 let else_jump = self.emit_jump(Op::JumpIfFalse);
                 self.emit(Op::Pop);
@@ -1024,7 +1116,12 @@ impl Compiler {
                 self.patch(end_jump);
             }
 
-            Expr::ListComp { expr, var, iter, condition } => {
+            Expr::ListComp {
+                expr,
+                var,
+                iter,
+                condition,
+            } => {
                 // Stack-based list comprehension (no local variable for accumulator).
                 //
                 // Stack layout during the loop:
@@ -1073,16 +1170,16 @@ impl Compiler {
                 self.emit(Op::Over); // [..., acc, iterator, acc_copy]
                 let append_idx = self.add_name("append");
                 self.emit(Op::GetAttr(append_idx)); // [..., acc, iterator, BoundBuiltin]
-                self.compile_expr(expr)?;            // [..., acc, iterator, BoundBuiltin, val]
-                self.emit(Op::Call(1, vec![]));      // [..., acc, iterator, nil]
-                self.emit(Op::Pop);                  // [..., acc, iterator]
+                self.compile_expr(expr)?; // [..., acc, iterator, BoundBuiltin, val]
+                self.emit(Op::Call(1, vec![])); // [..., acc, iterator, nil]
+                self.emit(Op::Pop); // [..., acc, iterator]
 
                 // Jump back to loop (skipping the false-condition path below).
                 let true_continue = self.emit_jump(Op::Jump);
 
                 if let Some(p) = cond_patch {
-                    self.patch(p);       // false case jumps here (cond bool still on stack)
-                    self.emit(Op::Pop);  // pop the falsy cond bool
+                    self.patch(p); // false case jumps here (cond bool still on stack)
+                    self.emit(Op::Pop); // pop the falsy cond bool
                 }
 
                 // Both paths converge here → jump back to loop start.
@@ -1095,7 +1192,9 @@ impl Compiler {
 
                 let info = self.scopes.last_mut().unwrap().loop_stack.pop().unwrap();
                 let after = self.chunk().current_ip();
-                for p in info.break_patches { self.chunk().patch_jump(p, after); }
+                for p in info.break_patches {
+                    self.chunk().patch_jump(p, after);
+                }
                 // acc is already on TOS — no GetLocal needed.
             }
         }
@@ -1106,13 +1205,47 @@ impl Compiler {
 // ── Built-in name list ────────────────────────────────────────────────────────
 
 const BUILTINS: &[&str] = &[
-    "print", "len", "range", "str", "int", "float", "bool", "type",
-    "input", "repr", "exit", "open", "isinstance", "hasattr", "getattr",
-    "list", "tuple", "dict", "set", "sorted", "reversed", "enumerate",
-    "zip", "abs", "min", "max", "sum", "map", "filter",
-    "set_completions", "eval", "append", "pop", "keys", "values", "items",
-    "runfile", "super",
-    "__import_file__", "__import_module__", "__exc_matches__",
+    "print",
+    "len",
+    "range",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "type",
+    "input",
+    "repr",
+    "exit",
+    "open",
+    "isinstance",
+    "hasattr",
+    "getattr",
+    "list",
+    "tuple",
+    "dict",
+    "set",
+    "sorted",
+    "reversed",
+    "enumerate",
+    "zip",
+    "abs",
+    "min",
+    "max",
+    "sum",
+    "map",
+    "filter",
+    "set_completions",
+    "eval",
+    "append",
+    "pop",
+    "keys",
+    "values",
+    "items",
+    "runfile",
+    "super",
+    "__import_file__",
+    "__import_module__",
+    "__exc_matches__",
 ];
 
 // ── Public API ────────────────────────────────────────────────────────────────

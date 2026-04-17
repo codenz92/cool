@@ -27,17 +27,10 @@ impl rustyline::completion::Completer for CoolHelper {
         pos: usize,
         _ctx: &rustyline::Context<'_>,
     ) -> rustyline::Result<(usize, Vec<String>)> {
-        let word_start = line[..pos]
-            .rfind(|c: char| c == ' ' || c == '\t')
-            .map_or(0, |i| i + 1);
+        let word_start = line[..pos].rfind(|c: char| c == ' ' || c == '\t').map_or(0, |i| i + 1);
         let word = &line[word_start..pos];
-        let candidates: Vec<String> = COMPLETIONS.with(|c| {
-            c.borrow()
-                .iter()
-                .filter(|s| s.starts_with(word))
-                .cloned()
-                .collect()
-        });
+        let candidates: Vec<String> =
+            COMPLETIONS.with(|c| c.borrow().iter().filter(|s| s.starts_with(word)).cloned().collect());
         Ok((word_start, candidates))
     }
 }
@@ -126,8 +119,7 @@ impl Env {
             "read_str",
             "write_str",
         ] {
-            data.vars
-                .insert(name.to_string(), Value::BuiltinFn(name.to_string()));
+            data.vars.insert(name.to_string(), Value::BuiltinFn(name.to_string()));
         }
         Env(Rc::new(RefCell::new(data)))
     }
@@ -176,11 +168,7 @@ impl Env {
         let has_var = self.0.borrow().vars.contains_key(name);
         let parent = self.0.borrow().parent.clone();
         if is_global {
-            self.root()
-                .0
-                .borrow_mut()
-                .vars
-                .insert(name.to_string(), value);
+            self.root().0.borrow_mut().vars.insert(name.to_string(), value);
         } else if is_nonlocal {
             if let Some(p) = parent {
                 p.assign(name, value);
@@ -409,13 +397,7 @@ impl fmt::Display for Value {
                 ret_type,
                 arg_types,
                 ..
-            } => write!(
-                f,
-                "<ffi func {}({}) -> {}>",
-                name,
-                arg_types.join(", "),
-                ret_type
-            ),
+            } => write!(f, "<ffi func {}({}) -> {}>", name, arg_types.join(", "), ret_type),
         }
     }
 }
@@ -518,13 +500,12 @@ macro_rules! compare_op {
 
 impl Interpreter {
     pub fn new(source_dir: std::path::PathBuf, source: &str) -> Self {
-        let readline_editor =
-            rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
-                .ok()
-                .map(|mut ed| {
-                    ed.set_helper(Some(CoolHelper));
-                    ed
-                });
+        let readline_editor = rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
+            .ok()
+            .map(|mut ed| {
+                ed.set_helper(Some(CoolHelper));
+                ed
+            });
         // Seed xorshift64 from system time; fall back to a fixed seed if time is unavailable.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -611,11 +592,7 @@ impl Interpreter {
                 let v = self.eval(value, env)?;
                 let items = self.to_iterable(v)?;
                 if items.len() != names.len() {
-                    return Err(self.err(&format!(
-                        "unpack: expected {} values, got {}",
-                        names.len(),
-                        items.len()
-                    )));
+                    return Err(self.err(&format!("unpack: expected {} values, got {}", names.len(), items.len())));
                 }
                 for (name, val) in names.iter().zip(items) {
                     env.set_local(name.clone(), val);
@@ -649,12 +626,7 @@ impl Interpreter {
                                 Value::Dict(map) => {
                                     map.borrow_mut().set(idx, val);
                                 }
-                                other => {
-                                    return Err(self.err(&format!(
-                                        "cannot index-assign on {}",
-                                        other.type_name()
-                                    )))
-                                }
+                                other => return Err(self.err(&format!("cannot index-assign on {}", other.type_name()))),
                             }
                         }
                         Expr::Attr { object, name } => {
@@ -666,10 +638,7 @@ impl Interpreter {
                                 Value::Instance(inst) => {
                                     inst.fields.borrow_mut().insert(name.clone(), val);
                                 }
-                                other => {
-                                    return Err(self
-                                        .err(&format!("cannot set attr on {}", other.type_name())))
-                                }
+                                other => return Err(self.err(&format!("cannot set attr on {}", other.type_name()))),
                             }
                         }
                         _ => return Err(self.err("invalid unpack target")),
@@ -688,11 +657,7 @@ impl Interpreter {
                 Ok(Signal::None)
             }
 
-            Stmt::SetItem {
-                object,
-                index,
-                value,
-            } => {
+            Stmt::SetItem { object, index, value } => {
                 let obj = self.eval(object, env)?;
                 let idx = self.eval(index, env)?;
                 let val = self.eval(value, env)?;
@@ -705,19 +670,13 @@ impl Interpreter {
                         map.borrow_mut().set(idx, val);
                     }
                     other => {
-                        return Err(
-                            self.err(&format!("cannot index-assign on {}", other.type_name()))
-                        );
+                        return Err(self.err(&format!("cannot index-assign on {}", other.type_name())));
                     }
                 }
                 Ok(Signal::None)
             }
 
-            Stmt::SetAttr {
-                object,
-                name,
-                value,
-            } => {
+            Stmt::SetAttr { object, name, value } => {
                 let obj = self.eval(object, env)?;
                 let val = self.eval(value, env)?;
                 match obj {
@@ -729,9 +688,7 @@ impl Interpreter {
                         inst.fields.borrow_mut().insert(name.clone(), val);
                         Ok(Signal::None)
                     }
-                    other => {
-                        Err(self.err(&format!("cannot set attribute on {}", other.type_name())))
-                    }
+                    other => Err(self.err(&format!("cannot set attribute on {}", other.type_name()))),
                 }
             }
 
@@ -920,8 +877,8 @@ impl Interpreter {
                 } else {
                     self.source_dir.join(path)
                 };
-                let source = std::fs::read_to_string(&full_path)
-                    .map_err(|e| self.err(&format!("import error: {}", e)))?;
+                let source =
+                    std::fs::read_to_string(&full_path).map_err(|e| self.err(&format!("import error: {}", e)))?;
 
                 let mut lexer = crate::lexer::Lexer::new(&source);
                 let tokens = lexer
@@ -953,19 +910,12 @@ impl Interpreter {
                     } else {
                         "assertion failed".to_string()
                     };
-                    return Ok(Signal::Raise(Value::Str(format!(
-                        "AssertionError: {}",
-                        msg
-                    ))));
+                    return Ok(Signal::Raise(Value::Str(format!("AssertionError: {}", msg))));
                 }
                 Ok(Signal::None)
             }
 
-            Stmt::With {
-                expr,
-                as_name,
-                body,
-            } => {
+            Stmt::With { expr, as_name, body } => {
                 let val = self.eval(expr, env)?;
                 let with_env = Env::new_child(env.clone());
                 if let Some(name) = as_name {
@@ -1054,34 +1004,16 @@ impl Interpreter {
                 math_fn!("isnan");
                 math_fn!("isinf");
                 math_fn!("isfinite");
-                map.set(
-                    Value::Str("pi".to_string()),
-                    Value::Float(std::f64::consts::PI),
-                );
-                map.set(
-                    Value::Str("tau".to_string()),
-                    Value::Float(std::f64::consts::TAU),
-                );
-                map.set(
-                    Value::Str("e".to_string()),
-                    Value::Float(std::f64::consts::E),
-                );
+                map.set(Value::Str("pi".to_string()), Value::Float(std::f64::consts::PI));
+                map.set(Value::Str("tau".to_string()), Value::Float(std::f64::consts::TAU));
+                map.set(Value::Str("e".to_string()), Value::Float(std::f64::consts::E));
                 map.set(Value::Str("inf".to_string()), Value::Float(f64::INFINITY));
                 map.set(Value::Str("nan".to_string()), Value::Float(f64::NAN));
                 env.set_local("math".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
                 // Also pull common names into scope directly
-                env.set_local(
-                    "sqrt".to_string(),
-                    Value::BuiltinFn("math.sqrt".to_string()),
-                );
-                env.set_local(
-                    "floor".to_string(),
-                    Value::BuiltinFn("math.floor".to_string()),
-                );
-                env.set_local(
-                    "ceil".to_string(),
-                    Value::BuiltinFn("math.ceil".to_string()),
-                );
+                env.set_local("sqrt".to_string(), Value::BuiltinFn("math.sqrt".to_string()));
+                env.set_local("floor".to_string(), Value::BuiltinFn("math.floor".to_string()));
+                env.set_local("ceil".to_string(), Value::BuiltinFn("math.ceil".to_string()));
                 env.set_local("pi".to_string(), Value::Float(std::f64::consts::PI));
                 env.set_local("tau".to_string(), Value::Float(std::f64::consts::TAU));
             }
@@ -1105,26 +1037,14 @@ impl Interpreter {
                 os_fn!("rename");
                 os_fn!("popen");
                 env.set_local("os".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
-                env.set_local(
-                    "getcwd".to_string(),
-                    Value::BuiltinFn("os.getcwd".to_string()),
-                );
-                env.set_local(
-                    "listdir".to_string(),
-                    Value::BuiltinFn("os.listdir".to_string()),
-                );
+                env.set_local("getcwd".to_string(), Value::BuiltinFn("os.getcwd".to_string()));
+                env.set_local("listdir".to_string(), Value::BuiltinFn("os.listdir".to_string()));
             }
             "sys" => {
                 let argv: Vec<Value> = std::env::args().map(|a| Value::Str(a)).collect();
                 let mut map = IndexedMap::new();
-                map.set(
-                    Value::Str("argv".to_string()),
-                    Value::List(Rc::new(RefCell::new(argv))),
-                );
-                map.set(
-                    Value::Str("exit".to_string()),
-                    Value::BuiltinFn("exit".to_string()),
-                );
+                map.set(Value::Str("argv".to_string()), Value::List(Rc::new(RefCell::new(argv))));
+                map.set(Value::Str("exit".to_string()), Value::BuiltinFn("exit".to_string()));
                 env.set_local("sys".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "string" => {
@@ -1151,16 +1071,11 @@ impl Interpreter {
                         Value::BuiltinFn(format!("string.{}", fn_name)),
                     );
                 }
-                env.set_local(
-                    "string".to_string(),
-                    Value::Dict(Rc::new(RefCell::new(map))),
-                );
+                env.set_local("string".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "list" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &[
-                    "sort", "reverse", "filter", "map", "reduce", "flatten", "unique",
-                ] {
+                for fn_name in &["sort", "reverse", "filter", "map", "reduce", "flatten", "unique"] {
                     map.set(
                         Value::Str(fn_name.to_string()),
                         Value::BuiltinFn(format!("list.{}", fn_name)),
@@ -1208,10 +1123,7 @@ impl Interpreter {
                         Value::BuiltinFn(format!("random.{}", fn_name)),
                     );
                 }
-                env.set_local(
-                    "random".to_string(),
-                    Value::Dict(Rc::new(RefCell::new(map))),
-                );
+                env.set_local("random".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "term" => {
                 let mut map = IndexedMap::new();
@@ -1309,8 +1221,8 @@ class Stack:
                 let file_path = name.replace('.', "/");
                 let path = self.source_dir.join(format!("{}.cool", file_path));
                 if path.exists() {
-                    let source = std::fs::read_to_string(&path)
-                        .map_err(|e| self.err(&format!("import error: {}", e)))?;
+                    let source =
+                        std::fs::read_to_string(&path).map_err(|e| self.err(&format!("import error: {}", e)))?;
                     let mut lexer = crate::lexer::Lexer::new(&source);
                     let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
                     let mut parser = crate::parser::Parser::new(tokens);
@@ -1335,10 +1247,7 @@ class Stack:
             Value::Tuple(t) => Ok((*t).clone()),
             Value::Str(s) => Ok(s.chars().map(|c| Value::Str(c.to_string())).collect()),
             Value::Dict(map) => Ok(map.borrow().keys.clone()),
-            Value::Int(n) => Err(self.err(&format!(
-                "cannot iterate over int (did you mean range({}))?",
-                n
-            ))),
+            Value::Int(n) => Err(self.err(&format!("cannot iterate over int (did you mean range({}))?", n))),
             other => Err(self.err(&format!("cannot iterate over {}", other.type_name()))),
         }
     }
@@ -1441,10 +1350,7 @@ class Stack:
                     UnaryOp::Not => Ok(Value::Bool(!v.is_truthy())),
                     UnaryOp::BitNot => match v {
                         Value::Int(n) => Ok(Value::Int(!n)),
-                        other => Err(self.err(&format!(
-                            "bitwise ~ requires int, got {}",
-                            other.type_name()
-                        ))),
+                        other => Err(self.err(&format!("bitwise ~ requires int, got {}", other.type_name()))),
                     },
                 }
             }
@@ -1453,19 +1359,11 @@ class Stack:
                 match op {
                     BinOp::And => {
                         let lv = self.eval(left, env)?;
-                        return if !lv.is_truthy() {
-                            Ok(lv)
-                        } else {
-                            self.eval(right, env)
-                        };
+                        return if !lv.is_truthy() { Ok(lv) } else { self.eval(right, env) };
                     }
                     BinOp::Or => {
                         let lv = self.eval(left, env)?;
-                        return if lv.is_truthy() {
-                            Ok(lv)
-                        } else {
-                            self.eval(right, env)
-                        };
+                        return if lv.is_truthy() { Ok(lv) } else { self.eval(right, env) };
                     }
                     BinOp::In => {
                         let item = self.eval(left, env)?;
@@ -1505,15 +1403,10 @@ class Stack:
             }
 
             // Method call: obj.method(args) — dispatched before generic Call
-            Expr::Call {
-                callee,
-                args,
-                kwargs,
-            } if matches!(**callee, Expr::Attr { .. }) => {
+            Expr::Call { callee, args, kwargs } if matches!(**callee, Expr::Attr { .. }) => {
                 if let Expr::Attr { object, name } = callee.as_ref() {
                     let obj = self.eval(object, env)?;
-                    let arg_vals: Result<Vec<_>, _> =
-                        args.iter().map(|a| self.eval(a, env)).collect();
+                    let arg_vals: Result<Vec<_>, _> = args.iter().map(|a| self.eval(a, env)).collect();
                     let arg_vals = arg_vals?;
                     let kwarg_vals = self.eval_kwargs(kwargs, env)?;
                     return self.call_method(obj, name, arg_vals, kwarg_vals, env);
@@ -1521,11 +1414,7 @@ class Stack:
                 unreachable!()
             }
 
-            Expr::Call {
-                callee,
-                args,
-                kwargs,
-            } => {
+            Expr::Call { callee, args, kwargs } => {
                 let func = self.eval(callee, env)?;
                 let arg_vals: Result<Vec<_>, _> = args.iter().map(|a| self.eval(a, env)).collect();
                 let kwarg_vals = self.eval_kwargs(kwargs, env)?;
@@ -1538,11 +1427,7 @@ class Stack:
                 self.eval_index(obj, idx)
             }
 
-            Expr::Slice {
-                object,
-                start,
-                stop,
-            } => {
+            Expr::Slice { object, start, stop } => {
                 let obj = self.eval(object, env)?;
                 let len = match &obj {
                     Value::List(lst) => lst.borrow().len() as i64,
@@ -1559,10 +1444,7 @@ class Stack:
                             n as usize
                         }
                         other => {
-                            return Err(self.err(&format!(
-                                "slice index must be int, got {}",
-                                other.type_name()
-                            )));
+                            return Err(self.err(&format!("slice index must be int, got {}", other.type_name())));
                         }
                     }
                 } else {
@@ -1575,10 +1457,7 @@ class Stack:
                             n as usize
                         }
                         other => {
-                            return Err(self.err(&format!(
-                                "slice index must be int, got {}",
-                                other.type_name()
-                            )));
+                            return Err(self.err(&format!("slice index must be int, got {}", other.type_name())));
                         }
                     }
                 } else {
@@ -1617,10 +1496,7 @@ class Stack:
                             // Return a bound method (closure wrapping self)
                             return Ok(method);
                         }
-                        Err(self.err(&format!(
-                            "'{}' has no attribute '{}'",
-                            inst.class.name, name
-                        )))
+                        Err(self.err(&format!("'{}' has no attribute '{}'", inst.class.name, name)))
                     }
                     Value::Dict(map) => {
                         // First look up the attribute as a dict key (e.g. module.member)
@@ -1630,20 +1506,16 @@ class Stack:
                         // Fall back to a method stub (keys, values, items, etc.)
                         Ok(Value::BuiltinFn(format!("<method {} on dict>", name)))
                     }
-                    Value::Str(_) | Value::List(_) | Value::File(_) => Ok(Value::BuiltinFn(
-                        format!("<method {} on {}>", name, obj.type_name()),
-                    )),
+                    Value::Str(_) | Value::List(_) | Value::File(_) => {
+                        Ok(Value::BuiltinFn(format!("<method {} on {}>", name, obj.type_name())))
+                    }
                     Value::Class(cls) => {
                         if let Some(v) = cls.methods.get(name) {
                             return Ok(v.clone());
                         }
                         Err(self.err(&format!("class '{}' has no attribute '{}'", cls.name, name)))
                     }
-                    other => Err(self.err(&format!(
-                        "'{}' has no attribute '{}'",
-                        other.type_name(),
-                        name
-                    ))),
+                    other => Err(self.err(&format!("'{}' has no attribute '{}'", other.type_name(), name))),
                 }
             }
         }
@@ -1702,10 +1574,7 @@ class Stack:
         // (e.g. module dicts like `ffi`, `math`, `os`).
         if let Value::Dict(ref map) = obj {
             let callable = map.borrow().get(&Value::Str(method.to_string()));
-            if let Some(
-                func @ (Value::BuiltinFn(_) | Value::Function { .. } | Value::FfiFunc { .. }),
-            ) = callable
-            {
+            if let Some(func @ (Value::BuiltinFn(_) | Value::Function { .. } | Value::FfiFunc { .. })) = callable {
                 return self.call_value(func, args, kwargs, env);
             }
         }
@@ -1716,11 +1585,7 @@ class Stack:
             Value::File(_) => self.file_method(obj, method, args),
             Value::Instance(_) => self.instance_method(obj, method, args, kwargs, env),
             Value::Super { .. } => self.super_method(obj, method, args, kwargs, env),
-            other => Err(self.err(&format!(
-                "'{}' has no method '{}'",
-                other.type_name(),
-                method
-            ))),
+            other => Err(self.err(&format!("'{}' has no method '{}'", other.type_name(), method))),
         }
     }
 
@@ -1800,14 +1665,10 @@ class Stack:
             }
             "split" => {
                 let parts: Vec<Value> = if args.is_empty() {
-                    s.split_whitespace()
-                        .map(|p| Value::Str(p.to_string()))
-                        .collect()
+                    s.split_whitespace().map(|p| Value::Str(p.to_string())).collect()
                 } else {
                     let sep = req_str_arg(&args, 0, "split")?;
-                    s.split(sep.as_str())
-                        .map(|p| Value::Str(p.to_string()))
-                        .collect()
+                    s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect()
                 };
                 Ok(Value::List(Rc::new(RefCell::new(parts))))
             }
@@ -1864,21 +1725,11 @@ class Stack:
                 let cnt = s.matches(pat.as_str()).count();
                 Ok(Value::Int(cnt as i64))
             }
-            "isdigit" => Ok(Value::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
-            )),
-            "isalpha" => Ok(Value::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_alphabetic()),
-            )),
-            "isalnum" => Ok(Value::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_alphanumeric()),
-            )),
-            "isupper" => Ok(Value::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_uppercase()),
-            )),
-            "islower" => Ok(Value::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_lowercase()),
-            )),
+            "isdigit" => Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))),
+            "isalpha" => Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic()))),
+            "isalnum" => Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphanumeric()))),
+            "isupper" => Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_uppercase()))),
+            "islower" => Ok(Value::Bool(!s.is_empty() && s.chars().all(|c| c.is_lowercase()))),
             _ => Err(self.err(&format!("str has no method '{}'", method))),
         }
     }
@@ -1935,9 +1786,7 @@ class Stack:
                     .into_iter()
                     .next()
                     .ok_or_else(|| self.err("contains() requires 1 argument"))?;
-                Ok(Value::Bool(
-                    lst.borrow().iter().any(|x| values_equal(x, &target)),
-                ))
+                Ok(Value::Bool(lst.borrow().iter().any(|x| values_equal(x, &target))))
             }
             "len" => Ok(Value::Int(lst.borrow().len() as i64)),
             "reverse" => {
@@ -2115,11 +1964,7 @@ class Stack:
                 if fh.closed {
                     return Err(self.err("readlines() on closed file"));
                 }
-                let lines: Vec<Value> = fh
-                    .content
-                    .iter()
-                    .map(|l| Value::Str(l.clone() + "\n"))
-                    .collect();
+                let lines: Vec<Value> = fh.content.iter().map(|l| Value::Str(l.clone() + "\n")).collect();
                 Ok(Value::List(Rc::new(RefCell::new(lines))))
             }
             "write" => {
@@ -2169,8 +2014,7 @@ class Stack:
                 let fh = fh_rc.borrow();
                 if !fh.closed && fh.mode != "r" {
                     let content = fh.write_buf.borrow().clone();
-                    std::fs::write(&fh.path, &content)
-                        .map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                    std::fs::write(&fh.path, &content).map_err(|e| self.err(&format!("file write error: {}", e)))?;
                 }
                 Ok(Value::Nil)
             }
@@ -2190,10 +2034,7 @@ class Stack:
         match func {
             Value::BuiltinFn(name) => self.call_builtin(&name, args, env),
             Value::Function {
-                params,
-                body,
-                closure,
-                ..
+                params, body, closure, ..
             } => {
                 let fn_env = Env::new_child(closure.clone());
                 self.bind_args(&params, args, kwargs, &fn_env, &closure)?;
@@ -2286,10 +2127,7 @@ class Stack:
         }
 
         if i < args.len() && !positional_done {
-            let expected = params
-                .iter()
-                .filter(|p| !p.is_vararg && !p.is_kwarg)
-                .count();
+            let expected = params.iter().filter(|p| !p.is_vararg && !p.is_kwarg).count();
             return Err(self.err(&format!("expected {} arg(s), got {}", expected, args.len())));
         }
         if !kwargs.is_empty() {
@@ -2301,11 +2139,7 @@ class Stack:
     // ── Built-in functions ────────────────────────────────────────────────
 
     /// Evaluate kwargs, expanding `**dict` spreads into individual key-value pairs.
-    fn eval_kwargs(
-        &mut self,
-        kwargs: &[(String, Expr)],
-        env: &Env,
-    ) -> Result<Vec<(String, Value)>, String> {
+    fn eval_kwargs(&mut self, kwargs: &[(String, Expr)], env: &Env) -> Result<Vec<(String, Value)>, String> {
         let mut result = Vec::new();
         for (k, v) in kwargs {
             let val = self.eval(v, env)?;
@@ -2317,18 +2151,15 @@ class Stack:
                             match key {
                                 Value::Str(s) => result.push((s.clone(), value.clone())),
                                 other => {
-                                    return Err(self.err(&format!(
-                                        "**kwargs keys must be strings, got {}",
-                                        other.type_name()
-                                    )));
+                                    return Err(
+                                        self.err(&format!("**kwargs keys must be strings, got {}", other.type_name()))
+                                    );
                                 }
                             }
                         }
                     }
                     other => {
-                        return Err(
-                            self.err(&format!("** requires a dict, got {}", other.type_name()))
-                        );
+                        return Err(self.err(&format!("** requires a dict, got {}", other.type_name())));
                     }
                 }
             } else {
@@ -2412,24 +2243,17 @@ class Stack:
                         if let Some(func) = lookup_method(&inst.class, "__len__") {
                             return self.call_value(func, vec![v], vec![], env);
                         }
-                        Err(self.err(&format!(
-                            "object of type '{}' has no len()",
-                            inst.class.name
-                        )))
+                        Err(self.err(&format!("object of type '{}' has no len()", inst.class.name)))
                     }
                     Value::List(l) => Ok(Value::Int(l.borrow().len() as i64)),
                     Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
                     Value::Dict(m) => Ok(Value::Int(m.borrow().keys.len() as i64)),
                     Value::Tuple(t) => Ok(Value::Int(t.len() as i64)),
-                    other => {
-                        Err(self.err(&format!("len() not supported for {}", other.type_name())))
-                    }
+                    other => Err(self.err(&format!("len() not supported for {}", other.type_name()))),
                 }
             }
             "range" => match args.as_slice() {
-                [Value::Int(end)] => Ok(Value::List(Rc::new(RefCell::new(
-                    (0..*end).map(Value::Int).collect(),
-                )))),
+                [Value::Int(end)] => Ok(Value::List(Rc::new(RefCell::new((0..*end).map(Value::Int).collect())))),
                 [Value::Int(start), Value::Int(end)] => Ok(Value::List(Rc::new(RefCell::new(
                     (*start..*end).map(Value::Int).collect(),
                 )))),
@@ -2501,9 +2325,7 @@ class Stack:
                         .parse::<f64>()
                         .map(Value::Float)
                         .map_err(|_| self.err(&format!("cannot convert \"{}\" to float", s))),
-                    other => {
-                        Err(self.err(&format!("cannot convert {} to float", other.type_name())))
-                    }
+                    other => Err(self.err(&format!("cannot convert {} to float", other.type_name()))),
                 }
             }
             "bool" => {
@@ -2528,21 +2350,13 @@ class Stack:
                 match v {
                     Value::Int(n) => Ok(Value::Int(n.abs())),
                     Value::Float(f) => Ok(Value::Float(f.abs())),
-                    other => {
-                        Err(self.err(&format!("abs() not supported for {}", other.type_name())))
-                    }
+                    other => Err(self.err(&format!("abs() not supported for {}", other.type_name()))),
                 }
             }
             "round" => {
                 let ndigits = args
                     .get(1)
-                    .and_then(|v| {
-                        if let Value::Int(n) = v {
-                            Some(*n)
-                        } else {
-                            None
-                        }
-                    })
+                    .and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None })
                     .unwrap_or(0);
                 match args.first() {
                     Some(Value::Int(n)) => Ok(Value::Int(*n)),
@@ -2575,11 +2389,7 @@ class Stack:
                         None => Ok(Some(x)),
                         Some(cur) => {
                             let ord = compare_values(&x, &cur)?;
-                            Ok(Some(if ord == std::cmp::Ordering::Less {
-                                x
-                            } else {
-                                cur
-                            }))
+                            Ok(Some(if ord == std::cmp::Ordering::Less { x } else { cur }))
                         }
                     })
                     .map(|v| v.unwrap_or(Value::Nil))
@@ -2602,11 +2412,7 @@ class Stack:
                         None => Ok(Some(x)),
                         Some(cur) => {
                             let ord = compare_values(&x, &cur)?;
-                            Ok(Some(if ord == std::cmp::Ordering::Greater {
-                                x
-                            } else {
-                                cur
-                            }))
+                            Ok(Some(if ord == std::cmp::Ordering::Greater { x } else { cur }))
                         }
                     })
                     .map(|v| v.unwrap_or(Value::Nil))
@@ -2617,9 +2423,9 @@ class Stack:
                     _ => return Err(self.err("sum() requires a list")),
                 };
                 let items: Vec<Value> = lst.borrow().clone();
-                items.into_iter().try_fold(Value::Int(0), |acc, x| {
-                    self.apply_binop(&BinOp::Add, acc, x)
-                })
+                items
+                    .into_iter()
+                    .try_fold(Value::Int(0), |acc, x| self.apply_binop(&BinOp::Add, acc, x))
             }
             "sorted" => {
                 let lst = match args.into_iter().next() {
@@ -2666,22 +2472,17 @@ class Stack:
                 if args.len() < 2 {
                     return Err(self.err("zip() requires at least 2 lists"));
                 }
-                let lists: Result<Vec<Vec<Value>>, String> =
-                    args.into_iter()
-                        .map(|a| match a {
-                            Value::List(l) => Ok(l.borrow().clone()),
-                            other => Err(self
-                                .err(&format!("zip() requires lists, got {}", other.type_name()))),
-                        })
-                        .collect();
+                let lists: Result<Vec<Vec<Value>>, String> = args
+                    .into_iter()
+                    .map(|a| match a {
+                        Value::List(l) => Ok(l.borrow().clone()),
+                        other => Err(self.err(&format!("zip() requires lists, got {}", other.type_name()))),
+                    })
+                    .collect();
                 let lists = lists?;
                 let len = lists.iter().map(|l| l.len()).min().unwrap_or(0);
                 let result: Vec<Value> = (0..len)
-                    .map(|i| {
-                        Value::List(Rc::new(RefCell::new(
-                            lists.iter().map(|l| l[i].clone()).collect(),
-                        )))
-                    })
+                    .map(|i| Value::List(Rc::new(RefCell::new(lists.iter().map(|l| l[i].clone()).collect()))))
                     .collect();
                 Ok(Value::List(Rc::new(RefCell::new(result))))
             }
@@ -2752,13 +2553,7 @@ class Stack:
                     let completions: Vec<String> = lst
                         .borrow()
                         .iter()
-                        .filter_map(|v| {
-                            if let Value::Str(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
+                        .filter_map(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
                         .collect();
                     COMPLETIONS.with(|c| *c.borrow_mut() = completions);
                 }
@@ -2918,9 +2713,7 @@ class Stack:
                     [v, Value::Str(s)] => (v.clone(), s.clone()),
                     [v, Value::Class(c)] => (v.clone(), c.name.clone()),
                     _ => {
-                        return Err(
-                            self.err("isinstance() requires a value and a class or type name")
-                        );
+                        return Err(self.err("isinstance() requires a value and a class or type name"));
                     }
                 };
                 let result = match &val {
@@ -2936,8 +2729,7 @@ class Stack:
                 };
                 let result = match &val {
                     Value::Instance(inst) => {
-                        inst.fields.borrow().contains_key(&attr)
-                            || lookup_method(&inst.class, &attr).is_some()
+                        inst.fields.borrow().contains_key(&attr) || lookup_method(&inst.class, &attr).is_some()
                     }
                     Value::Dict(m) => m.borrow().contains(&Value::Str(attr)),
                     _ => false,
@@ -2966,13 +2758,11 @@ class Stack:
                     }
                 }
             }
-            "asm" | "malloc" | "free" | "read_byte" | "write_byte" | "read_i64" |
-            "write_i64" | "read_f64" | "write_f64" | "read_str" | "write_str" => {
-                Err(self.err(&format!(
-                    "'{}' is only supported in the LLVM backend — compile with `cool build`",
-                    name
-                )))
-            }
+            "asm" | "malloc" | "free" | "read_byte" | "write_byte" | "read_i64" | "write_i64" | "read_f64"
+            | "write_f64" | "read_str" | "write_str" => Err(self.err(&format!(
+                "'{}' is only supported in the LLVM backend — compile with `cool build`",
+                name
+            ))),
             _ => Err(self.err(&format!("unknown builtin '{}'", name))),
         }
     }
@@ -3026,11 +2816,7 @@ class Stack:
                         gcd(b, a % b)
                     }
                 }
-                return Ok(Value::Int(if a == 0 || b == 0 {
-                    0
-                } else {
-                    (a * b).abs() / gcd(a, b)
-                }));
+                return Ok(Value::Int(if a == 0 || b == 0 { 0 } else { (a * b).abs() / gcd(a, b) }));
             }
             "factorial" => {
                 let n = match args.get(0) {
@@ -3097,8 +2883,7 @@ class Stack:
     fn call_os_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
         match name {
             "getcwd" => {
-                let path = std::env::current_dir()
-                    .map_err(|e| self.err(&format!("os.getcwd() error: {}", e)))?;
+                let path = std::env::current_dir().map_err(|e| self.err(&format!("os.getcwd() error: {}", e)))?;
                 Ok(Value::Str(path.to_string_lossy().to_string()))
             }
             "listdir" => {
@@ -3154,8 +2939,7 @@ class Stack:
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.mkdir() requires a path string")),
                 };
-                std::fs::create_dir_all(&path)
-                    .map_err(|e| self.err(&format!("os.mkdir() error: {}", e)))?;
+                std::fs::create_dir_all(&path).map_err(|e| self.err(&format!("os.mkdir() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "remove" => {
@@ -3163,8 +2947,7 @@ class Stack:
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.remove() requires a path string")),
                 };
-                std::fs::remove_file(&path)
-                    .map_err(|e| self.err(&format!("os.remove() error: {}", e)))?;
+                std::fs::remove_file(&path).map_err(|e| self.err(&format!("os.remove() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "rename" => {
@@ -3176,8 +2959,7 @@ class Stack:
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.rename() requires 2 path strings")),
                 };
-                std::fs::rename(&from, &to)
-                    .map_err(|e| self.err(&format!("os.rename() error: {}", e)))?;
+                std::fs::rename(&from, &to).map_err(|e| self.err(&format!("os.rename() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "popen" => {
@@ -3190,9 +2972,7 @@ class Stack:
                     .arg(&cmd)
                     .output()
                     .map_err(|e| self.err(&format!("os.popen() error: {}", e)))?;
-                Ok(Value::Str(
-                    String::from_utf8_lossy(&output.stdout).to_string(),
-                ))
+                Ok(Value::Str(String::from_utf8_lossy(&output.stdout).to_string()))
             }
             _ => Err(self.err(&format!("os has no function '{}'", name))),
         }
@@ -3200,12 +2980,7 @@ class Stack:
 
     // ── string module ─────────────────────────────────────────────────────
 
-    fn call_string_fn(
-        &mut self,
-        name: &str,
-        args: Vec<Value>,
-        _env: &Env,
-    ) -> Result<Value, String> {
+    fn call_string_fn(&mut self, name: &str, args: Vec<Value>, _env: &Env) -> Result<Value, String> {
         match name {
             "split" => {
                 let s = req_str_arg(&args, 0, "string.split")?;
@@ -3216,10 +2991,7 @@ class Stack:
                 };
                 let parts: Vec<Value> = match sep {
                     Some(sep) => s.split(&*sep).map(|p| Value::Str(p.to_string())).collect(),
-                    None => s
-                        .split_whitespace()
-                        .map(|p| Value::Str(p.to_string()))
-                        .collect(),
+                    None => s.split_whitespace().map(|p| Value::Str(p.to_string())).collect(),
                 };
                 Ok(Value::List(Rc::new(RefCell::new(parts))))
             }
@@ -3319,12 +3091,7 @@ class Stack:
 
     // ── list module ───────────────────────────────────────────────────────
 
-    fn call_list_mod_fn(
-        &mut self,
-        name: &str,
-        args: Vec<Value>,
-        env: &Env,
-    ) -> Result<Value, String> {
+    fn call_list_mod_fn(&mut self, name: &str, args: Vec<Value>, env: &Env) -> Result<Value, String> {
         match name {
             "sort" => {
                 let lst = match args.into_iter().next() {
@@ -3393,9 +3160,8 @@ class Stack:
                 let mut acc = if args.len() >= 3 {
                     args[2].clone()
                 } else {
-                    iter.next().ok_or_else(|| {
-                        self.err("list.reduce() called on empty list with no initial value")
-                    })?
+                    iter.next()
+                        .ok_or_else(|| self.err("list.reduce() called on empty list with no initial value"))?
                 };
                 for item in iter {
                     acc = self.call_value(func.clone(), vec![acc, item], vec![], env)?;
@@ -3457,14 +3223,12 @@ class Stack:
     fn call_re_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
         let pattern = req_str_arg(&args, 0, &format!("re.{}", name))?;
         let text = req_str_arg(&args, 1, &format!("re.{}", name))?;
-        let re = Regex::new(&pattern)
-            .map_err(|e| self.err(&format!("re.{}() invalid pattern: {}", name, e)))?;
+        let re = Regex::new(&pattern).map_err(|e| self.err(&format!("re.{}() invalid pattern: {}", name, e)))?;
         match name {
             "match" => {
                 // Anchored at start
                 let anchored = format!("^(?:{})", pattern);
-                let re2 = Regex::new(&anchored)
-                    .map_err(|e| self.err(&format!("re.match() invalid pattern: {}", e)))?;
+                let re2 = Regex::new(&anchored).map_err(|e| self.err(&format!("re.match() invalid pattern: {}", e)))?;
                 match re2.find(&text) {
                     Some(m) => Ok(Value::Str(m.as_str().to_string())),
                     None => Ok(Value::Nil),
@@ -3472,8 +3236,8 @@ class Stack:
             }
             "fullmatch" => {
                 let anchored = format!("^(?:{})$", pattern);
-                let re2 = Regex::new(&anchored)
-                    .map_err(|e| self.err(&format!("re.fullmatch() invalid pattern: {}", e)))?;
+                let re2 =
+                    Regex::new(&anchored).map_err(|e| self.err(&format!("re.fullmatch() invalid pattern: {}", e)))?;
                 match re2.find(&text) {
                     Some(m) => Ok(Value::Str(m.as_str().to_string())),
                     None => Ok(Value::Nil),
@@ -3495,8 +3259,7 @@ class Stack:
                 Ok(Value::Str(re.replace_all(&text, repl.as_str()).to_string()))
             }
             "split" => {
-                let parts: Vec<Value> =
-                    re.split(&text).map(|s| Value::Str(s.to_string())).collect();
+                let parts: Vec<Value> = re.split(&text).map(|s| Value::Str(s.to_string())).collect();
                 Ok(Value::List(Rc::new(RefCell::new(parts))))
             }
             _ => Err(self.err(&format!("re has no function '{}'", name))),
@@ -3613,13 +3376,11 @@ class Stack:
         use std::io::Write;
         match name {
             "raw" => {
-                terminal::enable_raw_mode()
-                    .map_err(|e| self.err(&format!("term.raw() error: {}", e)))?;
+                terminal::enable_raw_mode().map_err(|e| self.err(&format!("term.raw() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "normal" => {
-                terminal::disable_raw_mode()
-                    .map_err(|e| self.err(&format!("term.normal() error: {}", e)))?;
+                terminal::disable_raw_mode().map_err(|e| self.err(&format!("term.normal() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "clear" => {
@@ -3677,12 +3438,8 @@ class Stack:
                 Ok(Value::Nil)
             }
             "size" => {
-                let (w, h) =
-                    terminal::size().map_err(|e| self.err(&format!("term.size() error: {}", e)))?;
-                Ok(Value::Tuple(Rc::new(vec![
-                    Value::Int(w as i64),
-                    Value::Int(h as i64),
-                ])))
+                let (w, h) = terminal::size().map_err(|e| self.err(&format!("term.size() error: {}", e)))?;
+                Ok(Value::Tuple(Rc::new(vec![Value::Int(w as i64), Value::Int(h as i64)])))
             }
             "get_char" => {
                 // Blocking read of one keypress
@@ -3728,11 +3485,7 @@ class Stack:
                     v.extend(b.borrow().clone());
                     Ok(Value::List(Rc::new(RefCell::new(v))))
                 }
-                (l, r) => Err(self.err(&format!(
-                    "cannot add {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                ))),
+                (l, r) => Err(self.err(&format!("cannot add {} and {}", l.type_name(), r.type_name()))),
             },
             BinOp::Sub => numeric_op!(self, l, r, -, "subtract"),
             BinOp::Mul => match (l, r) {
@@ -3742,11 +3495,7 @@ class Stack:
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
                 (Value::Str(s), Value::Int(n)) => Ok(Value::Str(s.repeat(n.max(0) as usize))),
                 (Value::Int(n), Value::Str(s)) => Ok(Value::Str(s.repeat(n.max(0) as usize))),
-                (l, r) => Err(self.err(&format!(
-                    "cannot multiply {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                ))),
+                (l, r) => Err(self.err(&format!("cannot multiply {} and {}", l.type_name(), r.type_name()))),
             },
             BinOp::Div => match (l, r) {
                 (_, Value::Int(0)) => Err(self.err("division by zero")),
@@ -3755,11 +3504,7 @@ class Stack:
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 / b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a / b as f64)),
-                (l, r) => Err(self.err(&format!(
-                    "cannot divide {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                ))),
+                (l, r) => Err(self.err(&format!("cannot divide {} and {}", l.type_name(), r.type_name()))),
             },
             BinOp::Mod => match (l, r) {
                 (Value::Int(a), Value::Int(b)) if b != 0 => Ok(Value::Int(a % b)),
@@ -3767,22 +3512,14 @@ class Stack:
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a % b)),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 % b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a % b as f64)),
-                (l, r) => Err(self.err(&format!(
-                    "cannot mod {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                ))),
+                (l, r) => Err(self.err(&format!("cannot mod {} and {}", l.type_name(), r.type_name()))),
             },
             BinOp::Pow => match (l, r) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Float((a as f64).powf(b as f64))),
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.powf(b))),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float((a as f64).powf(b))),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a.powf(b as f64))),
-                (l, r) => Err(self.err(&format!(
-                    "cannot exponentiate {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                ))),
+                (l, r) => Err(self.err(&format!("cannot exponentiate {} and {}", l.type_name(), r.type_name()))),
             },
             BinOp::Eq => Ok(Value::Bool(values_equal(&l, &r))),
             BinOp::NotEq => Ok(Value::Bool(!values_equal(&l, &r))),
@@ -3797,11 +3534,7 @@ class Stack:
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float((a / b).floor())),
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float((a as f64 / b).floor())),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float((a / b as f64).floor())),
-                (l, r) => Err(self.err(&format!(
-                    "cannot floor-divide {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                ))),
+                (l, r) => Err(self.err(&format!("cannot floor-divide {} and {}", l.type_name(), r.type_name()))),
             },
             BinOp::BitAnd => match (l, r) {
                 (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a & b)),
@@ -3829,9 +3562,7 @@ class Stack:
             },
             BinOp::LShift => match (l, r) {
                 (Value::Int(a), Value::Int(b)) if b >= 0 => Ok(Value::Int(a << b)),
-                (Value::Int(_), Value::Int(b)) => {
-                    Err(self.err(&format!("negative shift count: {}", b)))
-                }
+                (Value::Int(_), Value::Int(b)) => Err(self.err(&format!("negative shift count: {}", b))),
                 (l, r) => Err(self.err(&format!(
                     "shift requires int, got {} and {}",
                     l.type_name(),
@@ -3840,9 +3571,7 @@ class Stack:
             },
             BinOp::RShift => match (l, r) {
                 (Value::Int(a), Value::Int(b)) if b >= 0 => Ok(Value::Int(a >> b)),
-                (Value::Int(_), Value::Int(b)) => {
-                    Err(self.err(&format!("negative shift count: {}", b)))
-                }
+                (Value::Int(_), Value::Int(b)) => Err(self.err(&format!("negative shift count: {}", b))),
                 (l, r) => Err(self.err(&format!(
                     "shift requires int, got {} and {}",
                     l.type_name(),
@@ -3869,9 +3598,7 @@ class Stack:
             }
             "func" => {
                 if args.len() < 3 {
-                    return Err(self.err(
-                        "ffi.func(lib, name, ret_type[, arg_types]) requires at least 3 args",
-                    ));
+                    return Err(self.err("ffi.func(lib, name, ret_type[, arg_types]) requires at least 3 args"));
                 }
                 let lib = match &args[0] {
                     Value::FfiLib(h) => h.clone(),
@@ -3892,9 +3619,7 @@ class Stack:
                             .iter()
                             .map(|v| match v {
                                 Value::Str(s) => Ok(s.clone()),
-                                _ => {
-                                    Err(self.err("ffi.func(): arg_types list must contain strings"))
-                                }
+                                _ => Err(self.err("ffi.func(): arg_types list must contain strings")),
                             })
                             .collect::<Result<Vec<_>, _>>()?,
                         _ => return Err(self.err("ffi.func(): fourth argument must be a list")),
@@ -3904,13 +3629,10 @@ class Stack:
                 };
                 // Resolve the symbol address now — fail fast if not found
                 let sym_addr: usize = unsafe {
-                    let sym: libloading::Symbol<*const ()> =
-                        lib.0.get(sym_name.as_bytes()).map_err(|e| {
-                            self.err(&format!(
-                                "ffi.func(): symbol '{}' not found: {}",
-                                sym_name, e
-                            ))
-                        })?;
+                    let sym: libloading::Symbol<*const ()> = lib
+                        .0
+                        .get(sym_name.as_bytes())
+                        .map_err(|e| self.err(&format!("ffi.func(): symbol '{}' not found: {}", sym_name, e)))?;
                     *sym as usize
                 };
                 Ok(Value::FfiFunc {
@@ -3998,12 +3720,7 @@ class Stack:
                         }
                         Value::Float(f) => *f as i64,
                         _ => {
-                            return Err(self.err(&format!(
-                                "FFI arg {}: cannot convert {} to {}",
-                                i,
-                                v.type_name(),
-                                ty
-                            )))
+                            return Err(self.err(&format!("FFI arg {}: cannot convert {} to {}", i, v.type_name(), ty)))
                         }
                     };
                     Slot::I(n)
@@ -4020,12 +3737,7 @@ class Stack:
                             }
                         }
                         _ => {
-                            return Err(self.err(&format!(
-                                "FFI arg {}: cannot convert {} to {}",
-                                i,
-                                v.type_name(),
-                                ty
-                            )))
+                            return Err(self.err(&format!("FFI arg {}: cannot convert {} to {}", i, v.type_name(), ty)))
                         }
                     };
                     Slot::F(f)
@@ -4036,8 +3748,8 @@ class Stack:
                         Value::Nil => String::new(),
                         other => other.to_string(),
                     };
-                    let cstr = std::ffi::CString::new(s)
-                        .map_err(|_| self.err("FFI: string argument contains null byte"))?;
+                    let cstr =
+                        std::ffi::CString::new(s).map_err(|_| self.err("FFI: string argument contains null byte"))?;
                     let ptr = cstr.as_ptr() as i64;
                     cstrings.push(cstr); // keep alive for the duration of the call
                     Slot::I(ptr)
@@ -4047,8 +3759,7 @@ class Stack:
             slots.push(slot);
         }
         // Perform the call; cstrings stay alive until after ffi_dispatch returns
-        let result =
-            unsafe { ffi_dispatch(sym, ret_type, arg_types, &slots) }.map_err(|e| self.err(&e))?;
+        let result = unsafe { ffi_dispatch(sym, ret_type, arg_types, &slots) }.map_err(|e| self.err(&e))?;
         drop(cstrings);
         Ok(result)
     }
@@ -4108,21 +3819,11 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
 fn compare_values(a: &Value, b: &Value) -> Result<std::cmp::Ordering, String> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),
-        (Value::Float(x), Value::Float(y)) => {
-            Ok(x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
-        }
-        (Value::Int(x), Value::Float(y)) => Ok((*x as f64)
-            .partial_cmp(y)
-            .unwrap_or(std::cmp::Ordering::Equal)),
-        (Value::Float(x), Value::Int(y)) => Ok(x
-            .partial_cmp(&(*y as f64))
-            .unwrap_or(std::cmp::Ordering::Equal)),
+        (Value::Float(x), Value::Float(y)) => Ok(x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)),
+        (Value::Int(x), Value::Float(y)) => Ok((*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)),
+        (Value::Float(x), Value::Int(y)) => Ok(x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal)),
         (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),
-        (a, b) => Err(format!(
-            "cannot compare {} and {}",
-            a.type_name(),
-            b.type_name()
-        )),
+        (a, b) => Err(format!("cannot compare {} and {}", a.type_name(), b.type_name())),
     }
 }
 
@@ -4152,11 +3853,7 @@ fn req_str_arg(args: &[Value], i: usize, method: &str) -> Result<String, String>
             i + 1,
             other.type_name()
         )),
-        None => Err(format!(
-            "{}() requires at least {} argument(s)",
-            method,
-            i + 1
-        )),
+        None => Err(format!("{}() requires at least {} argument(s)", method, i + 1)),
     }
 }
 
@@ -4169,11 +3866,7 @@ fn req_int_arg(args: &[Value], i: usize, method: &str) -> Result<i64, String> {
             i + 1,
             other.type_name()
         )),
-        None => Err(format!(
-            "{}() requires at least {} argument(s)",
-            method,
-            i + 1
-        )),
+        None => Err(format!("{}() requires at least {} argument(s)", method, i + 1)),
     }
 }
 
@@ -4213,11 +3906,7 @@ fn as_float_arg(args: &[Value], i: usize, method: &str) -> Result<f64, String> {
             i + 1,
             other.type_name()
         )),
-        None => Err(format!(
-            "{}() requires at least {} argument(s)",
-            method,
-            i + 1
-        )),
+        None => Err(format!("{}() requires at least {} argument(s)", method, i + 1)),
     }
 }
 
@@ -4307,18 +3996,12 @@ fn json_parse_value(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result<
 }
 
 fn skip_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
-    while matches!(
-        chars.peek(),
-        Some(' ') | Some('\t') | Some('\n') | Some('\r')
-    ) {
+    while matches!(chars.peek(), Some(' ') | Some('\t') | Some('\n') | Some('\r')) {
         chars.next();
     }
 }
 
-fn consume_literal(
-    chars: &mut std::iter::Peekable<std::str::Chars>,
-    lit: &str,
-) -> Result<(), String> {
+fn consume_literal(chars: &mut std::iter::Peekable<std::str::Chars>, lit: &str) -> Result<(), String> {
     for expected in lit.chars() {
         match chars.next() {
             Some(c) if c == expected => {}
@@ -4346,8 +4029,7 @@ fn json_parse_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result
                 Some('f') => s.push('\x0C'),
                 Some('u') => {
                     let hex: String = (0..4).filter_map(|_| chars.next()).collect();
-                    let cp = u32::from_str_radix(&hex, 16)
-                        .map_err(|_| format!("invalid \\u escape: {}", hex))?;
+                    let cp = u32::from_str_radix(&hex, 16).map_err(|_| format!("invalid \\u escape: {}", hex))?;
                     s.push(char::from_u32(cp).unwrap_or('?'));
                 }
                 Some(c) => {
@@ -4463,12 +4145,7 @@ pub enum Slot {
 /// * `arg_types` — declared argument-type strings (drives slot interpretation)
 /// * `slots`     — coerced argument values (already converted from `Value`)
 #[allow(clippy::too_many_arguments)]
-unsafe fn ffi_dispatch(
-    sym: usize,
-    ret: &str,
-    arg_types: &[String],
-    slots: &[Slot],
-) -> Result<Value, String> {
+unsafe fn ffi_dispatch(sym: usize, ret: &str, arg_types: &[String], slots: &[Slot]) -> Result<Value, String> {
     use std::ffi::CStr;
     use std::mem::transmute;
     use std::os::raw::c_char;
@@ -4524,15 +4201,10 @@ unsafe fn ffi_dispatch(
                 transmute::<_, unsafe extern "C" fn()>(sym)();
                 Ok(Value::Nil)
             }
-            "f32" => Ok(Value::Float(
-                transmute::<_, unsafe extern "C" fn() -> f32>(sym)() as f64,
-            )),
-            "f64" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn() -> f64>(
-                sym,
-            )())),
+            "f32" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn() -> f32>(sym)() as f64)),
+            "f64" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn() -> f64>(sym)())),
             "str" => {
-                let p: *const c_char =
-                    transmute::<_, unsafe extern "C" fn() -> *const c_char>(sym)();
+                let p: *const c_char = transmute::<_, unsafe extern "C" fn() -> *const c_char>(sym)();
                 if p.is_null() {
                     return Ok(Value::Nil);
                 }
@@ -4556,14 +4228,11 @@ unsafe fn ffi_dispatch(
                     Ok(Value::Nil)
                 }
                 "f32" => Ok(Value::Float(
-                    transmute::<_, unsafe extern "C" fn(f64) -> f32>(sym)(a) as f64,
+                    transmute::<_, unsafe extern "C" fn(f64) -> f32>(sym)(a) as f64
                 )),
-                "f64" => Ok(Value::Float(
-                    transmute::<_, unsafe extern "C" fn(f64) -> f64>(sym)(a),
-                )),
+                "f64" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn(f64) -> f64>(sym)(a))),
                 "str" => {
-                    let p: *const c_char =
-                        transmute::<_, unsafe extern "C" fn(f64) -> *const c_char>(sym)(a);
+                    let p: *const c_char = transmute::<_, unsafe extern "C" fn(f64) -> *const c_char>(sym)(a);
                     if p.is_null() {
                         return Ok(Value::Nil);
                     }
@@ -4582,11 +4251,9 @@ unsafe fn ffi_dispatch(
                     Ok(Value::Nil)
                 }
                 "f32" => Ok(Value::Float(
-                    transmute::<_, unsafe extern "C" fn(f32) -> f32>(sym)(a) as f64,
+                    transmute::<_, unsafe extern "C" fn(f32) -> f32>(sym)(a) as f64
                 )),
-                "f64" => Ok(Value::Float(
-                    transmute::<_, unsafe extern "C" fn(f32) -> f64>(sym)(a),
-                )),
+                "f64" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn(f32) -> f64>(sym)(a))),
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(f32) -> i64>(sym)(a);
                     int_ret!(raw)
@@ -4601,24 +4268,18 @@ unsafe fn ffi_dispatch(
                     Ok(Value::Nil)
                 }
                 "f32" => Ok(Value::Float(
-                    transmute::<_, unsafe extern "C" fn(i64) -> f32>(sym)(a) as f64,
+                    transmute::<_, unsafe extern "C" fn(i64) -> f32>(sym)(a) as f64
                 )),
-                "f64" => Ok(Value::Float(
-                    transmute::<_, unsafe extern "C" fn(i64) -> f64>(sym)(a),
-                )),
+                "f64" => Ok(Value::Float(transmute::<_, unsafe extern "C" fn(i64) -> f64>(sym)(a))),
                 "str" => {
                     // integer arg is a char pointer
                     let p = a as *const c_char;
-                    let out: *const c_char = transmute::<
-                        _,
-                        unsafe extern "C" fn(*const c_char) -> *const c_char,
-                    >(sym)(p);
+                    let out: *const c_char =
+                        transmute::<_, unsafe extern "C" fn(*const c_char) -> *const c_char>(sym)(p);
                     if out.is_null() {
                         return Ok(Value::Nil);
                     }
-                    Ok(Value::Str(
-                        CStr::from_ptr(out).to_string_lossy().into_owned(),
-                    ))
+                    Ok(Value::Str(CStr::from_ptr(out).to_string_lossy().into_owned()))
                 }
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(i64) -> i64>(sym)(a);
@@ -4643,10 +4304,9 @@ unsafe fn ffi_dispatch(
                 "f32" => Ok(Value::Float(
                     transmute::<_, unsafe extern "C" fn(f64, f64) -> f32>(sym)(a, b) as f64,
                 )),
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(f64, f64) -> f64,
-                >(sym)(a, b))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f64, f64) -> f64>(sym)(a, b),
+                )),
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(f64, f64) -> i64>(sym)(a, b);
                     int_ret!(raw)
@@ -4663,10 +4323,9 @@ unsafe fn ffi_dispatch(
                 "f32" => Ok(Value::Float(
                     transmute::<_, unsafe extern "C" fn(f32, f32) -> f32>(sym)(a, b) as f64,
                 )),
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(f32, f32) -> f64,
-                >(sym)(a, b))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f32, f32) -> f64>(sym)(a, b),
+                )),
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(f32, f32) -> i64>(sym)(a, b);
                     int_ret!(raw)
@@ -4680,10 +4339,9 @@ unsafe fn ffi_dispatch(
                     transmute::<_, unsafe extern "C" fn(f64, i64)>(sym)(a, b);
                     Ok(Value::Nil)
                 }
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(f64, i64) -> f64,
-                >(sym)(a, b))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f64, i64) -> f64>(sym)(a, b),
+                )),
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(f64, i64) -> i64>(sym)(a, b);
                     int_ret!(raw)
@@ -4697,10 +4355,9 @@ unsafe fn ffi_dispatch(
                     transmute::<_, unsafe extern "C" fn(i64, f64)>(sym)(a, b);
                     Ok(Value::Nil)
                 }
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(i64, f64) -> f64,
-                >(sym)(a, b))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(i64, f64) -> f64>(sym)(a, b),
+                )),
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(i64, f64) -> i64>(sym)(a, b);
                     int_ret!(raw)
@@ -4718,10 +4375,9 @@ unsafe fn ffi_dispatch(
                 "f32" => Ok(Value::Float(
                     transmute::<_, unsafe extern "C" fn(i64, i64) -> f32>(sym)(a, b) as f64,
                 )),
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(i64, i64) -> f64,
-                >(sym)(a, b))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(i64, i64) -> f64>(sym)(a, b),
+                )),
                 _ => {
                     let raw = transmute::<_, unsafe extern "C" fn(i64, i64) -> i64>(sym)(a, b);
                     int_ret!(raw)
@@ -4744,13 +4400,11 @@ unsafe fn ffi_dispatch(
                     transmute::<_, unsafe extern "C" fn(f64, f64, f64)>(sym)(a, b, c);
                     Ok(Value::Nil)
                 }
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(f64, f64, f64) -> f64,
-                >(sym)(a, b, c))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(f64, f64, f64) -> f64>(sym)(a, b, c),
+                )),
                 _ => {
-                    let raw =
-                        transmute::<_, unsafe extern "C" fn(f64, f64, f64) -> i64>(sym)(a, b, c);
+                    let raw = transmute::<_, unsafe extern "C" fn(f64, f64, f64) -> i64>(sym)(a, b, c);
                     int_ret!(raw)
                 }
             };
@@ -4764,13 +4418,11 @@ unsafe fn ffi_dispatch(
                     transmute::<_, unsafe extern "C" fn(i64, i64, i64)>(sym)(a, b, c);
                     Ok(Value::Nil)
                 }
-                "f64" => Ok(Value::Float(transmute::<
-                    _,
-                    unsafe extern "C" fn(i64, i64, i64) -> f64,
-                >(sym)(a, b, c))),
+                "f64" => Ok(Value::Float(
+                    transmute::<_, unsafe extern "C" fn(i64, i64, i64) -> f64>(sym)(a, b, c),
+                )),
                 _ => {
-                    let raw =
-                        transmute::<_, unsafe extern "C" fn(i64, i64, i64) -> i64>(sym)(a, b, c);
+                    let raw = transmute::<_, unsafe extern "C" fn(i64, i64, i64) -> i64>(sym)(a, b, c);
                     int_ret!(raw)
                 }
             };
@@ -4798,9 +4450,7 @@ unsafe fn ffi_dispatch(
                     unsafe extern "C" fn(f64, f64, f64, f64) -> f64,
                 >(sym)(a, b, c, d))),
                 _ => {
-                    let raw = transmute::<_, unsafe extern "C" fn(f64, f64, f64, f64) -> i64>(sym)(
-                        a, b, c, d,
-                    );
+                    let raw = transmute::<_, unsafe extern "C" fn(f64, f64, f64, f64) -> i64>(sym)(a, b, c, d);
                     int_ret!(raw)
                 }
             };
@@ -4820,9 +4470,7 @@ unsafe fn ffi_dispatch(
                     unsafe extern "C" fn(i64, i64, i64, i64) -> f64,
                 >(sym)(a, b, c, d))),
                 _ => {
-                    let raw = transmute::<_, unsafe extern "C" fn(i64, i64, i64, i64) -> i64>(sym)(
-                        a, b, c, d,
-                    );
+                    let raw = transmute::<_, unsafe extern "C" fn(i64, i64, i64, i64) -> i64>(sym)(a, b, c, d);
                     int_ret!(raw)
                 }
             };

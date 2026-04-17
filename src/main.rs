@@ -98,10 +98,7 @@ impl CoolProject {
             }
             // Expect `key = "value"` or `key = value`
             let Some((k, v)) = line.split_once('=') else {
-                return Err(format!(
-                    "cool.toml line {}: expected `key = value`",
-                    lineno + 1
-                ));
+                return Err(format!("cool.toml line {}: expected `key = value`", lineno + 1));
             };
             let key = k.trim();
             let val = v.trim().trim_matches('"').to_string();
@@ -145,8 +142,8 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
                     .to_string());
             }
 
-            let manifest_src = fs::read_to_string(manifest_path)
-                .map_err(|e| format!("cool build: cannot read cool.toml: {e}"))?;
+            let manifest_src =
+                fs::read_to_string(manifest_path).map_err(|e| format!("cool build: cannot read cool.toml: {e}"))?;
             let project = CoolProject::from_str(&manifest_src)?;
 
             let main_path = Path::new(&project.main);
@@ -161,10 +158,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
 
             let output_path = Path::new(project.output_name());
 
-            println!(
-                "  Compiling {} v{} ({})",
-                project.name, project.version, project.main
-            );
+            println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
 
             let t0 = std::time::Instant::now();
             compile_to_native(&source, output_path)?;
@@ -185,10 +179,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
                 return Err(format!("cool build: file not found: {}", file_arg));
             }
             if file_path.extension().and_then(|e| e.to_str()) != Some("cool") {
-                eprintln!(
-                    "cool build: warning: '{}' does not have a .cool extension",
-                    file_arg
-                );
+                eprintln!("cool build: warning: '{}' does not have a .cool extension", file_arg);
             }
 
             let source = fs::read_to_string(file_path).map_err(|e| format!("cool build: {e}"))?;
@@ -238,12 +229,10 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
 
     // src/main.cool
     let main_src = format!("# {name}\n\nprint(\"Hello from {name}!\")\n");
-    fs::write(project_dir.join("src").join("main.cool"), main_src)
-        .map_err(|e| format!("cool new: {e}"))?;
+    fs::write(project_dir.join("src").join("main.cool"), main_src).map_err(|e| format!("cool new: {e}"))?;
 
     // .gitignore
-    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n"))
-        .map_err(|e| format!("cool new: {e}"))?;
+    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n")).map_err(|e| format!("cool new: {e}"))?;
 
     println!("  Created project '{name}'");
     println!("  ├── cool.toml");
@@ -329,10 +318,7 @@ fn main() {
     // ── Legacy flag-based dispatch (backward-compatible) ──────────────────
     let use_vm = args.iter().any(|a| a == "--vm");
     let use_compile = args.iter().any(|a| a == "--compile");
-    let file_args: Vec<&String> = args[1..]
-        .iter()
-        .filter(|a| *a != "--vm" && *a != "--compile")
-        .collect();
+    let file_args: Vec<&String> = args[1..].iter().filter(|a| *a != "--vm" && *a != "--compile").collect();
 
     match file_args.len() {
         0 => repl(),

@@ -42,11 +42,23 @@ pub enum Expr {
     /// f-string: alternating literal strings and expressions
     FString(Vec<FStringPart>),
     /// lambda params: expr
-    Lambda { params: Vec<Param>, body: Box<Expr> },
+    Lambda {
+        params: Vec<Param>,
+        body: Box<Expr>,
+    },
     /// x if cond else y
-    Ternary { condition: Box<Expr>, then_expr: Box<Expr>, else_expr: Box<Expr> },
+    Ternary {
+        condition: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
     /// [expr for var in iter (if cond)?]
-    ListComp { expr: Box<Expr>, var: String, iter: Box<Expr>, condition: Option<Box<Expr>> },
+    ListComp {
+        expr: Box<Expr>,
+        var: String,
+        iter: Box<Expr>,
+        condition: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -57,11 +69,28 @@ pub enum FStringPart {
 
 #[derive(Debug, Clone)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod, Pow, FloorDiv,
-    Eq, NotEq, Lt, LtEq, Gt, GtEq,
-    And, Or,
-    In, NotIn,
-    BitAnd, BitOr, BitXor, LShift, RShift,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    FloorDiv,
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    And,
+    Or,
+    In,
+    NotIn,
+    BitAnd,
+    BitOr,
+    BitXor,
+    LShift,
+    RShift,
 }
 
 #[derive(Debug, Clone)]
@@ -86,8 +115,8 @@ pub struct ExceptHandler {
 pub struct Param {
     pub name: String,
     pub default: Option<Expr>,
-    pub is_vararg: bool,   // *args
-    pub is_kwarg: bool,    // **kwargs
+    pub is_vararg: bool, // *args
+    pub is_kwarg: bool,  // **kwargs
 }
 
 #[derive(Debug, Clone)]
@@ -172,9 +201,16 @@ pub enum Stmt {
     ImportModule(String),
     Pass,
     /// assert condition [, message]
-    Assert { condition: Expr, message: Option<Expr> },
+    Assert {
+        condition: Expr,
+        message: Option<Expr>,
+    },
     /// with expr as name: body
-    With { expr: Expr, as_name: Option<String>, body: Vec<Stmt> },
+    With {
+        expr: Expr,
+        as_name: Option<String>,
+        body: Vec<Stmt>,
+    },
     /// global x, y
     Global(Vec<String>),
     /// nonlocal x, y

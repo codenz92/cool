@@ -13,13 +13,9 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
-};
+use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::types::StructType;
-use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue,
-};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::HashMap;
 use std::path::Path;
@@ -845,10 +841,7 @@ impl<'ctx> Compiler<'ctx> {
 
         // %CoolVal = type { i32, i64 }
         let cv_type = context.opaque_struct_type("CoolVal");
-        cv_type.set_body(
-            &[context.i32_type().into(), context.i64_type().into()],
-            false,
-        );
+        cv_type.set_body(&[context.i32_type().into(), context.i64_type().into()], false);
 
         let rt = Self::declare_runtime(context, &module, cv_type);
 
@@ -867,11 +860,7 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn declare_runtime(
-        context: &'ctx Context,
-        module: &Module<'ctx>,
-        cv_type: StructType<'ctx>,
-    ) -> RuntimeFns<'ctx> {
+    fn declare_runtime(context: &'ctx Context, module: &Module<'ctx>, cv_type: StructType<'ctx>) -> RuntimeFns<'ctx> {
         let i32t = context.i32_type();
         let i64t = context.i64_type();
         let f64t = context.f64_type();
@@ -1075,12 +1064,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     // Call a unary-op runtime function.
-    fn call_unop_fn(
-        &mut self,
-        fn_val: FunctionValue<'ctx>,
-        a: StructValue<'ctx>,
-        name: &str,
-    ) -> StructValue<'ctx> {
+    fn call_unop_fn(&mut self, fn_val: FunctionValue<'ctx>, a: StructValue<'ctx>, name: &str) -> StructValue<'ctx> {
         self.builder
             .build_call(fn_val, &[a.into()], name)
             .unwrap()
@@ -1183,9 +1167,16 @@ impl<'ctx> Compiler<'ctx> {
             Stmt::SetAttr { object, name, value } => {
                 let obj_val = self.compile_expr(object)?;
                 let val = self.compile_expr(value)?;
-                let attr_name_ptr = self.builder.build_global_string_ptr(name, &format!("attr_{}", name)).unwrap();
+                let attr_name_ptr = self
+                    .builder
+                    .build_global_string_ptr(name, &format!("attr_{}", name))
+                    .unwrap();
                 self.builder
-                    .build_call(self.rt.cool_set_attr, &[obj_val.into(), attr_name_ptr.as_pointer_value().into(), val.into()], "set_attr")
+                    .build_call(
+                        self.rt.cool_set_attr,
+                        &[obj_val.into(), attr_name_ptr.as_pointer_value().into(), val.into()],
+                        "set_attr",
+                    )
                     .unwrap();
             }
 
@@ -1213,10 +1204,7 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_unconditional_branch(break_bb).unwrap();
             }
             Stmt::Continue => {
-                let (cont_bb, _) = *self
-                    .loop_stack
-                    .last()
-                    .ok_or("'continue' used outside loop")?;
+                let (cont_bb, _) = *self.loop_stack.last().ok_or("'continue' used outside loop")?;
                 self.builder.build_unconditional_branch(cont_bb).unwrap();
             }
 
@@ -1279,9 +1267,7 @@ impl<'ctx> Compiler<'ctx> {
         let i1 = self.truthy_i1(cond_cv);
         let then_bb = self.context.append_basic_block(fn_val, "if_then");
         let else_entry = self.context.append_basic_block(fn_val, "if_else");
-        self.builder
-            .build_conditional_branch(i1, then_bb, else_entry)
-            .unwrap();
+        self.builder.build_conditional_branch(i1, then_bb, else_entry).unwrap();
 
         // ── then body ──
         self.builder.position_at_end(then_bb);
@@ -1298,9 +1284,7 @@ impl<'ctx> Compiler<'ctx> {
             let i1 = self.truthy_i1(cv);
             let elif_then = self.context.append_basic_block(fn_val, "elif_then");
             let elif_else = self.context.append_basic_block(fn_val, "elif_else");
-            self.builder
-                .build_conditional_branch(i1, elif_then, elif_else)
-                .unwrap();
+            self.builder.build_conditional_branch(i1, elif_then, elif_else).unwrap();
 
             self.builder.position_at_end(elif_then);
             self.compile_stmts(elif_body)?;
@@ -1338,9 +1322,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.position_at_end(cond_bb);
         let cond_cv = self.compile_expr(condition)?;
         let i1 = self.truthy_i1(cond_cv);
-        self.builder
-            .build_conditional_branch(i1, body_bb, after_bb)
-            .unwrap();
+        self.builder.build_conditional_branch(i1, body_bb, after_bb).unwrap();
 
         // Body — push (continue→cond_bb, break→after_bb)
         self.loop_stack.push((cond_bb, after_bb));
@@ -1388,9 +1370,7 @@ impl<'ctx> Compiler<'ctx> {
         let len_i64 = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "len");
         let cmp = self.call_binop_fn(self.rt.cool_lt, idx_cv, len_i64, "lt");
         let i1 = self.truthy_i1(cmp);
-        self.builder
-            .build_conditional_branch(i1, body_bb, after_bb)
-            .unwrap();
+        self.builder.build_conditional_branch(i1, body_bb, after_bb).unwrap();
 
         // Body: get element at idx and execute body
         self.builder.position_at_end(body_bb);
@@ -1418,12 +1398,7 @@ impl<'ctx> Compiler<'ctx> {
 
     // ── function definition ───────────────────────────────────────────────────
 
-    fn compile_fndef(
-        &mut self,
-        name: &str,
-        params: &[crate::ast::Param],
-        body: &[Stmt],
-    ) -> Result<(), String> {
+    fn compile_fndef(&mut self, name: &str, params: &[crate::ast::Param], body: &[Stmt]) -> Result<(), String> {
         if !self.is_main() {
             return Err("nested function definitions are not supported in the LLVM backend".into());
         }
@@ -1449,10 +1424,7 @@ impl<'ctx> Compiler<'ctx> {
                 return Err("*args / **kwargs are not supported in the LLVM backend".into());
             }
             if let Some(param_val) = fn_val.get_nth_param(i as u32) {
-                let alloca = self
-                    .builder
-                    .build_alloca(self.cv_type, &param.name)
-                    .unwrap();
+                let alloca = self.builder.build_alloca(self.cv_type, &param.name).unwrap();
                 self.builder.build_store(alloca, param_val).unwrap();
                 self.locals.insert(param.name.clone(), alloca);
             }
@@ -1479,12 +1451,7 @@ impl<'ctx> Compiler<'ctx> {
 
     // ── class definition ─────────────────────────────────────────────────────
 
-    fn compile_class(
-        &mut self,
-        name: &str,
-        _parent: Option<&str>,
-        body: &[Stmt],
-    ) -> Result<(), String> {
+    fn compile_class(&mut self, name: &str, _parent: Option<&str>, body: &[Stmt]) -> Result<(), String> {
         if !self.is_main() {
             return Err("class definitions are only allowed at the top level".into());
         }
@@ -1498,7 +1465,11 @@ impl<'ctx> Compiler<'ctx> {
 
         for stmt in body {
             match stmt {
-                Stmt::FnDef { name: mname, params, body: mbody } => {
+                Stmt::FnDef {
+                    name: mname,
+                    params,
+                    body: mbody,
+                } => {
                     if mname == "__init__" {
                         has_init = true;
                         init_body = Some(mbody.clone());
@@ -1520,11 +1491,17 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Create a global string for the class name
-        let name_ptr = self.builder.build_global_string_ptr(name, &format!("class_name_{}", name)).unwrap();
+        let name_ptr = self
+            .builder
+            .build_global_string_ptr(name, &format!("class_name_{}", name))
+            .unwrap();
 
         // First, declare stub functions for all methods
         for stmt in body {
-            if let Stmt::FnDef { name: mname, params, .. } = stmt {
+            if let Stmt::FnDef {
+                name: mname, params, ..
+            } = stmt
+            {
                 let fn_name = format!("{}#{}.{}", name, mname, name);
                 let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
                     params.iter().map(|_| self.cv_type.into()).collect();
@@ -1536,7 +1513,12 @@ impl<'ctx> Compiler<'ctx> {
 
         // Now compile the methods with self type
         for stmt in body {
-            if let Stmt::FnDef { name: mname, params, body: mbody } = stmt {
+            if let Stmt::FnDef {
+                name: mname,
+                params,
+                body: mbody,
+            } = stmt
+            {
                 if let Some(&fn_val) = methods.get(mname) {
                     // Save state
                     let saved_bb = self.builder.get_insert_block();
@@ -1551,9 +1533,10 @@ impl<'ctx> Compiler<'ctx> {
                     // Bind self as first param (or from cool_get_arg(0) for variadic call)
                     let self_ptr = self.builder.build_alloca(self.cv_type, "self").unwrap();
                     let i32t = self.context.i32_type();
-                    
+
                     // Load self from global args buffer
-                    let self_val = self.builder
+                    let self_val = self
+                        .builder
                         .build_call(self.rt.cool_get_arg, &[i32t.const_int(0, false).into()], "get_self")
                         .unwrap()
                         .try_as_basic_value()
@@ -1611,58 +1594,116 @@ impl<'ctx> Compiler<'ctx> {
 
         // Build method data array: [name_ptr1, fn_ptr1, name_ptr2, fn_ptr2, ...]
         let method_count = methods.len() as i64;
-        
+
         // Allocate array for method data (2 i64 values per method: name ptr and fn ptr)
         let method_data_size = method_count * 2 * 8; // 2 * i64 per method
-        let method_data_ptr = self.builder
-            .build_call(self.rt.cool_malloc, &[self.context.i64_type().const_int(method_data_size as u64, false).into()], "method_data_ptr")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value();
-        
-        // Get the raw pointer
-        let method_data_int = self.builder.build_extract_value(method_data_ptr, 1, "method_data_int").unwrap().into_int_value();
-        let method_data_i8ptr = self.builder.build_int_to_ptr(method_data_int, self.context.i8_type().ptr_type(inkwell::AddressSpace::default()), "method_data_i8ptr").unwrap();
-        
-        // Fill in method data
-        for (i, (method_name, &fn_val)) in methods.iter().enumerate() {
-            let idx = i as u64;
-            
-            // Store name pointer at offset idx * 16
-            let name_offset = self.context.i64_type().const_int(idx * 16, false);
-            let name_ptr_pos = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), method_data_i8ptr, &[name_offset], "name_ptr_pos").unwrap() };
-            let name_ptr_cast = self.builder.build_pointer_cast(name_ptr_pos, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "name_ptr_cast").unwrap();
-            let attr_name = format!("method_{}", method_name);
-            let method_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
-            let name_as_int = self.builder.build_ptr_to_int(method_name_ptr.as_pointer_value(), self.context.i64_type(), "name_int").unwrap();
-            self.builder.build_store(name_ptr_cast, name_as_int).unwrap();
-            
-            // Store function pointer at offset idx * 16 + 8
-            let fn_offset = self.context.i64_type().const_int(idx * 16 + 8, false);
-            let fn_ptr_pos = unsafe { self.builder.build_in_bounds_gep(self.context.i8_type(), method_data_i8ptr, &[fn_offset], "fn_ptr_pos").unwrap() };
-            let fn_ptr_cast = self.builder.build_pointer_cast(fn_ptr_pos, self.context.i64_type().ptr_type(inkwell::AddressSpace::default()), "fn_ptr_cast").unwrap();
-            let fn_ptr = fn_val.as_global_value().as_pointer_value();
-            let fn_as_int = self.builder.build_ptr_to_int(fn_ptr, self.context.i64_type(), "fn_int").unwrap();
-            self.builder.build_store(fn_ptr_cast, fn_as_int).unwrap();
-        }
-        
-        // Create class with method data
-        let method_data_int2 = self.builder.build_ptr_to_int(method_data_i8ptr, self.context.i64_type(), "method_data_int2").unwrap();
-        let class_val = self.builder
-            .build_call(self.rt.cool_class_new, &[
-                name_ptr.as_pointer_value().into(),
-                self.context.i64_type().const_int(method_count as u64, false).into(),
-                method_data_int2.into(),
-            ], "class")
+        let method_data_ptr = self
+            .builder
+            .build_call(
+                self.rt.cool_malloc,
+                &[self.context.i64_type().const_int(method_data_size as u64, false).into()],
+                "method_data_ptr",
+            )
             .unwrap()
             .try_as_basic_value()
             .left()
             .unwrap()
             .into_struct_value();
 
-        let obj_val = self.builder
+        // Get the raw pointer
+        let method_data_int = self
+            .builder
+            .build_extract_value(method_data_ptr, 1, "method_data_int")
+            .unwrap()
+            .into_int_value();
+        let method_data_i8ptr = self
+            .builder
+            .build_int_to_ptr(
+                method_data_int,
+                self.context.i8_type().ptr_type(inkwell::AddressSpace::default()),
+                "method_data_i8ptr",
+            )
+            .unwrap();
+
+        // Fill in method data
+        for (i, (method_name, &fn_val)) in methods.iter().enumerate() {
+            let idx = i as u64;
+
+            // Store name pointer at offset idx * 16
+            let name_offset = self.context.i64_type().const_int(idx * 16, false);
+            let name_ptr_pos = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        self.context.i8_type(),
+                        method_data_i8ptr,
+                        &[name_offset],
+                        "name_ptr_pos",
+                    )
+                    .unwrap()
+            };
+            let name_ptr_cast = self
+                .builder
+                .build_pointer_cast(
+                    name_ptr_pos,
+                    self.context.i64_type().ptr_type(inkwell::AddressSpace::default()),
+                    "name_ptr_cast",
+                )
+                .unwrap();
+            let attr_name = format!("method_{}", method_name);
+            let method_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
+            let name_as_int = self
+                .builder
+                .build_ptr_to_int(method_name_ptr.as_pointer_value(), self.context.i64_type(), "name_int")
+                .unwrap();
+            self.builder.build_store(name_ptr_cast, name_as_int).unwrap();
+
+            // Store function pointer at offset idx * 16 + 8
+            let fn_offset = self.context.i64_type().const_int(idx * 16 + 8, false);
+            let fn_ptr_pos = unsafe {
+                self.builder
+                    .build_in_bounds_gep(self.context.i8_type(), method_data_i8ptr, &[fn_offset], "fn_ptr_pos")
+                    .unwrap()
+            };
+            let fn_ptr_cast = self
+                .builder
+                .build_pointer_cast(
+                    fn_ptr_pos,
+                    self.context.i64_type().ptr_type(inkwell::AddressSpace::default()),
+                    "fn_ptr_cast",
+                )
+                .unwrap();
+            let fn_ptr = fn_val.as_global_value().as_pointer_value();
+            let fn_as_int = self
+                .builder
+                .build_ptr_to_int(fn_ptr, self.context.i64_type(), "fn_int")
+                .unwrap();
+            self.builder.build_store(fn_ptr_cast, fn_as_int).unwrap();
+        }
+
+        // Create class with method data
+        let method_data_int2 = self
+            .builder
+            .build_ptr_to_int(method_data_i8ptr, self.context.i64_type(), "method_data_int2")
+            .unwrap();
+        let class_val = self
+            .builder
+            .build_call(
+                self.rt.cool_class_new,
+                &[
+                    name_ptr.as_pointer_value().into(),
+                    self.context.i64_type().const_int(method_count as u64, false).into(),
+                    method_data_int2.into(),
+                ],
+                "class",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+
+        let obj_val = self
+            .builder
             .build_call(self.rt.cool_object_new, &[class_val.into()], "obj")
             .unwrap()
             .try_as_basic_value()
@@ -1690,7 +1731,8 @@ impl<'ctx> Compiler<'ctx> {
                     for (i, param) in params.iter().skip(1).enumerate() {
                         // Get from global args buffer
                         let idx = self.context.i32_type().const_int((i + 1) as u64, false);
-                        let arg_val = self.builder
+                        let arg_val = self
+                            .builder
                             .build_call(self.rt.cool_get_arg, &[idx.into()], &param.name)
                             .unwrap()
                             .try_as_basic_value()
@@ -1705,7 +1747,11 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Return the object
-        let result = self.builder.build_load(self.cv_type, obj_ptr, "result").unwrap().into_struct_value();
+        let result = self
+            .builder
+            .build_load(self.cv_type, obj_ptr, "result")
+            .unwrap()
+            .into_struct_value();
         self.builder.build_return(Some(&result)).unwrap();
 
         // Restore state
@@ -1717,19 +1763,25 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Store class info
-        self.classes.insert(name.to_string(), ClassInfo {
-            constructor,
-            methods,
-            attributes,
-        });
+        self.classes.insert(
+            name.to_string(),
+            ClassInfo {
+                constructor,
+                methods,
+                attributes,
+            },
+        );
 
         // Create a global variable to hold the class reference
         let global_name = format!("__class_{}", name);
         let _global = self.module.add_global(self.cv_type, None, &global_name);
-        
+
         // At runtime, we need to initialize this - for now, just store constructor ref
-        let _constructor_holder = self.builder.build_alloca(self.cv_type, &format!("{}_holder", name)).unwrap();
-        
+        let _constructor_holder = self
+            .builder
+            .build_alloca(self.cv_type, &format!("{}_holder", name))
+            .unwrap();
+
         // Store class info for later instantiation
         Ok(())
     }
@@ -1743,9 +1795,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let ok_bb = self.context.append_basic_block(fn_val, "assert_ok");
         let fail_bb = self.context.append_basic_block(fn_val, "assert_fail");
-        self.builder
-            .build_conditional_branch(i1, ok_bb, fail_bb)
-            .unwrap();
+        self.builder.build_conditional_branch(i1, ok_bb, fail_bb).unwrap();
 
         // Failure path: print message and abort
         self.builder.position_at_end(fail_bb);
@@ -1823,9 +1873,17 @@ impl<'ctx> Compiler<'ctx> {
             // attribute access: obj.attr
             Expr::Attr { object, name } => {
                 let obj_val = self.compile_expr(object)?;
-                let attr_name_ptr = self.builder.build_global_string_ptr(name, &format!("attr_{}", name)).unwrap();
-                Ok(self.builder
-                    .build_call(self.rt.cool_get_attr, &[obj_val.into(), attr_name_ptr.as_pointer_value().into()], "get_attr")
+                let attr_name_ptr = self
+                    .builder
+                    .build_global_string_ptr(name, &format!("attr_{}", name))
+                    .unwrap();
+                Ok(self
+                    .builder
+                    .build_call(
+                        self.rt.cool_get_attr,
+                        &[obj_val.into(), attr_name_ptr.as_pointer_value().into()],
+                        "get_attr",
+                    )
                     .unwrap()
                     .try_as_basic_value()
                     .left()
@@ -1839,12 +1897,7 @@ impl<'ctx> Compiler<'ctx> {
 
     // ── Binary expression ─────────────────────────────────────────────────────
 
-    fn compile_binop_expr(
-        &mut self,
-        op: &BinOp,
-        left: &Expr,
-        right: &Expr,
-    ) -> Result<StructValue<'ctx>, String> {
+    fn compile_binop_expr(&mut self, op: &BinOp, left: &Expr, right: &Expr) -> Result<StructValue<'ctx>, String> {
         match op {
             BinOp::And => return self.compile_and(left, right),
             BinOp::Or => return self.compile_or(left, right),
@@ -1883,9 +1936,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let rhs_bb = self.context.append_basic_block(fn_val, "and_rhs");
         let done_bb = self.context.append_basic_block(fn_val, "and_done");
-        self.builder
-            .build_conditional_branch(i1, rhs_bb, done_bb)
-            .unwrap();
+        self.builder.build_conditional_branch(i1, rhs_bb, done_bb).unwrap();
 
         self.builder.position_at_end(rhs_bb);
         let rhs = self.compile_expr(right)?;
@@ -1894,10 +1945,7 @@ impl<'ctx> Compiler<'ctx> {
 
         self.builder.position_at_end(done_bb);
         let phi = self.builder.build_phi(self.cv_type, "and_res").unwrap();
-        phi.add_incoming(&[
-            (&lhs as &dyn BasicValue, lhs_end),
-            (&rhs as &dyn BasicValue, rhs_end),
-        ]);
+        phi.add_incoming(&[(&lhs as &dyn BasicValue, lhs_end), (&rhs as &dyn BasicValue, rhs_end)]);
         Ok(phi.as_basic_value().into_struct_value())
     }
 
@@ -1915,9 +1963,7 @@ impl<'ctx> Compiler<'ctx> {
         let rhs_bb = self.context.append_basic_block(fn_val, "or_rhs");
         let done_bb = self.context.append_basic_block(fn_val, "or_done");
         // truthy → skip rhs (return lhs), falsy → evaluate rhs
-        self.builder
-            .build_conditional_branch(i1, done_bb, rhs_bb)
-            .unwrap();
+        self.builder.build_conditional_branch(i1, done_bb, rhs_bb).unwrap();
 
         self.builder.position_at_end(rhs_bb);
         let rhs = self.compile_expr(right)?;
@@ -1926,10 +1972,7 @@ impl<'ctx> Compiler<'ctx> {
 
         self.builder.position_at_end(done_bb);
         let phi = self.builder.build_phi(self.cv_type, "or_res").unwrap();
-        phi.add_incoming(&[
-            (&lhs as &dyn BasicValue, lhs_end),
-            (&rhs as &dyn BasicValue, rhs_end),
-        ]);
+        phi.add_incoming(&[(&lhs as &dyn BasicValue, lhs_end), (&rhs as &dyn BasicValue, rhs_end)]);
         Ok(phi.as_basic_value().into_struct_value())
     }
 
@@ -1937,21 +1980,30 @@ impl<'ctx> Compiler<'ctx> {
 
     fn compile_call(&mut self, callee: &Expr, args: &[Expr]) -> Result<StructValue<'ctx>, String> {
         // Handle method calls: obj.method(args)
-        if let Expr::Attr { object, name: method_name } = callee {
+        if let Expr::Attr {
+            object,
+            name: method_name,
+        } = callee
+        {
             let obj_val = self.compile_expr(object)?;
             let attr_name = format!("method_{}", method_name);
             let attr_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
-            
+
             // Call method - the runtime looks up the method from the class structure
             let i32t = self.context.i32_type();
             let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
-            
-            return Ok(self.builder
-                .build_call(self.rt.cool_call_method_vararg, &[
-                    obj_val.into(),
-                    attr_name_ptr.as_pointer_value().into(),
-                    nargs_i32.into(),
-                ], "call_method")
+
+            return Ok(self
+                .builder
+                .build_call(
+                    self.rt.cool_call_method_vararg,
+                    &[
+                        obj_val.into(),
+                        attr_name_ptr.as_pointer_value().into(),
+                        nargs_i32.into(),
+                    ],
+                    "call_method",
+                )
                 .unwrap()
                 .try_as_basic_value()
                 .left()
@@ -1962,11 +2014,7 @@ impl<'ctx> Compiler<'ctx> {
         // Simple function call: name(args)
         let name = match callee {
             Expr::Ident(n) => n.clone(),
-            other => {
-                return Err(format!(
-                    "only named function calls are supported; got {other:?}"
-                ))
-            }
+            other => return Err(format!("only named function calls are supported; got {other:?}")),
         };
 
         // ── Check for class instantiation ───────────────────────────────
@@ -1976,7 +2024,7 @@ impl<'ctx> Compiler<'ctx> {
                 let class_info = self.classes.get(&name).unwrap();
                 class_info.constructor
             };
-            
+
             // Compile arguments and store to global buffer for constructor
             let i32t = self.context.i32_type();
             for (i, arg) in args.iter().enumerate() {
@@ -1984,12 +2032,17 @@ impl<'ctx> Compiler<'ctx> {
                 let idx_val = i32t.const_int(i as u64, false);
                 // Store arg to global method args buffer
                 self.builder
-                    .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), cv.into()], "set_global_arg")
+                    .build_call(
+                        self.rt.cool_set_global_arg,
+                        &[idx_val.into(), cv.into()],
+                        "set_global_arg",
+                    )
                     .unwrap();
             }
-            
+
             // Call the constructor (which reads args from global buffer)
-            return Ok(self.builder
+            return Ok(self
+                .builder
                 .build_call(constructor, &[], "instantiate")
                 .unwrap()
                 .try_as_basic_value()
@@ -2001,9 +2054,7 @@ impl<'ctx> Compiler<'ctx> {
         // ── asm("template" [, "constraints" [, args...]]) ──
         if name == "asm" {
             if args.is_empty() {
-                return Err(
-                    "asm() requires at least one argument (assembly template string)".into(),
-                );
+                return Err("asm() requires at least one argument (assembly template string)".into());
             }
             let template = match &args[0] {
                 Expr::Str(s) => s.clone(),
@@ -2012,11 +2063,7 @@ impl<'ctx> Compiler<'ctx> {
             let (constraints, operand_start) = if args.len() > 1 {
                 match &args[1] {
                     Expr::Str(s) => (s.clone(), 2),
-                    _ => {
-                        return Err(
-                            "asm() second argument must be a string literal (constraints)".into(),
-                        )
-                    }
+                    _ => return Err("asm() second argument must be a string literal (constraints)".into()),
                 }
             } else {
                 (String::new(), 1)
@@ -2053,9 +2100,7 @@ impl<'ctx> Compiler<'ctx> {
                 let cv = self.compile_expr(arg)?;
                 call_args.push(cv.into());
             }
-            self.builder
-                .build_call(self.rt.cool_print, &call_args, "")
-                .unwrap();
+            self.builder.build_call(self.rt.cool_print, &call_args, "").unwrap();
             return Ok(self.build_nil());
         }
 
@@ -2109,11 +2154,7 @@ impl<'ctx> Compiler<'ctx> {
             };
             return Ok(self
                 .builder
-                .build_call(
-                    self.rt.cool_range,
-                    &[start.into(), stop.into(), step.into()],
-                    "range",
-                )
+                .build_call(self.rt.cool_range, &[start.into(), stop.into(), step.into()], "range")
                 .unwrap()
                 .try_as_basic_value()
                 .left()
@@ -2167,8 +2208,7 @@ impl<'ctx> Compiler<'ctx> {
 
 pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), String> {
     // Initialise LLVM for the host machine
-    Target::initialize_native(&InitializationConfig::default())
-        .map_err(|e| format!("LLVM init error: {e}"))?;
+    Target::initialize_native(&InitializationConfig::default()).map_err(|e| format!("LLVM init error: {e}"))?;
 
     let context = Context::create();
     let mut compiler = Compiler::new(&context);
@@ -2195,9 +2235,7 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
 
     // ── Pass 2: build main() and compile all top-level statements ────────────
     let i32_type = context.i32_type();
-    let main_fn = compiler
-        .module
-        .add_function("main", i32_type.fn_type(&[], false), None);
+    let main_fn = compiler.module.add_function("main", i32_type.fn_type(&[], false), None);
     let entry = context.append_basic_block(main_fn, "entry");
     compiler.builder.position_at_end(entry);
     compiler.current_fn = Some(main_fn);
@@ -2233,8 +2271,7 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
     let rt_c_path = std::path::Path::new("/tmp/cool_runtime.c");
     let rt_o_path = std::path::Path::new("/tmp/cool_runtime.o");
 
-    std::fs::write(rt_c_path, RUNTIME_C)
-        .map_err(|e| format!("Failed to write runtime source: {e}"))?;
+    std::fs::write(rt_c_path, RUNTIME_C).map_err(|e| format!("Failed to write runtime source: {e}"))?;
 
     let cc_status = std::process::Command::new("cc")
         .args([

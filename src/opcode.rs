@@ -20,41 +20,59 @@ pub enum UpvalueRef {
 #[derive(Debug, Clone)]
 pub enum Op {
     // ── Literals ──────────────────────────────────────────────────────────────
-    Constant(usize),   // push constants[idx]
+    Constant(usize), // push constants[idx]
     Nil,
     True,
     False,
     Pop,
     DupTop,
-    Over,      // duplicate TOS-1 (second from top) onto TOS
-    Swap,      // swap TOS and TOS-1
-    RotThree,  // lift TOS-2 to TOS, shift TOS and TOS-1 down one
+    Over,     // duplicate TOS-1 (second from top) onto TOS
+    Swap,     // swap TOS and TOS-1
+    RotThree, // lift TOS-2 to TOS, shift TOS and TOS-1 down one
 
     // ── Arithmetic ────────────────────────────────────────────────────────────
-    Add, Sub, Mul, Div, Mod, Pow, FloorDiv,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    FloorDiv,
 
     // ── Comparison ────────────────────────────────────────────────────────────
-    Eq, NotEq, Lt, LtEq, Gt, GtEq,
-    In, NotIn,
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+    In,
+    NotIn,
 
     // ── Bitwise ───────────────────────────────────────────────────────────────
-    BitAnd, BitOr, BitXor, LShift, RShift,
+    BitAnd,
+    BitOr,
+    BitXor,
+    LShift,
+    RShift,
 
     // ── Unary ─────────────────────────────────────────────────────────────────
-    Neg, Not, BitNot,
+    Neg,
+    Not,
+    BitNot,
 
     // ── Variable access ───────────────────────────────────────────────────────
     GetLocal(usize),
     SetLocal(usize),
-    GetGlobal(usize),    // names[idx]
-    SetGlobal(usize),    // names[idx]
+    GetGlobal(usize), // names[idx]
+    SetGlobal(usize), // names[idx]
     GetUpvalue(usize),
     SetUpvalue(usize),
 
     // ── Control flow (absolute instruction indices) ───────────────────────────
     Jump(usize),
-    JumpIfFalse(usize),  // peek top; jump if falsy (no pop)
-    JumpIfTrue(usize),   // peek top; jump if truthy (no pop)
+    JumpIfFalse(usize), // peek top; jump if falsy (no pop)
+    JumpIfTrue(usize),  // peek top; jump if truthy (no pop)
 
     // ── Closures / functions ──────────────────────────────────────────────────
     /// constants[proto_idx] must be a VmValue::Proto.  upvalues are captured
@@ -68,24 +86,24 @@ pub enum Op {
     Return,
 
     // ── Collections ───────────────────────────────────────────────────────────
-    BuildList(usize),    // pop n items (top is last element), push list
-    BuildDict(usize),    // pop 2n items (key, val pairs), push dict
-    BuildTuple(usize),   // pop n items, push tuple
+    BuildList(usize),  // pop n items (top is last element), push list
+    BuildDict(usize),  // pop 2n items (key, val pairs), push dict
+    BuildTuple(usize), // pop n items, push tuple
 
     // ── Subscript / attributes ────────────────────────────────────────────────
-    GetItem,             // pop idx, pop obj; push obj[idx]
-    SetItem,             // pop val, pop idx, pop obj; obj[idx] = val
+    GetItem, // pop idx, pop obj; push obj[idx]
+    SetItem, // pop val, pop idx, pop obj; obj[idx] = val
     /// pop stop, pop start, pop obj; push obj[start:stop]  (Nil = omitted end)
     GetSlice,
-    GetAttr(usize),      // pop obj; push obj.names[idx]
-    SetAttr(usize),      // pop val, pop obj; obj.names[idx] = val
+    GetAttr(usize), // pop obj; push obj.names[idx]
+    SetAttr(usize), // pop val, pop obj; obj.names[idx] = val
 
     // ── Classes ───────────────────────────────────────────────────────────────
     /// Define class: name is names[idx].  If has_parent, parent class is on TOS.
     MakeClass(usize, bool),
 
     // ── Iteration ─────────────────────────────────────────────────────────────
-    GetIter,             // pop obj; push iterator
+    GetIter, // pop obj; push iterator
     /// Peek TOS (iterator).  If exhausted: pop iterator, jump to target.
     /// Otherwise push next value (iterator stays below it on stack).
     ForIter(usize),
@@ -122,13 +140,18 @@ pub enum Op {
 pub struct Chunk {
     pub code: Vec<Op>,
     pub constants: Vec<VmValue>,
-    pub names: Vec<String>,   // global/attr names
-    pub lines: Vec<usize>,    // parallel to code
+    pub names: Vec<String>, // global/attr names
+    pub lines: Vec<usize>,  // parallel to code
 }
 
 impl Chunk {
     pub fn new() -> Self {
-        Chunk { code: Vec::new(), constants: Vec::new(), names: Vec::new(), lines: Vec::new() }
+        Chunk {
+            code: Vec::new(),
+            constants: Vec::new(),
+            names: Vec::new(),
+            lines: Vec::new(),
+        }
     }
 
     pub fn emit(&mut self, op: Op, line: usize) -> usize {
@@ -174,11 +197,7 @@ impl Chunk {
     /// Back-patch a jump at `idx` to point to `target`.
     pub fn patch_jump(&mut self, idx: usize, target: usize) {
         match &mut self.code[idx] {
-            Op::Jump(t)
-            | Op::JumpIfFalse(t)
-            | Op::JumpIfTrue(t)
-            | Op::ForIter(t)
-            | Op::SetupExcept(t) => *t = target,
+            Op::Jump(t) | Op::JumpIfFalse(t) | Op::JumpIfTrue(t) | Op::ForIter(t) | Op::SetupExcept(t) => *t = target,
             other => panic!("patch_jump: not a jump at {}: {:?}", idx, other),
         }
     }
@@ -276,10 +295,15 @@ pub struct VmDict {
 }
 
 impl VmDict {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn get(&self, key: &VmValue) -> Option<VmValue> {
-        self.keys.iter().position(|k| vm_eq(k, key)).map(|i| self.vals[i].clone())
+        self.keys
+            .iter()
+            .position(|k| vm_eq(k, key))
+            .map(|i| self.vals[i].clone())
     }
 
     pub fn set(&mut self, key: VmValue, val: VmValue) {
@@ -310,12 +334,28 @@ impl VmDict {
 
 #[derive(Debug)]
 pub enum VmIter {
-    List { items: Rc<RefCell<Vec<VmValue>>>, idx: usize },
-    Tuple { items: Rc<Vec<VmValue>>, idx: usize },
-    Str { chars: Vec<char>, idx: usize },
+    List {
+        items: Rc<RefCell<Vec<VmValue>>>,
+        idx: usize,
+    },
+    Tuple {
+        items: Rc<Vec<VmValue>>,
+        idx: usize,
+    },
+    Str {
+        chars: Vec<char>,
+        idx: usize,
+    },
     #[allow(dead_code)]
-    Range { current: i64, stop: i64, step: i64 },
-    DictKeys { dict: Rc<RefCell<VmDict>>, idx: usize },
+    Range {
+        current: i64,
+        stop: i64,
+        step: i64,
+    },
+    DictKeys {
+        dict: Rc<RefCell<VmDict>>,
+        idx: usize,
+    },
 }
 
 impl VmIter {
@@ -323,21 +363,31 @@ impl VmIter {
         match self {
             VmIter::List { items, idx } => {
                 let v = items.borrow().get(*idx).cloned();
-                if v.is_some() { *idx += 1; }
+                if v.is_some() {
+                    *idx += 1;
+                }
                 v
             }
             VmIter::Tuple { items, idx } => {
                 let v = items.get(*idx).cloned();
-                if v.is_some() { *idx += 1; }
+                if v.is_some() {
+                    *idx += 1;
+                }
                 v
             }
             VmIter::Str { chars, idx } => {
                 let v = chars.get(*idx).map(|c| VmValue::Str(c.to_string()));
-                if v.is_some() { *idx += 1; }
+                if v.is_some() {
+                    *idx += 1;
+                }
                 v
             }
             VmIter::Range { current, stop, step } => {
-                let done = if *step > 0 { *current >= *stop } else { *current <= *stop };
+                let done = if *step > 0 {
+                    *current >= *stop
+                } else {
+                    *current <= *stop
+                };
                 if done {
                     None
                 } else {
@@ -348,7 +398,9 @@ impl VmIter {
             }
             VmIter::DictKeys { dict, idx } => {
                 let v = dict.borrow().keys.get(*idx).cloned();
-                if v.is_some() { *idx += 1; }
+                if v.is_some() {
+                    *idx += 1;
+                }
                 v
             }
         }
@@ -440,7 +492,8 @@ pub fn vm_eq(a: &VmValue, b: &VmValue) -> bool {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| vm_eq(x, y))
         }
         (VmValue::List(a), VmValue::List(b)) => {
-            let a = a.borrow(); let b = b.borrow();
+            let a = a.borrow();
+            let b = b.borrow();
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| vm_eq(x, y))
         }
         _ => false,
@@ -472,7 +525,9 @@ impl fmt::Display for VmValue {
                 let v = v.borrow();
                 write!(f, "[")?;
                 for (i, item) in v.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", vm_repr(item))?;
                 }
                 write!(f, "]")
@@ -481,7 +536,9 @@ impl fmt::Display for VmValue {
                 let m = m.borrow();
                 write!(f, "{{")?;
                 for (i, (k, v)) in m.keys.iter().zip(m.vals.iter()).enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}: {}", vm_repr(k), vm_repr(v))?;
                 }
                 write!(f, "}}")
@@ -489,10 +546,14 @@ impl fmt::Display for VmValue {
             VmValue::Tuple(items) => {
                 write!(f, "(")?;
                 for (i, item) in items.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", vm_repr(item))?;
                 }
-                if items.len() == 1 { write!(f, ",")?; }
+                if items.len() == 1 {
+                    write!(f, ",")?;
+                }
                 write!(f, ")")
             }
             VmValue::Closure(c) => write!(f, "<function {}>", c.proto.name),

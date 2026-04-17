@@ -50,3 +50,6 @@
 /temp_cool_test.cool
 /test_except.cool
 /test_while.cool
+/test_closure.cool
+/test_lambda_closure.cool
+/test_while

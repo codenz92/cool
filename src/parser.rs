@@ -1,5 +1,4 @@
 /// Recursive-descent parser for Cool.
-
 use crate::ast::*;
 use crate::lexer::{Tok, Token};
 
@@ -40,7 +39,12 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
-            Err(format!("line {}: expected {:?}, got {:?}", self.line(), token, self.peek()))
+            Err(format!(
+                "line {}: expected {:?}, got {:?}",
+                self.line(),
+                token,
+                self.peek()
+            ))
         }
     }
 
@@ -97,28 +101,42 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek().clone() {
-            Token::Def      => self.parse_fn_def(),
-            Token::Class    => self.parse_class(),
-            Token::If       => self.parse_if(),
-            Token::While    => self.parse_while(),
-            Token::For      => self.parse_for(),
-            Token::Return   => self.parse_return(),
-            Token::Break    => { self.advance(); self.eat_newline(); Ok(Stmt::Break) }
-            Token::Continue => { self.advance(); self.eat_newline(); Ok(Stmt::Continue) }
-            Token::Pass     => { self.advance(); self.eat_newline(); Ok(Stmt::Pass) }
-            Token::Import   => self.parse_import(),
-            Token::Try      => self.parse_try(),
-            Token::Raise    => self.parse_raise(),
-            Token::Assert   => self.parse_assert(),
-            Token::With     => self.parse_with(),
-            Token::Global   => self.parse_global(),
+            Token::Def => self.parse_fn_def(),
+            Token::Class => self.parse_class(),
+            Token::If => self.parse_if(),
+            Token::While => self.parse_while(),
+            Token::For => self.parse_for(),
+            Token::Return => self.parse_return(),
+            Token::Break => {
+                self.advance();
+                self.eat_newline();
+                Ok(Stmt::Break)
+            }
+            Token::Continue => {
+                self.advance();
+                self.eat_newline();
+                Ok(Stmt::Continue)
+            }
+            Token::Pass => {
+                self.advance();
+                self.eat_newline();
+                Ok(Stmt::Pass)
+            }
+            Token::Import => self.parse_import(),
+            Token::Try => self.parse_try(),
+            Token::Raise => self.parse_raise(),
+            Token::Assert => self.parse_assert(),
+            Token::With => self.parse_with(),
+            Token::Global => self.parse_global(),
             Token::Nonlocal => self.parse_nonlocal(),
             _ => self.parse_assign_or_expr(),
         }
     }
 
     fn eat_newline(&mut self) {
-        if self.check(&Token::Newline) { self.advance(); }
+        if self.check(&Token::Newline) {
+            self.advance();
+        }
     }
 
     fn parse_fn_def(&mut self) -> Result<Stmt, String> {
@@ -135,11 +153,15 @@ impl Parser {
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, String> {
         let mut params = Vec::new();
-        if self.check(&Token::RParen) { return Ok(params); }
+        if self.check(&Token::RParen) {
+            return Ok(params);
+        }
         params.push(self.parse_param()?);
         while self.check(&Token::Comma) {
             self.advance();
-            if self.check(&Token::RParen) { break; }
+            if self.check(&Token::RParen) {
+                break;
+            }
             params.push(self.parse_param()?);
         }
         Ok(params)
@@ -150,21 +172,41 @@ impl Parser {
         if self.check(&Token::StarStar) {
             self.advance();
             let name = self.expect_ident()?;
-            return Ok(Param { name, default: None, is_vararg: false, is_kwarg: true });
+            return Ok(Param {
+                name,
+                default: None,
+                is_vararg: false,
+                is_kwarg: true,
+            });
         }
         // *args
         if self.check(&Token::Star) {
             self.advance();
             let name = self.expect_ident()?;
-            return Ok(Param { name, default: None, is_vararg: true, is_kwarg: false });
+            return Ok(Param {
+                name,
+                default: None,
+                is_vararg: true,
+                is_kwarg: false,
+            });
         }
         let name = self.expect_ident()?;
         if self.check(&Token::Eq) {
             self.advance();
             let default = self.parse_expr()?;
-            Ok(Param { name, default: Some(default), is_vararg: false, is_kwarg: false })
+            Ok(Param {
+                name,
+                default: Some(default),
+                is_vararg: false,
+                is_kwarg: false,
+            })
         } else {
-            Ok(Param { name, default: None, is_vararg: false, is_kwarg: false })
+            Ok(Param {
+                name,
+                default: None,
+                is_vararg: false,
+                is_kwarg: false,
+            })
         }
     }
 
@@ -215,7 +257,12 @@ impl Parser {
             }
         }
 
-        Ok(Stmt::If { condition, then_body, elif_clauses, else_body })
+        Ok(Stmt::If {
+            condition,
+            then_body,
+            elif_clauses,
+            else_body,
+        })
     }
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
@@ -250,7 +297,9 @@ impl Parser {
             let mut elems = vec![first];
             while self.check(&Token::Comma) {
                 self.advance();
-                if self.check(&Token::Newline) || self.check(&Token::Eof) { break; }
+                if self.check(&Token::Newline) || self.check(&Token::Eof) {
+                    break;
+                }
                 elems.push(self.parse_expr()?);
             }
             self.eat_newline();
@@ -283,7 +332,10 @@ impl Parser {
             self.eat_newline();
             Ok(Stmt::ImportModule(parts.join(".")))
         } else {
-            Err(format!("line {}: import expects a string path or module name", self.line()))
+            Err(format!(
+                "line {}: import expects a string path or module name",
+                self.line()
+            ))
         }
     }
 
@@ -316,7 +368,11 @@ impl Parser {
             self.eat(&Token::Colon)?;
             self.eat_newline();
             let handler_body = self.parse_block()?;
-            handlers.push(ExceptHandler { exc_type, as_name, body: handler_body });
+            handlers.push(ExceptHandler {
+                exc_type,
+                as_name,
+                body: handler_body,
+            });
             self.skip_newlines();
         }
 
@@ -336,10 +392,18 @@ impl Parser {
         }
 
         if handlers.is_empty() && finally_body.is_none() {
-            return Err(format!("line {}: try requires at least one except or finally", self.line()));
+            return Err(format!(
+                "line {}: try requires at least one except or finally",
+                self.line()
+            ));
         }
 
-        Ok(Stmt::Try { body, handlers, else_body, finally_body })
+        Ok(Stmt::Try {
+            body,
+            handlers,
+            else_body,
+            finally_body,
+        })
     }
 
     fn parse_raise(&mut self) -> Result<Stmt, String> {
@@ -408,9 +472,9 @@ impl Parser {
         // Augmented assignment: ident <op>= expr
         if let Token::Ident(name) = self.peek().clone() {
             let aug_op = match self.token_at(1) {
-                Token::PlusEq  => Some(BinOp::Add),
+                Token::PlusEq => Some(BinOp::Add),
                 Token::MinusEq => Some(BinOp::Sub),
-                Token::StarEq  => Some(BinOp::Mul),
+                Token::StarEq => Some(BinOp::Mul),
                 Token::SlashEq => Some(BinOp::Div),
                 _ => None,
             };
@@ -435,9 +499,9 @@ impl Parser {
 
         // Check for augmented assignment on subscript/attr targets: a[i] += x, obj.f += x
         let aug_op = match self.peek() {
-            Token::PlusEq  => Some(BinOp::Add),
+            Token::PlusEq => Some(BinOp::Add),
             Token::MinusEq => Some(BinOp::Sub),
-            Token::StarEq  => Some(BinOp::Mul),
+            Token::StarEq => Some(BinOp::Mul),
             Token::SlashEq => Some(BinOp::Div),
             _ => None,
         };
@@ -446,7 +510,11 @@ impl Parser {
             let rhs = self.parse_expr()?;
             self.eat_newline();
             // Desugar: lhs op= rhs  →  lhs = lhs op rhs
-            let combined = Expr::BinOp { op, left: Box::new(lhs.clone()), right: Box::new(rhs) };
+            let combined = Expr::BinOp {
+                op,
+                left: Box::new(lhs.clone()),
+                right: Box::new(rhs),
+            };
             return match lhs {
                 Expr::Ident(name) => Ok(Stmt::Assign { name, value: combined }),
                 Expr::Index { object, index } => Ok(Stmt::SetItem {
@@ -477,7 +545,9 @@ impl Parser {
                 let mut elems = vec![first_val];
                 while self.check(&Token::Comma) {
                     self.advance();
-                    if self.check(&Token::Newline) || self.check(&Token::Eof) { break; }
+                    if self.check(&Token::Newline) || self.check(&Token::Eof) {
+                        break;
+                    }
                     elems.push(self.parse_expr()?);
                 }
                 Expr::Tuple(elems)
@@ -486,9 +556,10 @@ impl Parser {
             };
             self.eat_newline();
             // If all targets are plain idents, use the simpler Unpack node
-            let all_idents: Option<Vec<String>> = targets.iter().map(|t| {
-                if let Expr::Ident(n) = t { Some(n.clone()) } else { None }
-            }).collect();
+            let all_idents: Option<Vec<String>> = targets
+                .iter()
+                .map(|t| if let Expr::Ident(n) = t { Some(n.clone()) } else { None })
+                .collect();
             return if let Some(names) = all_idents {
                 Ok(Stmt::Unpack { names, value })
             } else {
@@ -574,13 +645,18 @@ impl Parser {
                 params.push(self.parse_param()?);
                 while self.check(&Token::Comma) {
                     self.advance();
-                    if self.check(&Token::Colon) { break; }
+                    if self.check(&Token::Colon) {
+                        break;
+                    }
                     params.push(self.parse_param()?);
                 }
             }
             self.eat(&Token::Colon)?;
             let body = self.parse_expr()?;
-            return Ok(Expr::Lambda { params, body: Box::new(body) });
+            return Ok(Expr::Lambda {
+                params,
+                body: Box::new(body),
+            });
         }
         let expr = self.parse_or()?;
         // ternary: expr if condition else expr
@@ -603,7 +679,11 @@ impl Parser {
         while self.check(&Token::Or) {
             self.advance();
             let right = self.parse_and()?;
-            left = Expr::BinOp { op: BinOp::Or, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op: BinOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -613,7 +693,11 @@ impl Parser {
         while self.check(&Token::And) {
             self.advance();
             let right = self.parse_not()?;
-            left = Expr::BinOp { op: BinOp::And, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op: BinOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -626,7 +710,10 @@ impl Parser {
                 // This case handled in comparison context; here just parse `not <expr>`
             }
             let expr = self.parse_not()?;
-            return Ok(Expr::UnaryOp { op: UnaryOp::Not, expr: Box::new(expr) });
+            return Ok(Expr::UnaryOp {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+            });
         }
         self.parse_comparison()
     }
@@ -634,20 +721,24 @@ impl Parser {
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let left = self.parse_bitor()?;
         let op = match self.peek() {
-            Token::EqEq   => BinOp::Eq,
+            Token::EqEq => BinOp::Eq,
             Token::BangEq => BinOp::NotEq,
-            Token::Lt     => BinOp::Lt,
-            Token::LtEq   => BinOp::LtEq,
-            Token::Gt     => BinOp::Gt,
-            Token::GtEq   => BinOp::GtEq,
-            Token::In     => BinOp::In,
+            Token::Lt => BinOp::Lt,
+            Token::LtEq => BinOp::LtEq,
+            Token::Gt => BinOp::Gt,
+            Token::GtEq => BinOp::GtEq,
+            Token::In => BinOp::In,
             Token::Not => {
                 // Check for "not in"
                 if matches!(self.token_at(1), Token::In) {
                     self.advance(); // consume 'not'
                     self.advance(); // consume 'in'
                     let right = self.parse_bitor()?;
-                    return Ok(Expr::BinOp { op: BinOp::NotIn, left: Box::new(left), right: Box::new(right) });
+                    return Ok(Expr::BinOp {
+                        op: BinOp::NotIn,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    });
                 }
                 return Ok(left);
             }
@@ -655,7 +746,11 @@ impl Parser {
         };
         self.advance();
         let right = self.parse_bitor()?;
-        Ok(Expr::BinOp { op, left: Box::new(left), right: Box::new(right) })
+        Ok(Expr::BinOp {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        })
     }
 
     fn parse_bitor(&mut self) -> Result<Expr, String> {
@@ -663,7 +758,11 @@ impl Parser {
         while self.check(&Token::Pipe) {
             self.advance();
             let right = self.parse_bitxor()?;
-            left = Expr::BinOp { op: BinOp::BitOr, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op: BinOp::BitOr,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -673,7 +772,11 @@ impl Parser {
         while self.check(&Token::Caret) {
             self.advance();
             let right = self.parse_bitand()?;
-            left = Expr::BinOp { op: BinOp::BitXor, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op: BinOp::BitXor,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -683,7 +786,11 @@ impl Parser {
         while self.check(&Token::Ampersand) {
             self.advance();
             let right = self.parse_shift()?;
-            left = Expr::BinOp { op: BinOp::BitAnd, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op: BinOp::BitAnd,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -698,7 +805,11 @@ impl Parser {
             };
             self.advance();
             let right = self.parse_add()?;
-            left = Expr::BinOp { op, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -707,13 +818,17 @@ impl Parser {
         let mut left = self.parse_mul()?;
         loop {
             let op = match self.peek() {
-                Token::Plus  => BinOp::Add,
+                Token::Plus => BinOp::Add,
                 Token::Minus => BinOp::Sub,
                 _ => break,
             };
             self.advance();
             let right = self.parse_mul()?;
-            left = Expr::BinOp { op, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -722,16 +837,20 @@ impl Parser {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.peek() {
-                Token::Star       => BinOp::Mul,
-                Token::Slash      => BinOp::Div,
+                Token::Star => BinOp::Mul,
+                Token::Slash => BinOp::Div,
                 Token::SlashSlash => BinOp::FloorDiv,
-                Token::Percent    => BinOp::Mod,
-                Token::StarStar   => BinOp::Pow,
+                Token::Percent => BinOp::Mod,
+                Token::StarStar => BinOp::Pow,
                 _ => break,
             };
             self.advance();
             let right = self.parse_unary()?;
-            left = Expr::BinOp { op, left: Box::new(left), right: Box::new(right) };
+            left = Expr::BinOp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -740,12 +859,18 @@ impl Parser {
         if self.check(&Token::Minus) {
             self.advance();
             let expr = self.parse_unary()?;
-            return Ok(Expr::UnaryOp { op: UnaryOp::Neg, expr: Box::new(expr) });
+            return Ok(Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
         }
         if self.check(&Token::Tilde) {
             self.advance();
             let expr = self.parse_unary()?;
-            return Ok(Expr::UnaryOp { op: UnaryOp::BitNot, expr: Box::new(expr) });
+            return Ok(Expr::UnaryOp {
+                op: UnaryOp::BitNot,
+                expr: Box::new(expr),
+            });
         }
         self.parse_postfix()
     }
@@ -758,7 +883,11 @@ impl Parser {
                     self.advance();
                     let (args, kwargs) = self.parse_arg_list()?;
                     self.eat(&Token::RParen)?;
-                    expr = Expr::Call { callee: Box::new(expr), args, kwargs };
+                    expr = Expr::Call {
+                        callee: Box::new(expr),
+                        args,
+                        kwargs,
+                    };
                 }
                 Token::LBracket => {
                     self.advance();
@@ -766,27 +895,49 @@ impl Parser {
                     if self.check(&Token::Colon) {
                         // obj[:stop] or obj[:]
                         self.advance();
-                        let stop = if self.check(&Token::RBracket) { None } else { Some(Box::new(self.parse_expr()?)) };
+                        let stop = if self.check(&Token::RBracket) {
+                            None
+                        } else {
+                            Some(Box::new(self.parse_expr()?))
+                        };
                         self.eat(&Token::RBracket)?;
-                        expr = Expr::Slice { object: Box::new(expr), start: None, stop };
+                        expr = Expr::Slice {
+                            object: Box::new(expr),
+                            start: None,
+                            stop,
+                        };
                     } else {
                         let first = self.parse_expr()?;
                         if self.check(&Token::Colon) {
                             // obj[start:stop] or obj[start:]
                             self.advance();
-                            let stop = if self.check(&Token::RBracket) { None } else { Some(Box::new(self.parse_expr()?)) };
+                            let stop = if self.check(&Token::RBracket) {
+                                None
+                            } else {
+                                Some(Box::new(self.parse_expr()?))
+                            };
                             self.eat(&Token::RBracket)?;
-                            expr = Expr::Slice { object: Box::new(expr), start: Some(Box::new(first)), stop };
+                            expr = Expr::Slice {
+                                object: Box::new(expr),
+                                start: Some(Box::new(first)),
+                                stop,
+                            };
                         } else {
                             self.eat(&Token::RBracket)?;
-                            expr = Expr::Index { object: Box::new(expr), index: Box::new(first) };
+                            expr = Expr::Index {
+                                object: Box::new(expr),
+                                index: Box::new(first),
+                            };
                         }
                     }
                 }
                 Token::Dot => {
                     self.advance();
                     let name = self.expect_ident()?;
-                    expr = Expr::Attr { object: Box::new(expr), name };
+                    expr = Expr::Attr {
+                        object: Box::new(expr),
+                        name,
+                    };
                 }
                 _ => break,
             }
@@ -798,11 +949,15 @@ impl Parser {
     fn parse_arg_list(&mut self) -> Result<(Vec<Expr>, Vec<(String, Expr)>), String> {
         let mut args = Vec::new();
         let mut kwargs = Vec::new();
-        if self.check(&Token::RParen) { return Ok((args, kwargs)); }
+        if self.check(&Token::RParen) {
+            return Ok((args, kwargs));
+        }
 
         loop {
             self.skip_collection_ws();
-            if self.check(&Token::RParen) { break; }
+            if self.check(&Token::RParen) {
+                break;
+            }
 
             if self.check(&Token::StarStar) {
                 // **dict — spread dict into kwargs; use sentinel name "**"
@@ -817,31 +972,62 @@ impl Parser {
                         let val = self.parse_expr()?;
                         kwargs.push((name, val));
                     } else {
-                        return Err(format!("line {}: keyword argument name must be an identifier", self.line()));
+                        return Err(format!(
+                            "line {}: keyword argument name must be an identifier",
+                            self.line()
+                        ));
                     }
                 } else {
                     if !kwargs.is_empty() {
-                        return Err(format!("line {}: positional argument after keyword argument", self.line()));
+                        return Err(format!(
+                            "line {}: positional argument after keyword argument",
+                            self.line()
+                        ));
                     }
                     args.push(arg);
                 }
             }
 
-            if self.check(&Token::Comma) { self.advance(); } else { break; }
+            if self.check(&Token::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
         }
         Ok((args, kwargs))
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.peek().clone() {
-            Token::Int(n)   => { self.advance(); Ok(Expr::Int(n)) }
-            Token::Float(f) => { self.advance(); Ok(Expr::Float(f)) }
-            Token::Str(s)   => { self.advance(); Ok(Expr::Str(s)) }
-            Token::FStr(s)  => { self.advance(); self.parse_fstring(s) }
-            Token::Bool(b)  => { self.advance(); Ok(Expr::Bool(b)) }
-            Token::Nil      => { self.advance(); Ok(Expr::Nil) }
-            Token::Ident(s) => { self.advance(); Ok(Expr::Ident(s)) }
-            Token::LParen   => {
+            Token::Int(n) => {
+                self.advance();
+                Ok(Expr::Int(n))
+            }
+            Token::Float(f) => {
+                self.advance();
+                Ok(Expr::Float(f))
+            }
+            Token::Str(s) => {
+                self.advance();
+                Ok(Expr::Str(s))
+            }
+            Token::FStr(s) => {
+                self.advance();
+                self.parse_fstring(s)
+            }
+            Token::Bool(b) => {
+                self.advance();
+                Ok(Expr::Bool(b))
+            }
+            Token::Nil => {
+                self.advance();
+                Ok(Expr::Nil)
+            }
+            Token::Ident(s) => {
+                self.advance();
+                Ok(Expr::Ident(s))
+            }
+            Token::LParen => {
                 self.advance();
                 self.skip_collection_ws();
                 // Empty tuple ()
@@ -857,7 +1043,9 @@ impl Parser {
                     while self.check(&Token::Comma) {
                         self.advance();
                         self.skip_collection_ws();
-                        if self.check(&Token::RParen) { break; }
+                        if self.check(&Token::RParen) {
+                            break;
+                        }
                         items.push(self.parse_expr()?);
                     }
                     self.skip_collection_ws();
@@ -916,7 +1104,9 @@ impl Parser {
                 while self.check(&Token::Comma) {
                     self.advance();
                     self.skip_collection_ws();
-                    if self.check(&Token::RBracket) { break; }
+                    if self.check(&Token::RBracket) {
+                        break;
+                    }
                     items.push(self.parse_expr()?);
                 }
                 self.skip_collection_ws();
@@ -935,7 +1125,9 @@ impl Parser {
                     while self.check(&Token::Comma) {
                         self.advance();
                         self.skip_collection_ws();
-                        if self.check(&Token::RBrace) { break; }
+                        if self.check(&Token::RBrace) {
+                            break;
+                        }
                         let k = self.parse_expr()?;
                         self.eat(&Token::Colon)?;
                         let v = self.parse_expr()?;
@@ -946,7 +1138,11 @@ impl Parser {
                 self.eat(&Token::RBrace)?;
                 Ok(Expr::Dict(pairs))
             }
-            other => Err(format!("line {}: unexpected token {:?} in expression", self.line(), other)),
+            other => Err(format!(
+                "line {}: unexpected token {:?} in expression",
+                self.line(),
+                other
+            )),
         }
     }
 
@@ -955,7 +1151,11 @@ impl Parser {
             self.advance();
             Ok(s)
         } else {
-            Err(format!("line {}: expected identifier, got {:?}", self.line(), self.peek()))
+            Err(format!(
+                "line {}: expected identifier, got {:?}",
+                self.line(),
+                self.peek()
+            ))
         }
     }
 
@@ -981,10 +1181,16 @@ impl Parser {
                 let mut depth = 1;
                 while i < chars.len() {
                     match chars[i] {
-                        '{' => { depth += 1; expr_src.push('{'); }
+                        '{' => {
+                            depth += 1;
+                            expr_src.push('{');
+                        }
                         '}' => {
                             depth -= 1;
-                            if depth == 0 { i += 1; break; }
+                            if depth == 0 {
+                                i += 1;
+                                break;
+                            }
                             expr_src.push('}');
                         }
                         c => expr_src.push(c),

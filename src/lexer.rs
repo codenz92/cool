@@ -7,7 +7,7 @@ pub enum Token {
     Int(i64),
     Float(f64),
     Str(String),
-    FStr(String),   // f"..." raw template
+    FStr(String), // f"..." raw template
     Bool(bool),
     Nil,
 
@@ -57,13 +57,13 @@ pub enum Token {
     MinusEq,
     StarEq,
     SlashEq,
-    SlashSlash,   // //  floor division
-    Ampersand,    // &
-    Pipe,         // |
-    Caret,        // ^
-    Tilde,        // ~
-    LtLt,         // <<
-    GtGt,         // >>
+    SlashSlash, // //  floor division
+    Ampersand,  // &
+    Pipe,       // |
+    Caret,      // ^
+    Tilde,      // ~
+    LtLt,       // <<
+    GtGt,       // >>
 
     // Punctuation
     LParen,
@@ -75,7 +75,7 @@ pub enum Token {
     Comma,
     Colon,
     Dot,
-    StarStar,  // **
+    StarStar, // **
 
     // Layout
     Newline,
@@ -131,12 +131,17 @@ impl Lexer {
     }
 
     fn tok(&self, token: Token) -> Tok {
-        Tok { token, span: Span { line: self.line } }
+        Tok {
+            token,
+            span: Span { line: self.line },
+        }
     }
 
     fn skip_comment(&mut self) {
         while let Some(c) = self.peek() {
-            if c == '\n' { break; }
+            if c == '\n' {
+                break;
+            }
             self.advance();
         }
     }
@@ -145,23 +150,31 @@ impl Lexer {
         let line = self.line;
         // Triple-quoted strings
         if self.peek() == Some(quote) && self.peek2() == Some(quote) {
-            self.advance(); self.advance();
+            self.advance();
+            self.advance();
             let mut s = String::new();
             loop {
                 match self.advance() {
                     None => return Err(format!("line {}: unterminated triple-quoted string", line)),
                     Some(c) if c == quote => {
                         if self.peek() == Some(quote) && self.peek2() == Some(quote) {
-                            self.advance(); self.advance();
+                            self.advance();
+                            self.advance();
                             break;
                         }
                         s.push(c);
                     }
-                    Some('\n') => { self.line += 1; s.push('\n'); }
+                    Some('\n') => {
+                        self.line += 1;
+                        s.push('\n');
+                    }
                     Some(c) => s.push(c),
                 }
             }
-            return Ok(Tok { token: Token::Str(s), span: Span { line } });
+            return Ok(Tok {
+                token: Token::Str(s),
+                span: Span { line },
+            });
         }
         let mut s = String::new();
         loop {
@@ -170,30 +183,41 @@ impl Lexer {
                 Some(c) if c == quote => break,
                 Some('\\') => {
                     match self.advance() {
-                        Some('n')  => s.push('\n'),
-                        Some('t')  => s.push('\t'),
-                        Some('r')  => s.push('\r'),
+                        Some('n') => s.push('\n'),
+                        Some('t') => s.push('\t'),
+                        Some('r') => s.push('\r'),
                         Some('\\') => s.push('\\'),
-                        Some('0')  => s.push('\0'),
-                        Some('x')  => {
+                        Some('0') => s.push('\0'),
+                        Some('x') => {
                             // \xHH hex escape
                             let h1 = self.advance().unwrap_or('0');
                             let h2 = self.advance().unwrap_or('0');
                             let hex = format!("{}{}", h1, h2);
                             match u8::from_str_radix(&hex, 16) {
                                 Ok(byte) => s.push(byte as char),
-                                Err(_) => { s.push('\\'); s.push('x'); s.push(h1); s.push(h2); }
+                                Err(_) => {
+                                    s.push('\\');
+                                    s.push('x');
+                                    s.push(h1);
+                                    s.push(h2);
+                                }
                             }
                         }
                         Some(q) if q == quote => s.push(q),
-                        Some(c) => { s.push('\\'); s.push(c); }
+                        Some(c) => {
+                            s.push('\\');
+                            s.push(c);
+                        }
                         None => return Err(format!("line {}: unterminated escape", line)),
                     }
                 }
                 Some(c) => s.push(c),
             }
         }
-        Ok(Tok { token: Token::Str(s), span: Span { line } })
+        Ok(Tok {
+            token: Token::Str(s),
+            span: Span { line },
+        })
     }
 
     fn read_number(&mut self, first: char) -> Tok {
@@ -204,7 +228,12 @@ impl Lexer {
                     self.advance(); // consume 'x'
                     let mut s = String::new();
                     while let Some(c) = self.peek() {
-                        if c.is_ascii_hexdigit() { s.push(c); self.advance(); } else { break; }
+                        if c.is_ascii_hexdigit() {
+                            s.push(c);
+                            self.advance();
+                        } else {
+                            break;
+                        }
                     }
                     let n = i64::from_str_radix(&s, 16).unwrap_or(0);
                     return self.tok(Token::Int(n));
@@ -213,7 +242,12 @@ impl Lexer {
                     self.advance();
                     let mut s = String::new();
                     while let Some(c) = self.peek() {
-                        if c == '0' || c == '1' { s.push(c); self.advance(); } else { break; }
+                        if c == '0' || c == '1' {
+                            s.push(c);
+                            self.advance();
+                        } else {
+                            break;
+                        }
                     }
                     let n = i64::from_str_radix(&s, 2).unwrap_or(0);
                     return self.tok(Token::Int(n));
@@ -222,7 +256,12 @@ impl Lexer {
                     self.advance();
                     let mut s = String::new();
                     while let Some(c) = self.peek() {
-                        if c >= '0' && c <= '7' { s.push(c); self.advance(); } else { break; }
+                        if c >= '0' && c <= '7' {
+                            s.push(c);
+                            self.advance();
+                        } else {
+                            break;
+                        }
                     }
                     let n = i64::from_str_radix(&s, 8).unwrap_or(0);
                     return self.tok(Token::Int(n));
@@ -262,36 +301,36 @@ impl Lexer {
             }
         }
         let token = match s.as_str() {
-            "def"      => Token::Def,
-            "return"   => Token::Return,
-            "if"       => Token::If,
-            "elif"     => Token::Elif,
-            "else"     => Token::Else,
-            "while"    => Token::While,
-            "for"      => Token::For,
-            "in"       => Token::In,
-            "and"      => Token::And,
-            "or"       => Token::Or,
-            "not"      => Token::Not,
-            "pass"     => Token::Pass,
-            "break"    => Token::Break,
+            "def" => Token::Def,
+            "return" => Token::Return,
+            "if" => Token::If,
+            "elif" => Token::Elif,
+            "else" => Token::Else,
+            "while" => Token::While,
+            "for" => Token::For,
+            "in" => Token::In,
+            "and" => Token::And,
+            "or" => Token::Or,
+            "not" => Token::Not,
+            "pass" => Token::Pass,
+            "break" => Token::Break,
             "continue" => Token::Continue,
-            "import"   => Token::Import,
-            "class"    => Token::Class,
-            "try"      => Token::Try,
-            "except"   => Token::Except,
-            "finally"  => Token::Finally,
-            "raise"    => Token::Raise,
-            "as"       => Token::As,
-            "assert"   => Token::Assert,
-            "with"     => Token::With,
-            "global"   => Token::Global,
+            "import" => Token::Import,
+            "class" => Token::Class,
+            "try" => Token::Try,
+            "except" => Token::Except,
+            "finally" => Token::Finally,
+            "raise" => Token::Raise,
+            "as" => Token::As,
+            "assert" => Token::Assert,
+            "with" => Token::With,
+            "global" => Token::Global,
             "nonlocal" => Token::Nonlocal,
-            "lambda"   => Token::Lambda,
-            "true"     => Token::Bool(true),
-            "false"    => Token::Bool(false),
-            "nil"      => Token::Nil,
-            _          => Token::Ident(s),
+            "lambda" => Token::Lambda,
+            "true" => Token::Bool(true),
+            "false" => Token::Bool(false),
+            "nil" => Token::Nil,
+            _ => Token::Ident(s),
         };
         self.tok(token)
     }
@@ -300,8 +339,14 @@ impl Lexer {
         let mut col = 0usize;
         loop {
             match self.peek() {
-                Some(' ')  => { col += 1; self.advance(); }
-                Some('\t') => { col += 4; self.advance(); }
+                Some(' ') => {
+                    col += 1;
+                    self.advance();
+                }
+                Some('\t') => {
+                    col += 4;
+                    self.advance();
+                }
                 _ => break,
             }
         }
@@ -324,11 +369,17 @@ impl Lexer {
         let current = *self.indent_stack.last().unwrap();
         if col > current {
             self.indent_stack.push(col);
-            toks.push(Tok { token: Token::Indent, span: Span { line } });
+            toks.push(Tok {
+                token: Token::Indent,
+                span: Span { line },
+            });
         } else {
             while col < *self.indent_stack.last().unwrap() {
                 self.indent_stack.pop();
-                toks.push(Tok { token: Token::Dedent, span: Span { line } });
+                toks.push(Tok {
+                    token: Token::Dedent,
+                    span: Span { line },
+                });
             }
         }
         toks
@@ -354,7 +405,10 @@ impl Lexer {
                     let line = self.line;
                     while self.indent_stack.len() > 1 {
                         self.indent_stack.pop();
-                        tokens.push(Tok { token: Token::Dedent, span: Span { line } });
+                        tokens.push(Tok {
+                            token: Token::Dedent,
+                            span: Span { line },
+                        });
                     }
                     tokens.push(self.tok(Token::Eof));
                     break;
@@ -365,8 +419,12 @@ impl Lexer {
                     tokens.push(self.tok(Token::Newline));
                     at_line_start = true;
                 }
-                Some('\r') => { self.advance(); }
-                Some(' ') | Some('\t') => { self.advance(); }
+                Some('\r') => {
+                    self.advance();
+                }
+                Some(' ') | Some('\t') => {
+                    self.advance();
+                }
                 Some('\\') if self.peek2() == Some('\n') => {
                     // Line continuation — consume both, skip the newline silently
                     self.advance(); // consume '\'
@@ -391,7 +449,10 @@ impl Lexer {
                         let tok = self.read_string(q)?;
                         // Re-wrap as FStr with the same raw content
                         if let Token::Str(s) = tok.token {
-                            tokens.push(Tok { token: Token::FStr(s), span: tok.span });
+                            tokens.push(Tok {
+                                token: Token::FStr(s),
+                                span: tok.span,
+                            });
                         }
                     } else {
                         tokens.push(self.read_ident(c));
@@ -399,61 +460,143 @@ impl Lexer {
                 }
                 Some('+') => {
                     self.advance();
-                    if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::PlusEq)); }
-                    else { tokens.push(self.tok(Token::Plus)); }
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::PlusEq));
+                    } else {
+                        tokens.push(self.tok(Token::Plus));
+                    }
                 }
                 Some('-') => {
                     self.advance();
-                    if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::MinusEq)); }
-                    else { tokens.push(self.tok(Token::Minus)); }
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::MinusEq));
+                    } else {
+                        tokens.push(self.tok(Token::Minus));
+                    }
                 }
                 Some('*') => {
                     self.advance();
-                    if self.peek() == Some('*') { self.advance(); tokens.push(self.tok(Token::StarStar)); }
-                    else if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::StarEq)); }
-                    else { tokens.push(self.tok(Token::Star)); }
+                    if self.peek() == Some('*') {
+                        self.advance();
+                        tokens.push(self.tok(Token::StarStar));
+                    } else if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::StarEq));
+                    } else {
+                        tokens.push(self.tok(Token::Star));
+                    }
                 }
                 Some('/') => {
                     self.advance();
-                    if self.peek() == Some('/') { self.advance(); tokens.push(self.tok(Token::SlashSlash)); }
-                    else if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::SlashEq)); }
-                    else { tokens.push(self.tok(Token::Slash)); }
+                    if self.peek() == Some('/') {
+                        self.advance();
+                        tokens.push(self.tok(Token::SlashSlash));
+                    } else if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::SlashEq));
+                    } else {
+                        tokens.push(self.tok(Token::Slash));
+                    }
                 }
-                Some('%') => { self.advance(); tokens.push(self.tok(Token::Percent)); }
-                Some('&') => { self.advance(); tokens.push(self.tok(Token::Ampersand)); }
-                Some('|') => { self.advance(); tokens.push(self.tok(Token::Pipe)); }
-                Some('^') => { self.advance(); tokens.push(self.tok(Token::Caret)); }
-                Some('~') => { self.advance(); tokens.push(self.tok(Token::Tilde)); }
-                Some('(') => { self.advance(); tokens.push(self.tok(Token::LParen)); }
-                Some(')') => { self.advance(); tokens.push(self.tok(Token::RParen)); }
-                Some('[') => { self.advance(); tokens.push(self.tok(Token::LBracket)); }
-                Some(']') => { self.advance(); tokens.push(self.tok(Token::RBracket)); }
-                Some('{') => { self.advance(); tokens.push(self.tok(Token::LBrace)); }
-                Some('}') => { self.advance(); tokens.push(self.tok(Token::RBrace)); }
-                Some(',') => { self.advance(); tokens.push(self.tok(Token::Comma)); }
-                Some(':') => { self.advance(); tokens.push(self.tok(Token::Colon)); }
-                Some('.') => { self.advance(); tokens.push(self.tok(Token::Dot)); }
+                Some('%') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Percent));
+                }
+                Some('&') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Ampersand));
+                }
+                Some('|') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Pipe));
+                }
+                Some('^') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Caret));
+                }
+                Some('~') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Tilde));
+                }
+                Some('(') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::LParen));
+                }
+                Some(')') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::RParen));
+                }
+                Some('[') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::LBracket));
+                }
+                Some(']') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::RBracket));
+                }
+                Some('{') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::LBrace));
+                }
+                Some('}') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::RBrace));
+                }
+                Some(',') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Comma));
+                }
+                Some(':') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Colon));
+                }
+                Some('.') => {
+                    self.advance();
+                    tokens.push(self.tok(Token::Dot));
+                }
                 Some('=') => {
                     self.advance();
-                    if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::EqEq)); }
-                    else { tokens.push(self.tok(Token::Eq)); }
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::EqEq));
+                    } else {
+                        tokens.push(self.tok(Token::Eq));
+                    }
                 }
                 Some('!') => {
                     self.advance();
-                    if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::BangEq)); }
-                    else { return Err(format!("line {}: unexpected '!'", self.line)); }
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::BangEq));
+                    } else {
+                        return Err(format!("line {}: unexpected '!'", self.line));
+                    }
                 }
                 Some('<') => {
                     self.advance();
-                    if self.peek() == Some('<') { self.advance(); tokens.push(self.tok(Token::LtLt)); }
-                    else if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::LtEq)); }
-                    else { tokens.push(self.tok(Token::Lt)); }
+                    if self.peek() == Some('<') {
+                        self.advance();
+                        tokens.push(self.tok(Token::LtLt));
+                    } else if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::LtEq));
+                    } else {
+                        tokens.push(self.tok(Token::Lt));
+                    }
                 }
                 Some('>') => {
                     self.advance();
-                    if self.peek() == Some('>') { self.advance(); tokens.push(self.tok(Token::GtGt)); }
-                    else if self.peek() == Some('=') { self.advance(); tokens.push(self.tok(Token::GtEq)); }
-                    else { tokens.push(self.tok(Token::Gt)); }
+                    if self.peek() == Some('>') {
+                        self.advance();
+                        tokens.push(self.tok(Token::GtGt));
+                    } else if self.peek() == Some('=') {
+                        self.advance();
+                        tokens.push(self.tok(Token::GtEq));
+                    } else {
+                        tokens.push(self.tok(Token::Gt));
+                    }
                 }
                 Some(c) => {
                     return Err(format!("line {}: unexpected character '{}'", self.line, c));

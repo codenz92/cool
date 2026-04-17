@@ -130,8 +130,7 @@ impl VM {
                 methods: std::collections::HashMap::new(),
                 class_vars: RefCell::new(HashMap::new()),
             });
-            self.globals
-                .insert(exc_name.to_string(), VmValue::Class(cls));
+            self.globals.insert(exc_name.to_string(), VmValue::Class(cls));
         }
     }
 
@@ -227,11 +226,7 @@ impl VM {
         // base = current stack height so that Op::Return truncates back to here,
         // not to 0 (which would destroy callers' locals when run() is called mid-execution).
         let base = self.stack.len();
-        self.frames.push(CallFrame {
-            closure,
-            ip: 0,
-            base,
-        });
+        self.frames.push(CallFrame { closure, ip: 0, base });
 
         match self.execute() {
             Ok(_) => Ok(()),
@@ -265,12 +260,7 @@ impl VM {
         }
     }
 
-    fn dispatch_op(
-        &mut self,
-        op: Op,
-        base: usize,
-        entry_frames: usize,
-    ) -> Result<Option<VmValue>, String> {
+    fn dispatch_op(&mut self, op: Op, base: usize, entry_frames: usize) -> Result<Option<VmValue>, String> {
         // Save frame count before dispatching. After any user-code call (call_closure,
         // call_value), check this: if frames dropped, it means exception handling ran
         // the handler (and possibly the rest of the script) in a recursive execute()
@@ -575,23 +565,21 @@ impl VM {
 
             // ── Closures / calls ───────────────────────────────────────
             Op::MakeClosure(proto_idx, refs) => {
-                let proto =
-                    match &self.frames.last().unwrap().closure.proto.chunk.constants[proto_idx] {
-                        VmValue::Proto(p) => p.clone(),
-                        other => {
-                            return Err(self
-                                .err(&format!("MakeClosure: not a proto: {}", other.type_name())))
-                        }
-                    };
+                let proto = match &self.frames.last().unwrap().closure.proto.chunk.constants[proto_idx] {
+                    VmValue::Proto(p) => p.clone(),
+                    other => return Err(self.err(&format!("MakeClosure: not a proto: {}", other.type_name()))),
+                };
                 let mut upvalues: Vec<UpvalueCell> = Vec::new();
                 for r in &refs {
                     let cell = match r {
                         UpvalueRef::Local(slot) => {
                             let abs = base + slot;
                             // Reuse an existing open cell for this slot if one exists.
-                            if let Some(existing) = self.open_upvalues.iter().find(
-                                |c| matches!(*c.0.borrow(), UpvalueCellInner::Open(s) if s == abs),
-                            ) {
+                            if let Some(existing) = self
+                                .open_upvalues
+                                .iter()
+                                .find(|c| matches!(*c.0.borrow(), UpvalueCellInner::Open(s) if s == abs))
+                            {
                                 existing.clone()
                             } else {
                                 let cell = UpvalueCell::open(abs);
@@ -624,8 +612,7 @@ impl VM {
                 self.frames.pop();
                 // Clean up any exc_handlers that were installed by the returning frame.
                 // Without this, a `return` inside a `try` block would leave stale handlers.
-                self.exc_handlers
-                    .retain(|h| h.frame_depth < returning_depth);
+                self.exc_handlers.retain(|h| h.frame_depth < returning_depth);
                 if self.frames.len() < entry_frames {
                     return Ok(Some(val));
                 }
@@ -690,10 +677,7 @@ impl VM {
                     match self.pop() {
                         VmValue::Class(c) => Some(c),
                         other => {
-                            return Err(self.err(&format!(
-                                "class parent must be a class, got {}",
-                                other.type_name()
-                            )))
+                            return Err(self.err(&format!("class parent must be a class, got {}", other.type_name())))
                         }
                     }
                 } else {
@@ -716,11 +700,7 @@ impl VM {
             Op::ForIter(target) => {
                 let next = match self.peek() {
                     VmValue::Iter(it) => it.borrow_mut().next_val(),
-                    other => {
-                        return Err(
-                            self.err(&format!("ForIter: not an iterator: {}", other.type_name()))
-                        )
-                    }
+                    other => return Err(self.err(&format!("ForIter: not an iterator: {}", other.type_name()))),
                 };
                 match next {
                     Some(v) => self.push(v),
@@ -839,10 +819,7 @@ impl VM {
             return self.execute();
         }
         // No handler found.
-        Err(format!(
-            "Unhandled exception (line {}): {}",
-            self.current_line, exc
-        ))
+        Err(format!("Unhandled exception (line {}): {}", self.current_line, exc))
     }
 
     // ── Upvalue closing ───────────────────────────────────────────────────────
@@ -874,10 +851,7 @@ impl VM {
         let func = self.stack[func_pos].clone();
 
         // Collect kwargs.
-        let kwarg_vals: Vec<VmValue> = self
-            .stack
-            .drain(self.stack.len() - kwarg_names.len()..)
-            .collect();
+        let kwarg_vals: Vec<VmValue> = self.stack.drain(self.stack.len() - kwarg_names.len()..).collect();
         let kwargs: Vec<(String, VmValue)> = kwarg_names.iter().cloned().zip(kwarg_vals).collect();
 
         // Collect positional args.
@@ -971,8 +945,7 @@ impl VM {
         let base = self.stack.len();
 
         // Extend stack to hold all locals.
-        self.stack
-            .resize(base + local_count.max(params.len()), VmValue::Nil);
+        self.stack.resize(base + local_count.max(params.len()), VmValue::Nil);
 
         // Bind parameters.
         let mut pos_idx = 0usize;
@@ -996,24 +969,15 @@ impl VM {
                 } else if pos_idx < args.len() {
                     self.stack[base + i] = args[pos_idx].clone();
                     pos_idx += 1;
-                } else if let Some(default_val) =
-                    closure.proto.defaults.get(i).and_then(|d| d.clone())
-                {
+                } else if let Some(default_val) = closure.proto.defaults.get(i).and_then(|d| d.clone()) {
                     self.stack[base + i] = default_val;
                 } else {
-                    return Err(self.err(&format!(
-                        "{}() missing argument '{}'",
-                        closure.proto.name, param.name
-                    )));
+                    return Err(self.err(&format!("{}() missing argument '{}'", closure.proto.name, param.name)));
                 }
             }
         }
 
-        self.frames.push(CallFrame {
-            closure,
-            ip: 0,
-            base,
-        });
+        self.frames.push(CallFrame { closure, ip: 0, base });
 
         match self.execute() {
             Ok(v) => Ok(v),
@@ -1051,10 +1015,7 @@ impl VM {
                 if let Some(v) = inst.class.class_vars.borrow().get(name).cloned() {
                     return Ok(v);
                 }
-                Err(self.err(&format!(
-                    "'{}' object has no attribute '{}'",
-                    inst.class.name, name
-                )))
+                Err(self.err(&format!("'{}' object has no attribute '{}'", inst.class.name, name)))
             }
             VmValue::Class(cls) => {
                 // Check class variables first.
@@ -1093,11 +1054,7 @@ impl VM {
                 self.dict_method(obj.clone(), d.clone(), name)
             }
             VmValue::File(fh) => self.file_method(obj.clone(), fh.clone(), name),
-            other => Err(self.err(&format!(
-                "'{}' has no attribute '{}'",
-                other.type_name(),
-                name
-            ))),
+            other => Err(self.err(&format!("'{}' has no attribute '{}'", other.type_name(), name))),
         }
     }
 
@@ -1149,11 +1106,7 @@ impl VM {
                 .borrow()
                 .get(&idx)
                 .ok_or_else(|| self.err(&format!("key not found: {}", idx))),
-            _ => Err(self.err(&format!(
-                "cannot index {} with {}",
-                obj.type_name(),
-                idx.type_name()
-            ))),
+            _ => Err(self.err(&format!("cannot index {} with {}", obj.type_name(), idx.type_name()))),
         }
     }
 
@@ -1264,11 +1217,7 @@ impl VM {
                             chars: chars.clone(),
                             idx: *idx,
                         },
-                        VmIter::Range {
-                            current,
-                            stop,
-                            step,
-                        } => VmIter::Range {
+                        VmIter::Range { current, stop, step } => VmIter::Range {
                             current: *current,
                             stop: *stop,
                             step: *step,
@@ -1308,11 +1257,7 @@ impl VM {
                 v.extend_from_slice(&b.borrow());
                 Ok(VmValue::List(Rc::new(RefCell::new(v))))
             }
-            (l, r) => Err(self.err(&format!(
-                "cannot add {} and {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot add {} and {}", l.type_name(), r.type_name()))),
         }
     }
 
@@ -1334,12 +1279,7 @@ impl VM {
                 "-" => a - b as f64,
                 _ => unreachable!(),
             })),
-            (l, r) => Err(self.err(&format!(
-                "cannot {} {} and {}",
-                op,
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot {} {} and {}", op, l.type_name(), r.type_name()))),
         }
     }
 
@@ -1360,11 +1300,7 @@ impl VM {
                 }
                 Ok(VmValue::List(Rc::new(RefCell::new(result))))
             }
-            (l, r) => Err(self.err(&format!(
-                "cannot multiply {} and {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot multiply {} and {}", l.type_name(), r.type_name()))),
         }
     }
 
@@ -1379,11 +1315,7 @@ impl VM {
             (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a / b)),
             (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(a as f64 / b)),
             (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a / b as f64)),
-            (l, r) => Err(self.err(&format!(
-                "cannot divide {} and {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot divide {} and {}", l.type_name(), r.type_name()))),
         }
     }
 
@@ -1399,11 +1331,7 @@ impl VM {
             (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float(a as f64 % b)),
             (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a % b as f64)),
             (VmValue::Str(fmt_str), r) => self.str_format(&fmt_str, r),
-            (l, r) => Err(self.err(&format!(
-                "cannot mod {} and {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot mod {} and {}", l.type_name(), r.type_name()))),
         }
     }
 
@@ -1419,11 +1347,7 @@ impl VM {
             (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float(a.powf(b))),
             (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float((a as f64).powf(b))),
             (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float(a.powi(b as i32))),
-            (l, r) => Err(self.err(&format!(
-                "cannot pow {} and {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot pow {} and {}", l.type_name(), r.type_name()))),
         }
     }
 
@@ -1438,11 +1362,7 @@ impl VM {
             (VmValue::Float(a), VmValue::Float(b)) => Ok(VmValue::Float((a / b).floor())),
             (VmValue::Int(a), VmValue::Float(b)) => Ok(VmValue::Float((a as f64 / b).floor())),
             (VmValue::Float(a), VmValue::Int(b)) => Ok(VmValue::Float((a / b as f64).floor())),
-            (l, r) => Err(self.err(&format!(
-                "cannot floor-div {} and {}",
-                l.type_name(),
-                r.type_name()
-            ))),
+            (l, r) => Err(self.err(&format!("cannot floor-div {} and {}", l.type_name(), r.type_name()))),
         }
     }
 
@@ -1483,13 +1403,7 @@ impl VM {
                 ">=" => a >= b,
                 _ => unreachable!(),
             },
-            (l, r) => {
-                return Err(self.err(&format!(
-                    "cannot compare {} and {}",
-                    l.type_name(),
-                    r.type_name()
-                )))
-            }
+            (l, r) => return Err(self.err(&format!("cannot compare {} and {}", l.type_name(), r.type_name()))),
         };
         Ok(VmValue::Bool(result))
     }
@@ -1541,89 +1455,53 @@ impl VM {
 
     // ── Built-in methods on primitive types ───────────────────────────────────
 
-    fn list_method(
-        &self,
-        receiver: VmValue,
-        _list: Rc<RefCell<Vec<VmValue>>>,
-        name: &str,
-    ) -> Result<VmValue, String> {
+    fn list_method(&self, receiver: VmValue, _list: Rc<RefCell<Vec<VmValue>>>, name: &str) -> Result<VmValue, String> {
         match name {
-            "append" | "pop" | "sort" | "reverse" | "extend" | "insert" | "remove" | "index"
-            | "count" | "clear" | "copy" => Ok(VmValue::BoundBuiltin(
-                Box::new(receiver),
-                format!("list.{}", name),
-            )),
+            "append" | "pop" | "sort" | "reverse" | "extend" | "insert" | "remove" | "index" | "count" | "clear"
+            | "copy" => Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("list.{}", name))),
             _ => Err(self.err(&format!("list has no method '{}'", name))),
         }
     }
 
     fn str_method(&self, receiver: VmValue, s: String, name: &str) -> Result<VmValue, String> {
         match name {
-            "upper" | "lower" | "strip" | "lstrip" | "rstrip" | "split" | "replace" | "find"
-            | "count" | "startswith" | "endswith" | "join" | "format" | "title" | "capitalize"
-            | "encode" | "isdigit" | "isalpha" | "isspace" | "zfill" => {
+            "upper" | "lower" | "strip" | "lstrip" | "rstrip" | "split" | "replace" | "find" | "count"
+            | "startswith" | "endswith" | "join" | "format" | "title" | "capitalize" | "encode" | "isdigit"
+            | "isalpha" | "isspace" | "zfill" => {
                 // Embed the string value in the builtin name so we can recover it at call time.
-                Ok(VmValue::BoundBuiltin(
-                    Box::new(receiver),
-                    format!("str.{}:{}", name, s),
-                ))
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("str.{}:{}", name, s)))
             }
             _ => Err(self.err(&format!("str has no method '{}'", name))),
         }
     }
 
-    fn dict_method(
-        &self,
-        receiver: VmValue,
-        _dict: Rc<RefCell<VmDict>>,
-        name: &str,
-    ) -> Result<VmValue, String> {
+    fn dict_method(&self, receiver: VmValue, _dict: Rc<RefCell<VmDict>>, name: &str) -> Result<VmValue, String> {
         match name {
-            "keys" | "values" | "items" | "get" | "pop" | "update" | "clear" | "copy"
-            | "contains" | "has_key" => Ok(VmValue::BoundBuiltin(
-                Box::new(receiver),
-                format!("dict.{}", name),
-            )),
+            "keys" | "values" | "items" | "get" | "pop" | "update" | "clear" | "copy" | "contains" | "has_key" => {
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("dict.{}", name)))
+            }
             _ => Err(self.err(&format!("dict has no method '{}'", name))),
         }
     }
 
-    fn file_method(
-        &self,
-        receiver: VmValue,
-        _fh: Rc<RefCell<VmFile>>,
-        name: &str,
-    ) -> Result<VmValue, String> {
+    fn file_method(&self, receiver: VmValue, _fh: Rc<RefCell<VmFile>>, name: &str) -> Result<VmValue, String> {
         match name {
-            "read" | "readline" | "readlines" | "write" | "close" | "seek" | "tell" => Ok(
-                VmValue::BoundBuiltin(Box::new(receiver), format!("file.{}", name)),
-            ),
+            "read" | "readline" | "readlines" | "write" | "close" | "seek" | "tell" => {
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("file.{}", name)))
+            }
             // Context manager protocol: __enter__ returns self, __exit__ closes the file.
-            "__enter__" => Ok(VmValue::BoundBuiltin(
-                Box::new(receiver),
-                "file.__enter__".to_string(),
-            )),
-            "__exit__" => Ok(VmValue::BoundBuiltin(
-                Box::new(receiver),
-                "file.__exit__".to_string(),
-            )),
+            "__enter__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "file.__enter__".to_string())),
+            "__exit__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "file.__exit__".to_string())),
             _ => Err(self.err(&format!("file has no method '{}'", name))),
         }
     }
 
     // ── Built-in function dispatch ────────────────────────────────────────────
 
-    fn call_builtin(
-        &mut self,
-        name: &str,
-        args: &[VmValue],
-        kwargs: &[(String, VmValue)],
-    ) -> Result<VmValue, String> {
+    fn call_builtin(&mut self, name: &str, args: &[VmValue], kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
         // Handle namespaced method builtins first.
         if let Some(_f) = name.strip_prefix("ffi.") {
-            return Err(
-                self.err("FFI is only supported in the tree-walk interpreter (run without --vm)")
-            );
+            return Err(self.err("FFI is only supported in the tree-walk interpreter (run without --vm)"));
         }
         if let Some(rest) = name.strip_prefix("list.") {
             return self.call_list_method(rest, args, kwargs);
@@ -1657,9 +1535,7 @@ impl VM {
                 Ok(VmValue::Nil)
             }
             "len" => {
-                let v = args
-                    .first()
-                    .ok_or_else(|| self.err("len() requires 1 argument"))?;
+                let v = args.first().ok_or_else(|| self.err("len() requires 1 argument"))?;
                 Ok(VmValue::Int(self.vm_len(v)? as i64))
             }
             "range" => match args {
@@ -1694,9 +1570,7 @@ impl VM {
                 Ok(VmValue::Str(v.to_string()))
             }
             "int" => {
-                let v = args
-                    .first()
-                    .ok_or_else(|| self.err("int() requires 1 argument"))?;
+                let v = args.first().ok_or_else(|| self.err("int() requires 1 argument"))?;
                 match v {
                     VmValue::Int(n) => Ok(VmValue::Int(*n)),
                     VmValue::Float(f) => Ok(VmValue::Int(*f as i64)),
@@ -1707,9 +1581,7 @@ impl VM {
                             i64::from_str_radix(hex, 16)
                                 .map(VmValue::Int)
                                 .map_err(|_| self.err(&format!("invalid int: '{}'", s)))
-                        } else if let Some(bin) =
-                            s.strip_prefix("0b").or_else(|| s.strip_prefix("0B"))
-                        {
+                        } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
                             i64::from_str_radix(bin, 2)
                                 .map(VmValue::Int)
                                 .map_err(|_| self.err(&format!("invalid int: '{}'", s)))
@@ -1723,9 +1595,7 @@ impl VM {
                 }
             }
             "float" => {
-                let v = args
-                    .first()
-                    .ok_or_else(|| self.err("float() requires 1 argument"))?;
+                let v = args.first().ok_or_else(|| self.err("float() requires 1 argument"))?;
                 match v {
                     VmValue::Float(f) => Ok(VmValue::Float(*f)),
                     VmValue::Int(n) => Ok(VmValue::Float(*n as f64)),
@@ -1734,9 +1604,7 @@ impl VM {
                         .parse::<f64>()
                         .map(VmValue::Float)
                         .map_err(|_| self.err(&format!("invalid float: '{}'", s))),
-                    other => {
-                        Err(self.err(&format!("cannot convert {} to float", other.type_name())))
-                    }
+                    other => Err(self.err(&format!("cannot convert {} to float", other.type_name()))),
                 }
             }
             "bool" => {
@@ -1759,13 +1627,7 @@ impl VM {
             "round" => {
                 let ndigits = args
                     .get(1)
-                    .and_then(|v| {
-                        if let VmValue::Int(n) = v {
-                            Some(*n)
-                        } else {
-                            None
-                        }
-                    })
+                    .and_then(|v| if let VmValue::Int(n) = v { Some(*n) } else { None })
                     .unwrap_or(0);
                 match args.first() {
                     Some(VmValue::Int(n)) => Ok(VmValue::Int(*n)),
@@ -1843,11 +1705,7 @@ impl VM {
                         .cloned()
                         .ok_or_else(|| self.err("enumerate() requires an argument"))?,
                 )?;
-                let start = if let Some(VmValue::Int(n)) = args.get(1) {
-                    *n
-                } else {
-                    0
-                };
+                let start = if let Some(VmValue::Int(n)) = args.get(1) { *n } else { 0 };
                 let result: Vec<VmValue> = items
                     .into_iter()
                     .enumerate()
@@ -1905,12 +1763,8 @@ impl VM {
                 Ok(VmValue::List(Rc::new(RefCell::new(result))))
             }
             "isinstance" => {
-                let obj = args
-                    .first()
-                    .ok_or_else(|| self.err("isinstance() requires 2 args"))?;
-                let cls = args
-                    .get(1)
-                    .ok_or_else(|| self.err("isinstance() requires 2 args"))?;
+                let obj = args.first().ok_or_else(|| self.err("isinstance() requires 2 args"))?;
+                let cls = args.get(1).ok_or_else(|| self.err("isinstance() requires 2 args"))?;
                 match (obj, cls) {
                     (VmValue::Instance(inst), VmValue::Class(c)) => {
                         Ok(VmValue::Bool(self.is_instance_of(&inst.class, c)))
@@ -1984,9 +1838,7 @@ impl VM {
                 let mut line = String::new();
                 io::stdin().lock().read_line(&mut line).ok();
                 Ok(VmValue::Str(
-                    line.trim_end_matches('\n')
-                        .trim_end_matches('\r')
-                        .to_string(),
+                    line.trim_end_matches('\n').trim_end_matches('\r').to_string(),
                 ))
             }
             "exit" => {
@@ -2047,10 +1899,7 @@ impl VM {
                             .parent
                             .clone()
                             .ok_or_else(|| self.err("class has no parent"))?;
-                        Ok(VmValue::Super(Rc::new(VmSuper {
-                            instance: inst,
-                            parent,
-                        })))
+                        Ok(VmValue::Super(Rc::new(VmSuper { instance: inst, parent })))
                     }
                     _ => Err(self.err("super() called outside of method")),
                 }
@@ -2074,17 +1923,11 @@ impl VM {
                 let exc = args
                     .first()
                     .ok_or_else(|| self.err("__exc_matches__ requires 2 args"))?;
-                let type_val = args
-                    .get(1)
-                    .ok_or_else(|| self.err("__exc_matches__ requires 2 args"))?;
+                let type_val = args.get(1).ok_or_else(|| self.err("__exc_matches__ requires 2 args"))?;
                 let result = match (exc, type_val) {
-                    (VmValue::Instance(inst), VmValue::Class(cls)) => {
-                        self.is_instance_of(&inst.class, cls)
-                    }
+                    (VmValue::Instance(inst), VmValue::Class(cls)) => self.is_instance_of(&inst.class, cls),
                     (VmValue::Str(_), VmValue::Class(cls)) => {
-                        cls.name == "Exception"
-                            || cls.name == "ValueError"
-                            || cls.name == "TypeError"
+                        cls.name == "Exception" || cls.name == "ValueError" || cls.name == "TypeError"
                     }
                     (_, VmValue::Class(cls)) => cls.name == "Exception",
                     _ => false,
@@ -2105,12 +1948,7 @@ impl VM {
                 let n = match args.first() {
                     Some(VmValue::Int(i)) => *i as f64,
                     Some(VmValue::Float(f)) => *f,
-                    _ if fname == "gcd"
-                        || fname == "lcm"
-                        || fname == "atan2"
-                        || fname == "hypot"
-                        || fname == "pow" =>
-                    {
+                    _ if fname == "gcd" || fname == "lcm" || fname == "atan2" || fname == "hypot" || fname == "pow" => {
                         0.0
                     }
                     _ => return Err(self.err(&format!("math.{}() requires a number", fname))),
@@ -2210,11 +2048,7 @@ impl VM {
                                 gcd(b, a % b)
                             }
                         }
-                        Ok(VmValue::Int(if a == 0 || b == 0 {
-                            0
-                        } else {
-                            (a / gcd(a, b)) * b
-                        }))
+                        Ok(VmValue::Int(if a == 0 || b == 0 { 0 } else { (a / gcd(a, b)) * b }))
                     }
                     "factorial" => {
                         let n = match args.first() {
@@ -2421,9 +2255,7 @@ impl VM {
                 use regex::Regex;
                 let re = Regex::new(&pattern).map_err(|e| self.err(&e.to_string()))?;
                 match fname {
-                    "match" => Ok(VmValue::Bool(
-                        re.find(&text).map(|m| m.start() == 0).unwrap_or(false),
-                    )),
+                    "match" => Ok(VmValue::Bool(re.find(&text).map(|m| m.start() == 0).unwrap_or(false))),
                     "search" => Ok(VmValue::Bool(re.is_match(&text))),
                     "fullmatch" => Ok(VmValue::Bool(
                         re.find(&text)
@@ -2442,15 +2274,10 @@ impl VM {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("re.sub requires 3 args")),
                         };
-                        Ok(VmValue::Str(
-                            re.replace_all(&text, repl.as_str()).to_string(),
-                        ))
+                        Ok(VmValue::Str(re.replace_all(&text, repl.as_str()).to_string()))
                     }
                     "split" => {
-                        let parts: Vec<VmValue> = re
-                            .split(&text)
-                            .map(|s| VmValue::Str(s.to_string()))
-                            .collect();
+                        let parts: Vec<VmValue> = re.split(&text).map(|s| VmValue::Str(s.to_string())).collect();
                         Ok(VmValue::List(Rc::new(RefCell::new(parts))))
                     }
                     _ => Err(self.err(&format!("unknown re function '{}'", fname))),
@@ -2521,9 +2348,7 @@ impl VM {
                 Ok(VmValue::Nil)
             }
             "remove" => {
-                let target = args
-                    .get(1)
-                    .ok_or_else(|| self.err("remove() requires a value"))?;
+                let target = args.get(1).ok_or_else(|| self.err("remove() requires a value"))?;
                 let mut v = list.borrow_mut();
                 let pos = v
                     .iter()
@@ -2533,9 +2358,7 @@ impl VM {
                 Ok(VmValue::Nil)
             }
             "index" => {
-                let target = args
-                    .get(1)
-                    .ok_or_else(|| self.err("index() requires a value"))?;
+                let target = args.get(1).ok_or_else(|| self.err("index() requires a value"))?;
                 let v = list.borrow();
                 let pos = v
                     .iter()
@@ -2544,13 +2367,9 @@ impl VM {
                 Ok(VmValue::Int(pos as i64))
             }
             "count" => {
-                let target = args
-                    .get(1)
-                    .ok_or_else(|| self.err("count() requires a value"))?;
+                let target = args.get(1).ok_or_else(|| self.err("count() requires a value"))?;
                 let v = list.borrow();
-                Ok(VmValue::Int(
-                    v.iter().filter(|x| vm_eq(x, target)).count() as i64
-                ))
+                Ok(VmValue::Int(v.iter().filter(|x| vm_eq(x, target)).count() as i64))
             }
             "clear" => {
                 list.borrow_mut().clear();
@@ -2577,12 +2396,8 @@ impl VM {
             _ => return Err(self.err(&format!("dict.{}() requires a dict", method))),
         };
         match method {
-            "keys" => Ok(VmValue::List(Rc::new(RefCell::new(
-                dict.borrow().keys.clone(),
-            )))),
-            "values" => Ok(VmValue::List(Rc::new(RefCell::new(
-                dict.borrow().vals.clone(),
-            )))),
+            "keys" => Ok(VmValue::List(Rc::new(RefCell::new(dict.borrow().keys.clone())))),
+            "values" => Ok(VmValue::List(Rc::new(RefCell::new(dict.borrow().vals.clone())))),
             "items" => {
                 let d = dict.borrow();
                 let items: Vec<VmValue> = d
@@ -2594,16 +2409,12 @@ impl VM {
                 Ok(VmValue::List(Rc::new(RefCell::new(items))))
             }
             "get" => {
-                let key = args
-                    .get(1)
-                    .ok_or_else(|| self.err("dict.get() requires a key"))?;
+                let key = args.get(1).ok_or_else(|| self.err("dict.get() requires a key"))?;
                 let default = args.get(2).cloned().unwrap_or(VmValue::Nil);
                 Ok(dict.borrow().get(key).unwrap_or(default))
             }
             "pop" => {
-                let key = args
-                    .get(1)
-                    .ok_or_else(|| self.err("dict.pop() requires a key"))?;
+                let key = args.get(1).ok_or_else(|| self.err("dict.pop() requires a key"))?;
                 let default = args.get(2).cloned();
                 match dict.borrow().get(key) {
                     Some(v) => {
@@ -2635,9 +2446,7 @@ impl VM {
             }
             "copy" => Ok(VmValue::Dict(Rc::new(RefCell::new(dict.borrow().clone())))),
             "contains" | "has_key" => {
-                let key = args
-                    .get(1)
-                    .ok_or_else(|| self.err("dict.contains() requires a key"))?;
+                let key = args.get(1).ok_or_else(|| self.err("dict.contains() requires a key"))?;
                 Ok(VmValue::Bool(dict.borrow().get(key).is_some()))
             }
             _ => Err(self.err(&format!("dict has no method '{}'", method))),
@@ -2646,16 +2455,9 @@ impl VM {
 
     // ── String method dispatch ────────────────────────────────────────────────
 
-    fn call_str_method(
-        &self,
-        spec: &str,
-        args: &[VmValue],
-        _kwargs: &[(String, VmValue)],
-    ) -> Result<VmValue, String> {
+    fn call_str_method(&self, spec: &str, args: &[VmValue], _kwargs: &[(String, VmValue)]) -> Result<VmValue, String> {
         // spec is "method_name:self_str"
-        let colon = spec
-            .find(':')
-            .ok_or_else(|| self.err("invalid str method spec"))?;
+        let colon = spec.find(':').ok_or_else(|| self.err("invalid str method spec"))?;
         let method = &spec[..colon];
         let s = spec[colon + 1..].to_string();
 
@@ -2693,14 +2495,8 @@ impl VM {
                     _ => None,
                 };
                 let parts: Vec<VmValue> = match sep {
-                    Some(sep) => s
-                        .split(sep.as_str())
-                        .map(|p| VmValue::Str(p.to_string()))
-                        .collect(),
-                    None => s
-                        .split_whitespace()
-                        .map(|p| VmValue::Str(p.to_string()))
-                        .collect(),
+                    Some(sep) => s.split(sep.as_str()).map(|p| VmValue::Str(p.to_string())).collect(),
+                    None => s.split_whitespace().map(|p| VmValue::Str(p.to_string())).collect(),
                 };
                 Ok(VmValue::List(Rc::new(RefCell::new(parts))))
             }
@@ -2720,9 +2516,7 @@ impl VM {
                     Some(VmValue::Str(s)) => s.clone(),
                     _ => return Err(self.err("find() requires a string")),
                 };
-                Ok(VmValue::Int(
-                    s.find(sub.as_str()).map(|i| i as i64).unwrap_or(-1),
-                ))
+                Ok(VmValue::Int(s.find(sub.as_str()).map(|i| i as i64).unwrap_or(-1)))
             }
             "count" => {
                 let sub = match args.get(1) {
@@ -2761,15 +2555,9 @@ impl VM {
                 }
                 Ok(VmValue::Str(result))
             }
-            "isdigit" => Ok(VmValue::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()),
-            )),
-            "isalpha" => Ok(VmValue::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_alphabetic()),
-            )),
-            "isspace" => Ok(VmValue::Bool(
-                !s.is_empty() && s.chars().all(|c| c.is_whitespace()),
-            )),
+            "isdigit" => Ok(VmValue::Bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))),
+            "isalpha" => Ok(VmValue::Bool(!s.is_empty() && s.chars().all(|c| c.is_alphabetic()))),
+            "isspace" => Ok(VmValue::Bool(!s.is_empty() && s.chars().all(|c| c.is_whitespace()))),
             "zfill" => {
                 let width = match args.get(1) {
                     Some(VmValue::Int(n)) => *n as usize,
@@ -2828,10 +2616,7 @@ impl VM {
                     let full_path = self.source_dir.join(&path);
                     let content = std::fs::read_to_string(&full_path)
                         .map_err(|e| self.err(&format!("readlines '{}': {}", path, e)))?;
-                    let lines: Vec<VmValue> = content
-                        .lines()
-                        .map(|l| VmValue::Str(l.to_string() + "\n"))
-                        .collect();
+                    let lines: Vec<VmValue> = content.lines().map(|l| VmValue::Str(l.to_string() + "\n")).collect();
                     Ok(VmValue::List(Rc::new(RefCell::new(lines))))
                 } else {
                     Err(self.err("file not open for reading"))
@@ -2850,8 +2635,7 @@ impl VM {
                 } else {
                     String::new()
                 };
-                std::fs::write(&full_path, existing + &fh.write_buf)
-                    .map_err(|e| self.err(&format!("write: {}", e)))?;
+                std::fs::write(&full_path, existing + &fh.write_buf).map_err(|e| self.err(&format!("write: {}", e)))?;
                 Ok(VmValue::Nil)
             }
             "close" => {
@@ -2890,9 +2674,7 @@ impl VM {
         let mut best = items[0].clone();
         for item in &items[1..] {
             let cmp = vm_cmp_order(&best, item);
-            if (is_max && cmp == std::cmp::Ordering::Less)
-                || (!is_max && cmp == std::cmp::Ordering::Greater)
-            {
+            if (is_max && cmp == std::cmp::Ordering::Less) || (!is_max && cmp == std::cmp::Ordering::Greater) {
                 best = item.clone();
             }
         }
@@ -2911,8 +2693,7 @@ impl VM {
 
     fn run_file(&mut self, path: &str) -> Result<VmValue, String> {
         let full = self.source_dir.join(path);
-        let source = std::fs::read_to_string(&full)
-            .map_err(|e| self.err(&format!("runfile '{}': {}", path, e)))?;
+        let source = std::fs::read_to_string(&full).map_err(|e| self.err(&format!("runfile '{}': {}", path, e)))?;
         let mut lexer = crate::lexer::Lexer::new(&source);
         let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
         let mut parser = crate::parser::Parser::new(tokens);
@@ -2976,10 +2757,7 @@ impl VM {
             }
             return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));
         }
-        Err(self.err(&format!(
-            "json.loads: cannot parse: {}",
-            &s[..s.len().min(40)]
-        )))
+        Err(self.err(&format!("json.loads: cannot parse: {}", &s[..s.len().min(40)])))
     }
 
     fn json_split_array(s: &str) -> Vec<&str> {
@@ -3080,8 +2858,7 @@ impl VM {
         ];
         for path in &candidates {
             if path.exists() {
-                let source = std::fs::read_to_string(path)
-                    .map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
+                let source = std::fs::read_to_string(path).map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
                 // Compile and run in a sub-scope; collect exported names into a dict.
                 let old_source_dir = self.source_dir.clone();
                 self.source_dir = path.parent().unwrap_or(&old_source_dir).to_path_buf();
@@ -3155,10 +2932,7 @@ impl VM {
                     ("math.ceil".to_string(), bf("math.ceil")),
                     ("math.pi".to_string(), VmValue::Float(std::f64::consts::PI)),
                     ("math.e".to_string(), VmValue::Float(std::f64::consts::E)),
-                    (
-                        "math.tau".to_string(),
-                        VmValue::Float(std::f64::consts::TAU),
-                    ),
+                    ("math.tau".to_string(), VmValue::Float(std::f64::consts::TAU)),
                 ]);
             }
             "os" => {
@@ -3211,15 +2985,9 @@ impl VM {
 fn vm_cmp_order(a: &VmValue, b: &VmValue) -> std::cmp::Ordering {
     match (a, b) {
         (VmValue::Int(x), VmValue::Int(y)) => x.cmp(y),
-        (VmValue::Float(x), VmValue::Float(y)) => {
-            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
-        }
-        (VmValue::Int(x), VmValue::Float(y)) => (*x as f64)
-            .partial_cmp(y)
-            .unwrap_or(std::cmp::Ordering::Equal),
-        (VmValue::Float(x), VmValue::Int(y)) => x
-            .partial_cmp(&(*y as f64))
-            .unwrap_or(std::cmp::Ordering::Equal),
+        (VmValue::Float(x), VmValue::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (VmValue::Int(x), VmValue::Float(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (VmValue::Float(x), VmValue::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
         (VmValue::Str(x), VmValue::Str(y)) => x.cmp(y),
         _ => std::cmp::Ordering::Equal,
     }
