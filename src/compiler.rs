@@ -1232,6 +1232,8 @@ const BUILTINS: &[&str] = &[
     "min",
     "max",
     "sum",
+    "any",
+    "all",
     "map",
     "filter",
     "set_completions",

@@ -36,7 +36,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 
 ### Built-in Functions
 
-`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()`, `round()`, `pow()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `assert`, `exit()`
+`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `pow()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `assert`, `exit()`
 
 ### String Methods
 

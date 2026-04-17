@@ -91,6 +91,8 @@ impl VM {
             "min",
             "max",
             "sum",
+            "any",
+            "all",
             "map",
             "filter",
             "set_completions",
@@ -1671,6 +1673,32 @@ impl VM {
                 } else {
                     Ok(VmValue::Int(total))
                 }
+            }
+            "any" => {
+                let items = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    Some(VmValue::Tuple(t)) => t.as_ref().clone(),
+                    _ => return Err(self.err("any() requires a list")),
+                };
+                for item in &items {
+                    if item.is_truthy() {
+                        return Ok(VmValue::Bool(true));
+                    }
+                }
+                Ok(VmValue::Bool(false))
+            }
+            "all" => {
+                let items = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    Some(VmValue::Tuple(t)) => t.as_ref().clone(),
+                    _ => return Err(self.err("all() requires a list")),
+                };
+                for item in &items {
+                    if !item.is_truthy() {
+                        return Ok(VmValue::Bool(false));
+                    }
+                }
+                Ok(VmValue::Bool(true))
             }
             "sorted" => {
                 let items = match args.first() {

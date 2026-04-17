@@ -90,6 +90,8 @@ impl Env {
             "min",
             "max",
             "sum",
+            "any",
+            "all",
             "map",
             "filter",
             "repr",
@@ -2416,6 +2418,44 @@ class Stack:
                         }
                     })
                     .map(|v| v.unwrap_or(Value::Nil))
+            }
+            "any" => {
+                if args.is_empty() {
+                    return Err(self.err("any() requires at least 1 argument"));
+                }
+                let items = if args.len() == 1 {
+                    match args.into_iter().next().unwrap() {
+                        Value::List(l) => l.borrow().clone(),
+                        v => vec![v],
+                    }
+                } else {
+                    args
+                };
+                for v in items {
+                    if v.is_truthy() {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            "all" => {
+                if args.is_empty() {
+                    return Err(self.err("all() requires at least 1 argument"));
+                }
+                let items = if args.len() == 1 {
+                    match args.into_iter().next().unwrap() {
+                        Value::List(l) => l.borrow().clone(),
+                        v => vec![v],
+                    }
+                } else {
+                    args
+                };
+                for v in items {
+                    if !v.is_truthy() {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
             }
             "sum" => {
                 let lst = match args.into_iter().next() {
