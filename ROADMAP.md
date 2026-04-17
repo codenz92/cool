@@ -196,3 +196,17 @@
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler | ✅ Complete |
+| 9 — Self-Hosted Compiler | ✅ Complete |
+
+---
+
+## Phase 9 — Self-Hosted Compiler
+
+> Goal: write the compiler in Cool itself, so Cool can compile itself
+
+- [x] Lexer in Cool (`coolc/compiler_v7.cool`)
+- [x] Recursive descent parser in Cool
+- [x] Code generator (AST → bytecode) in Cool
+- [x] Test: compiler correctly parses and compiles `print(1)`, `print(1 + 2)`, `x = 1`, etc.
+- [ ] Bytecode VM in Cool (to execute compiled programs)
+- [ ] Bootstrap: use self-hosted compiler to compile itself |

@@ -1,0 +1,25 @@
+# Try items approach
+t = ("NUM", 1)
+l = [1, 2, 3]
+n = 42
+s = "hello"
+
+print("Testing tuple access...")
+print("t[0] = " + str(t[0]))
+print("l[0] = " + str(l[0]))
+print("n[0] = " + str(n[0]))
+print("s[0] = " + str(s[0]))
+
+# Try checking if we can index into it as a tuple
+def is_tuple_like(v):
+    try:
+        # For tuples, first element is a string like 'NUM'
+        first = v[0]
+        return type(first) == str
+    except:
+        return false
+
+print("is_tuple_like(t): " + str(is_tuple_like(t)))
+print("is_tuple_like(l): " + str(is_tuple_like(l)))
+print("is_tuple_like(n): " + str(is_tuple_like(n)))
+print("is_tuple_like(s): " + str(is_tuple_like(s)))

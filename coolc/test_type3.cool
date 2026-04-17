@@ -1,0 +1,32 @@
+# Type detection using try/catch
+
+def get_len(v):
+    try:
+        return len(v)
+    except:
+        return 0
+
+def is_tuple(v):
+    return get_len(v) == 2
+
+def is_list(v):
+    return get_len(v) > 2
+
+def is_number(v):
+    try:
+        len(v)
+        return false
+    except:
+        return true
+
+t = ("NUM", 1)
+l = [1, 2, 3]
+n = 42
+s = "hello"
+
+print("is_tuple(t)=" + str(is_tuple(t)))
+print("is_tuple(l)=" + str(is_tuple(l)))
+print("is_tuple(n)=" + str(is_tuple(n)))
+print("is_list(l)=" + str(is_list(l)))
+print("is_number(n)=" + str(is_number(n)))
+print("is_number(t)=" + str(is_number(t)))

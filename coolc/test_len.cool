@@ -1,0 +1,37 @@
+# Simple type detection - check length for tuples
+
+t = ("NUM", 1)
+l = [1, 2, 3]
+n = 42
+s = "hello"
+
+print("len(t)=" + str(len(t)))
+print("len(l)=" + str(len(l)))
+print("len(n)=" + str(len(n)))
+print("len(s)=" + str(len(s)))
+
+# Tuples have length 2, lists have variable length, strings have length
+# Integers don't have len - this will error, so check strings first
+
+def safe_len(v):
+    if type(v) == str:
+        return len(v)
+    if len(v) == 2:
+        return 2  # could be tuple
+    return len(v)
+
+def is_tuple(v):
+    try:
+        return len(v) == 2
+    except:
+        return false
+
+def is_list(v):
+    try:
+        return len(v) > 2
+    except:
+        return false
+
+print("\nis_tuple(t)=" + str(is_tuple(t)))
+print("is_tuple(l)=" + str(is_tuple(l)))
+print("is_list(l)=" + str(is_list(l)))

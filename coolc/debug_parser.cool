@@ -1,0 +1,93 @@
+# Simple self-hosted Cool compiler - minimal debug
+
+print("Testing parser...")
+
+source = 'print(1)'
+print("Source: " + source)
+
+# Minimal test - just check lexer
+class Lexer:
+    def __init__(self, src):
+        self.src = src
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.src):
+            return self.src[self.pos]
+        return nil
+
+    def next(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+        return c
+
+    def tokenize(self):
+        out = []
+        while self.peek() != nil:
+            c = self.peek()
+            if c == ' ' or c == '\n' or c == '\t':
+                self.next()
+            elif c >= '0' and c <= '9':
+                n = ""
+                while self.peek() != nil and self.peek() >= '0' and self.peek() <= '9':
+                    n += self.next()
+                out.append(('NUM', int(n)))
+            elif c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z':
+                s = ""
+                while self.peek() != nil and (self.peek() >= 'a' and self.peek() <= 'z' or self.peek() >= 'A' and self.peek() <= 'Z'):
+                    s += self.next()
+                out.append(s)
+            elif c == '(':
+                self.next()
+                out.append('(')
+            elif c == ')':
+                self.next()
+                out.append(')')
+            else:
+                self.next()
+        out.append('EOF')
+        return out
+
+lexer = Lexer(source)
+tokens = lexer.tokenize()
+print("Tokens: " + str(tokens))
+
+# Simple parser test
+print("Testing parser...")
+
+class Parser:
+    def __init__(self, toks):
+        self.toks = toks
+        self.i = 0
+
+    def peek(self):
+        return self.toks[self.i]
+
+    def consume(self):
+        t = self.toks[self.i]
+        self.i += 1
+        return t
+
+    def parse(self):
+        print("Parse start, tokens: " + str(len(self.toks)))
+        stmts = []
+        while self.peek() != 'EOF':
+            print("Loop, i=" + str(self.i) + ", peek=" + str(self.peek()))
+            t = self.peek()
+            if t == 'print':
+                self.consume()
+                self.consume()  # (
+                e = self.consume()  # number
+                self.consume()  # )
+                stmts.append(('PRINT', e))
+            else:
+                break
+        print("Parse done, stmts: " + str(stmts))
+        return stmts
+
+parser = Parser(tokens)
+ast = parser.parse()
+print("AST: " + str(ast))
+
+print("Success!")

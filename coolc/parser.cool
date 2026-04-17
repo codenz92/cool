@@ -1,0 +1,435 @@
+# Parser for Cool - builds AST from tokens
+
+import "lexer.cool"
+
+class Parser:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.tokens):
+            return self.tokens[self.pos]
+        return nil
+
+    def advance(self):
+        tok = self.peek()
+        if tok != nil:
+            self.pos += 1
+        return tok
+
+    def expect(self, tok_type):
+        tok = self.peek()
+        if tok == nil or type(tok) != tok_type:
+            raise "Expected " + str(tok_type) + " but got " + str(tok)
+        return self.advance()
+
+    def is_type(self, tok, tok_type):
+        return tok != nil and type(tok) == tok_type
+
+    def parse_program(self):
+        stmts = []
+        while not self.is_type(self.peek(), Eof):
+            stmt = self.parse_statement()
+            if stmt != nil:
+                stmts.append(stmt)
+        return Program(stmts)
+
+    def parse_statement(self):
+        tok = self.peek()
+
+        if self.is_type(tok, Newline):
+            self.advance()
+            return nil
+
+        if self.is_type(tok, KeywordToken):
+            if tok.name == 'def':
+                return self.parse_def()
+            elif tok.name == 'return':
+                return self.parse_return()
+            elif tok.name == 'if':
+                return self.parse_if()
+            elif tok.name == 'while':
+                return self.parse_while()
+            elif tok.name == 'for':
+                return self.parse_for()
+            elif tok.name == 'break':
+                self.advance()
+                return Break()
+            elif tok.name == 'continue':
+                self.advance()
+                return Continue()
+            elif tok.name == 'import':
+                return self.parse_import()
+            elif tok.name == 'class':
+                return self.parse_class()
+
+        return self.parse_expr_statement()
+
+    def parse_block(self):
+        stmts = []
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, Eof) or self.is_type(tok, Dedent) or self.is_type(tok, Newline):
+                break
+            stmt = self.parse_statement()
+            if stmt != nil:
+                stmts.append(stmt)
+        return Block(stmts)
+
+    def parse_def(self):
+        self.advance()  # 'def'
+        name_tok = self.expect(IdentToken)
+        name = name_tok.name
+
+        self.expect(LParen)
+        params = []
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, RParen):
+                break
+            if self.is_type(tok, IdentToken):
+                params.append(tok.name)
+                self.advance()
+                tok = self.peek()
+                if self.is_type(tok, Comma):
+                    self.advance()
+                continue
+            break
+
+        self.expect(RParen)
+        self.expect(Colon)
+        self.expect(Newline)
+        self.expect(Indent)
+
+        body = self.parse_block()
+
+        self.expect(Dedent)
+
+        return Def(name, params, body)
+
+    def parse_return(self):
+        self.advance()  # 'return'
+        if self.is_type(self.peek(), Newline):
+            return Return(NilLiteral())
+        value = self.parse_expr()
+        return Return(value)
+
+    def parse_if(self):
+        self.advance()  # 'if'
+        cond = self.parse_expr()
+        self.expect(Colon)
+        self.expect(Newline)
+        self.expect(Indent)
+        then_body = self.parse_block()
+        self.expect(Dedent)
+
+        elifs = []
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, KeywordToken) and tok.name == 'elif':
+                self.advance()
+                cond2 = self.parse_expr()
+                self.expect(Colon)
+                self.expect(Newline)
+                self.expect(Indent)
+                body2 = self.parse_block()
+                self.expect(Dedent)
+                elifs.append((cond2, body2))
+                continue
+            break
+
+        else_body = nil
+        tok = self.peek()
+        if self.is_type(tok, KeywordToken) and tok.name == 'else':
+            self.advance()
+            self.expect(Colon)
+            self.expect(Newline)
+            self.expect(Indent)
+            else_body = self.parse_block()
+            self.expect(Dedent)
+
+        return If(cond, then_body, elifs, else_body)
+
+    def parse_while(self):
+        self.advance()  # 'while'
+        cond = self.parse_expr()
+        self.expect(Colon)
+        self.expect(Newline)
+        self.expect(Indent)
+        body = self.parse_block()
+        self.expect(Dedent)
+        return While(cond, body)
+
+    def parse_for(self):
+        self.advance()  # 'for'
+        var_tok = self.expect(IdentToken)
+        var_name = var_tok.name
+        self.expect(KeywordToken)  # 'in'
+        iter_expr = self.parse_expr()
+        self.expect(Colon)
+        self.expect(Newline)
+        self.expect(Indent)
+        body = self.parse_block()
+        self.expect(Dedent)
+        return For(var_name, iter_expr, body)
+
+    def parse_import(self):
+        self.advance()  # 'import'
+        tok = self.expect(IdentToken)
+        return Import(tok.name)
+
+    def parse_class(self):
+        self.advance()  # 'class'
+        name_tok = self.expect(IdentToken)
+        name = name_tok.name
+
+        superclass = nil
+        tok = self.peek()
+        if self.is_type(tok, LParen):
+            self.advance()
+            superclass = self.parse_expr()
+            self.expect(RParen)
+
+        self.expect(Colon)
+        self.expect(Newline)
+        self.expect(Indent)
+
+        methods = []
+        while true:
+            if self.is_type(self.peek(), Dedent) or self.is_type(self.peek(), Eof):
+                break
+            method = self.parse_statement()
+            if method != nil and type(method) == Def:
+                methods.append(method)
+
+        self.expect(Dedent)
+        return Class(name, superclass, methods)
+
+    def parse_expr_statement(self):
+        expr = self.parse_expr()
+        return ExprStmt(expr)
+
+    def parse_expr(self):
+        return self.parse_or()
+
+    def parse_or(self):
+        left = self.parse_and()
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, KeywordToken) and tok.name == 'or':
+                self.advance()
+                right = self.parse_and()
+                left = BinOp('or', left, right)
+                continue
+            break
+        return left
+
+    def parse_and(self):
+        left = self.parse_not()
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, KeywordToken) and tok.name == 'and':
+                self.advance()
+                right = self.parse_not()
+                left = BinOp('and', left, right)
+                continue
+            break
+        return left
+
+    def parse_not(self):
+        tok = self.peek()
+        if self.is_type(tok, KeywordToken) and tok.name == 'not':
+            self.advance()
+            operand = self.parse_not()
+            return UnaryOp('not', operand)
+        return self.parse_cmp()
+
+    def parse_cmp(self):
+        left = self.parse_add()
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, OpToken):
+                op = tok.op
+                if op == '==' or op == '!=' or op == '<' or op == '>' or op == '<=' or op == '>=':
+                    self.advance()
+                    right = self.parse_add()
+                    left = BinOp(op, left, right)
+                    continue
+            break
+        return left
+
+    def parse_add(self):
+        left = self.parse_mul()
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, OpToken):
+                op = tok.op
+                if op == '+' or op == '-':
+                    self.advance()
+                    right = self.parse_mul()
+                    left = BinOp(op, left, right)
+                    continue
+            break
+        return left
+
+    def parse_mul(self):
+        left = self.parse_unary()
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, OpToken):
+                op = tok.op
+                if op == '*' or op == '/' or op == '//' or op == '%':
+                    self.advance()
+                    right = self.parse_unary()
+                    left = BinOp(op, left, right)
+                    continue
+            break
+        return left
+
+    def parse_unary(self):
+        tok = self.peek()
+        if self.is_type(tok, OpToken):
+            op = tok.op
+            if op == '-' or op == '~' or op == '+':
+                self.advance()
+                operand = self.parse_unary()
+                return UnaryOp(op, operand)
+        return self.parse_pow()
+
+    def parse_pow(self):
+        left = self.parse_call()
+        tok = self.peek()
+        if self.is_type(tok, OpToken) and tok.op == '**':
+            self.advance()
+            right = self.parse_unary()
+            return BinOp('**', left, right)
+        return left
+
+    def parse_call(self):
+        expr = self.parse_primary()
+        while true:
+            tok = self.peek()
+            if self.is_type(tok, LParen):
+                self.advance()
+                args = []
+                while true:
+                    if self.is_type(self.peek(), RParen):
+                        break
+                    args.append(self.parse_expr())
+                    tok = self.peek()
+                    if self.is_type(tok, Comma):
+                        self.advance()
+                        continue
+                    break
+                self.expect(RParen)
+                expr = Call(expr, args)
+            elif self.is_type(tok, LBracket):
+                self.advance()
+                idx = self.parse_expr()
+                self.expect(RBracket)
+                expr = Index(expr, idx)
+            elif self.is_type(tok, Dot):
+                self.advance()
+                method_tok = self.expect(IdentToken)
+                method_name = method_tok.name
+
+                # Check if it's a method call
+                if self.is_type(self.peek(), LParen):
+                    self.advance()
+                    args = []
+                    while true:
+                        if self.is_type(self.peek(), RParen):
+                            break
+                        args.append(self.parse_expr())
+                        tok = self.peek()
+                        if self.is_type(tok, Comma):
+                            self.advance()
+                            continue
+                        break
+                    self.expect(RParen)
+                    expr = MethodCall(expr, method_name, args)
+                else:
+                    expr = Attr(expr, method_name)
+            else:
+                break
+        return expr
+
+    def parse_primary(self):
+        tok = self.peek()
+
+        if self.is_type(tok, IntToken):
+            self.advance()
+            return IntLiteral(tok.value)
+
+        if self.is_type(tok, FloatToken):
+            self.advance()
+            return FloatLiteral(tok.value)
+
+        if self.is_type(tok, StrToken):
+            self.advance()
+            return StrLiteral(tok.value)
+
+        if self.is_type(tok, KeywordToken):
+            if tok.name == 'true':
+                self.advance()
+                return BoolLiteral(true)
+            if tok.name == 'false':
+                self.advance()
+                return BoolLiteral(false)
+            if tok.name == 'nil':
+                self.advance()
+                return NilLiteral()
+
+        if self.is_type(tok, LBracket):
+            return self.parse_list()
+
+        if self.is_type(tok, LBrace):
+            return self.parse_dict()
+
+        if self.is_type(tok, IdentToken):
+            self.advance()
+            return Ident(tok.name)
+
+        if self.is_type(tok, LParen):
+            self.advance()
+            expr = self.parse_expr()
+            self.expect(RParen)
+            return expr
+
+        raise "Unexpected token: " + str(tok)
+
+    def parse_list(self):
+        self.advance()  # '['
+        elems = []
+        while true:
+            if self.is_type(self.peek(), RBracket):
+                break
+            elems.append(self.parse_expr())
+            tok = self.peek()
+            if self.is_type(tok, Comma):
+                self.advance()
+                continue
+            if self.is_type(tok, RBracket):
+                break
+        self.expect(RBracket)
+        return ListLiteral(elems)
+
+    def parse_dict(self):
+        self.advance()  # '{'
+        pairs = []
+        while true:
+            if self.is_type(self.peek(), RBrace):
+                break
+            key = self.parse_expr()
+            self.expect(Colon)
+            value = self.parse_expr())
+            pairs.append((key, value))
+            tok = self.peek()
+            if self.is_type(tok, Comma):
+                self.advance()
+                continue
+            if self.is_type(tok, RBrace):
+                break
+        self.expect(RBrace)
+        return DictLiteral(pairs)

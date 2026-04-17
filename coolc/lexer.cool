@@ -1,0 +1,342 @@
+# Lexer for Cool - tokenizes source code
+# Simplified for self-hosting, handles indentation
+
+class Token:
+    pass
+
+class IntToken(Token):
+    def __init__(self, value):
+        self.value = value
+
+class FloatToken(Token):
+    def __init__(self, value):
+        self.value = value
+
+class StrToken(Token):
+    def __init__(self, value):
+        self.value = value
+
+class IdentToken(Token):
+    def __init__(self, name):
+        self.name = name
+
+class KeywordToken(Token):
+    def __init__(self, name):
+        self.name = name
+
+class OpToken(Token):
+    def __init__(self, op):
+        self.op = op
+
+class LParen(Token): pass
+class RParen(Token): pass
+class LBracket(Token): pass
+class RBracket(Token): pass
+class LBrace(Token): pass
+class RBrace(Token): pass
+class Comma(Token): pass
+class Colon(Token): pass
+class Dot(Token): pass
+class Newline(Token): pass
+class Indent(Token): pass
+class Dedent(Token): pass
+class Eof(Token): pass
+
+keywords = {
+    'def': true,
+    'return': true,
+    'if': true,
+    'elif': true,
+    'else': true,
+    'while': true,
+    'for': true,
+    'in': true,
+    'and': true,
+    'or': true,
+    'not': true,
+    'pass': true,
+    'break': true,
+    'continue': true,
+    'import': true,
+    'class': true,
+    'try': true,
+    'except': true,
+    'finally': true,
+    'raise': true,
+    'as': true,
+    'assert': true,
+    'with': true,
+    'global': true,
+    'nonlocal': true,
+    'true': true,
+    'false': true,
+    'nil': true,
+}
+
+class Lexer:
+    def __init__(self, source):
+        self.source = source
+        self.pos = 0
+        self.line = 1
+        self.indent_stack = [0]
+        self.tokens = []
+
+    def peek(self):
+        if self.pos < len(self.source):
+            return self.source[self.pos]
+        return nil
+
+    def peek_next(self):
+        if self.pos + 1 < len(self.source):
+            return self.source[self.pos + 1]
+        return nil
+
+    def advance(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+            if c == '\n':
+                self.line += 1
+        return c
+
+    def is_digit(c):
+        return c != nil and c >= '0' and c <= '9'
+
+    def is_alpha(c):
+        return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_')
+
+    def is_alnum(c):
+        return Lexer.is_alpha(c) or Lexer.is_digit(c)
+
+    def skip_whitespace(self):
+        while true:
+            c = self.peek()
+            if c == ' ' or c == '\t':
+                self.advance()
+            elif c == '#':
+                while self.peek() != '\n' and self.peek() != nil:
+                    self.advance()
+            else:
+                break
+
+    def read_number(self):
+        start = self.pos
+        has_dot = false
+        while true:
+            c = self.peek()
+            if Lexer.is_digit(c):
+                self.advance()
+            elif c == '.' and not has_dot:
+                has_dot = true
+                self.advance()
+            else:
+                break
+
+        num_str = self.source[start:self.pos]
+        if has_dot:
+            return FloatToken(float(num_str))
+        return IntToken(int(num_str))
+
+    def read_string(self):
+        quote = self.advance()
+        s = ""
+        while true:
+            c = self.peek()
+            if c == nil:
+                break
+            if c == quote:
+                self.advance()
+                break
+            if c == '\\':
+                self.advance()
+                c = self.peek()
+                if c == 'n':
+                    s += '\n'
+                elif c == 't':
+                    s += '\t'
+                elif c == '\\':
+                    s += '\\'
+                elif c == '"':
+                    s += '"'
+                elif c == "'":
+                    s += "'"
+                else:
+                    s += c
+            else:
+                s += c
+            self.advance()
+        return StrToken(s)
+
+    def read_ident(self):
+        start = self.pos
+        while Lexer.is_alnum(self.peek()):
+            self.advance()
+        name = self.source[start:self.pos]
+
+        if keywords.get(name) != nil:
+            return KeywordToken(name)
+        return IdentToken(name)
+
+    def read_operator(self):
+        c = self.advance()
+        if c == '+':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('+=')
+            return OpToken('+')
+        elif c == '-':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('-=')
+            return OpToken('-')
+        elif c == '*':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('*=')
+            if self.peek() == '*':
+                self.advance()
+                return OpToken('**')
+            return OpToken('*')
+        elif c == '/':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('/=')
+            if self.peek() == '/':
+                self.advance()
+                return OpToken('//')
+            return OpToken('/')
+        elif c == '%':
+            return OpToken('%')
+        elif c == '=':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('==')
+            if self.peek() == '>':
+                self.advance()
+                return OpToken('=>')
+            return OpToken('=')
+        elif c == '!':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('!=')
+            return OpToken('!')
+        elif c == '<':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('<=')
+            if self.peek() == '<':
+                self.advance()
+                return OpToken('<<')
+            return OpToken('<')
+        elif c == '>':
+            if self.peek() == '=':
+                self.advance()
+                return OpToken('>=')
+            if self.peek() == '>':
+                self.advance()
+                return OpToken('>>')
+            return OpToken('>')
+        elif c == '&':
+            return OpToken('&')
+        elif c == '|':
+            return OpToken('|')
+        elif c == '^':
+            return OpToken('^')
+        elif c == '~':
+            return OpToken('~')
+        else:
+            return OpToken(c)
+
+    def tokenize(self):
+        self.tokens = []
+
+        while self.peek() != nil:
+            c = self.peek()
+
+            # Handle newline - emit Newline, then handle indentation
+            if c == '\n':
+                self.advance()
+                self.tokens.append(Newline())
+
+                # Count indentation after newline
+                indent = 0
+                while self.peek() == ' ':
+                    indent += 1
+                    self.advance()
+                while self.peek() == '\t':
+                    indent += 4
+                    self.advance()
+
+                # Skip empty lines
+                if self.peek() == '\n' or self.peek() == '#':
+                    continue
+
+                prev = self.indent_stack[-1]
+                if indent > prev:
+                    self.indent_stack.append(indent)
+                    self.tokens.append(Indent())
+                elif indent < prev:
+                    while len(self.indent_stack) > 1 and self.indent_stack[-1] > indent:
+                        self.indent_stack.pop()
+                        self.tokens.append(Dedent())
+                continue
+
+            # Skip whitespace (but not at line start - handled above)
+            if c == ' ' or c == '\t':
+                self.skip_whitespace()
+                continue
+
+            # Comments
+            if c == '#':
+                while self.peek() != '\n' and self.peek() != nil:
+                    self.advance()
+                continue
+
+            # Strings
+            if c == '"' or c == "'":
+                self.tokens.append(self.read_string())
+                continue
+
+            # Numbers
+            if Lexer.is_digit(c):
+                self.tokens.append(self.read_number())
+                continue
+
+            # Identifiers/keywords
+            if Lexer.is_alpha(c):
+                self.tokens.append(self.read_ident())
+                continue
+
+            # Single char tokens
+            if c == '(':
+                self.advance()
+                self.tokens.append(LParen())
+            elif c == ')':
+                self.advance()
+                self.tokens.append(RParen())
+            elif c == '[':
+                self.advance()
+                self.tokens.append(LBracket())
+            elif c == ']':
+                self.advance()
+                self.tokens.append(RBracket())
+            elif c == '{':
+                self.advance()
+                self.tokens.append(LBrace())
+            elif c == '}':
+                self.advance()
+                self.tokens.append(RBrace())
+            elif c == ',':
+                self.advance()
+                self.tokens.append(Comma())
+            elif c == ':':
+                self.advance()
+                self.tokens.append(Colon())
+            elif c == '.':
+                self.advance()
+                self.tokens.append(Dot())
+            else:
+                self.tokens.append(self.read_operator())
+
+        self.tokens.append(Eof())
+        return self.tokens

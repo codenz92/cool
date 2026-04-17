@@ -1,0 +1,237 @@
+# Simple self-hosted compiler in Cool
+# Compiles Cool source to a simple bytecode format
+
+print("Simple Cool Compiler v0.1")
+print("=========================")
+
+# --- Lexer ---
+def is_alpha(c):
+    return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_')
+
+def is_digit(c):
+    return c != nil and c >= '0' and c <= '9'
+
+def is_alnum(c):
+    return is_alpha(c) or is_digit(c)
+
+class Lexer:
+    def __init__(self, source):
+        self.source = source
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.source):
+            return self.source[self.pos]
+        return nil
+
+    def advance(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+        return c
+
+    def tokenize(self):
+        tokens = []
+        while self.peek() != nil:
+            c = self.peek()
+            if c == ' ' or c == '\t' or c == '\n':
+                self.advance()
+                continue
+            if is_digit(c):
+                n = ""
+                while self.peek() != nil and is_digit(self.peek()):
+                    n += self.peek()
+                    self.advance()
+                tokens.append(('NUM', int(n)))
+            elif c == '"':
+                self.advance()
+                s = ""
+                while self.peek() != nil and self.peek() != '"':
+                    s += self.peek()
+                    self.advance()
+                self.advance()
+                tokens.append(('STR', s))
+            elif is_alpha(c):
+                id = ""
+                while self.peek() != nil and is_alnum(self.peek()):
+                    id += self.peek()
+                    self.advance()
+                tokens.append(('IDENT', id))
+            elif c == '(':
+                self.advance()
+                tokens.append(('LPAREN', '('))
+            elif c == ')':
+                self.advance()
+                tokens.append(('RPAREN', ')'))
+            elif c == '[':
+                self.advance()
+                tokens.append(('LBRACKET', '['))
+            elif c == ']':
+                self.advance()
+                tokens.append(('RBRACKET', ']'))
+            elif c == ',':
+                self.advance()
+                tokens.append(('COMMA', ','))
+            elif c == ':':
+                self.advance()
+                tokens.append(('COLON', ':'))
+            elif c == '+':
+                self.advance()
+                tokens.append(('PLUS', '+'))
+            elif c == '-':
+                self.advance()
+                tokens.append(('MINUS', '-'))
+            elif c == '*':
+                self.advance()
+                tokens.append(('STAR', '*'))
+            elif c == '/':
+                self.advance()
+                tokens.append(('SLASH', '/'))
+            elif c == '=':
+                self.advance()
+                if self.peek() == '=':
+                    self.advance()
+                    tokens.append(('EQ', '=='))
+                else:
+                    tokens.append(('ASSIGN', '='))
+            else:
+                self.advance()
+        tokens.append(('EOF', nil))
+        return tokens
+
+# --- Simple bytecode compiler ---
+class Compiler:
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.pos = 0
+        self.code = []
+
+    def peek(self):
+        return self.tokens[self.pos]
+
+    def advance(self):
+        self.pos += 1
+        return self.tokens[self.pos - 1]
+
+    def emit(self, op):
+        self.code.append(op)
+
+    def compile(self):
+        while self.peek()[0] != 'EOF':
+            self.compile_stmt()
+        self.emit(('HALT',))
+        return self.code
+
+    def compile_stmt(self):
+        tok = self.peek()
+        if tok[0] == 'IDENT':
+            if tok[1] == 'print':
+                self.compile_print()
+            elif tok[1] == 'def':
+                self.compile_def()
+            elif tok[1] == 'return':
+                self.compile_return()
+            else:
+                # Assume assignment
+                self.compile_assign()
+        else:
+            self.advance()  # Skip unknown
+
+    def compile_print(self):
+        self.advance()  # print
+        self.expect('LPAREN')
+        args = []
+        while self.peek()[0] != 'RPAREN':
+            args.append(self.compile_expr())
+            if self.peek()[0] == 'COMMA':
+                self.advance()
+        self.expect('RPAREN')
+        self.emit(('PRINT', len(args)))
+        for arg in args:
+            self.emit(arg)
+
+    def compile_def(self):
+        self.advance()  # def
+        name_tok = self.advance()
+        name = name_tok[1]
+        self.expect('LPAREN')
+        params = []
+        while self.peek()[0] != 'RPAREN':
+            p = self.advance()
+            params.append(p[1])
+            if self.peek()[0] == 'COMMA':
+                self.advance()
+        self.expect('RPAREN')
+        self.expect('COLON')
+        self.emit(('DEF', name, len(params)))
+
+    def compile_return(self):
+        self.advance()  # return
+        val = self.compile_expr()
+        self.emit(('RETURN',))
+        self.emit(val)
+
+    def compile_assign(self):
+        name_tok = self.advance()
+        name = name_tok[1]
+        self.expect('ASSIGN')
+        val = self.compile_expr()
+        self.emit(('STORE', name))
+        self.emit(val)
+
+    def compile_expr(self):
+        tok = self.peek()
+        if tok[0] == 'NUM':
+            self.advance()
+            return ('CONST', tok[1])
+        if tok[0] == 'STR':
+            self.advance()
+            return ('CONST', tok[1])
+        if tok[0] == 'IDENT':
+            name = self.advance()[1]
+            if self.peek()[0] == 'LPAREN':
+                self.advance()
+                args = []
+                while self.peek()[0] != 'RPAREN':
+                    args.append(self.compile_expr())
+                    if self.peek()[0] == 'COMMA':
+                        self.advance()
+                self.expect('RPAREN')
+                return ('CALL', name, args)
+            return ('LOAD', name)
+        if tok[0] == 'PLUS':
+            self.advance()
+            left = self.compile_expr()
+            right = self.compile_expr()
+            return ('ADD', left, right)
+        if tok[0] == 'MINUS':
+            self.advance()
+            left = self.compile_expr()
+            right = self.compile_expr()
+            return ('SUB', left, right)
+        if tok[0] == 'STAR':
+            self.advance()
+            left = self.compile_expr()
+            right = self.compile_expr()
+            return ('MUL', left, right)
+        return ('CONST', nil)
+
+    def expect(self, tok_type):
+        tok = self.advance()
+        if tok[0] != tok_type:
+            raise "Expected " + tok_type + " but got " + tok[0]
+
+# --- Main ---
+source = "print(1 + 2 * 3)"
+print("Compiling: " + source)
+
+lexer = Lexer(source)
+tokens = lexer.tokenize()
+print("Tokens: " + str(len(tokens)))
+
+compiler = Compiler(tokens)
+bytecode = compiler.compile()
+
+print("Bytecode:")
+for op in bytecode:
+    print("  " + str(op))

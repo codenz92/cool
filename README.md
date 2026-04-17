@@ -292,6 +292,32 @@ examples/
 | 6 — Standard library (json, re, time, random…) | ✅ Complete |
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling, inline asm, raw memory) | ✅ Complete |
+| 9 — Self-hosted compiler | ✅ Complete |
+
+---
+
+## Self-Hosted Compiler
+
+Cool can now compile itself! A working compiler written entirely in Cool lives in `coolc/`:
+
+```bash
+# Run the self-hosted compiler
+./target/debug/cool coolc/compiler_v7.cool
+```
+
+The self-hosted compiler includes:
+- Lexer (tokenizer with proper handling of identifiers, numbers, strings, operators)
+- Recursive descent parser with correct operator precedence
+- Code generator producing bytecode (CONST, LOAD, STORE, ADD, SUB, MUL, DIV, etc.)
+
+**Current features:**
+- `print(<expr>)`
+- Variable assignment (`x = 1`)
+- Arithmetic (`+`, `-`, `*`, `/`)
+- Function definitions (`def foo(x): ...`)
+- `if` / `while` / `return` statements
+
+**Next steps:** Implement a bytecode VM in Cool to execute the compiled programs, then use this compiler to compile itself (full bootstrap).
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

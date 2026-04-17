@@ -1,0 +1,5 @@
+# Test type()
+print(type(42))
+print(type("hello"))
+print(type([1,2]))
+print(type(("NUM", 1)))

@@ -1,0 +1,55 @@
+# Debug print_stmt parsing
+
+def tok_type(t):
+    if type(t) == tuple:
+        return t[0]
+    return t
+
+print("Testing print_stmt parsing...")
+
+# Simple test
+toks = ["print", "(", ("NUM", 1), ")", "EOF"]
+
+class Parser:
+    def __init__(self, toks):
+        self.toks = toks
+        self.i = 0
+
+    def peek(self):
+        if self.i < len(self.toks):
+            return self.toks[self.i]
+        return 'EOF'
+
+    def consume(self):
+        if self.i < len(self.toks):
+            t = self.toks[self.i]
+            self.i += 1
+            return t
+        return 'EOF'
+
+    def print_stmt(self):
+        print("print_stmt start, peek=" + str(self.peek()))
+        self.consume()  # print
+        print("after consume print, peek=" + str(self.peek()))
+        
+        if self.peek() == '(':
+            print("saw (")
+            self.consume()
+            print("after consume (, peek=" + str(self.peek()))
+            args = []
+            while self.peek() != ')':
+                print("loop: peek=" + str(self.peek()))
+                e = self.peek()
+                print("  adding expr: " + str(e))
+                args.append(e)
+                self.consume()  # skip expr for debug
+                if self.peek() == ',':
+                    self.consume()
+            print("exited loop, peek=" + str(self.peek()))
+            if self.peek() == ')':
+                self.consume()
+        return ('PRINT', args)
+
+p = Parser(toks)
+result = p.print_stmt()
+print("Result: " + str(result))

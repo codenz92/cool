@@ -1,0 +1,22 @@
+# Debug type comparison
+
+t = ("NUM", 1)
+l = [1, 2, 3]
+n = 42
+s = "hello"
+
+items = [t, l, n, s]
+
+for item in items:
+    print("item=" + str(item))
+    # Try different type checks
+    if type(item).__name__ == "tuple":
+        print("  -> tuple by name")
+    elif type(item).__name__ == "list":
+        print("  -> list by name")  
+    elif type(item).__name__ == "int":
+        print("  -> int by name")
+    elif type(item).__name__ == "str":
+        print("  -> str by name")
+    else:
+        print("  -> unknown type: " + str(type(item).__name__))

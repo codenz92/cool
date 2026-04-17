@@ -1,0 +1,71 @@
+# Parser test - with debug
+print("Starting parser test...")
+
+def is_alpha(c):
+    return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z'))
+
+def is_digit(c):
+    return c != nil and c >= '0' and c <= '9'
+
+class Lexer:
+    def __init__(self, source):
+        self.source = source
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.source):
+            return self.source[self.pos]
+        return nil
+
+    def advance(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+        return c
+
+    def tokenize(self):
+        tokens = []
+        while self.peek() != nil:
+            c = self.peek()
+            if c == ' ' or c == '\t' or c == '\n':
+                self.advance()
+                continue
+            if is_digit(c):
+                n = ""
+                while self.peek() != nil and is_digit(self.peek()):
+                    n += self.peek()
+                    self.advance()
+                tokens.append(('NUM', int(n)))
+            elif is_alpha(c):
+                id = ""
+                while self.peek() != nil and (is_alpha(self.peek()) or is_digit(self.peek())):
+                    id += self.peek()
+                    self.advance()
+                tokens.append(('IDENT', id))
+            elif c == '(':
+                self.advance()
+                tokens.append(('LPAREN', '('))
+            elif c == ')':
+                self.advance()
+                tokens.append(('RPAREN', ')'))
+            elif c == ':':
+                self.advance()
+                tokens.append(('COLON', ':'))
+            elif c == '+':
+                self.advance()
+                tokens.append(('PLUS', '+'))
+            else:
+                self.advance()
+        tokens.append(('EOF', nil))
+        print("Lexed " + str(len(tokens)) + " tokens")
+        return tokens
+
+source = "def foo(x): return x + 1"
+print("Input: " + source)
+
+lexer = Lexer(source)
+tokens = lexer.tokenize()
+
+print("Parsing...")
+# Parser would go here
+print("Done!")

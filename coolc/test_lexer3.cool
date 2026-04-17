@@ -1,0 +1,75 @@
+# Test lexer - inline version
+source = """
+def foo(x):
+    if x > 0:
+        return x + 1
+    return 0
+"""
+
+# Simplified inline lexer for testing
+class Lexer:
+    def __init__(self, source):
+        self.source = source
+        self.pos = 0
+
+    def peek(self):
+        if self.pos < len(self.source):
+            return self.source[self.pos]
+        return nil
+
+    def advance(self):
+        c = self.peek()
+        if c != nil:
+            self.pos += 1
+        return c
+
+    def is_alpha(c):
+        return c != nil and ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z'))
+
+    def is_digit(c):
+        return c != nil and c >= '0' and c <= '9'
+
+    def tokenize(self):
+        tokens = []
+        while self.peek() != nil:
+            c = self.peek()
+            if c == ' ' or c == '\t' or c == '\n':
+                self.advance()
+                continue
+            if c >= '0' and c <= '9':
+                n = ""
+                while self.peek() != nil and self.peek() >= '0' and self.peek() <= '9':
+                    n += self.peek()
+                    self.advance()
+                tokens.append(('NUM', int(n)))
+            elif c >= 'a' and c <= 'z' or c >= 'A' and c <= 'Z':
+                id = ""
+                while self.peek() != nil and (self.peek() >= 'a' and self.peek() <= 'z' or self.peek() >= 'A' and self.peek() <= 'Z' or self.peek() >= '0' and self.peek() <= '9'):
+                    id += self.peek()
+                    self.advance()
+                tokens.append(('IDENT', id))
+            elif c == '(':
+                self.advance()
+                tokens.append(('LPAREN', '('))
+            elif c == ')':
+                self.advance()
+                tokens.append(('RPAREN', ')'))
+            elif c == ':':
+                self.advance()
+                tokens.append(('COLON', ':'))
+            elif c == '+':
+                self.advance()
+                tokens.append(('PLUS', '+'))
+            elif c == '>':
+                self.advance()
+                tokens.append(('GT', '>'))
+            else:
+                self.advance()
+        tokens.append(('EOF', nil))
+        return tokens
+
+lexer = Lexer(source)
+tokens = lexer.tokenize()
+print("Got " + str(len(tokens)) + " tokens")
+for tok in tokens:
+    print("  " + str(tok[0]) + ": " + str(tok[1]))
