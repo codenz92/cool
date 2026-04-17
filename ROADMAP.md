@@ -194,11 +194,11 @@ The LLVM backend covers the core language. The following features remain interpr
 
 ---
 
-## Phase 9 — Self-Hosted Compiler 🔧 In Progress
+## Phase 9 — Self-Hosted Compiler ✅ Complete
 
 > Goal: write the Cool compiler in Cool itself, capable of compiling real Cool programs
 
-A proof-of-concept lives in `coolc/compiler_vm.cool`. It demonstrates the architecture — lexer, parser, code generator, and bytecode VM — all written in Cool. Currently it handles a subset of the language.
+The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full lexer, recursive descent parser, code generator, and bytecode VM — all written in Cool. It can compile and execute a substantial subset of the Cool language.
 
 ### What works
 
@@ -223,9 +223,9 @@ A proof-of-concept lives in `coolc/compiler_vm.cool`. It demonstrates the archit
 - [x] Classes and method dispatch
 - [x] Full test suite: arithmetic, variables, if/elif/else, while, for, break/continue, functions, closures, lists, classes, inheritance, FizzBuzz
 
-### What's left to reach genuine self-hosting
+### Self-hosting achievement
 
-- [x] Bootstrap: compile `compiler_vm.cool` with itself (full self-hosting) ✅
+- [x] Bootstrap: compiles `compiler_vm.cool` with itself (full self-hosting)
 
 ---
 

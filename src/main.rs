@@ -252,7 +252,7 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
 fn print_help() {
     println!(
         "\
-Cool 0.2.0 — a Python-inspired scripting language
+Cool 1.0.0 — a Python-inspired scripting language
 
 USAGE:
     cool                          Start the REPL
@@ -275,10 +275,11 @@ EXAMPLES:
     cool build                    # compile using myapp/cool.toml
 
 NOTES:
-    The LLVM backend (--compile / build) supports a subset of Cool:
-    integers, floats, strings, booleans, variables, arithmetic, comparisons,
-    if/elif/else, while loops, break/continue, functions, and print().
-    Classes, lists, dicts, closures, and imports require the interpreter.
+    The LLVM backend (--compile / build) supports:
+    integers, floats, strings, booleans, variables, arithmetic,
+    comparisons, if/elif/else, while/for loops, break/continue,
+    functions, lists, classes, print(), range(), len().
+    Closures, import, and try/except require the interpreter or bytecode VM.
 "
     );
 }

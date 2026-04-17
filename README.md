@@ -70,16 +70,22 @@ cool build hello.cool      # compiles → ./hello
 
 The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `break`/`continue`, functions (including recursion), classes with `__init__` and methods, `print()`, lists, `for` loops, `range()`, `len()`, inline assembly, and raw memory operations.
 
-**LLVM limitations:** Closures, `import`, and `try`/`except` are interpreter/VM-only for now. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
+**LLVM limitations:** Closures, `import`, `try`/`except`, f-strings, dicts, and tuples are interpreter/VM-only for now. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 |---------|:-----------:|:-----------:|:----:|
-| Classes | ✅ | ✅ | ✅ |
+| Variables, arithmetic, comparisons | ✅ | ✅ | ✅ |
+| `if`/`elif`/`else`, `while`/`for` loops | ✅ | ✅ | ✅ |
+| `break`/`continue` | ✅ | ✅ | ✅ |
+| Functions, recursion | ✅ | ✅ | ✅ |
+| **Classes** with `__init__`, methods | ✅ | ✅ | ✅ |
+| **Lists**, indexing, `len()`, `range()` | ✅ | ✅ | ✅ |
 | Closures | ✅ | ✅ | ❌ |
 | `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
+| f-strings, dicts, tuples | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
-| Raw memory | ❌ | ❌ | ✅ |
+| Raw memory access | ❌ | ❌ | ✅ |
 
 ### Inline Assembly (LLVM backend)
 
