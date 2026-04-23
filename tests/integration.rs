@@ -467,6 +467,39 @@ fn test_http_app_cli_args() {
 }
 
 #[test]
+fn test_http_app_getjson_and_head() {
+    let temp_dir = std::env::temp_dir().join("cool_http_app_json_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let json_path = temp_dir.join("data.json");
+    std::fs::write(&json_path, "{\"ok\":true,\"n\":2}\n").unwrap();
+    let json_url = format!("file://{}", json_path.display());
+
+    let getjson_output = Command::new(cool_bin())
+        .args(["coolapps/http.cool", "getjson", &json_url])
+        .output()
+        .unwrap();
+    assert!(getjson_output.status.success());
+    let getjson_stdout = String::from_utf8_lossy(&getjson_output.stdout);
+    assert!(getjson_stdout.contains("\"ok\": true"));
+    assert!(getjson_stdout.contains("\"n\": 2"));
+
+    let body_path = temp_dir.join("body.txt");
+    std::fs::write(&body_path, "plain body\n").unwrap();
+    let body_url = format!("file://{}", body_path.display());
+
+    let head_output = Command::new(cool_bin())
+        .args(["coolapps/http.cool", "head", &body_url])
+        .output()
+        .unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(head_output.status.success());
+}
+
+#[test]
 fn test_runfile_passes_program_args() {
     let temp_dir = std::env::temp_dir().join("cool_runfile_args_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
