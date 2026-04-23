@@ -1844,14 +1844,17 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             if (strcmp(name, "acos") == 0) return cv_float(acos(x));
             if (strcmp(name, "atan") == 0) return cv_float(atan(x));
             if (strcmp(name, "log") == 0) return cv_float(log(x));
+            if (strcmp(name, "log2") == 0) return cv_float(log2(x));
             if (strcmp(name, "log10") == 0) return cv_float(log10(x));
             if (strcmp(name, "exp") == 0) return cv_float(exp(x));
+            if (strcmp(name, "exp2") == 0) return cv_float(exp2(x));
             if (strcmp(name, "degrees") == 0) return cv_float(x * 180.0 / M_PI);
             if (strcmp(name, "radians") == 0) return cv_float(x * M_PI / 180.0);
             if (strcmp(name, "sinh") == 0) return cv_float(sinh(x));
             if (strcmp(name, "cosh") == 0) return cv_float(cosh(x));
             if (strcmp(name, "tanh") == 0) return cv_float(tanh(x));
             if (strcmp(name, "round") == 0) return cool_round(args[0], cv_nil());
+            if (strcmp(name, "trunc") == 0) return cv_int((int64_t)trunc(x));
             if (strcmp(name, "abs") == 0) return cool_abs(args[0]);
             if (strcmp(name, "isnan") == 0) return cv_bool(isnan(x));
             if (strcmp(name, "isinf") == 0) return cv_bool(isinf(x));
