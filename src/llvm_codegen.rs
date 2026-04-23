@@ -231,6 +231,8 @@ CoolVal cool_module_call(const char*, const char*, int32_t, ...);
 CoolVal cool_round(CoolVal, CoolVal);
 CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
+int64_t cool_closure_get_fn_ptr(CoolVal);
+int32_t cool_is_closure(CoolVal);
 void cool_raise(CoolVal);
 void cool_print(int32_t, ...);
 
@@ -1077,6 +1079,78 @@ static CoolVal cool_list_unique_copy(CoolVal seq) {
     return out;
 }
 
+static CoolVal cool_call_callable1(CoolVal callable, CoolVal arg) {
+    if (!cool_is_closure(callable)) {
+        fprintf(stderr, "TypeError: callable argument must be a function\n");
+        exit(1);
+    }
+    int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
+    CoolVal argv[1] = {arg};
+    return call_cool_fn_ptr(fn_ptr, 1, argv);
+}
+
+static CoolVal cool_call_callable2(CoolVal callable, CoolVal arg1, CoolVal arg2) {
+    if (!cool_is_closure(callable)) {
+        fprintf(stderr, "TypeError: callable argument must be a function\n");
+        exit(1);
+    }
+    int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
+    CoolVal argv[2] = {arg1, arg2};
+    return call_cool_fn_ptr(fn_ptr, 2, argv);
+}
+
+static CoolVal cool_list_map_copy(CoolVal func, CoolVal seq) {
+    if (seq.tag != TAG_LIST) {
+        fprintf(stderr, "TypeError: list.map() requires a list\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)seq.payload;
+    CoolVal out = cool_list_make(cv_int(src->length));
+    for (int64_t i = 0; i < src->length; i++) {
+        CoolVal item = ((CoolVal*)src->data)[i];
+        cool_list_push(out, cool_call_callable1(func, item));
+    }
+    return out;
+}
+
+static CoolVal cool_list_filter_copy(CoolVal func, CoolVal seq) {
+    if (seq.tag != TAG_LIST) {
+        fprintf(stderr, "TypeError: list.filter() requires a list\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)seq.payload;
+    CoolVal out = cool_list_make(cv_int(src->length));
+    for (int64_t i = 0; i < src->length; i++) {
+        CoolVal item = ((CoolVal*)src->data)[i];
+        if (cool_truthy(cool_call_callable1(func, item))) {
+            cool_list_push(out, item);
+        }
+    }
+    return out;
+}
+
+static CoolVal cool_list_reduce_copy(CoolVal func, CoolVal seq, CoolVal initial, int has_initial) {
+    if (seq.tag != TAG_LIST) {
+        fprintf(stderr, "TypeError: list.reduce() requires a list\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)seq.payload;
+    if (src->length == 0 && !has_initial) {
+        fprintf(stderr, "ValueError: list.reduce() called on empty list with no initial value\n");
+        exit(1);
+    }
+    int64_t idx = 0;
+    CoolVal acc = initial;
+    if (!has_initial) {
+        acc = ((CoolVal*)src->data)[0];
+        idx = 1;
+    }
+    for (; idx < src->length; idx++) {
+        acc = cool_call_callable2(func, acc, ((CoolVal*)src->data)[idx]);
+    }
+    return acc;
+}
+
 static CoolVal g_queue_class = { TAG_NIL, 0 };
 static CoolVal g_stack_class = { TAG_NIL, 0 };
 
@@ -1466,34 +1540,38 @@ CoolVal cool_to_bool_val(CoolVal v) {
 
 static CoolVal cool_make_argv(void) {
     CoolVal out = cool_list_make(cv_int(8));
+    if (COOL_SCRIPT_PATH && *COOL_SCRIPT_PATH) {
+        cool_list_push(out, cv_str(strdup(COOL_SCRIPT_PATH)));
+    } else {
 #ifdef __APPLE__
-    char*** argvp = _NSGetArgv();
-    int argc = *_NSGetArgc();
-    if (argvp && *argvp) {
-        for (int i = 0; i < argc; i++) {
-            cool_list_push(out, cv_str(strdup((*argvp)[i])));
-        }
-    }
-#elif defined(__linux__)
-    FILE* f = fopen("/proc/self/cmdline", "rb");
-    if (f) {
-        char buf[4096];
-        size_t n = fread(buf, 1, sizeof(buf), f);
-        fclose(f);
-        size_t start = 0;
-        for (size_t i = 0; i < n; i++) {
-            if (buf[i] == '\0') {
-                if (i > start) {
-                    char* s = (char*)malloc(i - start + 1);
-                    memcpy(s, &buf[start], i - start);
-                    s[i - start] = '\0';
-                    cool_list_push(out, cv_str(s));
-                }
-                start = i + 1;
+        char*** argvp = _NSGetArgv();
+        int argc = *_NSGetArgc();
+        if (argvp && *argvp) {
+            for (int i = 0; i < argc; i++) {
+                cool_list_push(out, cv_str(strdup((*argvp)[i])));
             }
         }
-    }
+#elif defined(__linux__)
+        FILE* f = fopen("/proc/self/cmdline", "rb");
+        if (f) {
+            char buf[4096];
+            size_t n = fread(buf, 1, sizeof(buf), f);
+            fclose(f);
+            size_t start = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (buf[i] == '\0') {
+                    if (i > start) {
+                        char* s = (char*)malloc(i - start + 1);
+                        memcpy(s, &buf[start], i - start);
+                        s[i - start] = '\0';
+                        cool_list_push(out, cv_str(s));
+                    }
+                    start = i + 1;
+                }
+            }
+        }
 #endif
+    }
     const char* extra = getenv("COOL_PROGRAM_ARGS");
     if (extra && *extra) {
         const char* start = extra;
@@ -2156,6 +2234,10 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
     if (strcmp(module, "list") == 0) {
         if (strcmp(name, "sort") == 0 && nargs == 1) return cool_sorted(args[0]);
         if (strcmp(name, "reverse") == 0 && nargs == 1) return cool_list_reverse_copy(args[0]);
+        if (strcmp(name, "map") == 0 && nargs == 2) return cool_list_map_copy(args[0], args[1]);
+        if (strcmp(name, "filter") == 0 && nargs == 2) return cool_list_filter_copy(args[0], args[1]);
+        if (strcmp(name, "reduce") == 0 && nargs == 2) return cool_list_reduce_copy(args[0], args[1], cv_nil(), 0);
+        if (strcmp(name, "reduce") == 0 && nargs == 3) return cool_list_reduce_copy(args[0], args[1], args[2], 1);
         if (strcmp(name, "flatten") == 0 && nargs == 1) return cool_list_flatten_copy(args[0]);
         if (strcmp(name, "unique") == 0 && nargs == 1) return cool_list_unique_copy(args[0]);
     }
@@ -3435,6 +3517,36 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+
+        // Bind the top-level function name as a first-class zero-capture closure
+        // so module helpers like list.map(fn, xs) can receive it as a value.
+        let fn_ptr = fn_val.as_global_value().as_pointer_value();
+        let fn_ptr_int = self
+            .builder
+            .build_ptr_to_int(fn_ptr, self.context.i64_type(), &format!("{}_fn_ptr", name))
+            .unwrap();
+        let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
+        let zero_captures = self.context.i64_type().const_zero();
+        let closure = self
+            .builder
+            .build_call(
+                self.rt.cool_closure_new,
+                &[fn_ptr_int.into(), zero_captures.into(), null_ptr.into()],
+                &format!("{}_closure", name),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+        let ptr = if let Some(&p) = self.locals.get(name) {
+            p
+        } else {
+            let p = self.build_entry_alloca(name);
+            self.locals.insert(name.to_string(), p);
+            p
+        };
+        self.builder.build_store(ptr, closure).unwrap();
         Ok(())
     }
 
@@ -5094,7 +5206,23 @@ impl<'ctx> Compiler<'ctx> {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), String> {
+fn c_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii() => out.push(c),
+            c => out.push_str(&format!("\\x{:02x}", c as u32)),
+        }
+    }
+    out
+}
+
+pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path) -> Result<(), String> {
     // Initialise LLVM for the host machine
     Target::initialize_native(&InitializationConfig::default()).map_err(|e| format!("LLVM init error: {e}"))?;
 
@@ -5171,7 +5299,12 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
     let rt_c_path = tmp_dir.join(format!("cool_runtime_{pid}_{nonce}.c"));
     let rt_o_path = tmp_dir.join(format!("cool_runtime_{pid}_{nonce}.o"));
 
-    std::fs::write(&rt_c_path, RUNTIME_C).map_err(|e| format!("Failed to write runtime source: {e}"))?;
+    let runtime_source = format!(
+        "static const char* COOL_SCRIPT_PATH = \"{}\";\n{}",
+        c_string_literal(&script_path.to_string_lossy()),
+        RUNTIME_C
+    );
+    std::fs::write(&rt_c_path, runtime_source).map_err(|e| format!("Failed to write runtime source: {e}"))?;
 
     let cc_status = std::process::Command::new("cc")
         .args([

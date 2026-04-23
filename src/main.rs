@@ -38,14 +38,14 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
     machine.run(&chunk)
 }
 
-fn compile_to_native(source: &str, output_path: &Path) -> Result<(), String> {
+fn compile_to_native(source: &str, output_path: &Path, script_path: &Path) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
 
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    llvm_codegen::compile_program(&program, output_path)
+    llvm_codegen::compile_program(&program, output_path, script_path)
 }
 
 // ── REPL ──────────────────────────────────────────────────────────────────────
@@ -161,7 +161,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
 
             let t0 = std::time::Instant::now();
-            compile_to_native(&source, output_path)?;
+            compile_to_native(&source, output_path, main_path)?;
             let elapsed = t0.elapsed();
 
             println!(
@@ -189,7 +189,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
 
             println!("  Compiling {} ...", file_path.display());
             let t0 = std::time::Instant::now();
-            compile_to_native(&source, &output_path)?;
+            compile_to_native(&source, &output_path, file_path)?;
             let elapsed = t0.elapsed();
 
             println!(
@@ -287,7 +287,7 @@ NOTES:
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
     startswith/endswith/title/capitalize/format), plus list
-    (sort/reverse/flatten/unique), plus re
+    (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
     (Queue/Stack), inline asm, and raw memory.
     Closures/lambdas, broader import support beyond those built-ins, and try/except still require the interpreter or bytecode VM.
@@ -348,7 +348,7 @@ fn main() {
 
             if use_compile {
                 let out = Path::new(path.as_str()).with_extension("");
-                match compile_to_native(&source, &out) {
+                match compile_to_native(&source, &out, Path::new(path.as_str())) {
                     Ok(()) => println!("Compiled to {}", out.display()),
                     Err(e) => {
                         eprintln!("Error: {e}");

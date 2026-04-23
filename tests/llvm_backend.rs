@@ -89,6 +89,48 @@ fn compile_native_expect_error(source: &str) -> String {
     format!("{stdout}{stderr}")
 }
 
+fn compile_and_run_native_manual(source: &str, envs: &[(&str, &str)]) -> Result<(String, PathBuf), String> {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let source_path = cwd.join(unique_test_path("temp_llvm_test", "cool"));
+    let binary_path = source_path.with_extension("");
+
+    fs::write(&source_path, source).map_err(|e| e.to_string())?;
+
+    let build_output = Command::new(cool_bin())
+        .args(["build", source_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
+        cleanup_native_artifacts(&source_path, &binary_path);
+        return Err(format!("{stdout}{stderr}"));
+    }
+
+    let mut run_cmd = Command::new(&binary_path);
+    for (k, v) in envs {
+        run_cmd.env(k, v);
+    }
+    let run_output = match run_cmd.output() {
+        Ok(output) => output,
+        Err(e) => {
+            cleanup_native_artifacts(&source_path, &binary_path);
+            return Err(e.to_string());
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
+    cleanup_native_artifacts(&source_path, &binary_path);
+
+    if run_output.status.success() {
+        Ok((stdout, source_path))
+    } else {
+        Err(String::from_utf8_lossy(&run_output.stderr).to_string())
+    }
+}
+
 #[test]
 fn test_llvm_default_kwargs_and_sorted() {
     let result = compile_and_run_native(
@@ -254,10 +296,11 @@ print(os.listdir("{dir}"))
 
 #[test]
 fn test_llvm_import_sys_module() {
-    let result = compile_and_run_native_with_env(
+    let (result, source_path) = compile_and_run_native_manual(
         r#"
 import sys
 print(sys)
+print(sys.argv[0])
 print(len(sys.argv))
 print(sys.argv[1])
 "#,
@@ -266,6 +309,7 @@ print(sys.argv[1])
     .unwrap();
 
     assert!(result.contains("<module sys>"));
+    assert!(result.contains(&source_path.display().to_string()));
     assert!(result.contains("alpha"));
 }
 
@@ -390,11 +434,24 @@ print(string.format("hi {}, {}", "cool", 7))
 fn test_llvm_import_list_module() {
     let result = compile_and_run_native(
         r#"
+def double(x):
+    return x * 2
+
+def gt_two(x):
+    return x > 2
+
+def add(acc, x):
+    return acc + x
+
 import list
 print(list)
 nums = [3, 1, 2]
 print(list.sort(nums))
 print(list.reverse(nums))
+print(list.map(double, nums))
+print(list.filter(gt_two, [1, 2, 3, 4]))
+print(list.reduce(add, [1, 2, 3, 4], 0))
+print(list.reduce(add, [1, 2, 3, 4]))
 print(list.flatten([[1, 2], [3], 4]))
 print(list.unique([1, 1, 2, 2, 3]))
 "#,
@@ -404,6 +461,9 @@ print(list.unique([1, 1, 2, 2, 3]))
     assert!(result.contains("<module list>"));
     assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
     assert!(result.contains("[2, 1, 3]") || result.contains("[2,1,3]"));
+    assert!(result.contains("[6, 2, 4]") || result.contains("[6,2,4]") || result.contains("[2, 6, 4]") || result.contains("[2,6,4]"));
+    assert!(result.contains("[3, 4]") || result.contains("[3,4]"));
+    assert!(result.contains("\n10\n10\n"));
     assert!(result.contains("[1, 2, 3, 4]") || result.contains("[1,2,3,4]"));
 }
 

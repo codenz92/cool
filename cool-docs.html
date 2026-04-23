@@ -1946,7 +1946,7 @@ os.popen("uname -a")</code></pre>
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python">import sys
 
-sys.argv          # list of command-line arguments (argv[0] = script path under interpreter/VM, executable path for native binaries)
+sys.argv          # list of command-line arguments (argv[0] = script path)
 sys.exit(0)       # exit with success
 sys.exit(1)       # exit with error code</code></pre>
         </div>
@@ -2393,9 +2393,9 @@ string.capitalize("hello world")     # "Hello world"</code></pre>
 
 list.sort([3, 1, 4, 1, 5])                          # [1, 1, 3, 4, 5]
 list.reverse([1, 2, 3])                              # [3, 2, 1]
-list.map([1, 2, 3], lambda x: x * 2)                # [2, 4, 6]
-list.filter([1, 2, 3, 4, 5], lambda x: x > 2)       # [3, 4, 5]
-list.reduce([1, 2, 3, 4], lambda acc, x: acc + x, 0) # 10
+list.map(lambda x: x * 2, [1, 2, 3])                # [2, 4, 6]
+list.filter(lambda x: x > 2, [1, 2, 3, 4, 5])       # [3, 4, 5]
+list.reduce(lambda acc, x: acc + x, [1, 2, 3, 4], 0) # 10
 list.flatten([[1, 2], [3, [4, 5]]])                   # [1, 2, 3, 4, 5]
 list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
         </div>
@@ -2879,7 +2879,7 @@ echo Done.</code></pre>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM still excludes closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code>, core <code>random</code> helpers such as <code>seed</code>/<code>random</code>/<code>randint</code>/<code>uniform</code>/<code>choice</code>/<code>shuffle</code>, <code>json.loads</code>/<code>json.dumps</code>, built-in <code>string</code> helpers such as <code>split</code>/<code>join</code>/<code>strip</code>/<code>upper</code>/<code>replace</code>, pure <code>list</code> helpers such as <code>sort</code>/<code>reverse</code>/<code>flatten</code>/<code>unique</code>, built-in <code>re</code> helpers such as <code>match</code>/<code>search</code>/<code>fullmatch</code>/<code>findall</code>/<code>sub</code>/<code>split</code>, and <code>collections.Queue()</code>/<code>collections.Stack()</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
+          <li>⚠️ LLVM still excludes closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code>, core <code>random</code> helpers such as <code>seed</code>/<code>random</code>/<code>randint</code>/<code>uniform</code>/<code>choice</code>/<code>shuffle</code>, <code>json.loads</code>/<code>json.dumps</code>, built-in <code>string</code> helpers such as <code>split</code>/<code>join</code>/<code>strip</code>/<code>upper</code>/<code>replace</code>, pure <code>list</code> helpers such as <code>sort</code>/<code>reverse</code>/<code>map</code>/<code>filter</code>/<code>reduce</code>/<code>flatten</code>/<code>unique</code>, built-in <code>re</code> helpers such as <code>match</code>/<code>search</code>/<code>fullmatch</code>/<code>findall</code>/<code>sub</code>/<code>split</code>, and <code>collections.Queue()</code>/<code>collections.Stack()</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>
