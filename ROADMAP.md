@@ -186,7 +186,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend covers the core language. The following features remain interpreter/VM-only for now:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, and helpers like `min()`, `max()`, `sum()`, `round()`, and `sorted()`. The following features still remain interpreter/VM-only for now:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -196,7 +196,7 @@ The LLVM backend covers the core language. The following features remain interpr
 | `in` / `not in` | ✅ | ✅ | ✅ |
 | Dicts | ✅ | ✅ | ✅ |
 | Tuples | ✅ | ✅ | ✅ |
-| Closures | ✅ | ✅ | ❌ |
+| Closures / lambdas | ✅ | ✅ | ❌ |
 | `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |

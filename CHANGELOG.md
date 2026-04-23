@@ -177,16 +177,16 @@ cool coolapps/shell.cool
 run coolapps/snake.cool
 ```
 
-The interpreter and bytecode VM are functionally equivalent. The LLVM backend has some limitations:
+The interpreter and bytecode VM are functionally equivalent. The LLVM backend now also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, and helpers like `min()`, `max()`, `sum()`, `round()`, and `sorted()`, but it still has some limitations:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 |---------|-------------|-------------|------|
 | Classes | ✅ | ✅ | ✅ |
-| Closures | ✅ | ✅ | ❌ |
-| `while` loops | ✅ | ✅ | Use `for` |
+| Closures / lambdas | ✅ | ✅ | ❌ |
+| `while` loops | ✅ | ✅ | ✅ |
 | `import` | ✅ | ✅ | ❌ |
 | `try`/`except` | ✅ | ✅ | ❌ |
-| FFI | ✅ | ✅ | ✅ |
+| FFI (`import ffi`) | ✅ | ✅ | ❌ |
 | Inline asm | ❌ | ❌ | ✅ |
 
 ---

@@ -8,7 +8,7 @@
 //   3. compile_program() writes the runtime to /tmp, compiles it with `cc`,
 //      emits the LLVM module to a .o file, then links both together.
 
-use crate::ast::{BinOp, Expr, FStringPart, Program, Stmt, UnaryOp};
+use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -29,6 +29,7 @@ const RUNTIME_C: &str = r#"
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <ctype.h>
 
 #define TAG_NIL    0
 #define TAG_INT    1
@@ -40,6 +41,8 @@ const RUNTIME_C: &str = r#"
 #define TAG_CLASS  7
 #define TAG_DICT   8
 #define TAG_TUPLE  9
+#define TAG_CLOSURE 10
+#define TAG_EXCEPTION 11
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -194,8 +197,8 @@ CoolVal cool_bitxor(CoolVal, CoolVal);
 CoolVal cool_bitnot(CoolVal);
 CoolVal cool_lshift(CoolVal, CoolVal);
 CoolVal cool_rshift(CoolVal, CoolVal);
-CoolVal cool_list_make(int64_t);
-CoolVal cool_tuple_make(int64_t);
+CoolVal cool_list_make(CoolVal);
+CoolVal cool_tuple_make(CoolVal);
 CoolVal cool_list_len(CoolVal);
 CoolVal cool_type(CoolVal);
 CoolVal cool_list_get(CoolVal, CoolVal);
@@ -208,7 +211,11 @@ CoolVal cool_dict_set(CoolVal, CoolVal, CoolVal);
 CoolVal cool_dict_len(CoolVal);
 CoolVal cool_dict_contains(CoolVal, CoolVal);
 CoolVal cool_index(CoolVal, CoolVal);
+CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
+CoolVal cool_round(CoolVal, CoolVal);
+CoolVal cool_sorted(CoolVal);
+CoolVal cool_sum(CoolVal);
 void cool_print(int32_t, ...);
 
 /* ── class / object support ─────────────────────────────────────────── */
@@ -219,6 +226,7 @@ CoolVal cool_set_attr(CoolVal, const char*, CoolVal);
 CoolVal cool_call_method_vararg(CoolVal, const char*, int32_t, ...);
 CoolVal cool_get_arg(int32_t);
 CoolVal cool_is_instance(CoolVal, const char*);
+int64_t cool_get_method_ptr(CoolVal, const char*);
 
 /* ── bit-pattern helpers ──────────────────────────────────────────────── */
 static double cv_as_float(CoolVal v) {
@@ -255,8 +263,37 @@ int32_t cool_truthy(CoolVal v) {
     }
 }
 
+typedef CoolVal (*CoolFn0)(void);
+typedef CoolVal (*CoolFn1)(CoolVal);
+typedef CoolVal (*CoolFn2)(CoolVal, CoolVal);
+typedef CoolVal (*CoolFn3)(CoolVal, CoolVal, CoolVal);
+typedef CoolVal (*CoolFn4)(CoolVal, CoolVal, CoolVal, CoolVal);
+typedef CoolVal (*CoolFn5)(CoolVal, CoolVal, CoolVal, CoolVal, CoolVal);
+
+static CoolVal call_cool_fn_ptr(int64_t fn_ptr, int32_t argc, CoolVal* argv) {
+    switch (argc) {
+        case 0: return ((CoolFn0)(intptr_t)fn_ptr)();
+        case 1: return ((CoolFn1)(intptr_t)fn_ptr)(argv[0]);
+        case 2: return ((CoolFn2)(intptr_t)fn_ptr)(argv[0], argv[1]);
+        case 3: return ((CoolFn3)(intptr_t)fn_ptr)(argv[0], argv[1], argv[2]);
+        case 4: return ((CoolFn4)(intptr_t)fn_ptr)(argv[0], argv[1], argv[2], argv[3]);
+        case 5: return ((CoolFn5)(intptr_t)fn_ptr)(argv[0], argv[1], argv[2], argv[3], argv[4]);
+        default:
+            fprintf(stderr, "RuntimeError: too many arguments for native call (%d)\n", argc);
+            exit(1);
+    }
+}
+
 /* ── arithmetic ───────────────────────────────────────────────────────── */
 CoolVal cool_add(CoolVal a, CoolVal b) {
+    if (a.tag == TAG_OBJECT) {
+        CoolObject* o = (CoolObject*)(intptr_t)a.payload;
+        int64_t fn_ptr = o && o->class ? cool_get_method_ptr((CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class}, "method___add__") : 0;
+        if (fn_ptr) {
+            CoolVal argv[2] = {a, b};
+            return call_cool_fn_ptr(fn_ptr, 2, argv);
+        }
+    }
     if (a.tag == TAG_STR && b.tag == TAG_STR) {
         const char* sa = (const char*)(intptr_t)a.payload;
         const char* sb = (const char*)(intptr_t)b.payload;
@@ -313,6 +350,14 @@ CoolVal cool_neg(CoolVal a) {
 
 /* ── comparisons ──────────────────────────────────────────────────────── */
 static int cv_eq_raw(CoolVal a, CoolVal b) {
+    if (a.tag == TAG_OBJECT) {
+        CoolObject* o = (CoolObject*)(intptr_t)a.payload;
+        int64_t fn_ptr = o && o->class ? cool_get_method_ptr((CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class}, "method___eq__") : 0;
+        if (fn_ptr) {
+            CoolVal argv[2] = {a, b};
+            return cool_truthy(call_cool_fn_ptr(fn_ptr, 2, argv));
+        }
+    }
     if (a.tag != b.tag) {
         int an = a.tag == TAG_INT || a.tag == TAG_FLOAT;
         int bn = b.tag == TAG_INT || b.tag == TAG_FLOAT;
@@ -369,7 +414,8 @@ CoolVal cool_lshift(CoolVal a, CoolVal b){ return cv_int((int64_t)a.payload << (
 CoolVal cool_rshift(CoolVal a, CoolVal b){ return cv_int((int64_t)a.payload >> (int)b.payload); }
 
 /* ── list operations ─────────────────────────────────────────────────────── */
-CoolVal cool_list_make(int64_t n) {
+CoolVal cool_list_make(CoolVal n_val) {
+    int64_t n = n_val.payload;
     /* LIST MAKE: create empty list, capacity = n */
     CoolList* lst = (CoolList*)malloc(sizeof(CoolList));
     if (!lst) return cv_nil();
@@ -387,7 +433,8 @@ CoolVal cool_list_make(int64_t n) {
     return v;
 }
 
-CoolVal cool_tuple_make(int64_t n) {
+CoolVal cool_tuple_make(CoolVal n_val) {
+    int64_t n = n_val.payload;
     CoolList* lst = (CoolList*)malloc(sizeof(CoolList));
     if (!lst) return cv_nil();
     lst->tag = TAG_TUPLE;
@@ -402,6 +449,15 @@ CoolVal cool_tuple_make(int64_t n) {
 /* ── to_str ─────────���─────────────────────────────────────────────────── */
 char* cool_to_str(CoolVal v) {
     if (v.tag == TAG_STR) return (char*)(intptr_t)v.payload;
+    if (v.tag == TAG_OBJECT) {
+        CoolObject* o = (CoolObject*)(intptr_t)v.payload;
+        int64_t fn_ptr = o && o->class ? cool_get_method_ptr((CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class}, "method___str__") : 0;
+        if (fn_ptr) {
+            CoolVal argv[1] = {v};
+            CoolVal res = call_cool_fn_ptr(fn_ptr, 1, argv);
+            if (res.tag == TAG_STR) return (char*)(intptr_t)res.payload;
+        }
+    }
     char* buf = (char*)malloc(64);
     if (!buf) return (char*)"<oom>";
     switch (v.tag) {
@@ -494,12 +550,18 @@ const char* cool_type_name(int32_t tag) {
         case TAG_BOOL:   return "bool";
         case TAG_STR:    return "str";
         case TAG_LIST:   return "list";
+        case TAG_DICT:   return "dict";
         case TAG_OBJECT: return "object";
+        case TAG_TUPLE:  return "tuple";
         default:         return "unknown";
     }
 }
 
 CoolVal cool_type(CoolVal v) {
+    if (v.tag == TAG_OBJECT) {
+        CoolObject* o = (CoolObject*)(intptr_t)v.payload;
+        if (o && o->class) return cv_str((const char*)(intptr_t)o->class->name);
+    }
     return cv_str(cool_type_name(v.tag));
 }
 
@@ -551,6 +613,15 @@ CoolVal cool_len(CoolVal v) {
         case TAG_DICT: {
             CoolDict* d = (CoolDict*)(intptr_t)v.payload;
             return cv_int(d->len);
+        }
+        case TAG_OBJECT: {
+            CoolObject* o = (CoolObject*)(intptr_t)v.payload;
+            int64_t fn_ptr = o && o->class ? cool_get_method_ptr((CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class}, "method___len__") : 0;
+            if (fn_ptr) {
+                CoolVal argv[1] = {v};
+                return call_cool_fn_ptr(fn_ptr, 1, argv);
+            }
+            return cv_int(0);
         }
         default: return cv_int(0);
     }
@@ -704,41 +775,101 @@ int64_t cool_get_method_ptr(CoolVal class_val, const char* name) {
 static CoolVal g_method_args[32];
 static int g_method_arg_count = 0;
 
-CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
-    if (obj.tag != TAG_OBJECT) return cv_nil();
-    CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
-    if (!o->class) return cv_nil();
-    
-    // Look up method from class structure
-    int64_t method_ptr = 0;
-    CoolClass* cls = o->class;
-    
-    for (int64_t i = 0; i < cls->method_count; i++) {
-        const char* mname = (const char*)(intptr_t)cls->methods[i * 2];
-        if (mname && strcmp(mname, name) == 0) {
-            method_ptr = cls->methods[i * 2 + 1];
-            break;
+static CoolVal cool_string_upper(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    size_t len = strlen(s);
+    char* out = (char*)malloc(len + 1);
+    for (size_t i = 0; i < len; i++) out[i] = (char)toupper((unsigned char)s[i]);
+    out[len] = '\0';
+    return cv_str(out);
+}
+
+static CoolVal cool_string_lower(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    size_t len = strlen(s);
+    char* out = (char*)malloc(len + 1);
+    for (size_t i = 0; i < len; i++) out[i] = (char)tolower((unsigned char)s[i]);
+    out[len] = '\0';
+    return cv_str(out);
+}
+
+static CoolVal cool_string_strip(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    const char* start = s;
+    while (*start && isspace((unsigned char)*start)) start++;
+    const char* end = s + strlen(s);
+    while (end > start && isspace((unsigned char)end[-1])) end--;
+    size_t len = (size_t)(end - start);
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return cv_str(out);
+}
+
+static CoolVal cool_string_join(CoolVal sep, CoolVal seq) {
+    if (seq.tag != TAG_LIST && seq.tag != TAG_TUPLE) return cv_nil();
+    const char* delim = (const char*)(intptr_t)sep.payload;
+    CoolList* lst = (CoolList*)(intptr_t)seq.payload;
+    size_t delim_len = strlen(delim);
+    size_t total = 1;
+    for (int64_t i = 0; i < lst->length; i++) {
+        total += strlen(cool_to_str(((CoolVal*)lst->data)[i]));
+        if (i > 0) total += delim_len;
+    }
+    char* out = (char*)malloc(total);
+    char* p = out;
+    for (int64_t i = 0; i < lst->length; i++) {
+        if (i > 0) {
+            memcpy(p, delim, delim_len);
+            p += delim_len;
         }
+        char* elem = cool_to_str(((CoolVal*)lst->data)[i]);
+        size_t len = strlen(elem);
+        memcpy(p, elem, len);
+        p += len;
     }
-    
-    if (method_ptr == 0) {
-        fprintf(stderr, "AttributeError: '%s' object has no attribute '%s'\n",
-                (const char*)(intptr_t)o->class->name, name);
-        exit(1);
-    }
-    
+    *p = '\0';
+    return cv_str(out);
+}
+
+CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
-    g_method_args[0] = obj;  /* self */
+    g_method_args[0] = obj;
     for (int32_t i = 0; i < nargs && i < 31; i++) {
         g_method_args[i + 1] = va_arg(ap, CoolVal);
     }
     g_method_arg_count = nargs + 1;
     va_end(ap);
-    
-    typedef CoolVal (*CoolFn)(void);
-    CoolFn fn = (CoolFn)(intptr_t)method_ptr;
-    return fn();
+
+    const char* builtin_name = strncmp(name, "method_", 7) == 0 ? name + 7 : name;
+
+    if (obj.tag == TAG_STR) {
+        if (strcmp(builtin_name, "upper") == 0 && nargs == 0) return cool_string_upper(obj);
+        if (strcmp(builtin_name, "lower") == 0 && nargs == 0) return cool_string_lower(obj);
+        if (strcmp(builtin_name, "strip") == 0 && nargs == 0) return cool_string_strip(obj);
+        if (strcmp(builtin_name, "join") == 0 && nargs == 1) return cool_string_join(obj, g_method_args[1]);
+    }
+
+    if (obj.tag == TAG_LIST && strcmp(builtin_name, "append") == 0 && nargs == 1) {
+        cool_list_push(obj, g_method_args[1]);
+        return cv_nil();
+    }
+    if (obj.tag == TAG_DICT && (strcmp(builtin_name, "contains") == 0 || strcmp(builtin_name, "has_key") == 0) && nargs == 1) {
+        return cool_dict_contains(obj, g_method_args[1]);
+    }
+
+    if (obj.tag != TAG_OBJECT) return cv_nil();
+    CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
+    if (!o->class) return cv_nil();
+
+    int64_t method_ptr = cool_get_method_ptr((CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class}, name);
+    if (method_ptr == 0) {
+        fprintf(stderr, "AttributeError: '%s' object has no attribute '%s'\n",
+                (const char*)(intptr_t)o->class->name, name);
+        exit(1);
+    }
+    return call_cool_fn_ptr(method_ptr, nargs + 1, g_method_args);
 }
 
 CoolVal cool_get_arg(int32_t idx) {
@@ -822,11 +953,103 @@ CoolVal cool_index(CoolVal obj, CoolVal idx) {
     fprintf(stderr, "TypeError: not subscriptable\n"); exit(1);
 }
 
+CoolVal cool_slice(CoolVal obj, CoolVal start_v, CoolVal stop_v) {
+    int64_t start = start_v.tag == TAG_NIL ? 0 : start_v.payload;
+    int64_t stop = stop_v.tag == TAG_NIL ? INT64_MAX : stop_v.payload;
+    if (obj.tag == TAG_LIST || obj.tag == TAG_TUPLE) {
+        CoolList* src = (CoolList*)(intptr_t)obj.payload;
+        int64_t len = src->length;
+        if (start < 0) start += len;
+        if (stop == INT64_MAX) stop = len;
+        if (stop < 0) stop += len;
+        if (start < 0) start = 0;
+        if (stop > len) stop = len;
+        if (start > stop) start = stop;
+        CoolVal out = obj.tag == TAG_TUPLE ? cool_tuple_make(cv_int(stop - start)) : cool_list_make(cv_int(stop - start));
+        for (int64_t i = start; i < stop; i++) {
+            cool_list_push(out, ((CoolVal*)src->data)[i]);
+        }
+        return out;
+    }
+    if (obj.tag == TAG_STR) {
+        const char* s = (const char*)(intptr_t)obj.payload;
+        int64_t len = (int64_t)strlen(s);
+        if (start < 0) start += len;
+        if (stop == INT64_MAX) stop = len;
+        if (stop < 0) stop += len;
+        if (start < 0) start = 0;
+        if (stop > len) stop = len;
+        if (start > stop) start = stop;
+        char* out = (char*)malloc((size_t)(stop - start + 1));
+        memcpy(out, s + start, (size_t)(stop - start));
+        out[stop - start] = '\0';
+        return cv_str(out);
+    }
+    fprintf(stderr, "TypeError: not sliceable\n");
+    exit(1);
+}
+
 /* Unified setindex: dispatches list vs dict */
 CoolVal cool_setindex(CoolVal obj, CoolVal idx, CoolVal val) {
     if (obj.tag == TAG_LIST) return cool_list_set(obj, idx, val);
     if (obj.tag == TAG_DICT) return cool_dict_set(obj, idx, val);
     fprintf(stderr, "TypeError: not subscriptable\n"); exit(1);
+}
+
+CoolVal cool_round(CoolVal num, CoolVal digits) {
+    double f = cv_to_float(num);
+    if (digits.tag == TAG_NIL) return num.tag == TAG_INT ? num : cv_int((int64_t)llround(f));
+    int64_t places = digits.payload;
+    double factor = pow(10.0, (double)places);
+    return cv_float(round(f * factor) / factor);
+}
+
+static int cool_compare(CoolVal a, CoolVal b) {
+    if (cv_eq_raw(a, b)) return 0;
+    return cool_truthy(cool_lt(a, b)) ? -1 : 1;
+}
+
+CoolVal cool_sorted(CoolVal iterable) {
+    if (iterable.tag == TAG_STR) {
+        const char* s = (const char*)(intptr_t)iterable.payload;
+        CoolVal chars = cool_list_make(cv_int((int64_t)strlen(s)));
+        for (const char* p = s; *p; p++) {
+            char* ch = (char*)malloc(2);
+            ch[0] = *p;
+            ch[1] = '\0';
+            cool_list_push(chars, cv_str(ch));
+        }
+        iterable = chars;
+    }
+    if (iterable.tag != TAG_LIST && iterable.tag != TAG_TUPLE) {
+        fprintf(stderr, "TypeError: sorted() requires an iterable\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)iterable.payload;
+    CoolVal out = cool_list_make(cv_int(src->length));
+    for (int64_t i = 0; i < src->length; i++) cool_list_push(out, ((CoolVal*)src->data)[i]);
+    CoolList* dst = (CoolList*)(intptr_t)out.payload;
+    for (int64_t i = 0; i < dst->length; i++) {
+        for (int64_t j = i + 1; j < dst->length; j++) {
+            if (cool_compare(((CoolVal*)dst->data)[j], ((CoolVal*)dst->data)[i]) < 0) {
+                CoolVal tmp = ((CoolVal*)dst->data)[i];
+                ((CoolVal*)dst->data)[i] = ((CoolVal*)dst->data)[j];
+                ((CoolVal*)dst->data)[j] = tmp;
+            }
+        }
+    }
+    return out;
+}
+
+CoolVal cool_sum(CoolVal iterable) {
+    if (iterable.tag != TAG_LIST && iterable.tag != TAG_TUPLE) {
+        fprintf(stderr, "TypeError: sum() requires a list or tuple\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)iterable.payload;
+    CoolVal total = cv_int(0);
+    for (int64_t i = 0; i < src->length; i++) total = cool_add(total, ((CoolVal*)src->data)[i]);
+    return total;
 }
 
 static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
@@ -847,6 +1070,209 @@ CoolVal cool_contains(CoolVal container, CoolVal item) {
     }
     fprintf(stderr, "TypeError: 'in' not supported for this type\n");
     exit(1);
+}
+
+/* ── Closure runtime ───────────────────────────────────────────────────── */
+
+#include <setjmp.h>
+
+/* Closure: captures enclosing variables */
+typedef struct {
+    int32_t tag;
+    int64_t fn_ptr;       /* pointer to the compiled function */
+    int64_t num_captures; /* number of captured variables */
+    CoolVal captures[];    /* captured CoolVal variables */
+} CoolClosure;
+
+/* Create a closure with n captured variables */
+CoolVal cool_closure_new(int64_t fn_ptr, int64_t num_captures, CoolVal* captures) {
+    CoolClosure* clo = (CoolClosure*)malloc(sizeof(CoolClosure) + num_captures * sizeof(CoolVal));
+    clo->tag = TAG_CLOSURE;
+    clo->fn_ptr = fn_ptr;
+    clo->num_captures = num_captures;
+    for (int64_t i = 0; i < num_captures; i++) {
+        clo->captures[i] = captures[i];
+    }
+    CoolVal v; v.tag = TAG_CLOSURE; v.payload = (int64_t)(intptr_t)clo;
+    return v;
+}
+
+/* Get the function pointer from a closure */
+int64_t cool_closure_get_fn_ptr(CoolVal clo) {
+    if (clo.tag != TAG_CLOSURE) { fprintf(stderr, "TypeError: not a closure\n"); exit(1); }
+    CoolClosure* c = (CoolClosure*)(intptr_t)clo.payload;
+    return c->fn_ptr;
+}
+
+/* Get captured variable from a closure */
+CoolVal cool_closure_get_capture(CoolVal clo, int64_t idx) {
+    if (clo.tag != TAG_CLOSURE) { fprintf(stderr, "TypeError: not a closure\n"); exit(1); }
+    CoolClosure* c = (CoolClosure*)(intptr_t)clo.payload;
+    if (idx < 0 || idx >= c->num_captures) { fprintf(stderr, "IndexError: closure capture index out of range\n"); exit(1); }
+    return c->captures[idx];
+}
+
+/* Get number of captures */
+int64_t cool_closure_get_num_captures(CoolVal clo) {
+    if (clo.tag != TAG_CLOSURE) { fprintf(stderr, "TypeError: not a closure\n"); exit(1); }
+    CoolClosure* c = (CoolClosure*)(intptr_t)clo.payload;
+    return c->num_captures;
+}
+
+/* Check if a value is a closure */
+int32_t cool_is_closure(CoolVal v) {
+    return v.tag == TAG_CLOSURE ? 1 : 0;
+}
+
+/* Global for passing closure captures */
+static CoolVal g_closure_captures[64];
+static int g_num_closure_captures = 0;
+
+void cool_set_closure_capture(int32_t idx, CoolVal val) {
+    if (idx >= 0 && idx < 64) {
+        g_closure_captures[idx] = val;
+        if (idx >= g_num_closure_captures) g_num_closure_captures = idx + 1;
+    }
+}
+
+CoolVal cool_get_closure_capture(int32_t idx) {
+    if (idx >= 0 && idx < g_num_closure_captures) {
+        return g_closure_captures[idx];
+    }
+    return cv_nil();
+}
+
+int32_t cool_get_num_closure_captures(void) {
+    return g_num_closure_captures;
+}
+
+/* ── Exception handling with setjmp/longjmp ────────────────────────────── */
+
+#define MAX_EXCEPTION_FRAMES 16
+
+typedef struct {
+    jmp_buf buf;
+    int active;
+} ExceptionFrame;
+static ExceptionFrame g_exception_frames[MAX_EXCEPTION_FRAMES];
+static int g_exception_frame_count = 0;
+static CoolVal g_current_exception;
+
+/* Set up an exception frame, returns 0 if first time, 1 if longjmp occurred */
+int32_t cool_enter_try(void) {
+    if (g_exception_frame_count < MAX_EXCEPTION_FRAMES) {
+        int idx = g_exception_frame_count;
+        g_exception_frames[idx].active = 1;
+        int result = setjmp(g_exception_frames[idx].buf);
+        g_exception_frame_count++;
+        if (result == 0) {
+            return 0;  /* normal execution */
+        } else {
+            return 1;  /* exception caught via longjmp */
+        }
+    }
+    fprintf(stderr, "RuntimeError: too many nested try blocks\n");
+    exit(1);
+    return 0;
+}
+
+/* Exit the current try block */
+void cool_exit_try(void) {
+    if (g_exception_frame_count > 0) {
+        g_exception_frame_count--;
+        g_exception_frames[g_exception_frame_count].active = 0;
+    }
+}
+
+/* Raise an exception - transfers control to the nearest try frame */
+void cool_raise(CoolVal exc) {
+    g_current_exception = exc;
+    for (int i = g_exception_frame_count - 1; i >= 0; i--) {
+        if (g_exception_frames[i].active) {
+            g_exception_frames[i].active = 0;
+            longjmp(g_exception_frames[i].buf, 1);
+        }
+    }
+    /* No try frame found - print and exit */
+    char* msg = cool_to_str(exc);
+    fprintf(stderr, "Unhandled exception: %s\n", msg);
+    exit(1);
+}
+
+/* Get the current exception value */
+CoolVal cool_get_exception(void) {
+    return g_current_exception;
+}
+
+/* ── Module registry for import support ────────────────────────────────── */
+
+#define MAX_MODULES 32
+
+typedef struct {
+    const char* name;
+    CoolVal dict;
+} ModuleEntry;
+
+static ModuleEntry g_modules[MAX_MODULES];
+static int g_module_count = 0;
+static int g_modules_initialized = 0;
+
+void cool_init_modules(void) {
+    if (g_modules_initialized) return;
+    g_modules_initialized = 1;
+    
+    /* math module */
+    CoolDict* math_d = (CoolDict*)malloc(sizeof(CoolDict));
+    math_d->tag = TAG_DICT; math_d->len = 0; math_d->cap = 16;
+    math_d->keys = (CoolVal*)calloc(16, sizeof(CoolVal));
+    math_d->vals = (CoolVal*)calloc(16, sizeof(CoolVal));
+    CoolVal math_v; math_v.tag = TAG_DICT; math_v.payload = (int64_t)(intptr_t)math_d;
+    g_modules[g_module_count].name = "math";
+    g_modules[g_module_count++].dict = math_v;
+    
+    /* os module */
+    CoolDict* os_d = (CoolDict*)malloc(sizeof(CoolDict));
+    os_d->tag = TAG_DICT; os_d->len = 0; os_d->cap = 16;
+    os_d->keys = (CoolVal*)calloc(16, sizeof(CoolVal));
+    os_d->vals = (CoolVal*)calloc(16, sizeof(CoolVal));
+    CoolVal os_v; os_v.tag = TAG_DICT; os_v.payload = (int64_t)(intptr_t)os_d;
+    g_modules[g_module_count].name = "os";
+    g_modules[g_module_count++].dict = os_v;
+}
+
+CoolVal cool_get_module(const char* name) {
+    cool_init_modules();
+    for (int i = 0; i < g_module_count; i++) {
+        if (strcmp(g_modules[i].name, name) == 0) {
+            return g_modules[i].dict;
+        }
+    }
+    return cv_nil();
+}
+
+int32_t cool_module_exists(const char* name) {
+    cool_init_modules();
+    for (int i = 0; i < g_module_count; i++) {
+        if (strcmp(g_modules[i].name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ── Function pointer call helper ─────────────────────────────────────── */
+
+typedef CoolVal (*CoolFnPtr)(void);
+
+CoolVal cool_call_fn_ptr(int64_t fn_ptr, int32_t nargs, ...) {
+    va_list ap;
+    va_start(ap, nargs);
+    CoolVal argv[8];
+    for (int32_t i = 0; i < nargs && i < 8; i++) {
+        argv[i] = va_arg(ap, CoolVal);
+    }
+    va_end(ap);
+    return call_cool_fn_ptr(fn_ptr, nargs, argv);
 }
 "#;
 
@@ -930,7 +1356,37 @@ struct RuntimeFns<'ctx> {
     #[allow(dead_code)]
     cool_dict_len: FunctionValue<'ctx>,
     cool_index: FunctionValue<'ctx>,
+    cool_slice: FunctionValue<'ctx>,
     cool_setindex: FunctionValue<'ctx>,
+    cool_round: FunctionValue<'ctx>,
+    cool_sorted: FunctionValue<'ctx>,
+    cool_sum: FunctionValue<'ctx>,
+    // closure operations
+    #[allow(dead_code)]
+    cool_closure_new: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_closure_get_fn_ptr: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_closure_get_capture: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_is_closure: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_set_closure_capture: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_get_closure_capture: FunctionValue<'ctx>,
+    // exception handling
+    cool_enter_try: FunctionValue<'ctx>,
+    cool_exit_try: FunctionValue<'ctx>,
+    cool_raise: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_get_exception: FunctionValue<'ctx>,
+    // module/import
+    #[allow(dead_code)]
+    cool_get_module: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_module_exists: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_call_fn_ptr: FunctionValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -946,6 +1402,8 @@ struct Compiler<'ctx> {
     locals: HashMap<String, PointerValue<'ctx>>,
     /// Top-level user-defined functions (name → FunctionValue).
     functions: HashMap<String, FunctionValue<'ctx>>,
+    /// Top-level user-defined function signatures.
+    function_params: HashMap<String, Vec<crate::ast::Param>>,
     /// Top-level user-defined classes (name → ClassInfo).
     classes: HashMap<String, ClassInfo<'ctx>>,
     str_counter: usize,
@@ -953,6 +1411,13 @@ struct Compiler<'ctx> {
     loop_stack: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>)>,
     /// The function currently being compiled (Some(main_fn) at top level).
     current_fn: Option<FunctionValue<'ctx>>,
+    /// Captured variables for closures (var name → capture index).
+    #[allow(dead_code)]
+    captured_vars: HashMap<String, usize>,
+    /// All nested function definitions (for closure support).
+    nested_functions: Vec<(String, Vec<crate::ast::Param>, Vec<crate::ast::Stmt>)>,
+    /// Class currently being compiled, if any.
+    current_class: Option<String>,
 }
 
 /// Information about a compiled class
@@ -962,9 +1427,15 @@ struct ClassInfo<'ctx> {
     /// Method names and their function values
     #[allow(dead_code)]
     methods: HashMap<String, FunctionValue<'ctx>>,
+    /// Method signatures, including the leading `self` parameter.
+    method_params: HashMap<String, Vec<crate::ast::Param>>,
     /// Attribute default values (compiled)
     #[allow(dead_code)]
     attributes: Vec<(String, Expr)>,
+    /// Optional parent class name.
+    parent: Option<String>,
+    /// Constructor parameter list, excluding the implicit `self`.
+    constructor_params: Vec<crate::ast::Param>,
 }
 
 // ── Constructor & runtime declarations ───────────────────────────────────────
@@ -988,10 +1459,14 @@ impl<'ctx> Compiler<'ctx> {
             rt,
             locals: HashMap::new(),
             functions: HashMap::new(),
+            function_params: HashMap::new(),
             classes: HashMap::new(),
             str_counter: 0,
             loop_stack: Vec::new(),
             current_fn: None,
+            captured_vars: HashMap::new(),
+            nested_functions: Vec::new(),
+            current_class: None,
         }
     }
 
@@ -1059,8 +1534,8 @@ impl<'ctx> Compiler<'ctx> {
             cool_read_str: decl!("cool_read_str", cv_type.fn_type(&[cv], false)),
             cool_write_str: decl!("cool_write_str", cv_type.fn_type(&[cv, cv], false)),
             // list operations
-            cool_list_make: decl!("cool_list_make", cv_type.fn_type(&[i64m], false)),
-            cool_tuple_make: decl!("cool_tuple_make", cv_type.fn_type(&[i64m], false)),
+            cool_list_make: decl!("cool_list_make", cv_type.fn_type(&[cv], false)),
+            cool_tuple_make: decl!("cool_tuple_make", cv_type.fn_type(&[cv], false)),
             cool_list_len: decl!("cool_list_len", cv_type.fn_type(&[cv], false)),
             cool_list_get: decl!("cool_list_get", cv_type.fn_type(&[cv, cv], false)),
             cool_list_set: decl!("cool_list_set", cv_type.fn_type(&[cv, cv, cv], false)),
@@ -1086,7 +1561,27 @@ impl<'ctx> Compiler<'ctx> {
             cool_dict_new: decl!("cool_dict_new", cv_type.fn_type(&[], false)),
             cool_dict_len: decl!("cool_dict_len", cv_type.fn_type(&[cv], false)),
             cool_index: decl!("cool_index", cv_type.fn_type(&[cv, cv], false)),
+            cool_slice: decl!("cool_slice", cv_type.fn_type(&[cv, cv, cv], false)),
             cool_setindex: decl!("cool_setindex", cv_type.fn_type(&[cv, cv, cv], false)),
+            cool_round: decl!("cool_round", cv_type.fn_type(&[cv, cv], false)),
+            cool_sorted: decl!("cool_sorted", cv_type.fn_type(&[cv], false)),
+            cool_sum: decl!("cool_sum", cv_type.fn_type(&[cv], false)),
+            // closure operations
+            cool_closure_new: decl!("cool_closure_new", cv_type.fn_type(&[i64m, i64m, ptrm], false)),
+            cool_closure_get_fn_ptr: decl!("cool_closure_get_fn_ptr", i64t.fn_type(&[cv], false)),
+            cool_closure_get_capture: decl!("cool_closure_get_capture", cv_type.fn_type(&[cv, i64m], false)),
+            cool_is_closure: decl!("cool_is_closure", i32t.fn_type(&[cv], false)),
+            cool_set_closure_capture: decl!("cool_set_closure_capture", voidt.fn_type(&[i32m, cv], false)),
+            cool_get_closure_capture: decl!("cool_get_closure_capture", cv_type.fn_type(&[i32m], false)),
+            // exception handling
+            cool_enter_try: decl!("cool_enter_try", i32t.fn_type(&[], false)),
+            cool_exit_try: decl!("cool_exit_try", voidt.fn_type(&[], false)),
+            cool_raise: decl!("cool_raise", voidt.fn_type(&[cv], false)),
+            cool_get_exception: decl!("cool_get_exception", cv_type.fn_type(&[], false)),
+            // module/import
+            cool_get_module: decl!("cool_get_module", cv_type.fn_type(&[ptrm], false)),
+            cool_module_exists: decl!("cool_module_exists", i32t.fn_type(&[ptrm], false)),
+            cool_call_fn_ptr: decl!("cool_call_fn_ptr", cv_type.fn_type(&[i64m, i32m], true)),
         }
     }
 
@@ -1109,6 +1604,20 @@ impl<'ctx> Compiler<'ctx> {
         let n = self.str_counter;
         self.str_counter += 1;
         format!("s{n}")
+    }
+
+    fn build_entry_alloca(&self, name: &str) -> PointerValue<'ctx> {
+        let fn_val = self.current_fn.expect("alloca requires active function");
+        let entry = fn_val
+            .get_first_basic_block()
+            .expect("function should have an entry block");
+        let builder = self.context.create_builder();
+        if let Some(first) = entry.get_first_instruction() {
+            builder.position_before(&first);
+        } else {
+            builder.position_at_end(entry);
+        }
+        builder.build_alloca(self.cv_type, name).unwrap()
     }
 
     // ── CoolVal constructors ──────────────────────────────────────────────────
@@ -1300,7 +1809,7 @@ impl<'ctx> Compiler<'ctx> {
                 let ptr = if let Some(&p) = self.locals.get(name) {
                     p
                 } else {
-                    let p = self.builder.build_alloca(self.cv_type, name).unwrap();
+                    let p = self.build_entry_alloca(name);
                     self.locals.insert(name.clone(), p);
                     p
                 };
@@ -1416,7 +1925,7 @@ impl<'ctx> Compiler<'ctx> {
                     let ptr = if let Some(&p) = self.locals.get(name) {
                         p
                     } else {
-                        let p = self.builder.build_alloca(self.cv_type, name).unwrap();
+                        let p = self.build_entry_alloca(name);
                         self.locals.insert(name.clone(), p);
                         p
                     };
@@ -1430,6 +1939,26 @@ impl<'ctx> Compiler<'ctx> {
                 let idx_val = self.compile_expr(index)?;
                 let val = self.compile_expr(value)?;
                 self.call_triop_fn(self.rt.cool_setindex, obj_val, idx_val, val, "setindex");
+            }
+
+            // ── try / except / else / finally ────────────────────────────────
+            Stmt::Try { body, handlers, else_body, finally_body } => {
+                self.compile_try(body, handlers, else_body.as_deref(), finally_body.as_deref())?;
+            }
+
+            // ── raise ────────────────────────────────────────────────────────
+            Stmt::Raise(opt_expr) => {
+                self.compile_raise(opt_expr.as_ref())?;
+            }
+
+            // ── import file.cool ─────────────────────────────────────────────
+            Stmt::Import(path) => {
+                self.compile_import(path)?;
+            }
+
+            // ── import module_name ───────────────────────────────────────────
+            Stmt::ImportModule(name) => {
+                self.compile_import_module(name)?;
             }
 
             other => {
@@ -1540,7 +2069,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_store(idx_ptr, zero).unwrap();
 
         // Allocate the loop variable
-        let var_ptr = self.builder.build_alloca(self.cv_type, var).unwrap();
+        let var_ptr = self.build_entry_alloca(var);
         self.locals.insert(var.to_string(), var_ptr);
 
         // Get length of list (computed but not needed at runtime yet)
@@ -1613,7 +2142,7 @@ impl<'ctx> Compiler<'ctx> {
                 return Err("*args / **kwargs are not supported in the LLVM backend".into());
             }
             if let Some(param_val) = fn_val.get_nth_param(i as u32) {
-                let alloca = self.builder.build_alloca(self.cv_type, &param.name).unwrap();
+                let alloca = self.build_entry_alloca(&param.name);
                 self.builder.build_store(alloca, param_val).unwrap();
                 self.locals.insert(param.name.clone(), alloca);
             }
@@ -1640,31 +2169,38 @@ impl<'ctx> Compiler<'ctx> {
 
     // ── class definition ─────────────────────────────────────────────────────
 
-    fn compile_class(&mut self, name: &str, _parent: Option<&str>, body: &[Stmt]) -> Result<(), String> {
+    fn compile_class(&mut self, name: &str, parent: Option<&str>, body: &[Stmt]) -> Result<(), String> {
         if !self.is_main() {
             return Err("class definitions are only allowed at the top level".into());
         }
 
         // Collect method names and check for __init__
         let mut methods: HashMap<String, FunctionValue<'ctx>> = HashMap::new();
+        let mut method_params: HashMap<String, Vec<crate::ast::Param>> = HashMap::new();
         let mut has_init = false;
-        let mut init_body: Option<Vec<Stmt>> = None;
         let mut init_params: Option<Vec<crate::ast::Param>> = None;
         let mut attributes: Vec<(String, Expr)> = Vec::new();
+
+        if let Some(parent_name) = parent {
+            if let Some(parent_info) = self.classes.get(parent_name) {
+                methods.extend(parent_info.methods.iter().map(|(k, v)| (k.clone(), *v)));
+                method_params.extend(parent_info.method_params.iter().map(|(k, v)| (k.clone(), v.clone())));
+                attributes.extend(parent_info.attributes.iter().cloned());
+            }
+        }
 
         for stmt in body {
             match stmt {
                 Stmt::FnDef {
                     name: mname,
                     params,
-                    body: mbody,
+                    ..
                 } => {
                     if mname == "__init__" {
                         has_init = true;
-                        init_body = Some(mbody.clone());
                         init_params = Some(params.clone());
                     }
-                    // Methods will be compiled after we register the class
+                    method_params.insert(mname.clone(), params.clone());
                 }
                 Stmt::Assign { name: aname, value } => {
                     // Instance attribute assignment - strip "self." prefix for storage
@@ -1714,34 +2250,19 @@ impl<'ctx> Compiler<'ctx> {
                     let saved_locals = std::mem::take(&mut self.locals);
                     let saved_fn = self.current_fn.replace(fn_val);
                     let saved_loops = std::mem::take(&mut self.loop_stack);
+                    let saved_class = self.current_class.replace(name.to_string());
 
                     // Build entry
                     let entry = self.context.append_basic_block(fn_val, "entry");
                     self.builder.position_at_end(entry);
 
-                    // Bind self as first param (or from cool_get_arg(0) for variadic call)
-                    let self_ptr = self.builder.build_alloca(self.cv_type, "self").unwrap();
-                    let i32t = self.context.i32_type();
-
-                    // Load self from global args buffer
-                    let self_val = self
-                        .builder
-                        .build_call(self.rt.cool_get_arg, &[i32t.const_int(0, false).into()], "get_self")
-                        .unwrap()
-                        .try_as_basic_value()
-                        .left()
-                        .unwrap()
-                        .into_struct_value();
-                    self.builder.build_store(self_ptr, self_val).unwrap();
-                    self.locals.insert("self".to_string(), self_ptr);
-
-                    // Bind other params
+                    // Bind params directly from the LLVM function signature.
                     for (i, param) in params.iter().enumerate() {
                         if param.is_vararg || param.is_kwarg {
                             return Err("*args / **kwargs not supported in methods".into());
                         }
                         if let Some(param_val) = fn_val.get_nth_param(i as u32) {
-                            let alloca = self.builder.build_alloca(self.cv_type, &param.name).unwrap();
+                            let alloca = self.build_entry_alloca(&param.name);
                             self.builder.build_store(alloca, param_val).unwrap();
                             self.locals.insert(param.name.clone(), alloca);
                         }
@@ -1760,6 +2281,7 @@ impl<'ctx> Compiler<'ctx> {
                     self.locals = saved_locals;
                     self.current_fn = saved_fn;
                     self.loop_stack = saved_loops;
+                    self.current_class = saved_class;
                     if let Some(bb) = saved_bb {
                         self.builder.position_at_end(bb);
                     }
@@ -1786,11 +2308,12 @@ impl<'ctx> Compiler<'ctx> {
 
         // Allocate array for method data (2 i64 values per method: name ptr and fn ptr)
         let method_data_size = method_count * 2 * 8; // 2 * i64 per method
+        let method_data_size_val = self.build_int(method_data_size);
         let method_data_ptr = self
             .builder
             .build_call(
                 self.rt.cool_malloc,
-                &[self.context.i64_type().const_int(method_data_size as u64, false).into()],
+                &[method_data_size_val.into()],
                 "method_data_ptr",
             )
             .unwrap()
@@ -1870,9 +2393,13 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Create class with method data
-        let method_data_int2 = self
+        let method_data_i64ptr = self
             .builder
-            .build_ptr_to_int(method_data_i8ptr, self.context.i64_type(), "method_data_int2")
+            .build_pointer_cast(
+                method_data_i8ptr,
+                self.context.i64_type().ptr_type(inkwell::AddressSpace::default()),
+                "method_data_i64ptr",
+            )
             .unwrap();
         let class_val = self
             .builder
@@ -1881,7 +2408,7 @@ impl<'ctx> Compiler<'ctx> {
                 &[
                     name_ptr.as_pointer_value().into(),
                     self.context.i64_type().const_int(method_count as u64, false).into(),
-                    method_data_int2.into(),
+                    method_data_i64ptr.into(),
                 ],
                 "class",
             )
@@ -1909,29 +2436,27 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_store(self_ptr, obj_val).unwrap();
 
         // Call __init__ if present
-        if has_init {
-            if let Some(_body) = init_body {
-                let params = init_params.unwrap_or_default();
+        if has_init || methods.contains_key("__init__") {
+            let params = init_params
+                .clone()
+                .or_else(|| method_params.get("__init__").cloned())
+                .unwrap_or_default();
 
-                if let Some(&init_fn) = methods.get("__init__") {
-                    // Call init with self as first arg
-                    let mut args: Vec<BasicMetadataValueEnum<'ctx>> = vec![obj_val.into()];
-                    // Skip first param (self) when building args
-                    for (i, param) in params.iter().skip(1).enumerate() {
-                        // Get from global args buffer
-                        let idx = self.context.i32_type().const_int((i + 1) as u64, false);
-                        let arg_val = self
-                            .builder
-                            .build_call(self.rt.cool_get_arg, &[idx.into()], &param.name)
-                            .unwrap()
-                            .try_as_basic_value()
-                            .left()
-                            .unwrap()
-                            .into_struct_value();
-                        args.push(arg_val.into());
-                    }
-                    self.builder.build_call(init_fn, &args, "").unwrap();
+            if let Some(&init_fn) = methods.get("__init__") {
+                let mut init_args = vec![obj_val];
+                for (i, param) in params.iter().skip(1).enumerate() {
+                    let idx = self.context.i32_type().const_int(i as u64, false);
+                    let arg_val = self
+                        .builder
+                        .build_call(self.rt.cool_get_arg, &[idx.into()], &param.name)
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_struct_value();
+                    init_args.push(arg_val);
                 }
+                self.call_fn_with_struct_args(init_fn, &init_args, "init_call");
             }
         }
 
@@ -1951,13 +2476,24 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(bb);
         }
 
+        let constructor_params = init_params
+            .clone()
+            .or_else(|| method_params.get("__init__").cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .skip(1)
+            .collect();
+
         // Store class info
         self.classes.insert(
             name.to_string(),
             ClassInfo {
                 constructor,
                 methods,
+                method_params,
                 attributes,
+                parent: parent.map(str::to_string),
+                constructor_params,
             },
         );
 
@@ -2004,6 +2540,202 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    // ── try / except / else / finally ────────────────────────────────────────
+    //
+    // Uses setjmp/longjmp for exception handling. cool_enter_try() returns 0 on
+    // normal entry, 1 on longjmp (exception caught). cool_exit_try() cleans up.
+    // cool_raise() transfers control to the nearest try frame.
+    //
+    fn compile_try(
+        &mut self,
+        body: &[Stmt],
+        handlers: &[ExceptHandler],
+        else_body: Option<&[Stmt]>,
+        finally_body: Option<&[Stmt]>,
+    ) -> Result<(), String> {
+        let fn_val = self.current_fn.unwrap();
+
+        // Call cool_enter_try() which does setjmp
+        let result = self
+            .builder
+            .build_call(self.rt.cool_enter_try, &[], "enter_try")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_int_value();
+        let zero = self.context.i32_type().const_int(0, false);
+        let caught_i1 = self
+            .builder
+            .build_int_compare(IntPredicate::NE, result, zero, "caught")
+            .unwrap();
+
+        let try_bb = self.context.append_basic_block(fn_val, "try_body");
+        let handler_bb = self.context.append_basic_block(fn_val, "exception_handler");
+        let merge_bb = self.context.append_basic_block(fn_val, "try_merge");
+
+        self.builder
+            .build_conditional_branch(caught_i1, handler_bb, try_bb)
+            .unwrap();
+
+        // ── Normal path: execute try body ──────────────────────────────────
+        self.builder.position_at_end(try_bb);
+        self.compile_stmts(body)?;
+
+        // Run else body if no exception occurred
+        let _else_bb = if else_body.is_some() {
+            let bb = self.context.append_basic_block(fn_val, "else_body");
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(bb).unwrap();
+            }
+            self.builder.position_at_end(bb);
+            if let Some(stmts) = else_body {
+                self.compile_stmts(stmts)?;
+            }
+            bb
+        } else {
+            try_bb
+        };
+
+        if !self.current_block_terminated() {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        // ── Exception handler path ──────────────────────────────────────────
+        self.builder.position_at_end(handler_bb);
+        // Get the exception value from cool_get_exception()
+        let exc_val = self
+            .builder
+            .build_call(self.rt.cool_get_exception, &[], "get_exc")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+
+        let mut handled = false;
+        for handler in handlers {
+            let matches = handler.exc_type.is_none()
+                || {
+                    // For type-based matching, we just match bare except or type names
+                    // In practice, we handle this by storing exception type info
+                    // For simplicity, bare except catches all, typed catches need more work
+                    true
+                };
+
+            if matches {
+                // Create handler scope
+                let handler_env_bb = self.context.append_basic_block(fn_val, "handler_body");
+                self.builder.build_unconditional_branch(handler_env_bb).unwrap();
+                self.builder.position_at_end(handler_env_bb);
+
+                // Bind the exception to the 'as' name if present
+                if let Some(as_name) = &handler.as_name {
+                    let ptr = self.build_entry_alloca(as_name);
+                    self.builder.build_store(ptr, exc_val).unwrap();
+                    self.locals.insert(as_name.clone(), ptr);
+                }
+
+                self.compile_stmts(&handler.body)?;
+
+                if !self.current_block_terminated() {
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                }
+
+                handled = true;
+                break;
+            }
+        }
+
+        if !handled {
+            // Re-raise if no handler matched - exit try and re-raise
+            self.builder
+                .build_call(self.rt.cool_exit_try, &[], "exit_try")
+                .unwrap();
+            // Call cool_raise again to propagate
+            self.builder
+                .build_call(self.rt.cool_raise, &[exc_val.into()], "re_raise")
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
+        }
+
+        // ── Finally block ────────────────────────────────────────────────────
+        // Position at merge or finally if present
+        if let Some(finally) = finally_body {
+            let finally_bb = self.context.append_basic_block(fn_val, "finally_body");
+            self.builder.position_at_end(merge_bb);
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(finally_bb).unwrap();
+            }
+            self.builder.position_at_end(finally_bb);
+            self.compile_stmts(finally)?;
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+            }
+        }
+
+        self.builder.position_at_end(merge_bb);
+
+        // Clean up the try frame
+        self.builder
+            .build_call(self.rt.cool_exit_try, &[], "exit_try")
+            .unwrap();
+
+        Ok(())
+    }
+
+    // ── raise ────────────────────────────────────────────────────────────────
+    fn compile_raise(&mut self, opt_expr: Option<&Expr>) -> Result<(), String> {
+        let exc_val = if let Some(e) = opt_expr {
+            self.compile_expr(e)?
+        } else {
+            self.build_str("Exception")
+        };
+
+        // Call cool_raise - this does longjmp if a try frame is active
+        self.builder
+            .build_call(self.rt.cool_raise, &[exc_val.into()], "raise")
+            .unwrap();
+        // If longjmp doesn't happen (no try frame), we continue
+        self.builder.build_unreachable().unwrap();
+        Ok(())
+    }
+
+    // ── import "path.cool" ────────────────────────────────────────────────────
+    fn compile_import(&mut self, _path: &str) -> Result<(), String> {
+        // LLVM backend doesn't support dynamic compilation
+        Err("import is not yet supported in LLVM backend (requires dynamic compilation)".into())
+    }
+
+    // ── import module_name ────────────────────────────────────────────────────
+    fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
+        match name {
+            "math" | "os" | "sys" | "time" | "random" | "json" | "re" | "string"
+            | "list" | "collections" => {
+                // Built-in modules are handled via the runtime's module registry
+                // Get the module dict from runtime
+                let module_name_ptr = self.builder.build_global_string_ptr(name, &format!("mod_{}", name)).unwrap();
+                let dict_val = self
+                    .builder
+                    .build_call(self.rt.cool_get_module, &[module_name_ptr.as_pointer_value().into()], "module_dict")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+                // Create a local variable to store the module reference
+                let ptr = self.build_entry_alloca(name);
+                self.builder.build_store(ptr, dict_val).unwrap();
+                self.locals.insert(name.to_string(), ptr);
+                Ok(())
+            }
+            _ => Err(format!(
+                "import: unknown module '{}' (only math, os, sys, time, random, json, re, string, list, collections supported in LLVM backend)",
+                name
+            )),
+        }
+    }
+
     // ── Expression compiler ───────────────────────────────────────────────────
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<StructValue<'ctx>, String> {
@@ -2039,7 +2771,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(self.call_unop_fn(fn_val, v, "unop"))
             }
 
-            Expr::Call { callee, args, .. } => self.compile_call(callee, args),
+            Expr::Call { callee, args, kwargs } => self.compile_call(callee, args, kwargs),
 
             // list literal: [a, b, c]
             Expr::List(elems) => {
@@ -2118,8 +2850,29 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(self.call_binop_fn(self.rt.cool_index, obj_val, idx_val, "index"))
             }
 
+            Expr::Slice { object, start, stop } => {
+                let obj_val = self.compile_expr(object)?;
+                let start_val = match start {
+                    Some(expr) => self.compile_expr(expr)?,
+                    None => self.build_nil(),
+                };
+                let stop_val = match stop {
+                    Some(expr) => self.compile_expr(expr)?,
+                    None => self.build_nil(),
+                };
+                Ok(self.call_triop_fn(self.rt.cool_slice, obj_val, start_val, stop_val, "slice"))
+            }
+
             // attribute access: obj.attr
             Expr::Attr { object, name } => {
+                if let Expr::Ident(class_name) = object.as_ref() {
+                    if let Some(class_info) = self.classes.get(class_name) {
+                        if let Some((_, expr)) = class_info.attributes.iter().find(|(attr, _)| attr == name) {
+                            let expr = expr.clone();
+                            return self.compile_expr(&expr);
+                        }
+                    }
+                }
                 let obj_val = self.compile_expr(object)?;
                 let attr_name_ptr = self
                     .builder
@@ -2137,6 +2890,83 @@ impl<'ctx> Compiler<'ctx> {
                     .left()
                     .unwrap()
                     .into_struct_value())
+            }
+
+            // lambda x, y: x + y — creates a closure
+            Expr::Lambda { params, body } => {
+                // Lambda creates a closure that captures the current environment.
+                // We create a function pointer dynamically and bundle it with captured values.
+                //
+                // Strategy:
+                // 1. Pre-declare a unique helper function for this lambda (fn_name by counter)
+                // 2. Store captured variables to globals so the helper can read them
+                // 3. Create the closure object with function ptr + capture count
+                //
+                // Since we can't dynamically create LLVM functions at runtime, we:
+                // - Create a unique named helper function (compiled later)
+                // - Capture all currently-visible locals as global data
+                // - Create closure with helper fn ptr and number of captures
+
+                let fn_name = format!("__lambda_{}", self.str_counter);
+                self.str_counter += 1;
+
+                // Create the helper function type
+                let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                    params.iter().map(|_| self.cv_type.into()).collect();
+                let fn_type = self.cv_type.fn_type(&param_types, false);
+                let lambda_fn = self.module.add_function(&fn_name, fn_type, None);
+
+                // Store captured variable count
+                let num_captures = self.locals.len();
+                let captures_i64 = self.context.i64_type().const_int(num_captures as u64, false);
+
+                // Store each local's current value to globals that the lambda can access
+                let i32t = self.context.i32_type();
+                for (i, (_, ptr)) in self.locals.iter().enumerate() {
+                    let val = self.builder.build_load(self.cv_type, *ptr, "capture_load").unwrap().into_struct_value();
+                    let idx_val = i32t.const_int(i as u64, false);
+                    self.builder.build_call(
+                        self.rt.cool_set_closure_capture,
+                        &[idx_val.into(), val.into()],
+                        "set_capture",
+                    ).unwrap();
+                }
+
+                // Get function pointer as i64 using pointer-to-int cast
+                let fn_ptr_val = lambda_fn.as_global_value().as_pointer_value();
+                let fn_ptr_int = self.builder.build_ptr_to_int(
+                    fn_ptr_val,
+                    self.context.i64_type(),
+                    "fn_ptr_int"
+                ).unwrap();
+                
+                // Create null pointer for captures array (we use global storage instead)
+                let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
+                
+                let closure = self.builder
+                    .build_call(
+                        self.rt.cool_closure_new,
+                        &[fn_ptr_int.into(), captures_i64.into(), null_ptr.into()],
+                        "make_closure",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+
+                // Store this closure's function for later compilation
+                self.nested_functions.push((
+                    fn_name.clone(),
+                    params.clone(),
+                    vec![Stmt::Return(Some(*body.clone()))],
+                ));
+
+                // We'll compile nested functions at the end. For now, return the closure.
+                // Note: We need to register the function for later compilation.
+                // The nested_functions vec handles this.
+
+                Ok(closure)
             }
 
             Expr::Ternary { condition, then_expr, else_expr } => {
@@ -2180,7 +3010,7 @@ impl<'ctx> Compiler<'ctx> {
                 let idx_zero = self.build_int(0);
                 self.builder.build_store(idx_ptr, idx_zero).unwrap();
 
-                let var_ptr = self.builder.build_alloca(self.cv_type, var).unwrap();
+                let var_ptr = self.build_entry_alloca(var);
                 let saved_var = self.locals.get(var).copied();
                 self.locals.insert(var.clone(), var_ptr);
 
@@ -2282,7 +3112,6 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(self.builder.build_load(self.cv_type, dict_ptr, "dict_final").unwrap().into_struct_value())
             }
 
-            other => Err(format!("unsupported expression in LLVM backend: {other:?}")),
         }
     }
 
@@ -2374,15 +3203,107 @@ impl<'ctx> Compiler<'ctx> {
         Ok(phi.as_basic_value().into_struct_value())
     }
 
+    fn bind_call_args(
+        &mut self,
+        params: &[crate::ast::Param],
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+        skip_leading: usize,
+    ) -> Result<Vec<StructValue<'ctx>>, String> {
+        if params.iter().any(|p| p.is_vararg || p.is_kwarg) {
+            return Err("varargs and kwargs are not supported in the LLVM backend".into());
+        }
+        let effective = &params[skip_leading..];
+        if args.len() > effective.len() {
+            return Err("too many positional arguments".into());
+        }
+
+        let mut bound: Vec<Option<StructValue<'ctx>>> = vec![None; effective.len()];
+        for (i, arg) in args.iter().enumerate() {
+            bound[i] = Some(self.compile_expr(arg)?);
+        }
+
+        for (name, expr) in kwargs {
+            let pos = effective
+                .iter()
+                .position(|p| p.name == *name)
+                .ok_or_else(|| format!("unknown keyword argument '{name}'"))?;
+            if bound[pos].is_some() {
+                return Err(format!("multiple values for argument '{name}'"));
+            }
+            bound[pos] = Some(self.compile_expr(expr)?);
+        }
+
+        let mut out = Vec::with_capacity(effective.len());
+        for (i, param) in effective.iter().enumerate() {
+            if let Some(v) = bound[i] {
+                out.push(v);
+            } else if let Some(default) = &param.default {
+                out.push(self.compile_expr(default)?);
+            } else {
+                return Err(format!("missing required argument '{}'", param.name));
+            }
+        }
+        Ok(out)
+    }
+
+    fn call_fn_with_struct_args(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        values: &[StructValue<'ctx>],
+        name: &str,
+    ) -> StructValue<'ctx> {
+        let args: Vec<BasicMetadataValueEnum<'ctx>> = values.iter().map(|v| (*v).into()).collect();
+        self.builder
+            .build_call(fn_val, &args, name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
     // ── Function call ─────────────────────────────────────────────────────────
 
-    fn compile_call(&mut self, callee: &Expr, args: &[Expr]) -> Result<StructValue<'ctx>, String> {
+    fn compile_call(
+        &mut self,
+        callee: &Expr,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<StructValue<'ctx>, String> {
         // Handle method calls: obj.method(args)
         if let Expr::Attr {
             object,
             name: method_name,
         } = callee
         {
+            if let Expr::Call { callee, args: super_args, kwargs: super_kwargs } = object.as_ref() {
+                if matches!(callee.as_ref(), Expr::Ident(name) if name == "super") && super_args.is_empty() && super_kwargs.is_empty() {
+                    let current_class = self.current_class.clone().ok_or("super() used outside method")?;
+                    let parent_name = self
+                        .classes
+                        .get(&current_class)
+                        .and_then(|c| c.parent.clone())
+                        .ok_or("super(): class has no parent")?;
+                    let parent_info = self.classes.get(&parent_name).ok_or("super(): missing parent metadata")?;
+                    let parent_method = *parent_info
+                        .methods
+                        .get(method_name)
+                        .ok_or_else(|| format!("super(): parent has no method '{method_name}'"))?;
+                    let self_ptr = self.locals.get("self").copied().ok_or("super() called outside of a method")?;
+                    let self_val = self
+                        .builder
+                        .build_load(self.cv_type, self_ptr, "super_self")
+                        .unwrap()
+                        .into_struct_value();
+                    let mut call_args = vec![self_val];
+                    for arg in args {
+                        call_args.push(self.compile_expr(arg)?);
+                    }
+                    return Ok(self.call_fn_with_struct_args(parent_method, &call_args, "super_call"));
+                }
+            }
+
             let obj_val = self.compile_expr(object)?;
             let attr_name = format!("method_{}", method_name);
             let attr_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
@@ -2390,18 +3311,15 @@ impl<'ctx> Compiler<'ctx> {
             // Call method - the runtime looks up the method from the class structure
             let i32t = self.context.i32_type();
             let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
+            let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+                vec![obj_val.into(), attr_name_ptr.as_pointer_value().into(), nargs_i32.into()];
+            for arg in args {
+                call_args.push(self.compile_expr(arg)?.into());
+            }
 
             return Ok(self
                 .builder
-                .build_call(
-                    self.rt.cool_call_method_vararg,
-                    &[
-                        obj_val.into(),
-                        attr_name_ptr.as_pointer_value().into(),
-                        nargs_i32.into(),
-                    ],
-                    "call_method",
-                )
+                .build_call(self.rt.cool_call_method_vararg, &call_args, "call_method")
                 .unwrap()
                 .try_as_basic_value()
                 .left()
@@ -2409,7 +3327,116 @@ impl<'ctx> Compiler<'ctx> {
                 .into_struct_value());
         }
 
-        // Simple function call: name(args)
+        // Handle closure calls: closure_val(args)
+        // This handles any non-Ident callee that might be a closure
+        let closure_val = match callee {
+            Expr::Ident(n) => {
+                // If it's a known function, call it directly
+                if let Some(&fn_val) = self.functions.get(n) {
+                    let params = self.function_params.get(n).cloned().unwrap_or_default();
+                    let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
+                    return Ok(self.call_fn_with_struct_args(fn_val, &compiled, "call"));
+                }
+                // Otherwise, load the variable (might be a closure stored in a local)
+                self.locals.get(n).copied()
+                    .map(|ptr| {
+                        self.builder.build_load(self.cv_type, ptr, n).unwrap().into_struct_value()
+                    })
+            }
+            Expr::Attr { object: _, name: _ } => {
+                // Method calls are handled above, but for closures we might get here
+                None
+            }
+            _ => {
+                // For other expressions (like nested lambdas), compile and load the result
+                Some(self.compile_expr(callee)?)
+            }
+        };
+
+        // If we have a closure value, call it via the runtime
+        if let Some(cv) = closure_val {
+            // Check if it's a closure using cool_is_closure
+            let is_closure = self.builder
+                .build_call(self.rt.cool_is_closure, &[cv.into()], "is_closure")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            let fn_val = self.current_fn.unwrap();
+            let direct_call_bb = self.context.append_basic_block(fn_val, "direct_call");
+            let closure_call_bb = self.context.append_basic_block(fn_val, "closure_call");
+            let after_bb = self.context.append_basic_block(fn_val, "call_after");
+
+            let zero = self.context.i32_type().const_int(0, false);
+            let is_zero = self.builder.build_int_compare(IntPredicate::EQ, is_closure, zero, "is_zero").unwrap();
+            self.builder.build_conditional_branch(is_zero, direct_call_bb, closure_call_bb).unwrap();
+
+            // Direct call path (for regular function values stored in locals)
+            self.builder.position_at_end(direct_call_bb);
+            // For direct call, we need to look up the function by name or call directly
+            let direct_result = if let Expr::Ident(name) = callee {
+                if let Some(&fn_val) = self.functions.get(name) {
+                    let params = self.function_params.get(name).cloned().unwrap_or_default();
+                    let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
+                    self.call_fn_with_struct_args(fn_val, &compiled, "direct_call")
+                } else {
+                    return Err(format!("undefined function '{}'", name));
+                }
+            } else {
+                // For non-identifier callees in direct call path, just compile and return nil
+                self.build_nil()
+            };
+            let direct_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(after_bb).unwrap();
+
+            // Closure call path
+            self.builder.position_at_end(closure_call_bb);
+            // Store args to global buffer
+            let i32t = self.context.i32_type();
+            for (i, arg) in args.iter().enumerate() {
+                let cv = self.compile_expr(arg)?;
+                let idx_val = i32t.const_int(i as u64, false);
+                self.builder.build_call(
+                    self.rt.cool_set_global_arg,
+                    &[idx_val.into(), cv.into()],
+                    "set_arg",
+                ).unwrap();
+            }
+
+            // Get function pointer from closure
+            let fn_ptr = self.builder
+                .build_call(self.rt.cool_closure_get_fn_ptr, &[cv.into()], "get_fn_ptr")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+
+            // Call the function pointer with nargs
+            let nargs_i32 = i32t.const_int(args.len() as u64, false);
+            let mut closure_call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![fn_ptr.into(), nargs_i32.into()];
+            for arg in args {
+                closure_call_args.push(self.compile_expr(arg)?.into());
+            }
+            let closure_result = self.builder
+                .build_call(self.rt.cool_call_fn_ptr, &closure_call_args, "call_closure")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value();
+
+            // Merge results
+            self.builder.build_unconditional_branch(after_bb).unwrap();
+            self.builder.position_at_end(after_bb);
+            let phi = self.builder.build_phi(self.cv_type, "call_result").unwrap();
+            phi.add_incoming(&[(&direct_result, direct_end), (&closure_result, closure_call_bb)]);
+            return Ok(phi.as_basic_value().into_struct_value());
+        }
+
+        // Fall back to named function call
         let name = match callee {
             Expr::Ident(n) => n.clone(),
             other => return Err(format!("only named function calls are supported; got {other:?}")),
@@ -2417,24 +3444,18 @@ impl<'ctx> Compiler<'ctx> {
 
         // ── Check for class instantiation ───────────────────────────────
         if self.classes.contains_key(&name) {
-            // Extract constructor first to avoid borrow conflict
-            let constructor = {
+            let (constructor, ctor_params) = {
                 let class_info = self.classes.get(&name).unwrap();
-                class_info.constructor
+                (class_info.constructor, class_info.constructor_params.clone())
             };
+            let compiled = self.bind_call_args(&ctor_params, args, kwargs, 0)?;
 
             // Compile arguments and store to global buffer for constructor
             let i32t = self.context.i32_type();
-            for (i, arg) in args.iter().enumerate() {
-                let cv = self.compile_expr(arg)?;
+            for (i, cv) in compiled.iter().enumerate() {
                 let idx_val = i32t.const_int(i as u64, false);
-                // Store arg to global method args buffer
                 self.builder
-                    .build_call(
-                        self.rt.cool_set_global_arg,
-                        &[idx_val.into(), cv.into()],
-                        "set_global_arg",
-                    )
+                    .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), (*cv).into()], "set_global_arg")
                     .unwrap();
             }
 
@@ -2540,15 +3561,29 @@ impl<'ctx> Compiler<'ctx> {
         // ── range(start, stop, step=1) ────────────────────────────────────────────
         if name == "range" {
             let n = args.len();
-            if n < 2 || n > 3 {
-                return Err("range() takes 2 or 3 arguments".into());
+            if n < 1 || n > 3 {
+                return Err("range() takes 1, 2 or 3 arguments".into());
             }
-            let start = self.compile_expr(&args[0])?;
-            let stop = self.compile_expr(&args[1])?;
-            let step = if n == 3 {
-                self.compile_expr(&args[2])?
-            } else {
-                self.build_int(1)
+            let (start, stop, step) = match n {
+                1 => {
+                    let stop = self.compile_expr(&args[0])?;
+                    let zero = self.build_int(0);
+                    let one = self.build_int(1);
+                    (zero, stop, one)
+                }
+                2 => {
+                    let start = self.compile_expr(&args[0])?;
+                    let stop = self.compile_expr(&args[1])?;
+                    let one = self.build_int(1);
+                    (start, stop, one)
+                }
+                3 => {
+                    let start = self.compile_expr(&args[0])?;
+                    let stop = self.compile_expr(&args[1])?;
+                    let step = self.compile_expr(&args[2])?;
+                    (start, stop, step)
+                }
+                _ => unreachable!(),
             };
             return Ok(self
                 .builder
@@ -2578,27 +3613,132 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(self.call_unop_fn(self.rt.cool_type, a, "type"));
         }
 
+        if name == "str" {
+            if args.len() != 1 {
+                return Err("str() takes exactly 1 argument".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            let ptr = self
+                .builder
+                .build_call(self.rt.cool_to_str, &[value.into()], "to_str_builtin")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_pointer_value();
+            return Ok(self
+                .builder
+                .build_call(self.rt.cv_str, &[ptr.into()], "cv_str_builtin")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value());
+        }
+
+        if name == "round" {
+            if args.is_empty() || args.len() > 2 {
+                return Err("round() takes 1 or 2 arguments".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            let digits = if args.len() == 2 {
+                self.compile_expr(&args[1])?
+            } else {
+                self.build_nil()
+            };
+            return Ok(self.call_binop_fn(self.rt.cool_round, value, digits, "round"));
+        }
+
+        if name == "sorted" {
+            if args.len() != 1 {
+                return Err("sorted() takes exactly 1 argument".into());
+            }
+            let iterable = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_sorted, iterable, "sorted"));
+        }
+
+        if name == "sum" {
+            if args.len() != 1 {
+                return Err("sum() takes exactly 1 argument".into());
+            }
+            let iterable = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_sum, iterable, "sum"));
+        }
+
+        if name == "min" || name == "max" {
+            if args.is_empty() {
+                return Err(format!("{name}() requires at least 1 argument"));
+            }
+            let mut best = self.compile_expr(&args[0])?;
+            for arg in &args[1..] {
+                let next = self.compile_expr(arg)?;
+                let cmp = if name == "min" {
+                    self.call_binop_fn(self.rt.cool_lt, next, best, "min_cmp")
+                } else {
+                    self.call_binop_fn(self.rt.cool_gt, next, best, "max_cmp")
+                };
+                let fn_val = self.current_fn.unwrap();
+                let take_bb = self.context.append_basic_block(fn_val, "minmax_take");
+                let keep_bb = self.context.append_basic_block(fn_val, "minmax_keep");
+                let done_bb = self.context.append_basic_block(fn_val, "minmax_done");
+                let cond_i1 = self.truthy_i1(cmp);
+                self.builder
+                    .build_conditional_branch(cond_i1, take_bb, keep_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(take_bb);
+                let take_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(keep_bb);
+                let keep_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let phi = self.builder.build_phi(self.cv_type, "minmax_phi").unwrap();
+                phi.add_incoming(&[(&next, take_end), (&best, keep_end)]);
+                best = phi.as_basic_value().into_struct_value();
+            }
+            return Ok(best);
+        }
+
+        if name == "isinstance" {
+            if args.len() != 2 {
+                return Err("isinstance() takes exactly 2 arguments".into());
+            }
+            let obj = self.compile_expr(&args[0])?;
+            let class_name = match &args[1] {
+                Expr::Str(s) => s.clone(),
+                _ => return Err("isinstance() currently requires a string literal class name".into()),
+            };
+            let class_name_ptr = self
+                .builder
+                .build_global_string_ptr(&class_name, &format!("isinstance_{}", self.str_counter))
+                .unwrap();
+            self.str_counter += 1;
+            return Ok(self
+                .builder
+                .build_call(
+                    self.rt.cool_is_instance,
+                    &[obj.into(), class_name_ptr.as_pointer_value().into()],
+                    "isinstance",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value());
+        }
+
         // ── user-defined function ──
         let fn_val = self
             .functions
             .get(&name)
             .copied()
             .ok_or_else(|| format!("undefined function '{name}'"))?;
-
-        let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
-        for arg in args {
-            let cv = self.compile_expr(arg)?;
-            compiled.push(cv.into());
-        }
-
-        Ok(self
-            .builder
-            .build_call(fn_val, &compiled, "call")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value())
+        let params = self.function_params.get(&name).cloned().unwrap_or_default();
+        let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
+        Ok(self.call_fn_with_struct_args(fn_val, &compiled, "call"))
     }
 }
 
@@ -2628,6 +3768,7 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
             let fn_type = compiler.cv_type.fn_type(&param_types, false);
             let fn_val = compiler.module.add_function(name, fn_type, None);
             compiler.functions.insert(name.clone(), fn_val);
+            compiler.function_params.insert(name.clone(), params.clone());
         }
     }
 
@@ -2645,6 +3786,11 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
         let zero = i32_type.const_int(0, false);
         compiler.builder.build_return(Some(&zero)).unwrap();
     }
+
+    compiler
+        .module
+        .verify()
+        .map_err(|e| format!("LLVM module verification failed: {e}"))?;
 
     // ── Emit LLVM module → object file ───────────────────────────────────────
     let triple = TargetMachine::get_default_triple();

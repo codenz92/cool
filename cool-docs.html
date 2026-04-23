@@ -2872,12 +2872,13 @@ echo Done.</code></pre>
           <li>✅ Bytecode VM — compile AST to bytecode, run on a stack-based virtual machine (<code>compiler.rs</code>,
             <code>vm.rs</code>, <code>opcode.rs</code>)
           </li>
-          <li>✅ LLVM backend — compile Cool → LLVM IR → native binary</li>
-          <li>✅ FFI — call C functions from Cool code via <code>import ffi</code></li>
+          <li>✅ LLVM backend — compile a large native subset of Cool → LLVM IR → native binary</li>
+          <li>✅ FFI — available in the interpreter and bytecode VM via <code>import ffi</code></li>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
-          <li>✅ Classes in LLVM — <code>class</code>, <code>__init__</code>, methods, attribute access</li>
+          <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
+          <li>⚠️ LLVM still excludes closures/lambdas, <code>import</code>, <code>try</code>/<code>except</code>, and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>
