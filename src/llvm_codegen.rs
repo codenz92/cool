@@ -3029,12 +3029,14 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── try / except / else / finally ────────────────────────────────
             Stmt::Try { body, handlers, else_body, finally_body } => {
-                self.compile_try(body, handlers, else_body.as_deref(), finally_body.as_deref())?;
+                let _ = (body, handlers, else_body, finally_body);
+                return Err("try/except is not yet supported in LLVM backend; use the interpreter or --vm".into());
             }
 
             // ── raise ────────────────────────────────────────────────────────
             Stmt::Raise(opt_expr) => {
-                self.compile_raise(opt_expr.as_ref())?;
+                let _ = opt_expr;
+                return Err("raise is not yet supported in LLVM backend; use the interpreter or --vm".into());
             }
 
             // ── import file.cool ─────────────────────────────────────────────

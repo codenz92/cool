@@ -55,6 +55,28 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
     }
 }
 
+fn compile_native_expect_error(source: &str) -> String {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let source_path = cwd.join(unique_test_path("temp_llvm_test", "cool"));
+    let binary_path = source_path.with_extension("");
+
+    fs::write(&source_path, source).unwrap();
+
+    let build_output = Command::new("./target/debug/cool")
+        .args(["build", source_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_file(&source_path);
+    let _ = fs::remove_file(&binary_path);
+
+    assert!(!build_output.status.success(), "expected native build to fail");
+    let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
+    format!("{stdout}{stderr}")
+}
+
 #[test]
 fn test_llvm_default_kwargs_and_sorted() {
     let result = compile_and_run_native(
@@ -372,4 +394,18 @@ print(re.split(",\s*", "a, b,  c"))
     assert!(result.contains("[1, 22, 333]") || result.contains("[1,22,333]"));
     assert!(result.contains("aXbXcX"));
     assert!(result.contains("[a, b, c]") || result.contains("[a,b,c]"));
+}
+
+#[test]
+fn test_llvm_rejects_try_except() {
+    let output = compile_native_expect_error(
+        r#"
+try:
+    raise "boom"
+except:
+    print("caught")
+"#,
+    );
+
+    assert!(output.contains("try/except is not yet supported in LLVM backend"));
 }
