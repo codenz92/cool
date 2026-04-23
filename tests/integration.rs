@@ -74,6 +74,32 @@ fn run_cool_path_with_args(path: &std::path::Path, extra_args: &[&str]) -> Resul
     }
 }
 
+fn run_cool_stdin_with_args(path: &str, extra_args: &[&str], stdin: &str) -> Result<String, String> {
+    let mut cmd = Command::new(cool_bin());
+    cmd.arg(path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    {
+        let mut child_stdin = child.stdin.take().ok_or_else(|| "missing stdin pipe".to_string())?;
+        child_stdin.write_all(stdin.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(stderr)
+    }
+}
+
 #[test]
 fn test_hello_world() {
     let result = run_cool("print(\"Hello, World!\")").unwrap();
@@ -438,6 +464,37 @@ fn test_http_app_cli_args() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("hello from cool http app"));
+}
+
+#[test]
+fn test_runfile_passes_program_args() {
+    let temp_dir = std::env::temp_dir().join("cool_runfile_args_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let child_path = temp_dir.join("child.cool");
+    let main_path = temp_dir.join("main.cool");
+    std::fs::write(&child_path, "import sys\nprint(sys.argv[0])\nprint(sys.argv[1])\nprint(sys.argv[2])\n").unwrap();
+    std::fs::write(
+        &main_path,
+        format!("runfile(\"{}\", [\"one\", \"two\"])\n", child_path.display()),
+    )
+    .unwrap();
+
+    let output = Command::new(cool_bin()).arg(&main_path).output().unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("child.cool"));
+    assert!(stdout.contains("\none\n"));
+    assert!(stdout.contains("\ntwo\n"));
+}
+
+#[test]
+fn test_shell_http_app_launch() {
+    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "http help\nexit\n").unwrap();
+    assert!(result.contains("http v1.0 — simple HTTP client"));
+    assert!(result.contains("http get <url>"));
 }
 
 #[test]

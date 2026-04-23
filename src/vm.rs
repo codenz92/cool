@@ -1945,7 +1945,13 @@ impl VM {
                     Some(VmValue::Str(s)) => s.clone(),
                     _ => return Err(self.err("runfile() requires a path string")),
                 };
-                self.run_file(&path)
+                let extra_args: Vec<String> = match args.get(1) {
+                    None => Vec::new(),
+                    Some(VmValue::List(items)) => items.borrow().iter().map(|v| v.to_string()).collect(),
+                    Some(VmValue::Tuple(items)) => items.iter().map(|v| v.to_string()).collect(),
+                    Some(_) => return Err(self.err("runfile() 2nd argument must be a list or tuple of args")),
+                };
+                self.run_file(&path, &extra_args)
             }
             "__import_module__" => {
                 let module_name = match args.first() {
@@ -2967,15 +2973,42 @@ impl VM {
         false
     }
 
-    fn run_file(&mut self, path: &str) -> Result<VmValue, String> {
-        let full = self.source_dir.join(path);
+    fn run_file(&mut self, path: &str, extra_args: &[String]) -> Result<VmValue, String> {
+        let full = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            self.source_dir.join(path)
+        };
         let source = std::fs::read_to_string(&full).map_err(|e| self.err(&format!("runfile '{}': {}", path, e)))?;
         let mut lexer = crate::lexer::Lexer::new(&source);
         let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
         let mut parser = crate::parser::Parser::new(tokens);
         let program = parser.parse_program().map_err(|e| self.err(&e))?;
         let chunk = crate::compiler::compile(&program).map_err(|e| self.err(&e))?;
+        let old_source_dir = self.source_dir.clone();
+        let old_script_path = std::env::var("COOL_SCRIPT_PATH").ok();
+        let old_program_args = std::env::var("COOL_PROGRAM_ARGS").ok();
+        if let Some(parent) = full.parent() {
+            self.source_dir = parent.to_path_buf();
+        }
+        std::env::set_var("COOL_SCRIPT_PATH", full.to_string_lossy().to_string());
+        if !extra_args.is_empty() {
+            std::env::set_var("COOL_PROGRAM_ARGS", extra_args.join("\x1F"));
+        } else {
+            std::env::remove_var("COOL_PROGRAM_ARGS");
+        }
         self.run(&chunk)?;
+        self.source_dir = old_source_dir;
+        if let Some(script_path) = old_script_path {
+            std::env::set_var("COOL_SCRIPT_PATH", script_path);
+        } else {
+            std::env::remove_var("COOL_SCRIPT_PATH");
+        }
+        if let Some(program_args) = old_program_args {
+            std::env::set_var("COOL_PROGRAM_ARGS", program_args);
+        } else {
+            std::env::remove_var("COOL_PROGRAM_ARGS");
+        }
         Ok(VmValue::Nil)
     }
 

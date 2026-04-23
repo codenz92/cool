@@ -1,5 +1,5 @@
 # CoolOS Shell — the user-facing layer of CoolOS
-# Run with: cool coolos/shell.cool
+# Run with: cool coolapps/shell.cool
 
 import os
 import sys
@@ -469,27 +469,26 @@ def cmd_clear(args):
 # ── Built-in apps ─────────────────────────────────────────────────────────────
 
 def cmd_calc(args):
-    runfile(join_path(cwd, "coolos/calc.cool"))
+    runfile(join_path(cwd, "coolapps/calc.cool"))
 
 def cmd_notes(args):
-    runfile(join_path(cwd, "coolos/notes.cool"))
+    runfile(join_path(cwd, "coolapps/notes.cool"))
 
 def cmd_top(args):
-    runfile(join_path(cwd, "coolos/top.cool"))
+    runfile(join_path(cwd, "coolapps/top.cool"))
 
 def cmd_snake(args):
-    runfile(join_path(cwd, "coolos/snake.cool"))
+    runfile(join_path(cwd, "coolapps/snake.cool"))
 
 def cmd_edit(args):
     if len(args) == 0:
         print("Usage: edit <file>")
         return
-    # Build a temporary launcher that passes the filename via argv workaround
     target = join_path(cwd, args[0])
-    runfile(join_path(cwd, "coolos/edit.cool"))
+    runfile(join_path(cwd, "coolapps/edit.cool"), [target])
 
 def cmd_http(args):
-    runfile(join_path(cwd, "coolos/http.cool"))
+    runfile(join_path(cwd, "coolapps/http.cool"), args)
 
 # ── Command dispatcher ────────────────────────────────────────────────────────
 

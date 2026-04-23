@@ -2674,26 +2674,55 @@ class Stack:
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("runfile() requires a file path string")),
                 };
-                let source = std::fs::read_to_string(&path)
-                    .map_err(|e| self.err(&format!("runfile: cannot read '{}': {}", path, e)))?;
+                let extra_args: Vec<String> = match args.get(1) {
+                    None => Vec::new(),
+                    Some(Value::List(lst)) => lst.borrow().iter().map(|v| format!("{}", v)).collect(),
+                    Some(Value::Tuple(items)) => items.iter().map(|v| format!("{}", v)).collect(),
+                    Some(_) => return Err(self.err("runfile() 2nd argument must be a list or tuple of args")),
+                };
+                let full_path = if std::path::Path::new(&path).is_absolute() {
+                    std::path::PathBuf::from(&path)
+                } else {
+                    self.source_dir.join(&path)
+                };
+                let source = std::fs::read_to_string(&full_path)
+                    .map_err(|e| self.err(&format!("runfile: cannot read '{}': {}", full_path.display(), e)))?;
                 let mut lexer = crate::lexer::Lexer::new(&source);
                 let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
                 let mut parser = crate::parser::Parser::new(tokens);
                 let program = parser.parse_program().map_err(|e| self.err(&e))?;
                 let old_dir = self.source_dir.clone();
-                if let Some(parent) = std::path::Path::new(&path).parent() {
+                let old_script_path = std::env::var("COOL_SCRIPT_PATH").ok();
+                let old_program_args = std::env::var("COOL_PROGRAM_ARGS").ok();
+                if let Some(parent) = full_path.parent() {
                     self.source_dir = parent.to_path_buf();
+                }
+                std::env::set_var("COOL_SCRIPT_PATH", full_path.to_string_lossy().to_string());
+                if !extra_args.is_empty() {
+                    std::env::set_var("COOL_PROGRAM_ARGS", extra_args.join("\x1F"));
+                } else {
+                    std::env::remove_var("COOL_PROGRAM_ARGS");
                 }
                 let run_env = Env::new_global();
                 let result = self.exec_block(&program, &run_env);
                 self.source_dir = old_dir;
+                if let Some(script_path) = old_script_path {
+                    std::env::set_var("COOL_SCRIPT_PATH", script_path);
+                } else {
+                    std::env::remove_var("COOL_SCRIPT_PATH");
+                }
+                if let Some(program_args) = old_program_args {
+                    std::env::set_var("COOL_PROGRAM_ARGS", program_args);
+                } else {
+                    std::env::remove_var("COOL_PROGRAM_ARGS");
+                }
                 match result {
                     Err(e) if e == "__raise__" => {
                         let v = self.pending_raise.take().unwrap_or(Value::Nil);
-                        eprintln!("Error in {}: {}", path, v);
+                        eprintln!("Error in {}: {}", full_path.display(), v);
                     }
-                    Err(e) => eprintln!("Error in {}: {}", path, e),
-                    Ok(Signal::Raise(v)) => eprintln!("Unhandled exception in {}: {}", path, v),
+                    Err(e) => eprintln!("Error in {}: {}", full_path.display(), e),
+                    Ok(Signal::Raise(v)) => eprintln!("Unhandled exception in {}: {}", full_path.display(), v),
                     Ok(_) => {}
                 }
                 Ok(Value::Nil)
