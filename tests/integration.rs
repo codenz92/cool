@@ -242,6 +242,12 @@ fn test_vm_random_seed_reproducible() {
 }
 
 #[test]
+fn test_vm_random_randint_invalid_bounds() {
+    let err = run_cool_vm("import random\nprint(random.randint(5, 3))").unwrap_err();
+    assert!(err.contains("random.randint a must be <= b"));
+}
+
+#[test]
 fn test_vm_import_string_module() {
     let result = run_cool_vm(
         "import string\nprint(string.upper(\"hello\"))\nprint(string.join(\" | \", [\"a\", \"b\", \"c\"]))",

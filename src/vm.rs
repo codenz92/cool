@@ -2255,7 +2255,10 @@ impl VM {
                             Some(VmValue::Int(i)) => *i,
                             _ => return Err(self.err("random.randint requires two ints")),
                         };
-                        let range = (b - a + 1).max(1) as u64;
+                        if a > b {
+                            return Err(self.err("random.randint a must be <= b"));
+                        }
+                        let range = (b - a + 1) as u64;
                         Ok(VmValue::Int(a + (self.rng_next_u64() % range) as i64))
                     }
                     "choice" => {
