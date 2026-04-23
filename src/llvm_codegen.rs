@@ -52,6 +52,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_TUPLE  9
 #define TAG_CLOSURE 10
 #define TAG_EXCEPTION 11
+#define TAG_FILE  12
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -178,6 +179,11 @@ typedef struct {
     AttrMap* attrs;
 } CoolObject;
 
+typedef struct {
+    FILE* fp;
+    int closed;
+} CoolFile;
+
 /* Forward declarations for runtime functions */
 CoolVal cv_nil(void);
 CoolVal cv_int(int64_t);
@@ -222,6 +228,7 @@ CoolVal cool_dict_contains(CoolVal, CoolVal);
 CoolVal cool_index(CoolVal, CoolVal);
 CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
+CoolVal cool_file_open(CoolVal, CoolVal);
 CoolVal cool_abs(CoolVal);
 CoolVal cool_to_int(CoolVal);
 CoolVal cool_to_float_val(CoolVal);
@@ -483,6 +490,7 @@ char* cool_to_str(CoolVal v) {
         case TAG_INT:   snprintf(buf, 64, "%lld", (long long)v.payload);      break;
         case TAG_FLOAT: snprintf(buf, 64, "%g",   cv_as_float(v));            break;
         case TAG_BOOL:  snprintf(buf, 64, "%s",   v.payload ? "true":"false"); break;
+        case TAG_FILE:  snprintf(buf, 64, "<file>");                          break;
         case TAG_LIST: {
             CoolList* lst = (CoolList*)(intptr_t)v.payload;
             if (!lst || !lst->data) { snprintf(buf, 64, "[]"); break; }
@@ -571,6 +579,7 @@ const char* cool_type_name(int32_t tag) {
         case TAG_DICT:   return "dict";
         case TAG_OBJECT: return "object";
         case TAG_TUPLE:  return "tuple";
+        case TAG_FILE:   return "file";
         default:         return "unknown";
     }
 }
@@ -712,6 +721,7 @@ void cool_print(int32_t n, ...) {
             case TAG_FLOAT: printf("%g",   cv_as_float(v));       break;
             case TAG_BOOL:  fputs(v.payload ? "true" : "false", stdout); break;
             case TAG_STR:   fputs((const char*)(intptr_t)v.payload, stdout); break;
+            case TAG_FILE:  fputs("<file>", stdout); break;
             case TAG_LIST: {
                 CoolList* lst = (CoolList*)(intptr_t)v.payload;
                 if (!lst || !lst->data) { fputs("[]", stdout); break; }
@@ -1262,6 +1272,143 @@ static CoolVal collections_make_instance(CoolVal cls) {
     return obj;
 }
 
+static CoolFile* cv_file_ptr(CoolVal v) {
+    return (CoolFile*)(intptr_t)v.payload;
+}
+
+CoolVal cool_file_open(CoolVal path, CoolVal mode) {
+    if (path.tag != TAG_STR) {
+        fprintf(stderr, "TypeError: open() requires a path string\n");
+        exit(1);
+    }
+    if (mode.tag != TAG_STR) {
+        fprintf(stderr, "TypeError: open() mode must be a string\n");
+        exit(1);
+    }
+    const char* p = (const char*)(intptr_t)path.payload;
+    const char* m = (const char*)(intptr_t)mode.payload;
+    FILE* fp = fopen(p, m);
+    if (!fp) {
+        fprintf(stderr, "FileNotFoundError: '%s'\n", p);
+        exit(1);
+    }
+    CoolFile* f = (CoolFile*)malloc(sizeof(CoolFile));
+    if (!f) {
+        fprintf(stderr, "RuntimeError: out of memory opening file\n");
+        exit(1);
+    }
+    f->fp = fp;
+    f->closed = 0;
+    CoolVal v;
+    v.tag = TAG_FILE;
+    v.payload = (int64_t)(intptr_t)f;
+    return v;
+}
+
+CoolVal cool_file_read(CoolVal file) {
+    CoolFile* f = cv_file_ptr(file);
+    if (!f || f->closed) {
+        fputs("ValueError: I/O operation on closed file\n", stderr);
+        exit(1);
+    }
+    fseek(f->fp, 0, SEEK_END);
+    long size = ftell(f->fp);
+    rewind(f->fp);
+    char* buf = (char*)malloc((size_t)size + 1);
+    if (!buf) return cv_str("");
+    size_t read = fread(buf, 1, (size_t)size, f->fp);
+    buf[read] = '\0';
+    return cv_str(buf);
+}
+
+CoolVal cool_file_readline(CoolVal file) {
+    CoolFile* f = cv_file_ptr(file);
+    if (!f || f->closed) {
+        fputs("ValueError: I/O operation on closed file\n", stderr);
+        exit(1);
+    }
+    char* buf = (char*)malloc(4096);
+    size_t cap = 4096, len = 0;
+    int c;
+    while ((c = fgetc(f->fp)) != EOF) {
+        if (len + 2 >= cap) {
+            cap *= 2;
+            buf = (char*)realloc(buf, cap);
+        }
+        buf[len++] = (char)c;
+        if (c == '\n') break;
+    }
+    buf[len] = '\0';
+    return cv_str(buf);
+}
+
+CoolVal cool_file_readlines(CoolVal file) {
+    CoolFile* f = cv_file_ptr(file);
+    if (!f || f->closed) {
+        fputs("ValueError: I/O operation on closed file\n", stderr);
+        exit(1);
+    }
+    CoolVal res = cool_list_make(cv_int(4));
+    char* buf = (char*)malloc(4096);
+    size_t cap = 4096, len = 0;
+    int c;
+    while ((c = fgetc(f->fp)) != EOF) {
+        if (len + 2 >= cap) {
+            cap *= 2;
+            buf = (char*)realloc(buf, cap);
+        }
+        buf[len++] = (char)c;
+        if (c == '\n') {
+            buf[len] = '\0';
+            char* line = (char*)malloc(len + 1);
+            memcpy(line, buf, len + 1);
+            cool_list_push(res, cv_str(line));
+            len = 0;
+        }
+    }
+    if (len > 0) {
+        buf[len] = '\0';
+        char* line = (char*)malloc(len + 1);
+        memcpy(line, buf, len + 1);
+        cool_list_push(res, cv_str(line));
+    }
+    free(buf);
+    return res;
+}
+
+CoolVal cool_file_write(CoolVal file, CoolVal text) {
+    CoolFile* f = cv_file_ptr(file);
+    if (!f || f->closed) {
+        fputs("ValueError: I/O operation on closed file\n", stderr);
+        exit(1);
+    }
+    const char* s = text.tag == TAG_STR ? (const char*)(intptr_t)text.payload : cool_to_str(text);
+    fputs(s, f->fp);
+    fflush(f->fp);
+    return cv_nil();
+}
+
+CoolVal cool_file_writelines(CoolVal file, CoolVal lines) {
+    if (lines.tag != TAG_LIST && lines.tag != TAG_TUPLE) {
+        fprintf(stderr, "TypeError: writelines() requires a list or tuple\n");
+        exit(1);
+    }
+    CoolList* l = (CoolList*)(intptr_t)lines.payload;
+    for (int64_t i = 0; i < l->length; i++) {
+        cool_file_write(file, ((CoolVal*)l->data)[i]);
+    }
+    return cv_nil();
+}
+
+CoolVal cool_file_close(CoolVal file) {
+    CoolFile* f = cv_file_ptr(file);
+    if (f && !f->closed) {
+        fclose(f->fp);
+        f->closed = 1;
+    }
+    return cv_nil();
+}
+
 CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
@@ -1289,6 +1436,17 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
     }
     if (obj.tag == TAG_DICT && (strcmp(builtin_name, "contains") == 0 || strcmp(builtin_name, "has_key") == 0) && nargs == 1) {
         return cool_dict_contains(obj, g_method_args[1]);
+    }
+    if (obj.tag == TAG_FILE) {
+        CoolVal a0 = nargs > 0 ? g_method_args[1] : cv_nil();
+        if (strcmp(builtin_name, "__enter__") == 0 && nargs == 0) return obj;
+        if (strcmp(builtin_name, "__exit__") == 0 && nargs == 3) return cool_file_close(obj);
+        if (strcmp(builtin_name, "read") == 0 && nargs == 0) return cool_file_read(obj);
+        if (strcmp(builtin_name, "readline") == 0 && nargs == 0) return cool_file_readline(obj);
+        if (strcmp(builtin_name, "readlines") == 0 && nargs == 0) return cool_file_readlines(obj);
+        if (strcmp(builtin_name, "write") == 0 && nargs == 1) return cool_file_write(obj, a0);
+        if (strcmp(builtin_name, "writelines") == 0 && nargs == 1) return cool_file_writelines(obj, a0);
+        if (strcmp(builtin_name, "close") == 0 && nargs == 0) return cool_file_close(obj);
     }
 
     if (obj.tag != TAG_OBJECT) return cv_nil();
@@ -2691,6 +2849,7 @@ struct RuntimeFns<'ctx> {
     cool_index: FunctionValue<'ctx>,
     cool_slice: FunctionValue<'ctx>,
     cool_setindex: FunctionValue<'ctx>,
+    cool_file_open: FunctionValue<'ctx>,
     cool_abs: FunctionValue<'ctx>,
     cool_to_int: FunctionValue<'ctx>,
     cool_to_float_val: FunctionValue<'ctx>,
@@ -2923,6 +3082,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_index: decl!("cool_index", cv_type.fn_type(&[cv, cv], false)),
             cool_slice: decl!("cool_slice", cv_type.fn_type(&[cv, cv, cv], false)),
             cool_setindex: decl!("cool_setindex", cv_type.fn_type(&[cv, cv, cv], false)),
+            cool_file_open: decl!("cool_file_open", cv_type.fn_type(&[cv, cv], false)),
             cool_abs: decl!("cool_abs", cv_type.fn_type(&[cv], false)),
             cool_to_int: decl!("cool_to_int", cv_type.fn_type(&[cv], false)),
             cool_to_float_val: decl!("cool_to_float_val", cv_type.fn_type(&[cv], false)),
@@ -5079,6 +5239,29 @@ impl<'ctx> Compiler<'ctx> {
             }
             self.builder.build_call(self.rt.cool_print, &call_args, "").unwrap();
             return Ok(self.build_nil());
+        }
+
+        if name == "open" {
+            if !kwargs.is_empty() {
+                return Err("open() keyword arguments are not yet supported in LLVM backend".into());
+            }
+            if args.is_empty() || args.len() > 2 {
+                return Err("open() takes 1 or 2 arguments".into());
+            }
+            let path = self.compile_expr(&args[0])?;
+            let mode = if args.len() == 2 {
+                self.compile_expr(&args[1])?
+            } else {
+                self.build_str("r")
+            };
+            return Ok(self
+                .builder
+                .build_call(self.rt.cool_file_open, &[path.into(), mode.into()], "open")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value());
         }
 
         // ── raw memory builtins ──

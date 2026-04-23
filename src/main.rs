@@ -289,12 +289,11 @@ NOTES:
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
-    (Queue/Stack), custom with/context managers on normal exit and
-    return/break/continue, inline asm, and raw memory.
+    (Queue/Stack), open()/file methods, with/context managers on
+    normal exit and return/break/continue, inline asm, and raw memory.
     Closures/lambdas, broader import support beyond those built-ins,
     import ffi, and try/except still require the interpreter or
-    bytecode VM. Native with does not yet unwind through exceptions,
-    and native open()/file context managers are still unavailable.
+    bytecode VM. Native with does not yet unwind through exceptions.
 "
     );
 }

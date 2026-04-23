@@ -634,3 +634,43 @@ print(s.is_empty())
     assert!(result.contains("\nb\n"));
     assert!(result.contains("false"));
 }
+
+#[test]
+fn test_llvm_open_and_file_methods() {
+    let cwd = std::env::current_dir().unwrap();
+    let file_path = cwd.join(unique_test_path("temp_llvm_file_io", "txt"));
+
+    let source = format!(
+        r#"
+path = "{path}"
+with open(path, "w") as f:
+    f.write("alpha\n")
+    f.writelines(["beta\n", "gamma\n"])
+
+with open(path) as f:
+    print(f.readline().strip())
+    rest = f.readlines()
+    print(len(rest))
+    print(rest[0].strip())
+    print(rest[1].strip())
+
+f = open(path, "a")
+f.write("delta\n")
+f.close()
+
+reader = open(path, "r")
+print(reader.read().strip())
+reader.close()
+"#,
+        path = file_path.display()
+    );
+
+    let result = compile_and_run_native(&source).unwrap();
+    let _ = fs::remove_file(&file_path);
+
+    assert!(result.contains("alpha"));
+    assert!(result.contains("\n2\n"));
+    assert!(result.contains("beta"));
+    assert!(result.contains("gamma"));
+    assert!(result.contains("delta"));
+}

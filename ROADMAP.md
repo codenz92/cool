@@ -316,7 +316,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, and custom `with` / context managers on normal exit and control-flow exits (`return`, `break`, `continue`). The following features still have notable gaps in LLVM:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit and control-flow exits (`return`, `break`, `continue`). The following features still have notable gaps in LLVM:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -326,7 +326,7 @@ The LLVM backend now covers most day-to-day language features, including default
 | `in` / `not in` | ✅ | ✅ | ✅ |
 | Dicts | ✅ | ✅ | ✅ |
 | Tuples | ✅ | ✅ | ✅ |
-| `with` / `context managers` (custom managers; no exception unwinding or `open()`) | ✅ | ✅ | ⚠️ |
+| `with` / `context managers` (normal/control-flow exits only; no exception unwinding) | ✅ | ✅ | ⚠️ |
 | Closures / lambdas | ✅ | ✅ | ❌ |
 | General `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
@@ -379,7 +379,8 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [x] Bytecode VM: full `with` / context-manager cleanup semantics, including `return`, `break`, `continue`, and exceptions
 - [x] LLVM: custom `with` / context managers on normal exit and control-flow exits (`return`, `break`, `continue`)
-- [ ] LLVM: exception-safe `with` unwinding and native `open()` / file context managers
+- [x] LLVM: native `open()` / file methods and `with open(...)` on normal exit and control-flow exits
+- [ ] LLVM: exception-safe `with` unwinding
 - [ ] LLVM: `try` / `except` / `finally` / `raise`
 - [ ] LLVM: broader `import` support beyond built-in native modules
 - [ ] LLVM: `import ffi`
