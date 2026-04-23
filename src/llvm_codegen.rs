@@ -168,9 +168,10 @@ static CoolVal attrmap_get(AttrMap* m, const char* key) {
 }
 
 /* ── Class definition ────────────────────────────────────────────────── */
-typedef struct {
+typedef struct CoolClass {
     int32_t tag;       /* TAG_CLASS */
     int64_t name;      /* const char* */
+    struct CoolClass* parent;
     int64_t method_count;
     /* Flexible array: [name1, ptr1, name2, ptr2, ...] (pairs) */
     int64_t methods[];  
@@ -252,10 +253,11 @@ CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
 int64_t cool_closure_get_fn_ptr(CoolVal);
 int32_t cool_is_closure(CoolVal);
-int32_t cool_enter_try(void);
+void cool_enter_try(void*);
 void cool_exit_try(void);
 CoolVal cool_get_exception(void);
 void cool_raise(CoolVal);
+void cool_register_class_parent(const char*, const char*);
 void cool_push_with(CoolVal);
 void cool_pop_with(void);
 static CoolSubprocessResult cool_subprocess_run_shell(const char*, int, double);
@@ -263,13 +265,14 @@ static CoolVal cool_subprocess_result_dict(CoolSubprocessResult);
 void cool_print(int32_t, ...);
 
 /* ── class / object support ─────────────────────────────────────────── */
-CoolVal cool_class_new(const char*, int64_t, int64_t*);
+CoolVal cool_class_new(const char*, CoolVal, int64_t, int64_t*);
 CoolVal cool_object_new(CoolVal);
 CoolVal cool_get_attr(CoolVal, const char*);
 CoolVal cool_set_attr(CoolVal, const char*, CoolVal);
 CoolVal cool_call_method_vararg(CoolVal, const char*, int32_t, ...);
 CoolVal cool_get_arg(int32_t);
 CoolVal cool_is_instance(CoolVal, const char*);
+int32_t cool_exception_matches(CoolVal, const char*);
 int64_t cool_get_method_ptr(CoolVal, const char*);
 
 /* ── bit-pattern helpers ──────────────────────────────────────────────── */
@@ -761,11 +764,56 @@ void cool_print(int32_t n, ...) {
 }
 
 /* ── class operations ─────────────────────────────────────────────────── */
-CoolVal cool_class_new(const char* name, int64_t method_count, int64_t* method_ptrs) {
+typedef struct {
+    const char* class_name;
+    const char* parent_name;
+} CoolClassParent;
+#define MAX_CLASS_PARENTS 256
+static CoolClassParent g_class_parents[MAX_CLASS_PARENTS];
+static int g_class_parent_count = 0;
+
+static const char* cool_lookup_parent_name(const char* class_name) {
+    for (int i = g_class_parent_count - 1; i >= 0; i--) {
+        if (strcmp(g_class_parents[i].class_name, class_name) == 0) {
+            return g_class_parents[i].parent_name;
+        }
+    }
+    return NULL;
+}
+
+void cool_register_class_parent(const char* class_name, const char* parent_name) {
+    if (!class_name || !parent_name || !*parent_name) return;
+    for (int i = 0; i < g_class_parent_count; i++) {
+        if (strcmp(g_class_parents[i].class_name, class_name) == 0) {
+            g_class_parents[i].parent_name = parent_name;
+            return;
+        }
+    }
+    if (g_class_parent_count < MAX_CLASS_PARENTS) {
+        g_class_parents[g_class_parent_count].class_name = class_name;
+        g_class_parents[g_class_parent_count].parent_name = parent_name;
+        g_class_parent_count++;
+    }
+}
+
+static int cool_class_name_matches(const char* actual_name, const char* expected_name) {
+    const char* cur = actual_name;
+    int depth = 0;
+    while (cur && depth++ < MAX_CLASS_PARENTS) {
+        if (strcmp(cur, expected_name) == 0) {
+            return 1;
+        }
+        cur = cool_lookup_parent_name(cur);
+    }
+    return 0;
+}
+
+CoolVal cool_class_new(const char* name, CoolVal parent_val, int64_t method_count, int64_t* method_ptrs) {
     CoolClass* cls = (CoolClass*)malloc(sizeof(CoolClass) + 2 * method_count * sizeof(int64_t));
     if (!cls) return cv_nil();
     cls->tag = TAG_CLASS;
     cls->name = (int64_t)(intptr_t)name;
+    cls->parent = parent_val.tag == TAG_CLASS ? (CoolClass*)(intptr_t)parent_val.payload : NULL;
     cls->method_count = method_count;
     for (int64_t i = 0; i < method_count; i++) {
         cls->methods[i * 2] = method_ptrs[i * 2];     /* name pointer */
@@ -1273,7 +1321,7 @@ static void cool_init_collections_classes(void) {
         (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_queue_is_empty,
         (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_queue_size,
     };
-    g_queue_class = cool_class_new("Queue", 7, queue_methods);
+    g_queue_class = cool_class_new("Queue", cv_nil(), 7, queue_methods);
 
     int64_t stack_methods[] = {
         (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_stack_push,
@@ -1282,7 +1330,7 @@ static void cool_init_collections_classes(void) {
         (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_stack_is_empty,
         (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_stack_size,
     };
-    g_stack_class = cool_class_new("Stack", 5, stack_methods);
+    g_stack_class = cool_class_new("Stack", cv_nil(), 5, stack_methods);
 }
 
 static CoolVal collections_make_instance(CoolVal cls) {
@@ -1497,7 +1545,21 @@ CoolVal cool_is_instance(CoolVal obj, const char* class_name) {
     if (obj.tag != TAG_OBJECT) return cv_bool(0);
     CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
     if (!o->class) return cv_bool(0);
-    return cv_bool(strcmp((const char*)(intptr_t)o->class->name, class_name) == 0);
+    const char* actual_name = (const char*)(intptr_t)o->class->name;
+    return cv_bool(cool_class_name_matches(actual_name, class_name));
+}
+
+int32_t cool_exception_matches(CoolVal exc, const char* class_name) {
+    if (exc.tag == TAG_STR) {
+        const char* text = (const char*)(intptr_t)exc.payload;
+        return strcmp(text, class_name) == 0
+            || strcmp(class_name, "Exception") == 0
+            || strcmp(class_name, "Error") == 0;
+    }
+    if (exc.tag == TAG_OBJECT) {
+        return cool_truthy(cool_is_instance(exc, class_name));
+    }
+    return strcmp(class_name, "Exception") == 0;
 }
 
 /* ── Dict runtime ────────────────────────────────────────────────────── */
@@ -3541,7 +3603,7 @@ int32_t cool_get_num_closure_captures(void) {
 #define MAX_WITH_MANAGERS 64
 
 typedef struct {
-    jmp_buf buf;
+    void* buf;
     int active;
     int with_depth;
 } ExceptionFrame;
@@ -3576,23 +3638,18 @@ static void cool_unwind_withs_to(int depth) {
     }
 }
 
-/* Set up an exception frame, returns 0 if first time, 1 if longjmp occurred */
-int32_t cool_enter_try(void) {
+/* Push an exception frame for a caller-owned jmp_buf. */
+void cool_enter_try(void* buf) {
     if (g_exception_frame_count < MAX_EXCEPTION_FRAMES) {
         int idx = g_exception_frame_count;
+        g_exception_frames[idx].buf = buf;
         g_exception_frames[idx].active = 1;
         g_exception_frames[idx].with_depth = g_with_manager_count;
         g_exception_frame_count++;
-        int result = setjmp(g_exception_frames[idx].buf);
-        if (result == 0) {
-            return 0;  /* normal execution */
-        } else {
-            return 1;  /* exception caught via longjmp */
-        }
+        return;
     }
     fprintf(stderr, "RuntimeError: too many nested try blocks\n");
     exit(1);
-    return 0;
 }
 
 /* Exit the current try block */
@@ -3610,7 +3667,7 @@ void cool_raise(CoolVal exc) {
         if (g_exception_frames[i].active) {
             cool_unwind_withs_to(g_exception_frames[i].with_depth);
             g_exception_frames[i].active = 0;
-            longjmp(g_exception_frames[i].buf, 1);
+            longjmp(*(jmp_buf*)g_exception_frames[i].buf, 1);
         }
     }
     cool_unwind_withs_to(0);
@@ -3925,6 +3982,7 @@ struct RuntimeFns<'ctx> {
     cool_set_global_arg: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_is_instance: FunctionValue<'ctx>,
+    cool_exception_matches: FunctionValue<'ctx>,
     cool_contains: FunctionValue<'ctx>,
     // dict operations
     cool_dict_new: FunctionValue<'ctx>,
@@ -3958,11 +4016,15 @@ struct RuntimeFns<'ctx> {
     #[allow(dead_code)]
     cool_enter_try: FunctionValue<'ctx>,
     #[allow(dead_code)]
+    setjmp_fn: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_exit_try: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_raise: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_get_exception: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_register_class_parent: FunctionValue<'ctx>,
     cool_push_with: FunctionValue<'ctx>,
     cool_pop_with: FunctionValue<'ctx>,
     // module/import
@@ -4007,8 +4069,10 @@ struct Compiler<'ctx> {
     current_class: Option<String>,
     /// Names of imported built-in modules visible to the native backend.
     imported_modules: HashSet<String>,
-    /// Active `with` blocks in the current function, stored by manager slot.
-    with_stack: Vec<WithCleanup<'ctx>>,
+    /// Active cleanup scopes in the current function.
+    cleanup_stack: Vec<CleanupEntry<'ctx>>,
+    /// Active try contexts in the current function.
+    try_stack: Vec<TryContext>,
 }
 
 /// Information about a compiled class
@@ -4033,12 +4097,19 @@ struct ClassInfo<'ctx> {
 struct LoopFrame<'ctx> {
     continue_bb: BasicBlock<'ctx>,
     break_bb: BasicBlock<'ctx>,
-    with_depth: usize,
+    cleanup_depth: usize,
+}
+
+#[derive(Clone)]
+enum CleanupEntry<'ctx> {
+    With { manager_ptr: PointerValue<'ctx> },
+    Finally { body: Vec<Stmt> },
 }
 
 #[derive(Clone, Copy)]
-struct WithCleanup<'ctx> {
-    manager_ptr: PointerValue<'ctx>,
+struct TryContext {
+    cleanup_depth: usize,
+    catches_exceptions: bool,
 }
 
 // ── Constructor & runtime declarations ───────────────────────────────────────
@@ -4071,7 +4142,8 @@ impl<'ctx> Compiler<'ctx> {
             nested_functions: Vec::new(),
             current_class: None,
             imported_modules: HashSet::new(),
-            with_stack: Vec::new(),
+            cleanup_stack: Vec::new(),
+            try_stack: Vec::new(),
         }
     }
 
@@ -4153,7 +4225,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_len: decl!("cool_len", cv_type.fn_type(&[cv], false)),
             cool_type: decl!("cool_type", cv_type.fn_type(&[cv], false)),
             // class operations
-            cool_class_new: decl!("cool_class_new", cv_type.fn_type(&[ptrm, i64m, ptrm], false)),
+            cool_class_new: decl!("cool_class_new", cv_type.fn_type(&[ptrm, cv, i64m, ptrm], false)),
             cool_object_new: decl!("cool_object_new", cv_type.fn_type(&[cv], false)),
             cool_get_attr: decl!("cool_get_attr", cv_type.fn_type(&[cv, ptrm], false)),
             cool_set_attr: decl!("cool_set_attr", cv_type.fn_type(&[cv, ptrm, cv], false)),
@@ -4161,6 +4233,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_get_arg: decl!("cool_get_arg", cv_type.fn_type(&[i32m], false)),
             cool_set_global_arg: decl!("cool_set_global_arg", voidt.fn_type(&[i32m, cv], false)),
             cool_is_instance: decl!("cool_is_instance", cv_type.fn_type(&[cv, ptrm], false)),
+            cool_exception_matches: decl!("cool_exception_matches", i32t.fn_type(&[cv, ptrm], false)),
             cool_contains: decl!("cool_contains", cv_type.fn_type(&[cv, cv], false)),
             // dict operations
             cool_dict_new: decl!("cool_dict_new", cv_type.fn_type(&[], false)),
@@ -4184,10 +4257,12 @@ impl<'ctx> Compiler<'ctx> {
             cool_set_closure_capture: decl!("cool_set_closure_capture", voidt.fn_type(&[i32m, cv], false)),
             cool_get_closure_capture: decl!("cool_get_closure_capture", cv_type.fn_type(&[i32m], false)),
             // exception handling
-            cool_enter_try: decl!("cool_enter_try", i32t.fn_type(&[], false)),
+            cool_enter_try: decl!("cool_enter_try", voidt.fn_type(&[ptrm], false)),
+            setjmp_fn: decl!("_setjmp", i32t.fn_type(&[ptrm], false)),
             cool_exit_try: decl!("cool_exit_try", voidt.fn_type(&[], false)),
             cool_raise: decl!("cool_raise", voidt.fn_type(&[cv], false)),
             cool_get_exception: decl!("cool_get_exception", cv_type.fn_type(&[], false)),
+            cool_register_class_parent: decl!("cool_register_class_parent", voidt.fn_type(&[ptrm, ptrm], false)),
             cool_push_with: decl!("cool_push_with", voidt.fn_type(&[cv], false)),
             cool_pop_with: decl!("cool_pop_with", voidt.fn_type(&[], false)),
             // module/import
@@ -4234,8 +4309,23 @@ impl<'ctx> Compiler<'ctx> {
         builder.build_alloca(self.cv_type, name).unwrap()
     }
 
-    fn current_with_depth(&self) -> usize {
-        self.with_stack.len()
+    fn build_entry_jmp_buf_alloca(&self, name: &str) -> PointerValue<'ctx> {
+        let fn_val = self.current_fn.expect("jmp_buf alloca requires active function");
+        let entry = fn_val
+            .get_first_basic_block()
+            .expect("function should have an entry block");
+        let builder = self.context.create_builder();
+        if let Some(first) = entry.get_first_instruction() {
+            builder.position_before(&first);
+        } else {
+            builder.position_at_end(entry);
+        }
+        let buf_ty = self.context.i64_type().array_type(64);
+        builder.build_alloca(buf_ty, name).unwrap()
+    }
+
+    fn current_cleanup_depth(&self) -> usize {
+        self.cleanup_stack.len()
     }
 
     fn call_method_named(
@@ -4279,14 +4369,56 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_call(self.rt.cool_pop_with, &[], "with_pop").unwrap();
     }
 
-    fn emit_with_cleanup(&mut self, manager_ptr: PointerValue<'ctx>) {
-        self.emit_with_exit_call(manager_ptr);
+    fn emit_cleanup_entry(&mut self, entry_index: usize, entry: CleanupEntry<'ctx>) -> Result<(), String> {
+        match entry {
+            CleanupEntry::With { manager_ptr } => {
+                self.emit_with_exit_call(manager_ptr);
+                Ok(())
+            }
+            CleanupEntry::Finally { body } => {
+                let saved_cleanup_stack = self.cleanup_stack.clone();
+                let saved_try_stack = self.try_stack.clone();
+                self.cleanup_stack.truncate(entry_index);
+                self.try_stack.retain(|ctx| ctx.cleanup_depth < entry_index);
+                let result = self.compile_stmts(&body);
+                self.cleanup_stack = saved_cleanup_stack;
+                self.try_stack = saved_try_stack;
+                result
+            }
+        }
     }
 
-    fn emit_cleanup_from_with_depth(&mut self, depth: usize) {
-        let manager_ptrs: Vec<_> = self.with_stack[depth..].iter().map(|cleanup| cleanup.manager_ptr).collect();
-        for manager_ptr in manager_ptrs.into_iter().rev() {
-            self.emit_with_cleanup(manager_ptr);
+    fn emit_try_exit_from_cleanup_depth(&mut self, depth: usize) {
+        for ctx in self.try_stack.iter().rev() {
+            if ctx.catches_exceptions && ctx.cleanup_depth >= depth {
+                self.builder
+                    .build_call(self.rt.cool_exit_try, &[], "exit_try_for_control_flow")
+                    .unwrap();
+            }
+        }
+    }
+
+    fn emit_cleanup_from_depth(&mut self, depth: usize) -> Result<(), String> {
+        let entries: Vec<(usize, CleanupEntry<'ctx>)> = self.cleanup_stack[depth..]
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(offset, entry)| (depth + offset, entry))
+            .collect();
+        for (entry_index, entry) in entries.into_iter().rev() {
+            self.emit_cleanup_entry(entry_index, entry)?;
+            if self.current_block_terminated() {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn current_raise_cleanup_depth(&self) -> Option<usize> {
+        match self.try_stack.last() {
+            Some(ctx) if ctx.catches_exceptions => None,
+            Some(ctx) => Some(ctx.cleanup_depth),
+            None => Some(0),
         }
     }
 
@@ -4527,7 +4659,8 @@ impl<'ctx> Compiler<'ctx> {
                     if let Some(e) = opt_expr {
                         self.compile_expr(e)?; // side-effects only
                     }
-                    self.emit_cleanup_from_with_depth(0);
+                    self.emit_try_exit_from_cleanup_depth(0);
+                    self.emit_cleanup_from_depth(0)?;
                     let zero = self.context.i32_type().const_int(0, false);
                     self.builder.build_return(Some(&zero)).unwrap();
                 } else {
@@ -4535,7 +4668,8 @@ impl<'ctx> Compiler<'ctx> {
                         Some(e) => self.compile_expr(e)?,
                         None => self.build_nil(),
                     };
-                    self.emit_cleanup_from_with_depth(0);
+                    self.emit_try_exit_from_cleanup_depth(0);
+                    self.emit_cleanup_from_depth(0)?;
                     self.builder.build_return(Some(&val)).unwrap();
                 }
             }
@@ -4543,12 +4677,14 @@ impl<'ctx> Compiler<'ctx> {
             // ── break / continue ─────────────────────────────────────────────
             Stmt::Break => {
                 let loop_frame = *self.loop_stack.last().ok_or("'break' used outside loop")?;
-                self.emit_cleanup_from_with_depth(loop_frame.with_depth);
+                self.emit_try_exit_from_cleanup_depth(loop_frame.cleanup_depth);
+                self.emit_cleanup_from_depth(loop_frame.cleanup_depth)?;
                 self.builder.build_unconditional_branch(loop_frame.break_bb).unwrap();
             }
             Stmt::Continue => {
                 let loop_frame = *self.loop_stack.last().ok_or("'continue' used outside loop")?;
-                self.emit_cleanup_from_with_depth(loop_frame.with_depth);
+                self.emit_try_exit_from_cleanup_depth(loop_frame.cleanup_depth);
+                self.emit_cleanup_from_depth(loop_frame.cleanup_depth)?;
                 self.builder.build_unconditional_branch(loop_frame.continue_bb).unwrap();
             }
 
@@ -4622,14 +4758,12 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── try / except / else / finally ────────────────────────────────
             Stmt::Try { body, handlers, else_body, finally_body } => {
-                let _ = (body, handlers, else_body, finally_body);
-                return Err("try/except is not yet supported in LLVM backend; use the interpreter or --vm".into());
+                self.compile_try(body, handlers, else_body.as_deref(), finally_body.as_deref())?;
             }
 
             // ── raise ────────────────────────────────────────────────────────
             Stmt::Raise(opt_expr) => {
-                let _ = opt_expr;
-                return Err("raise is not yet supported in LLVM backend; use the interpreter or --vm".into());
+                self.compile_raise(opt_expr.as_ref())?;
             }
 
             // ── import file.cool ─────────────────────────────────────────────
@@ -4727,7 +4861,7 @@ impl<'ctx> Compiler<'ctx> {
         self.loop_stack.push(LoopFrame {
             continue_bb: cond_bb,
             break_bb: after_bb,
-            with_depth: self.current_with_depth(),
+            cleanup_depth: self.current_cleanup_depth(),
         });
         self.builder.position_at_end(body_bb);
         self.compile_stmts(body)?;
@@ -4778,7 +4912,7 @@ impl<'ctx> Compiler<'ctx> {
         self.loop_stack.push(LoopFrame {
             continue_bb: step_bb,
             break_bb: after_bb,
-            with_depth: self.current_with_depth(),
+            cleanup_depth: self.current_cleanup_depth(),
         });
         let body_idx = self
             .builder
@@ -4826,7 +4960,8 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_fn = self.current_fn.replace(fn_val);
         let saved_loops = std::mem::take(&mut self.loop_stack);
-        let saved_withs = std::mem::take(&mut self.with_stack);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
 
         // Build entry block
         let entry = self.context.append_basic_block(fn_val, "entry");
@@ -4857,7 +4992,8 @@ impl<'ctx> Compiler<'ctx> {
         self.locals = saved_locals;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
-        self.with_stack = saved_withs;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -4977,7 +5113,8 @@ impl<'ctx> Compiler<'ctx> {
                     let saved_locals = std::mem::take(&mut self.locals);
                     let saved_fn = self.current_fn.replace(fn_val);
                     let saved_loops = std::mem::take(&mut self.loop_stack);
-                    let saved_withs = std::mem::take(&mut self.with_stack);
+                    let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+                    let saved_tries = std::mem::take(&mut self.try_stack);
                     let saved_class = self.current_class.replace(name.to_string());
 
                     // Build entry
@@ -5009,7 +5146,8 @@ impl<'ctx> Compiler<'ctx> {
                     self.locals = saved_locals;
                     self.current_fn = saved_fn;
                     self.loop_stack = saved_loops;
-                    self.with_stack = saved_withs;
+                    self.cleanup_stack = saved_cleanups;
+                    self.try_stack = saved_tries;
                     self.current_class = saved_class;
                     if let Some(bb) = saved_bb {
                         self.builder.position_at_end(bb);
@@ -5028,10 +5166,25 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_fn = self.current_fn.replace(constructor);
         let saved_loops = std::mem::take(&mut self.loop_stack);
-        let saved_withs = std::mem::take(&mut self.with_stack);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
 
         let entry = self.context.append_basic_block(constructor, "entry");
         self.builder.position_at_end(entry);
+
+        if let Some(parent_name) = parent {
+            let parent_name_ptr = self
+                .builder
+                .build_global_string_ptr(parent_name, &format!("class_parent_name_{}_{}", name, parent_name))
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.rt.cool_register_class_parent,
+                    &[name_ptr.as_pointer_value().into(), parent_name_ptr.as_pointer_value().into()],
+                    "register_class_parent",
+                )
+                .unwrap();
+        }
 
         // Build method data array: [name_ptr1, fn_ptr1, name_ptr2, fn_ptr2, ...]
         let method_count = methods.len() as i64;
@@ -5131,12 +5284,14 @@ impl<'ctx> Compiler<'ctx> {
                 "method_data_i64ptr",
             )
             .unwrap();
+        let parent_class_val = self.build_nil();
         let class_val = self
             .builder
             .build_call(
                 self.rt.cool_class_new,
                 &[
                     name_ptr.as_pointer_value().into(),
+                    parent_class_val.into(),
                     self.context.i64_type().const_int(method_count as u64, false).into(),
                     method_data_i64ptr.into(),
                 ],
@@ -5202,7 +5357,8 @@ impl<'ctx> Compiler<'ctx> {
         self.locals = saved_locals;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
-        self.with_stack = saved_withs;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -5294,17 +5450,16 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.build_store(ptr, entered).unwrap();
         }
 
-        self.with_stack.push(WithCleanup { manager_ptr });
+        self.cleanup_stack.push(CleanupEntry::With { manager_ptr });
         self.compile_stmts(body)?;
-        self.with_stack.pop();
+        self.cleanup_stack.pop();
         if !self.current_block_terminated() {
-            self.emit_with_cleanup(manager_ptr);
+            self.emit_with_exit_call(manager_ptr);
         }
         Ok(())
     }
 
     // ── try / except / else / finally ────────────────────────────────────────
-    #[allow(dead_code)]
     fn compile_try(
         &mut self,
         body: &[Stmt],
@@ -5313,11 +5468,32 @@ impl<'ctx> Compiler<'ctx> {
         finally_body: Option<&[Stmt]>,
     ) -> Result<(), String> {
         let fn_val = self.current_fn.unwrap();
+        let try_cleanup_depth = self.current_cleanup_depth();
+        if let Some(finally) = finally_body {
+            self.cleanup_stack
+                .push(CleanupEntry::Finally { body: finally.to_vec() });
+        }
+        self.try_stack.push(TryContext {
+            cleanup_depth: try_cleanup_depth,
+            catches_exceptions: true,
+        });
 
-        // Call cool_enter_try() which does setjmp
+        let jmp_name = format!("__try_jmp_{}", self.fresh_name());
+        let jmp_buf_ptr = self.build_entry_jmp_buf_alloca(&jmp_name);
+        let jmp_buf_i8ptr = self
+            .builder
+            .build_pointer_cast(
+                jmp_buf_ptr,
+                self.context.i8_type().ptr_type(inkwell::AddressSpace::default()),
+                "try_jmp_buf",
+            )
+            .unwrap();
+        self.builder
+            .build_call(self.rt.cool_enter_try, &[jmp_buf_i8ptr.into()], "push_try")
+            .unwrap();
         let result = self
             .builder
-            .build_call(self.rt.cool_enter_try, &[], "enter_try")
+            .build_call(self.rt.setjmp_fn, &[jmp_buf_i8ptr.into()], "setjmp")
             .unwrap()
             .try_as_basic_value()
             .left()
@@ -5330,39 +5506,51 @@ impl<'ctx> Compiler<'ctx> {
             .unwrap();
 
         let try_bb = self.context.append_basic_block(fn_val, "try_body");
-        let handler_bb = self.context.append_basic_block(fn_val, "exception_handler");
+        let caught_bb = self.context.append_basic_block(fn_val, "try_caught");
+        let after_body_bb = self.context.append_basic_block(fn_val, "try_after_body");
         let merge_bb = self.context.append_basic_block(fn_val, "try_merge");
+        let else_bb = else_body.map(|_| self.context.append_basic_block(fn_val, "try_else"));
+        let finally_normal_bb = finally_body.map(|_| self.context.append_basic_block(fn_val, "try_finally_normal"));
+        let finally_reraise_bb = finally_body.map(|_| self.context.append_basic_block(fn_val, "try_finally_reraise"));
+        let no_match_bb = self.context.append_basic_block(fn_val, "try_no_match");
+        let exc_name = format!("__try_exc_{}", self.fresh_name());
+        let exc_ptr = self.build_entry_alloca(&exc_name);
 
         self.builder
-            .build_conditional_branch(caught_i1, handler_bb, try_bb)
+            .build_conditional_branch(caught_i1, caught_bb, try_bb)
             .unwrap();
 
-        // ── Normal path: execute try body ──────────────────────────────────
         self.builder.position_at_end(try_bb);
         self.compile_stmts(body)?;
-
-        // Run else body if no exception occurred
-        let _else_bb = if else_body.is_some() {
-            let bb = self.context.append_basic_block(fn_val, "else_body");
-            if !self.current_block_terminated() {
+        if !self.current_block_terminated() {
+            self.builder
+                .build_call(self.rt.cool_exit_try, &[], "exit_try_normal")
+                .unwrap();
+            if let Some(bb) = else_bb {
                 self.builder.build_unconditional_branch(bb).unwrap();
+            } else {
+                self.builder.build_unconditional_branch(after_body_bb).unwrap();
             }
+        }
+
+        if let Some(ctx) = self.try_stack.last_mut() {
+            ctx.catches_exceptions = false;
+        }
+
+        if let Some(bb) = else_bb {
             self.builder.position_at_end(bb);
             if let Some(stmts) = else_body {
                 self.compile_stmts(stmts)?;
             }
-            bb
-        } else {
-            try_bb
-        };
-
-        if !self.current_block_terminated() {
-            self.builder.build_unconditional_branch(merge_bb).unwrap();
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(after_body_bb).unwrap();
+            }
         }
 
-        // ── Exception handler path ──────────────────────────────────────────
-        self.builder.position_at_end(handler_bb);
-        // Get the exception value from cool_get_exception()
+        self.builder.position_at_end(caught_bb);
+        self.builder
+            .build_call(self.rt.cool_exit_try, &[], "exit_try_caught")
+            .unwrap();
         let exc_val = self
             .builder
             .build_call(self.rt.cool_get_exception, &[], "get_exc")
@@ -5371,86 +5559,164 @@ impl<'ctx> Compiler<'ctx> {
             .left()
             .unwrap()
             .into_struct_value();
+        self.builder.build_store(exc_ptr, exc_val).unwrap();
 
-        let mut handled = false;
-        for handler in handlers {
-            let matches = handler.exc_type.is_none()
-                || {
-                    // For type-based matching, we just match bare except or type names
-                    // In practice, we handle this by storing exception type info
-                    // For simplicity, bare except catches all, typed catches need more work
-                    true
+        let mut next_check_bb = caught_bb;
+        for (idx, handler) in handlers.iter().enumerate() {
+            let handler_entry_bb = self.context.append_basic_block(fn_val, &format!("handler_{idx}"));
+            self.builder.position_at_end(next_check_bb);
+
+            if let Some(exc_type) = &handler.exc_type {
+                let next_bb = if idx + 1 == handlers.len() {
+                    no_match_bb
+                } else {
+                    self.context.append_basic_block(fn_val, &format!("handler_check_{}", idx + 1))
                 };
+                let exc_cur = self
+                    .builder
+                    .build_load(self.cv_type, exc_ptr, "exc_for_match")
+                    .unwrap()
+                    .into_struct_value();
+                let type_ptr = self
+                    .builder
+                    .build_global_string_ptr(exc_type, &format!("exc_type_{}_{}", exc_type, idx))
+                    .unwrap();
+                let matched_i32 = self
+                    .builder
+                    .build_call(
+                        self.rt.cool_exception_matches,
+                        &[exc_cur.into(), type_ptr.as_pointer_value().into()],
+                        "exc_matches",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_int_value();
+                let matched = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, matched_i32, zero, "exc_match_bool")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(matched, handler_entry_bb, next_bb)
+                    .unwrap();
+                next_check_bb = next_bb;
+            } else {
+                self.builder.build_unconditional_branch(handler_entry_bb).unwrap();
+                next_check_bb = no_match_bb;
+            }
 
-            if matches {
-                // Create handler scope
-                let handler_env_bb = self.context.append_basic_block(fn_val, "handler_body");
-                self.builder.build_unconditional_branch(handler_env_bb).unwrap();
-                self.builder.position_at_end(handler_env_bb);
+            self.builder.position_at_end(handler_entry_bb);
+            if let Some(as_name) = &handler.as_name {
+                let ptr = if let Some(&p) = self.locals.get(as_name) {
+                    p
+                } else {
+                    let p = self.build_entry_alloca(as_name);
+                    self.locals.insert(as_name.clone(), p);
+                    p
+                };
+                let exc_cur = self
+                    .builder
+                    .build_load(self.cv_type, exc_ptr, "exc_for_bind")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(ptr, exc_cur).unwrap();
+            }
 
-                // Bind the exception to the 'as' name if present
-                if let Some(as_name) = &handler.as_name {
-                    let ptr = self.build_entry_alloca(as_name);
-                    self.builder.build_store(ptr, exc_val).unwrap();
-                    self.locals.insert(as_name.clone(), ptr);
-                }
+            self.compile_stmts(&handler.body)?;
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(after_body_bb).unwrap();
+            }
 
-                self.compile_stmts(&handler.body)?;
-
-                if !self.current_block_terminated() {
-                    self.builder.build_unconditional_branch(merge_bb).unwrap();
-                }
-
-                handled = true;
+            if handler.exc_type.is_none() {
                 break;
             }
         }
 
-        if !handled {
-            // Re-raise if no handler matched - exit try and re-raise
-            self.builder
-                .build_call(self.rt.cool_exit_try, &[], "exit_try")
-                .unwrap();
-            // Call cool_raise again to propagate
-            self.builder
-                .build_call(self.rt.cool_raise, &[exc_val.into()], "re_raise")
-                .unwrap();
-            self.builder.build_unreachable().unwrap();
+        if next_check_bb != no_match_bb {
+            self.builder.position_at_end(next_check_bb);
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(no_match_bb).unwrap();
+            }
         }
 
-        // ── Finally block ────────────────────────────────────────────────────
-        // Position at merge or finally if present
-        if let Some(finally) = finally_body {
-            let finally_bb = self.context.append_basic_block(fn_val, "finally_body");
-            self.builder.position_at_end(merge_bb);
-            if !self.current_block_terminated() {
-                self.builder.build_unconditional_branch(finally_bb).unwrap();
-            }
-            self.builder.position_at_end(finally_bb);
-            self.compile_stmts(finally)?;
-            if !self.current_block_terminated() {
+        self.try_stack.pop();
+        if finally_body.is_some() {
+            self.cleanup_stack.pop();
+        }
+
+        self.builder.position_at_end(after_body_bb);
+        if !self.current_block_terminated() {
+            if let Some(bb) = finally_normal_bb {
+                self.builder.build_unconditional_branch(bb).unwrap();
+            } else {
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
             }
         }
 
+        self.builder.position_at_end(no_match_bb);
+        if let Some(bb) = finally_reraise_bb {
+            self.builder.build_unconditional_branch(bb).unwrap();
+        } else {
+            let exc_cur = self
+                .builder
+                .build_load(self.cv_type, exc_ptr, "exc_for_reraise")
+                .unwrap()
+                .into_struct_value();
+            self.builder
+                .build_call(self.rt.cool_raise, &[exc_cur.into()], "re_raise")
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
+        }
+
+        if let Some(finally) = finally_body {
+            let finally_normal_bb = finally_normal_bb.expect("finally block should exist");
+            self.builder.position_at_end(finally_normal_bb);
+            self.compile_stmts(finally)?;
+            if !self.current_block_terminated() {
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+            }
+
+            let finally_reraise_bb = finally_reraise_bb.expect("finally rethrow block should exist");
+            self.builder.position_at_end(finally_reraise_bb);
+            self.compile_stmts(finally)?;
+            if !self.current_block_terminated() {
+                let exc_cur = self
+                    .builder
+                    .build_load(self.cv_type, exc_ptr, "exc_after_finally")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder
+                    .build_call(self.rt.cool_raise, &[exc_cur.into()], "raise_after_finally")
+                    .unwrap();
+                self.builder.build_unreachable().unwrap();
+            }
+        }
+
         self.builder.position_at_end(merge_bb);
-
-        // Clean up the try frame
-        self.builder
-            .build_call(self.rt.cool_exit_try, &[], "exit_try")
-            .unwrap();
-
         Ok(())
     }
 
     // ── raise ────────────────────────────────────────────────────────────────
-    #[allow(dead_code)]
     fn compile_raise(&mut self, opt_expr: Option<&Expr>) -> Result<(), String> {
         let exc_val = if let Some(e) = opt_expr {
             self.compile_expr(e)?
         } else {
-            self.build_str("Exception")
+            self.builder
+                .build_call(self.rt.cool_get_exception, &[], "raise_current_exc")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
         };
+
+        if let Some(cleanup_depth) = self.current_raise_cleanup_depth() {
+            self.emit_cleanup_from_depth(cleanup_depth)?;
+            if self.current_block_terminated() {
+                return Ok(());
+            }
+        }
 
         self.builder
             .build_call(self.rt.cool_raise, &[exc_val.into()], "raise")

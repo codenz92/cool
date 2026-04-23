@@ -292,11 +292,10 @@ NOTES:
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
     (Queue/Stack), subprocess(run/call/check_output), argparse(parse/help), open()/file methods, with/context managers on
-    normal exit, return/break/continue, and unhandled native raises,
+    normal exit, return/break/continue, caught exceptions, and unhandled native raises,
     inline asm, and raw memory.
     Closures/lambdas, broader import support beyond those built-ins,
-    import ffi, and try/except still require the interpreter or
-    bytecode VM. Native with does not yet support caught exceptions.
+    and import ffi still require the interpreter or bytecode VM.
 "
     );
 }

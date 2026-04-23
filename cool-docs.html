@@ -1519,7 +1519,7 @@ print(len(v1))     # 2</code></pre>
         </div>
 
         <h3>Context Managers (with)</h3>
-        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in both the tree-walk interpreter and the bytecode VM, including cleanup on normal exit, control-flow exits, and raised exceptions. LLVM native builds also support custom context managers and <code>with open(...)</code> on normal exit, control-flow exits, and unhandled native raises, but caught exceptions still require the interpreter or bytecode VM.</p>
+        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in both the tree-walk interpreter and the bytecode VM, including cleanup on normal exit, control-flow exits, and raised exceptions. LLVM native builds now support custom context managers and <code>with open(...)</code> on normal exit, control-flow exits, caught exceptions, and unhandled native raises too.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python">class Timer:
@@ -2196,7 +2196,7 @@ eval("print('hello from eval')")</code></pre>
         </div>
 
         <h3>with Statement (Recommended)</h3>
-        <p>Use <code>with</code> for structured file cleanup. Both the tree-walk interpreter and the bytecode VM close files on normal exit and raised exceptions. LLVM native builds now support <code>open()</code> and file context managers on normal exit and control-flow exits too, but still do not unwind <code>with</code> blocks through exceptions.</p>
+        <p>Use <code>with</code> for structured file cleanup. Both the tree-walk interpreter and the bytecode VM close files on normal exit and raised exceptions. LLVM native builds now support <code>open()</code> and file context managers on normal exit, control-flow exits, caught exceptions, and unhandled native raises too.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python"># Read entire file
@@ -2902,7 +2902,7 @@ echo Done.</code></pre>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, and unhandled native raises, plus built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code> and <code>argparse.parse()</code>/<code>help()</code>, but still excludes caught exceptions, closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>path</code>/<code>subprocess</code>/<code>argparse</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, and <code>argparse.parse()</code>/<code>help()</code>, but still excludes closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>path</code>/<code>subprocess</code>/<code>argparse</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

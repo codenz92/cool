@@ -68,27 +68,6 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
     }
 }
 
-fn compile_native_expect_error(source: &str) -> String {
-    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
-    let cwd = std::env::current_dir().unwrap();
-    let source_path = cwd.join(unique_test_path("temp_llvm_test", "cool"));
-    let binary_path = source_path.with_extension("");
-
-    fs::write(&source_path, source).unwrap();
-
-    let build_output = Command::new(cool_bin())
-        .args(["build", source_path.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    cleanup_native_artifacts(&source_path, &binary_path);
-
-    assert!(!build_output.status.success(), "expected native build to fail");
-    let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
-    let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
-    format!("{stdout}{stderr}")
-}
-
 fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().unwrap();
@@ -614,17 +593,103 @@ print(res["ok"])
 }
 
 #[test]
-fn test_llvm_rejects_try_except() {
-    let output = compile_native_expect_error(
+fn test_llvm_try_except_catches_raised_value() {
+    let result = compile_and_run_native(
         r#"
 try:
     raise "boom"
-except:
+except as err:
+    print("caught")
+    print(err)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["caught", "boom"]);
+}
+
+#[test]
+fn test_llvm_try_except_matches_parent_handler() {
+    let result = compile_and_run_native(
+        r#"
+class BaseErr:
+    pass
+
+class SubErr(BaseErr):
+    pass
+
+try:
+    raise SubErr()
+except BaseErr:
     print("caught")
 "#,
-    );
+    )
+    .unwrap();
 
-    assert!(output.contains("try/except is not yet supported in LLVM backend"));
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["caught"]);
+}
+
+#[test]
+fn test_llvm_try_else_finally() {
+    let result = compile_and_run_native(
+        r#"
+try:
+    print("body")
+except:
+    print("except")
+else:
+    print("else")
+finally:
+    print("finally")
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["body", "else", "finally"]);
+}
+
+#[test]
+fn test_llvm_try_finally_cleans_on_continue() {
+    let result = compile_and_run_native(
+        r#"
+for i in [1, 2]:
+    try:
+        if i == 1:
+            continue
+        print(i)
+    finally:
+        print("finally")
+        print(i)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["finally", "1", "2", "finally", "2"]);
+}
+
+#[test]
+fn test_llvm_bare_raise_reraises_current_exception() {
+    let result = compile_and_run_native(
+        r#"
+try:
+    try:
+        raise "boom"
+    except:
+        print("inner")
+        raise
+except as err:
+    print("outer")
+    print(err)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["inner", "outer", "boom"]);
 }
 
 #[test]
@@ -650,6 +715,32 @@ with C():
     let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
     assert!(lines.starts_with(&["enter", "exit"]));
     assert!(output.contains("Unhandled exception: Stack is empty"));
+}
+
+#[test]
+fn test_llvm_with_context_manager_cleans_on_caught_exception() {
+    let result = compile_and_run_native(
+        r#"
+class C:
+    def __enter__(self):
+        print("enter")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("exit")
+
+try:
+    with C():
+        raise "boom"
+except as err:
+    print("caught")
+    print(err)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "exit", "caught", "boom"]);
 }
 
 #[test]
