@@ -10,6 +10,7 @@ mod llvm_codegen;
 mod logging_runtime;
 mod opcode;
 mod parser;
+mod sqlite_runtime;
 mod subprocess_runtime;
 mod toml_runtime;
 mod vm;
@@ -554,14 +555,14 @@ NOTES:
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
     source-relative file imports and project/package imports,
     native import ffi (ffi.open/ffi.func),
-    built-in import math/os/sys/path/csv/datetime/hashlib/toml/yaml/subprocess/argparse/logging/test/time and import random
+    built-in import math/os/sys/path/csv/datetime/hashlib/toml/yaml/sqlite/subprocess/argparse/logging/test/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
-    (Queue/Stack), csv(rows/dicts/write), datetime(now/format/parse/parts/add_seconds/diff_seconds), hashlib(md5/sha1/sha256/digest), toml(loads/dumps), yaml(loads/dumps for a config-oriented subset), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
+    (Queue/Stack), csv(rows/dicts/write), datetime(now/format/parse/parts/add_seconds/diff_seconds), hashlib(md5/sha1/sha256/digest), toml(loads/dumps), yaml(loads/dumps for a config-oriented subset), sqlite(execute/query/scalar), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
     test(equal/not_equal/truthy/falsey/is_nil/not_nil/fail/raises), open()/file methods, with/context managers on
     normal exit, return/break/continue, caught exceptions, and unhandled native raises,
     inline asm, and raw memory.

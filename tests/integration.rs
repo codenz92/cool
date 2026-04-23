@@ -881,6 +881,56 @@ print("note: null" in rendered)
 }
 
 #[test]
+fn test_import_sqlite_module() {
+    let db_path = unique_temp_path("cool_sqlite_module_test", "db");
+    let source = format!(
+        r#"import sqlite
+db = "{db}"
+print(sqlite.execute(db, "create table items (id integer primary key, name text, score real, active integer)") == 0)
+print(sqlite.execute(db, "insert into items (name, score, active) values (?, ?, ?)", ["alpha", 1.5, true]))
+print(sqlite.execute(db, "insert into items (name, score, active) values (?, ?, ?)", ["beta", 2.25, false]))
+rows = sqlite.query(db, "select name, score, active from items where score >= ? order by id", [1.5])
+print(len(rows))
+print(rows[0]["name"])
+print(rows[1]["score"])
+print(rows[0]["active"])
+print(sqlite.scalar(db, "select name from items where active = ? order by id limit 1", [true]))
+"#,
+        db = db_path.display()
+    );
+
+    let result = run_cool(&source).unwrap();
+    let _ = std::fs::remove_file(&db_path);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["true", "1", "1", "2", "alpha", "2.25", "1", "alpha"]);
+}
+
+#[test]
+fn test_vm_import_sqlite_module() {
+    let db_path = unique_temp_path("cool_vm_sqlite_module_test", "db");
+    let source = format!(
+        r#"import sqlite
+db = "{db}"
+print(sqlite.execute(db, "create table items (id integer primary key, name text, score real, active integer)") == 0)
+print(sqlite.execute(db, "insert into items (name, score, active) values (?, ?, ?)", ["alpha", 1.5, true]))
+print(sqlite.execute(db, "insert into items (name, score, active) values (?, ?, ?)", ["beta", 2.25, false]))
+rows = sqlite.query(db, "select name, score, active from items where score >= ? order by id", [1.5])
+print(len(rows))
+print(rows[0]["name"])
+print(rows[1]["score"])
+print(rows[0]["active"])
+print(sqlite.scalar(db, "select name from items where active = ? order by id limit 1", [true]))
+"#,
+        db = db_path.display()
+    );
+
+    let result = run_cool_vm(&source).unwrap();
+    let _ = std::fs::remove_file(&db_path);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["true", "1", "1", "2", "alpha", "2.25", "1", "alpha"]);
+}
+
+#[test]
 fn test_import_test_module() {
     let result = run_cool(
         r#"import test

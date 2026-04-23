@@ -914,7 +914,7 @@
           </div>
           <div class="feature-card">
             <div class="fc-title">Standard Library</div>
-            <div class="fc-desc">math, json, re, time, random, collections, path, csv, datetime, hashlib, toml, yaml, subprocess, argparse, logging, test, term.</div>
+            <div class="fc-desc">math, json, re, time, random, collections, path, csv, datetime, hashlib, toml, yaml, sqlite, subprocess, argparse, logging, test, term.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Cool Shell</div>
@@ -2106,6 +2106,20 @@ rendered = yaml.dumps({
 print("ports:" in rendered)         # true</code></pre>
         </div>
 
+        <h3>sqlite</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import sqlite
+
+db = "app.db"
+sqlite.execute(db, "create table if not exists items (name text, score real)")
+sqlite.execute(db, "insert into items (name, score) values (?, ?)", ["alpha", 1.5])
+
+rows = sqlite.query(db, "select name, score from items order by rowid")
+print(rows[0]["name"])              # alpha
+print(sqlite.scalar(db, "select count(*) from items"))</code></pre>
+        </div>
+
         <h3>argparse</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
@@ -2977,7 +2991,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>6</td>
-                <td>Standard library — json, re, time, random, collections, string, list, path, csv, datetime, hashlib, toml, yaml, subprocess, argparse, logging, test</td>
+                <td>Standard library — json, re, time, random, collections, string, list, path, csv, datetime, hashlib, toml, yaml, sqlite, subprocess, argparse, logging, test</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -3012,7 +3026,7 @@ echo Done.</code></pre>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

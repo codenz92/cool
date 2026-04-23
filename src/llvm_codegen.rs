@@ -41,6 +41,7 @@ const RUNTIME_C: &str = r#"
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <dlfcn.h>
+#include <sqlite3.h>
 #include <setjmp.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
@@ -4150,6 +4151,176 @@ static CoolVal cool_yaml_dumps(CoolVal value) {
     return cv_str(sb.data);
 }
 
+static void cool_sqlite_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static sqlite3* cool_sqlite_open(const char* path, const char* context) {
+    sqlite3* db = NULL;
+    int rc = sqlite3_open(path, &db);
+    if (rc != SQLITE_OK) {
+        const char* err = db ? sqlite3_errmsg(db) : "unknown error";
+        cool_sqlite_raisef("%s error: %s", context, err);
+    }
+    return db;
+}
+
+static sqlite3_stmt* cool_sqlite_prepare(sqlite3* db, const char* sql, const char* context) {
+    sqlite3_stmt* stmt = NULL;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        cool_sqlite_raisef("%s error: %s", context, sqlite3_errmsg(db));
+    }
+    return stmt;
+}
+
+static int cool_sqlite_param_len(CoolVal params) {
+    if (params.tag == TAG_NIL) return 0;
+    if (params.tag != TAG_LIST && params.tag != TAG_TUPLE) {
+        cool_sqlite_raisef("sqlite params must be a list, tuple, or nil, got %s", cool_type_name(params.tag));
+    }
+    CoolList* list = (CoolList*)(intptr_t)params.payload;
+    return list ? (int)list->length : 0;
+}
+
+static CoolVal cool_sqlite_param_at(CoolVal params, int index) {
+    CoolList* list = (CoolList*)(intptr_t)params.payload;
+    return ((CoolVal*)list->data)[index];
+}
+
+static void cool_sqlite_bind_one(sqlite3_stmt* stmt, int index, CoolVal value) {
+    int rc = SQLITE_OK;
+    switch (value.tag) {
+        case TAG_NIL:
+            rc = sqlite3_bind_null(stmt, index);
+            break;
+        case TAG_INT:
+            rc = sqlite3_bind_int64(stmt, index, (sqlite3_int64)value.payload);
+            break;
+        case TAG_BOOL:
+            rc = sqlite3_bind_int64(stmt, index, value.payload ? 1 : 0);
+            break;
+        case TAG_FLOAT:
+            rc = sqlite3_bind_double(stmt, index, cv_as_float(value));
+            break;
+        case TAG_STR:
+            rc = sqlite3_bind_text(stmt, index, (const char*)(intptr_t)value.payload, -1, SQLITE_TRANSIENT);
+            break;
+        default:
+            cool_sqlite_raisef(
+                "sqlite parameters only support nil/int/float/str/bool, got %s",
+                cool_type_name(value.tag)
+            );
+    }
+    if (rc != SQLITE_OK) {
+        cool_sqlite_raisef("sqlite bind error: %s", sqlite3_errstr(rc));
+    }
+}
+
+static void cool_sqlite_bind_params(sqlite3_stmt* stmt, CoolVal params) {
+    int actual = cool_sqlite_param_len(params);
+    int expected = sqlite3_bind_parameter_count(stmt);
+    if (actual != expected) {
+        cool_sqlite_raisef("sqlite expected %d parameter(s), got %d", expected, actual);
+    }
+    for (int i = 0; i < actual; i++) {
+        cool_sqlite_bind_one(stmt, i + 1, cool_sqlite_param_at(params, i));
+    }
+}
+
+static CoolVal cool_sqlite_column_value(sqlite3_stmt* stmt, int col) {
+    switch (sqlite3_column_type(stmt, col)) {
+        case SQLITE_NULL:
+            return cv_nil();
+        case SQLITE_INTEGER:
+            return cv_int((int64_t)sqlite3_column_int64(stmt, col));
+        case SQLITE_FLOAT:
+            return cv_float(sqlite3_column_double(stmt, col));
+        case SQLITE_TEXT:
+            return cv_str(strdup((const char*)sqlite3_column_text(stmt, col)));
+        case SQLITE_BLOB:
+            cool_sqlite_raisef("sqlite.query() does not support blob columns yet");
+        default:
+            return cv_nil();
+    }
+}
+
+static CoolVal cool_sqlite_execute(CoolVal path_v, CoolVal sql_v, CoolVal params_v) {
+    if (path_v.tag != TAG_STR) {
+        cool_sqlite_raisef("sqlite.execute requires a path string, got %s", cool_type_name(path_v.tag));
+    }
+    if (sql_v.tag != TAG_STR) {
+        cool_sqlite_raisef("sqlite.execute requires a SQL string, got %s", cool_type_name(sql_v.tag));
+    }
+    sqlite3* db = cool_sqlite_open((const char*)(intptr_t)path_v.payload, "sqlite.open()");
+    sqlite3_stmt* stmt = cool_sqlite_prepare(db, (const char*)(intptr_t)sql_v.payload, "sqlite.execute()");
+    cool_sqlite_bind_params(stmt, params_v);
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        cool_sqlite_raisef("sqlite.execute() error: %s", sqlite3_errmsg(db));
+    }
+    int changes = sqlite3_changes(db);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return cv_int(changes);
+}
+
+static CoolVal cool_sqlite_query(CoolVal path_v, CoolVal sql_v, CoolVal params_v) {
+    if (path_v.tag != TAG_STR) {
+        cool_sqlite_raisef("sqlite.query requires a path string, got %s", cool_type_name(path_v.tag));
+    }
+    if (sql_v.tag != TAG_STR) {
+        cool_sqlite_raisef("sqlite.query requires a SQL string, got %s", cool_type_name(sql_v.tag));
+    }
+    sqlite3* db = cool_sqlite_open((const char*)(intptr_t)path_v.payload, "sqlite.open()");
+    sqlite3_stmt* stmt = cool_sqlite_prepare(db, (const char*)(intptr_t)sql_v.payload, "sqlite.query()");
+    cool_sqlite_bind_params(stmt, params_v);
+    CoolVal rows = cool_list_make(cv_int(4));
+    int rc = SQLITE_OK;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        int cols = sqlite3_column_count(stmt);
+        CoolVal row = cool_dict_new();
+        for (int i = 0; i < cols; i++) {
+            const char* name = sqlite3_column_name(stmt, i);
+            cool_dict_set(row, cv_str(strdup(name ? name : "")), cool_sqlite_column_value(stmt, i));
+        }
+        cool_list_push(rows, row);
+    }
+    if (rc != SQLITE_DONE) {
+        cool_sqlite_raisef("sqlite.query() error: %s", sqlite3_errmsg(db));
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return rows;
+}
+
+static CoolVal cool_sqlite_scalar(CoolVal path_v, CoolVal sql_v, CoolVal params_v) {
+    if (path_v.tag != TAG_STR) {
+        cool_sqlite_raisef("sqlite.scalar requires a path string, got %s", cool_type_name(path_v.tag));
+    }
+    if (sql_v.tag != TAG_STR) {
+        cool_sqlite_raisef("sqlite.scalar requires a SQL string, got %s", cool_type_name(sql_v.tag));
+    }
+    sqlite3* db = cool_sqlite_open((const char*)(intptr_t)path_v.payload, "sqlite.open()");
+    sqlite3_stmt* stmt = cool_sqlite_prepare(db, (const char*)(intptr_t)sql_v.payload, "sqlite.scalar()");
+    cool_sqlite_bind_params(stmt, params_v);
+    int rc = sqlite3_step(stmt);
+    CoolVal out = cv_nil();
+    if (rc == SQLITE_ROW) {
+        out = sqlite3_column_count(stmt) > 0 ? cool_sqlite_column_value(stmt, 0) : cv_nil();
+    } else if (rc != SQLITE_DONE) {
+        cool_sqlite_raisef("sqlite.scalar() error: %s", sqlite3_errmsg(db));
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    return out;
+}
+
 static char* re_translate_pattern(const char* pattern) {
     CoolStrBuf sb;
     sb_init(&sb);
@@ -5788,6 +5959,18 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
     if (strcmp(module, "yaml") == 0) {
         if (strcmp(name, "loads") == 0 && nargs == 1) return cool_yaml_loads(args[0]);
         if (strcmp(name, "dumps") == 0 && nargs == 1) return cool_yaml_dumps(args[0]);
+    }
+
+    if (strcmp(module, "sqlite") == 0) {
+        if (strcmp(name, "execute") == 0 && (nargs == 2 || nargs == 3)) {
+            return cool_sqlite_execute(args[0], args[1], nargs == 3 ? args[2] : cv_nil());
+        }
+        if (strcmp(name, "query") == 0 && (nargs == 2 || nargs == 3)) {
+            return cool_sqlite_query(args[0], args[1], nargs == 3 ? args[2] : cv_nil());
+        }
+        if (strcmp(name, "scalar") == 0 && (nargs == 2 || nargs == 3)) {
+            return cool_sqlite_scalar(args[0], args[1], nargs == 3 ? args[2] : cv_nil());
+        }
     }
 
     if (strcmp(module, "test") == 0) {
@@ -8713,8 +8896,8 @@ impl<'ctx> Compiler<'ctx> {
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
-            | "time" | "random" | "json" | "toml" | "yaml" | "string" | "list" | "re" | "collections" | "path"
-            | "ffi" => {
+            | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "string" | "list" | "re" | "collections"
+            | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -10119,7 +10302,8 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
         .arg(&obj_path)
         .arg("-o")
         .arg(output_path)
-        .arg("-lm");
+        .arg("-lm")
+        .arg("-lsqlite3");
     #[cfg(target_os = "linux")]
     link_cmd.arg("-ldl");
     let link_status = link_cmd.status().map_err(|e| format!("Linker error: {e}"))?;

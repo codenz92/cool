@@ -4,6 +4,7 @@ use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::sqlite_runtime::{self, SqlData};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 use crate::toml_runtime::{self, TomlData};
 use crate::yaml_runtime::{self, YamlData};
@@ -1156,6 +1157,16 @@ impl Interpreter {
                     Value::BuiltinFn("yaml.dumps".to_string()),
                 );
                 env.set_local("yaml".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "sqlite" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["execute", "query", "scalar"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("sqlite.{}", fn_name)),
+                    );
+                }
+                env.set_local("sqlite".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "re" => {
                 let mut map = IndexedMap::new();
@@ -2359,6 +2370,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("yaml.") {
             return self.call_yaml_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("sqlite.") {
+            return self.call_sqlite_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("re.") {
             return self.call_re_fn(f, args);
@@ -4514,6 +4528,87 @@ class Stack:
                 ))
             }
             _ => Err(self.err(&format!("yaml has no function '{}'", name))),
+        }
+    }
+
+    fn value_to_sql_data(&self, value: &Value) -> Result<SqlData, String> {
+        match value {
+            Value::Nil => Ok(SqlData::Nil),
+            Value::Int(n) => Ok(SqlData::Int(*n)),
+            Value::Float(f) if f.is_finite() => Ok(SqlData::Float(*f)),
+            Value::Float(_) => Err(self.err("sqlite parameters do not support NaN or infinite floats")),
+            Value::Str(s) => Ok(SqlData::Str(s.clone())),
+            Value::Bool(b) => Ok(SqlData::Bool(*b)),
+            other => Err(self.err(&format!(
+                "sqlite parameters only support nil/int/float/str/bool, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn sqlite_data_to_value(data: &SqlData) -> Value {
+        match data {
+            SqlData::Nil => Value::Nil,
+            SqlData::Int(n) => Value::Int(*n),
+            SqlData::Float(f) => Value::Float(*f),
+            SqlData::Str(s) => Value::Str(s.clone()),
+            SqlData::Bool(b) => Value::Bool(*b),
+        }
+    }
+
+    fn sqlite_params_arg(&self, value: Option<&Value>) -> Result<Vec<SqlData>, String> {
+        match value {
+            None | Some(Value::Nil) => Ok(Vec::new()),
+            Some(Value::List(items)) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.value_to_sql_data(item)?);
+                }
+                Ok(out)
+            }
+            Some(Value::Tuple(items)) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.value_to_sql_data(item)?);
+                }
+                Ok(out)
+            }
+            Some(other) => Err(self.err(&format!(
+                "sqlite params must be a list, tuple, or nil, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn sqlite_rows_to_value(rows: Vec<Vec<(String, SqlData)>>) -> Value {
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                let mut dict = IndexedMap::new();
+                for (key, value) in row {
+                    dict.set(Value::Str(key), Self::sqlite_data_to_value(&value));
+                }
+                Value::Dict(Rc::new(RefCell::new(dict)))
+            })
+            .collect();
+        Value::List(Rc::new(RefCell::new(rows)))
+    }
+
+    fn call_sqlite_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        let path = req_str_arg(&args, 0, &format!("sqlite.{}", name))?;
+        let sql = req_str_arg(&args, 1, &format!("sqlite.{}", name))?;
+        let params = self.sqlite_params_arg(args.get(2))?;
+        match name {
+            "execute" => Ok(Value::Int(
+                sqlite_runtime::execute(&path, &sql, &params).map_err(|e| self.err(&e))?,
+            )),
+            "query" => Ok(Self::sqlite_rows_to_value(
+                sqlite_runtime::query(&path, &sql, &params).map_err(|e| self.err(&e))?,
+            )),
+            "scalar" => Ok(Self::sqlite_data_to_value(
+                &sqlite_runtime::scalar(&path, &sql, &params).map_err(|e| self.err(&e))?,
+            )),
+            _ => Err(self.err(&format!("sqlite has no function '{}'", name))),
         }
     }
 

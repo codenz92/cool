@@ -4,6 +4,7 @@ use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::sqlite_runtime::{self, SqlData};
 use crate::toml_runtime::{self, TomlData};
 use crate::yaml_runtime::{self, YamlData};
 use std::cell::RefCell;
@@ -1543,6 +1544,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("yaml.") {
             return self.call_yaml_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("sqlite.") {
+            return self.call_sqlite_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("test.") {
             return self.call_test_module(rest, args);
@@ -4267,6 +4271,105 @@ impl VM {
         }
     }
 
+    fn vm_value_to_sql_data(&self, value: &VmValue) -> Result<SqlData, String> {
+        match value {
+            VmValue::Nil => Ok(SqlData::Nil),
+            VmValue::Int(n) => Ok(SqlData::Int(*n)),
+            VmValue::Float(f) if f.is_finite() => Ok(SqlData::Float(*f)),
+            VmValue::Float(_) => Err(self.err("sqlite parameters do not support NaN or infinite floats")),
+            VmValue::Str(s) => Ok(SqlData::Str(s.clone())),
+            VmValue::Bool(b) => Ok(SqlData::Bool(*b)),
+            other => Err(self.err(&format!(
+                "sqlite parameters only support nil/int/float/str/bool, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn sqlite_data_to_vm_value(data: &SqlData) -> VmValue {
+        match data {
+            SqlData::Nil => VmValue::Nil,
+            SqlData::Int(n) => VmValue::Int(*n),
+            SqlData::Float(f) => VmValue::Float(*f),
+            SqlData::Str(s) => VmValue::Str(s.clone()),
+            SqlData::Bool(b) => VmValue::Bool(*b),
+        }
+    }
+
+    fn sqlite_params_arg(&self, value: Option<&VmValue>) -> Result<Vec<SqlData>, String> {
+        match value {
+            None | Some(VmValue::Nil) => Ok(Vec::new()),
+            Some(VmValue::List(items)) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.vm_value_to_sql_data(item)?);
+                }
+                Ok(out)
+            }
+            Some(VmValue::Tuple(items)) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.vm_value_to_sql_data(item)?);
+                }
+                Ok(out)
+            }
+            Some(other) => Err(self.err(&format!(
+                "sqlite params must be a list, tuple, or nil, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn sqlite_rows_to_vm_value(rows: Vec<Vec<(String, SqlData)>>) -> VmValue {
+        let rows = rows
+            .into_iter()
+            .map(|row| {
+                let mut dict = VmDict::new();
+                for (key, value) in row {
+                    dict.set(VmValue::Str(key), Self::sqlite_data_to_vm_value(&value));
+                }
+                VmValue::Dict(Rc::new(RefCell::new(dict)))
+            })
+            .collect();
+        VmValue::List(Rc::new(RefCell::new(rows)))
+    }
+
+    fn call_sqlite_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        let path = match args.first() {
+            Some(VmValue::Str(s)) => s.clone(),
+            other => {
+                return Err(self.err(&format!(
+                    "sqlite.{} requires a path string, got {}",
+                    name,
+                    other.map_or("nil", VmValue::type_name)
+                )))
+            }
+        };
+        let sql = match args.get(1) {
+            Some(VmValue::Str(s)) => s.clone(),
+            other => {
+                return Err(self.err(&format!(
+                    "sqlite.{} requires a SQL string, got {}",
+                    name,
+                    other.map_or("nil", VmValue::type_name)
+                )))
+            }
+        };
+        let params = self.sqlite_params_arg(args.get(2))?;
+        match name {
+            "execute" => Ok(VmValue::Int(
+                sqlite_runtime::execute(&path, &sql, &params).map_err(|e| self.err(&e))?,
+            )),
+            "query" => Ok(Self::sqlite_rows_to_vm_value(
+                sqlite_runtime::query(&path, &sql, &params).map_err(|e| self.err(&e))?,
+            )),
+            "scalar" => Ok(Self::sqlite_data_to_vm_value(
+                &sqlite_runtime::scalar(&path, &sql, &params).map_err(|e| self.err(&e))?,
+            )),
+            _ => Err(self.err(&format!("unknown sqlite function '{}'", name))),
+        }
+    }
+
     fn eval_source(&mut self, src: &str) -> Result<VmValue, String> {
         let mut lexer = crate::lexer::Lexer::new(src);
         let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
@@ -4500,6 +4603,11 @@ impl VM {
             "yaml" => {
                 set(&mut d, "loads", bf("yaml.loads"));
                 set(&mut d, "dumps", bf("yaml.dumps"));
+            }
+            "sqlite" => {
+                for fname in &["execute", "query", "scalar"] {
+                    set(&mut d, fname, bf(&format!("sqlite.{}", fname)));
+                }
             }
             "re" => {
                 for fname in &["match", "search", "fullmatch", "findall", "sub", "split"] {

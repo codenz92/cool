@@ -143,6 +143,7 @@
 - [x] `time` module — `time.time()`, `time.sleep()`, `time.monotonic()`
 - [x] `random` module — `random.random()`, `random.randint()`, `random.choice()`, `random.shuffle()`, `random.uniform()`, `random.seed()`
 - [x] `collections` module — `Queue` and `Stack` classes
+- [x] `sqlite` module — path-based embedded database access with `execute`, `query`, and `scalar`
 - [x] Package system — `import foo.bar` loads `foo/bar.cool` from source directory
 
 ### Next Library Targets
@@ -153,6 +154,7 @@
 - [x] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
 - [x] `toml` module — parse and write TOML for project/config tooling
 - [x] `yaml` module — config-oriented YAML subset for mappings, sequences, scalars, and null values
+- [x] `sqlite` module — path-based embedded database access with queries, params, and scalar reads
 - [ ] `json` extensions — schema-aware JSON transforms and streaming helpers
 - [ ] `xml` module — lightweight XML parsing and serialization helpers
 - [ ] `html` module — escaping/unescaping plus small DOM/text extraction helpers
@@ -193,7 +195,7 @@
 
 #### Databases And Storage
 
-- [ ] `sqlite` module — embedded database access with queries, params, and row iteration
+- [x] `sqlite` module — embedded database access with queries, params, and row iteration
 - [ ] `cache` module — in-memory and disk-backed caching with TTL and invalidation helpers
 - [ ] `memo` module — function memoization and deterministic result caching
 - [ ] `package` module — package metadata, manifests, semver helpers, and dependency resolution
@@ -317,7 +319,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import sqlite` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -392,10 +394,11 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
 - [x] `toml` module — `loads` / `dumps` helpers for tables, arrays, strings, numbers, and booleans
 - [x] `yaml` module — `loads` / `dumps` for a config-oriented YAML subset
+- [x] `sqlite` module — path-based embedded database access with `execute`, `query`, and `scalar`
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
-- [ ] `sqlite` / `socket` / `http` as the first practical application stack
+- [ ] `socket` / `http` as the first practical application stack
 
 ### Packaging And Developer Tooling
 
