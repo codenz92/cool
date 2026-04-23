@@ -3,17 +3,22 @@
 
 use std::io::Write;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static TEMP_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn unique_temp_path(stem: &str, ext: &str) -> std::path::PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    std::env::temp_dir().join(format!("{stem}_{nonce}.{ext}"))
+    let seq = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{stem}_{nonce}_{seq}.{ext}"))
+}
+
+fn unique_temp_dir(stem: &str) -> std::path::PathBuf {
+    unique_temp_path(stem, "dir")
 }
 
 fn cool_bin() -> &'static str {
@@ -33,14 +38,10 @@ fn run_cool_with_args_and_env(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<String, String> {
-    let mut path_guard = TEMP_FILE.lock().unwrap();
-
-    // Create temp file in current directory to avoid permission issues
-    let temp = std::path::PathBuf::from("temp_cool_test.cool");
+    let temp = unique_temp_path("temp_cool_test", "cool");
     let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(source.as_bytes()).map_err(|e| e.to_string())?;
     drop(file);
-    *path_guard = Some(temp.clone());
 
     let mut cmd = Command::new(cool_bin());
     for arg in extra_args {
@@ -314,13 +315,15 @@ fn test_vm_import_random_choice_tuple() {
 #[test]
 fn test_import_sys_argv_uses_script_path() {
     let result = run_cool("import sys\nprint(sys.argv[0])").unwrap();
-    assert!(result.contains("temp_cool_test.cool"));
+    assert!(result.contains("temp_cool_test_"));
+    assert!(result.contains(".cool"));
 }
 
 #[test]
 fn test_vm_import_sys_argv_uses_script_path() {
     let result = run_cool_vm("import sys\nprint(sys.argv[0])").unwrap();
-    assert!(result.contains("temp_cool_test.cool"));
+    assert!(result.contains("temp_cool_test_"));
+    assert!(result.contains(".cool"));
 }
 
 #[test]
@@ -392,7 +395,7 @@ fn test_vm_import_list_module() {
 
 #[test]
 fn test_vm_self_import_reports_error() {
-    let temp_dir = std::env::temp_dir().join("cool_vm_self_import_test");
+    let temp_dir = unique_temp_dir("cool_vm_self_import_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
     let source_path = temp_dir.join("string.cool");
@@ -432,8 +435,30 @@ fn test_vm_import_collections_module() {
 }
 
 #[test]
+fn test_with_context_manager_uses_enter_result() {
+    let result = run_cool(
+        "class C:\n\tdef __enter__(self):\n\t\tprint(\"enter\")\n\t\treturn 42\n\tdef __exit__(self, exc_type, exc_val, exc_tb):\n\t\tprint(\"exit\")\nwith C() as value:\n\tprint(value)",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "42", "exit"]);
+    assert!(!result.contains("<C object>"));
+}
+
+#[test]
+fn test_vm_with_context_manager_uses_enter_result() {
+    let result = run_cool_vm(
+        "class C:\n\tdef __enter__(self):\n\t\tprint(\"enter\")\n\t\treturn 42\n\tdef __exit__(self, exc_type, exc_val, exc_tb):\n\t\tprint(\"exit\")\nwith C() as value:\n\tprint(value)",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "42", "exit"]);
+    assert!(!result.contains("<C object>"));
+}
+
+#[test]
 fn test_import_dotted_module_package_path() {
-    let temp_dir = std::env::temp_dir().join("cool_import_package_test");
+    let temp_dir = unique_temp_dir("cool_import_package_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(temp_dir.join("foo")).unwrap();
     let source_path = temp_dir.join("main.cool");
@@ -448,7 +473,7 @@ fn test_import_dotted_module_package_path() {
 
 #[test]
 fn test_vm_import_dotted_module_package_path() {
-    let temp_dir = std::env::temp_dir().join("cool_vm_import_package_test");
+    let temp_dir = unique_temp_dir("cool_vm_import_package_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(temp_dir.join("foo")).unwrap();
     let source_path = temp_dir.join("main.cool");
@@ -493,7 +518,7 @@ fn test_self_hosted_compiler_bootstrap_mode() {
 
 #[test]
 fn test_http_app_cli_args() {
-    let temp_dir = std::env::temp_dir().join("cool_http_app_test");
+    let temp_dir = unique_temp_dir("cool_http_app_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
     let body_path = temp_dir.join("body.txt");
@@ -514,7 +539,7 @@ fn test_http_app_cli_args() {
 
 #[test]
 fn test_http_app_getjson_and_head() {
-    let temp_dir = std::env::temp_dir().join("cool_http_app_json_test");
+    let temp_dir = unique_temp_dir("cool_http_app_json_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -547,7 +572,7 @@ fn test_http_app_getjson_and_head() {
 
 #[test]
 fn test_runfile_passes_program_args() {
-    let temp_dir = std::env::temp_dir().join("cool_runfile_args_test");
+    let temp_dir = unique_temp_dir("cool_runfile_args_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
     let child_path = temp_dir.join("child.cool");
@@ -588,7 +613,7 @@ fn test_shell_alias_env_and_history() {
 
 #[test]
 fn test_shell_source_and_pipe() {
-    let temp_dir = std::env::temp_dir().join("cool_shell_source_test");
+    let temp_dir = unique_temp_dir("cool_shell_source_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
     let script_path = temp_dir.join("script.coolsh");
@@ -606,7 +631,7 @@ fn test_shell_source_and_pipe() {
 
 #[test]
 fn test_shell_run_passes_program_args() {
-    let temp_dir = std::env::temp_dir().join("cool_shell_run_args_test");
+    let temp_dir = unique_temp_dir("cool_shell_run_args_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
     let script_path = temp_dir.join("argv_app.cool");
@@ -643,7 +668,7 @@ fn test_shell_notes_app_launch() {
 
 #[test]
 fn test_notes_app_crud_flow() {
-    let temp_dir = std::env::temp_dir().join("cool_notes_app_test");
+    let temp_dir = unique_temp_dir("cool_notes_app_test");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
 

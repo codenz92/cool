@@ -918,32 +918,25 @@ impl Interpreter {
             }
 
             Stmt::With { expr, as_name, body } => {
-                let val = self.eval(expr, env)?;
+                let manager = self.eval(expr, env)?;
+                let entered = self.call_method(manager.clone(), "__enter__", vec![], vec![], env)?;
                 let with_env = Env::new_child(env.clone());
                 if let Some(name) = as_name {
-                    with_env.set_local(name.clone(), val.clone());
+                    with_env.set_local(name.clone(), entered);
                 }
-                let sig = self.exec_block(body, &with_env)?;
-                // Auto-close file handles
-                if let Value::File(fh) = &val {
-                    let mut h = fh.borrow_mut();
-                    if !h.closed {
-                        if !h.write_buf.borrow().is_empty() {
-                            let buf = h.write_buf.borrow().clone();
-                            let _ = std::fs::OpenOptions::new()
-                                .write(true)
-                                .append(h.mode == "a")
-                                .create(true)
-                                .open(&h.path)
-                                .and_then(|mut f| {
-                                    use std::io::Write;
-                                    f.write_all(buf.as_bytes())
-                                });
-                        }
-                        h.closed = true;
-                    }
+                let body_result = self.exec_block(body, &with_env);
+                let exit_result = self.call_method(
+                    manager,
+                    "__exit__",
+                    vec![Value::Nil, Value::Nil, Value::Nil],
+                    vec![],
+                    env,
+                );
+                match (body_result, exit_result) {
+                    (Ok(sig), Ok(_)) => Ok(sig),
+                    (Err(err), Ok(_)) => Err(err),
+                    (_, Err(exit_err)) => Err(exit_err),
                 }
-                Ok(sig)
             }
 
             Stmt::Global(names) => {
@@ -1976,6 +1969,8 @@ class Stack:
             _ => unreachable!(),
         };
         match method {
+            "__enter__" => Ok(Value::File(fh_rc)),
+            "__exit__" => self.file_method(Value::File(fh_rc), "close", vec![]),
             "read" => {
                 let fh = fh_rc.borrow();
                 if fh.closed {
