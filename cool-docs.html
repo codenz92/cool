@@ -1946,7 +1946,7 @@ os.popen("uname -a")</code></pre>
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python">import sys
 
-sys.argv          # list of command-line arguments (argv[0] = script path)
+sys.argv          # list of command-line arguments (argv[0] = script path under interpreter/VM, executable path for native binaries)
 sys.exit(0)       # exit with success
 sys.exit(1)       # exit with error code</code></pre>
         </div>

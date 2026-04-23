@@ -364,8 +364,11 @@ fn main() {
                 .unwrap_or_else(|| PathBuf::from("."));
 
             let program_args: Vec<String> = file_args[1..].iter().map(|s| (*s).clone()).collect();
+            std::env::set_var("COOL_SCRIPT_PATH", path);
             if !program_args.is_empty() {
                 std::env::set_var("COOL_PROGRAM_ARGS", program_args.join("\x1F"));
+            } else {
+                std::env::remove_var("COOL_PROGRAM_ARGS");
             }
 
             let result = if use_vm {
@@ -373,6 +376,9 @@ fn main() {
             } else {
                 run_source(&source, source_dir)
             };
+
+            std::env::remove_var("COOL_SCRIPT_PATH");
+            std::env::remove_var("COOL_PROGRAM_ARGS");
 
             if let Err(e) = result {
                 eprintln!("Error: {e}");
@@ -398,8 +404,11 @@ fn main() {
                 .unwrap_or_else(|| PathBuf::from("."));
 
             let program_args: Vec<String> = file_args[1..].iter().map(|s| (*s).clone()).collect();
+            std::env::set_var("COOL_SCRIPT_PATH", path);
             if !program_args.is_empty() {
                 std::env::set_var("COOL_PROGRAM_ARGS", program_args.join("\x1F"));
+            } else {
+                std::env::remove_var("COOL_PROGRAM_ARGS");
             }
 
             let result = if use_vm {
@@ -407,6 +416,9 @@ fn main() {
             } else {
                 run_source(&source, source_dir)
             };
+
+            std::env::remove_var("COOL_SCRIPT_PATH");
+            std::env::remove_var("COOL_PROGRAM_ARGS");
 
             if let Err(e) = result {
                 eprintln!("Error: {e}");

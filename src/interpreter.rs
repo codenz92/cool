@@ -1045,7 +1045,17 @@ impl Interpreter {
                 env.set_local("listdir".to_string(), Value::BuiltinFn("os.listdir".to_string()));
             }
             "sys" => {
-                let argv: Vec<Value> = std::env::args().map(|a| Value::Str(a)).collect();
+                let mut argv: Vec<Value> = Vec::new();
+                if let Ok(script_path) = std::env::var("COOL_SCRIPT_PATH") {
+                    argv.push(Value::Str(script_path));
+                } else {
+                    argv.extend(std::env::args().map(Value::Str));
+                }
+                if let Ok(extra) = std::env::var("COOL_PROGRAM_ARGS") {
+                    if !extra.is_empty() {
+                        argv.extend(extra.split('\x1F').map(|arg| Value::Str(arg.to_string())));
+                    }
+                }
                 let mut map = IndexedMap::new();
                 map.set(Value::Str("argv".to_string()), Value::List(Rc::new(RefCell::new(argv))));
                 map.set(Value::Str("exit".to_string()), Value::BuiltinFn("exit".to_string()));

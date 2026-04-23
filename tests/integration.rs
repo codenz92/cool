@@ -234,6 +234,18 @@ fn test_vm_import_random_choice_tuple() {
 }
 
 #[test]
+fn test_import_sys_argv_uses_script_path() {
+    let result = run_cool("import sys\nprint(sys.argv[0])").unwrap();
+    assert!(result.contains("temp_cool_test.cool"));
+}
+
+#[test]
+fn test_vm_import_sys_argv_uses_script_path() {
+    let result = run_cool_vm("import sys\nprint(sys.argv[0])").unwrap();
+    assert!(result.contains("temp_cool_test.cool"));
+}
+
+#[test]
 fn test_vm_random_seed_reproducible() {
     let result = run_cool_vm(
         "import random\nrandom.seed(42)\na = random.random()\nb = random.random()\nrandom.seed(42)\nprint(a == random.random())\nprint(b == random.random())",
