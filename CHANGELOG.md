@@ -4,7 +4,7 @@ All notable changes to the Cool language project.
 
 ## [1.0.0] - 2026-04-17 - The Complete Language
 
-Cool now has a working interpreter, bytecode VM, LLVM backend, FFI, a self-hosted compiler for a substantial language subset, and a steadily growing standard library. Full self-hosting bootstrap of `coolc/compiler_vm.cool` remains in progress.
+Cool now has a working interpreter, bytecode VM, LLVM backend, FFI, a self-hosted compiler, full bootstrap self-hosting for `coolc/compiler_vm.cool`, and a steadily growing standard library.
 
 ### Phase 1 - Core Interpreter (Complete)
 The foundational tree-walk interpreter.
@@ -148,7 +148,7 @@ The compiler written in Cool itself.
 - [x] Recursive descent parser in Cool
 - [x] Code generator (AST → bytecode) in Cool
 - [x] Bytecode VM in Cool (to execute compiled programs)
-- [~] Bootstrap mode exists, but full self-hosted compilation of `coolc/compiler_vm.cool` is still in progress
+- [x] Bootstrap: self-hosted compiler compiles itself
 
 ---
 

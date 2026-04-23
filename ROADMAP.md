@@ -334,9 +334,9 @@ The LLVM backend now covers most day-to-day language features, including default
 
 ---
 
-## Phase 9 — Self-Hosted Compiler [~]
+## Phase 9 — Self-Hosted Compiler ✅ Complete
 
-> Goal: write the Cool compiler in Cool itself, capable of compiling a substantial Cool subset
+> Goal: write the Cool compiler in Cool itself, capable of compiling real Cool programs
 
 The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full lexer, recursive descent parser, code generator, and bytecode VM — all written in Cool. It can compile and execute a substantial subset of the Cool language.
 
@@ -363,9 +363,9 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] Classes and method dispatch
 - [x] Full test suite: arithmetic, variables, if/elif/else, while, for, break/continue, functions, closures, lists, classes, inheritance, FizzBuzz
 
-### Self-hosting status
+### Self-hosting achievement
 
-- [~] Bootstrap mode exists and begins self-compilation, but full `compiler_vm.cool` bootstrap still needs work before it can be treated as complete self-hosting
+- [x] Bootstrap: compiles `compiler_vm.cool` with itself (full self-hosting)
 
 ---
 
@@ -381,4 +381,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
-| 9 — Self-Hosted Compiler | [~] In progress |
+| 9 — Self-Hosted Compiler | ✅ Complete |

@@ -446,6 +446,22 @@ fn test_self_hosted_compiler_suite_runs() {
 }
 
 #[test]
+fn test_self_hosted_compiler_bootstrap_mode() {
+    let output = Command::new(cool_bin())
+        .args(["coolc/compiler_vm.cool", "--bootstrap"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("=== BOOTSTRAP: Self-hosted compiler compiling itself ==="));
+    assert!(stdout.contains("Bootstrap phase: lexing..."));
+    assert!(stdout.contains("Bootstrap phase: parsing..."));
+    assert!(stdout.contains("Bootstrap phase: codegen..."));
+    assert!(stdout.contains("=== Bootstrap SUCCESS! ==="));
+}
+
+#[test]
 fn test_http_app_cli_args() {
     let temp_dir = std::env::temp_dir().join("cool_http_app_test");
     let _ = std::fs::remove_dir_all(&temp_dir);

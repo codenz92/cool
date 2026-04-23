@@ -12,6 +12,7 @@ def do_bootstrap():
     print("=== BOOTSTRAP: Self-hosted compiler compiling itself ===")
     print("")
     import os
+    import time
     src_file = sys.argv[0]
     if src_file[0] != "/":
         src_file = os.getcwd() + "/" + src_file
@@ -19,7 +20,19 @@ def do_bootstrap():
     f = open(src_file, "r")
     src = f.read()
     f.close()
-    code = compile(src)
+    started = time.time()
+    print("Bootstrap phase: lexing...")
+    lexer = Lexer(src)
+    toks = lexer.tokenize()
+    print("  tokens: " + str(len(toks)) + " in " + str(time.time() - started) + "s")
+    print("Bootstrap phase: parsing...")
+    parser = Parser(toks)
+    ast = parser.parse()
+    print("  statements: " + str(len(ast)) + " in " + str(time.time() - started) + "s")
+    print("Bootstrap phase: codegen...")
+    gen = Generator(ast)
+    code = gen.generate()
+    print("  instructions: " + str(len(code)) + " in " + str(time.time() - started) + "s")
     print("Compiled to " + str(len(code)) + " bytecode instructions")
     print("")
     print("=== Bootstrap SUCCESS! ===")
@@ -78,13 +91,14 @@ def is_truthy(v):
 class Lexer:
     def __init__(self, src):
         self.src = src
+        self.chars = list(src)
         self.pos = 0
         self.indent_stack = [0]
         self.at_line_start = true
 
     def peek(self):
-        if self.pos < len(self.src):
-            return self.src[self.pos]
+        if self.pos < len(self.chars):
+            return self.chars[self.pos]
         return nil
 
     def advance(self):
@@ -194,47 +208,47 @@ class Lexer:
                 continue
 
             # two-char operators
-            if c == '=' and self.src[self.pos + 1 if self.pos + 1 < len(self.src) else self.pos] == '=':
+            if c == '=' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('==')
                 continue
-            if c == '!' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+            if c == '!' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('!=')
                 continue
-            if c == '<' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+            if c == '<' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('<=')
                 continue
-            if c == '>' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+            if c == '>' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('>=')
                 continue
-            if c == '+' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+            if c == '+' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('+=')
                 continue
-            if c == '-' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+            if c == '-' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('-=')
                 continue
-            if c == '*' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '=':
+            if c == '*' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '=':
                 self.advance()
                 self.advance()
                 out.append('*=')
                 continue
-            if c == '/' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '/':
+            if c == '/' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '/':
                 self.advance()
                 self.advance()
                 out.append('//')
                 continue
-            if c == '*' and self.pos + 1 < len(self.src) and self.src[self.pos + 1] == '*':
+            if c == '*' and self.pos + 1 < len(self.chars) and self.chars[self.pos + 1] == '*':
                 self.advance()
                 self.advance()
                 out.append('**')

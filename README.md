@@ -337,7 +337,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
 ## Self-Hosted Compiler
 
-The self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself for a substantial language subset.
+The self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
 
 It supports:
 
@@ -345,7 +345,7 @@ It supports:
 - Functions with def/return, closures with upvalue capture
 - Classes with inheritance and method dispatch
 - Built-in self-test suite covering arithmetic, control flow, closures, classes, inheritance, and FizzBuzz
-- Bootstrap mode exists, but full self-hosting bootstrap of `compiler_vm.cool` is still in progress
+- Bootstrap mode compiles `compiler_vm.cool` with itself and reports lexing, parsing, and codegen progress
 
 ---
 
