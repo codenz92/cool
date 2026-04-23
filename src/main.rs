@@ -290,7 +290,10 @@ NOTES:
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
     (Queue/Stack), inline asm, and raw memory.
-    Closures/lambdas, broader import support beyond those built-ins, and try/except still require the interpreter or bytecode VM.
+    Closures/lambdas, with/context managers, broader import support
+    beyond those built-ins, import ffi, and try/except still require
+    the interpreter or bytecode VM. For the most complete context-
+    manager cleanup semantics, prefer the tree-walk interpreter.
 "
     );
 }

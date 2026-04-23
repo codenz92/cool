@@ -1519,6 +1519,7 @@ print(len(v1))     # 2</code></pre>
         </div>
 
         <h3>Context Managers (with)</h3>
+        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in the tree-walk interpreter and bytecode VM. The interpreter currently has the most complete cleanup behavior; the bytecode VM handles simple fallthrough <code>with</code> blocks, while the LLVM native backend does not support <code>with</code> yet.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python">class Timer:
@@ -2174,7 +2175,7 @@ eval("print('hello from eval')")</code></pre>
         </div>
 
         <h3>with Statement (Recommended)</h3>
-        <p>Always use <code>with</code> — it automatically closes the file even if an exception occurs:</p>
+        <p>Use <code>with</code> for structured file cleanup. The tree-walk interpreter closes files on both normal exit and raised exceptions; the bytecode VM guarantees cleanup for simple fallthrough <code>with</code> blocks, and LLVM native builds do not support <code>with</code> yet.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python"># Read entire file
@@ -2363,7 +2364,7 @@ f.close()    # always close manually when not using `with`</code></pre>
       <!-- STDLIB -->
       <section class="doc-section" id="stdlib">
         <h2>Standard Library</h2>
-        <p>The standard library modules are written in Cool itself. Import them with <code>import</code>.</p>
+        <p>The standard library ships with Cool across runtimes. Some modules are implemented directly by the Rust runtime, while others are provided as Cool code loaded through <code>import</code>.</p>
 
         <h3>string module</h3>
         <div class="code-wrap">
@@ -2880,7 +2881,7 @@ echo Done.</code></pre>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM still excludes closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code>, core <code>random</code> helpers such as <code>seed</code>/<code>random</code>/<code>randint</code>/<code>uniform</code>/<code>choice</code>/<code>shuffle</code>, <code>json.loads</code>/<code>json.dumps</code>, built-in <code>string</code> helpers such as <code>split</code>/<code>join</code>/<code>strip</code>/<code>upper</code>/<code>replace</code>, pure <code>list</code> helpers such as <code>sort</code>/<code>reverse</code>/<code>map</code>/<code>filter</code>/<code>reduce</code>/<code>flatten</code>/<code>unique</code>, built-in <code>re</code> helpers such as <code>match</code>/<code>search</code>/<code>fullmatch</code>/<code>findall</code>/<code>sub</code>/<code>split</code>, and <code>collections.Queue()</code>/<code>collections.Stack()</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
+          <li>⚠️ LLVM still excludes <code>with</code> / context managers, closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

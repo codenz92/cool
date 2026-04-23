@@ -70,7 +70,7 @@ cool build hello.cool      # compiles → ./hello
 
 The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, native `import math`, native `import os`, native `import sys`, native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
-**LLVM limitations:** Closures/lambdas, general `import` support beyond the built-in `math`, `os`, `sys`, `time`, `random`, `json`, `string`, `list`, `re`, and `collections` helpers above, and `try`/`except` are still interpreter/VM-only in practice. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
+**LLVM limitations:** `with` / context managers, closures/lambdas, general `import` support beyond the built-in `math`, `os`, `sys`, `time`, `random`, `json`, `string`, `list`, `re`, and `collections` helpers above, `import ffi`, and `try`/`except` are still interpreter/VM-only in practice. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :---------: | :---------: | :--: |
@@ -93,6 +93,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`) | ✅ | ✅ | ✅ |
 | `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`) | ✅ | ✅ | ✅ |
 | `import collections` (`Queue`, `Stack`) | ✅ | ✅ | ✅ |
+| `with` / context managers | ✅ | ⚠️ | ❌ |
 | f-strings | ✅ | ✅ | ✅ |
 | Ternary expressions | ✅ | ✅ | ✅ |
 | List comprehensions | ✅ | ✅ | ✅ |
@@ -100,8 +101,11 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | Closures / lambdas | ✅ | ✅ | ❌ |
 | General `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
+| `import ffi` | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory access | ❌ | ❌ | ✅ |
+
+`⚠️` for the bytecode VM means simple `with` flows run `__enter__` / `__exit__`, but exception and early-exit cleanup semantics are still more complete in the tree-walk interpreter.
 
 ### Inline Assembly (LLVM backend)
 

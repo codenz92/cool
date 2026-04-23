@@ -326,11 +326,15 @@ The LLVM backend now covers most day-to-day language features, including default
 | `in` / `not in` | ✅ | ✅ | ✅ |
 | Dicts | ✅ | ✅ | ✅ |
 | Tuples | ✅ | ✅ | ✅ |
+| `with` / `context managers` | ✅ | ⚠️ | ❌ |
 | Closures / lambdas | ✅ | ✅ | ❌ |
 | General `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
+| `import ffi` | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory | ❌ | ❌ | ✅ |
+
+`⚠️` for the bytecode VM means simple `with` flows run `__enter__` / `__exit__`, but exception and early-exit cleanup semantics are still more complete in the tree-walk interpreter.
 
 ---
 
