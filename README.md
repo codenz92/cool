@@ -156,7 +156,7 @@ clear
 
 - Pipes: `ls | grep cool`, `cat file | head 5`
 - Environment variables: `set PATH=/usr/bin`, use as `$PATH`
-- Tab completion and up-arrow history navigation
+- Tab completion and up-arrow history navigation in interactive TTY sessions
 - Shell scripting via `source <file>`
 
 ---

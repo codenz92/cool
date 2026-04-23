@@ -542,6 +542,20 @@ fn test_shell_run_passes_program_args() {
 }
 
 #[test]
+fn test_shell_calc_app_launch() {
+    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "calc\n2 + 3\nexit\nexit\n").unwrap();
+    assert!(result.contains("calc v1.0 — expression calculator"));
+    assert!(result.contains("= 5"));
+}
+
+#[test]
+fn test_shell_notes_app_launch() {
+    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "notes\nexit\nexit\n").unwrap();
+    assert!(result.contains("notes v1.0 — commands:"));
+    assert!(result.contains("new <name>"));
+}
+
+#[test]
 fn test_break_continue() {
     let result =
         run_cool("result = []\nfor i in range(10):\n\tif i == 5:\n\t\tbreak\n\tresult.append(i)\nprint(len(result))")

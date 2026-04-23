@@ -124,8 +124,8 @@
 - [x] `find <pattern>` — search for files by name
 - [x] Pipes: `ls | grep cool`
 - [x] Environment variables (`set VAR=value`, `$VAR`)
-- [x] Tab completion
-- [x] Up-arrow history navigation
+- [x] Tab completion in interactive TTY shell sessions
+- [x] Up-arrow history navigation in interactive TTY shell sessions
 - [x] Shell scripting (`source <file>` runs shell scripts line by line)
 - [x] `alias` command
 
