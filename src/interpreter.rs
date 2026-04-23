@@ -1,5 +1,6 @@
 use crate::argparse_runtime::{self, ArgData};
 use crate::ast::*;
+use crate::csv_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 /// Tree-walk interpreter for Cool.
@@ -1178,6 +1179,16 @@ impl Interpreter {
                 }
                 env.set_local("argparse".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "csv" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["rows", "dicts", "write"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("csv.{}", fn_name)),
+                    );
+                }
+                env.set_local("csv".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "test" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2309,6 +2320,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("argparse.") {
             return self.call_argparse_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("csv.") {
+            return self.call_csv_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("test.") {
             return self.call_test_fn(f, args, env);
@@ -3528,6 +3542,143 @@ class Stack:
                 }
             }
             _ => Err(self.err(&format!("test has no function '{}'", name))),
+        }
+    }
+
+    fn csv_rows_to_value(&self, rows: Vec<Vec<String>>) -> Value {
+        Value::List(Rc::new(RefCell::new(
+            rows.into_iter()
+                .map(|row| {
+                    Value::List(Rc::new(RefCell::new(
+                        row.into_iter().map(Value::Str).collect::<Vec<_>>(),
+                    )))
+                })
+                .collect(),
+        )))
+    }
+
+    fn csv_dicts_to_value(&self, rows: Vec<Vec<(String, String)>>) -> Value {
+        Value::List(Rc::new(RefCell::new(
+            rows.into_iter()
+                .map(|row| {
+                    let mut map = IndexedMap::new();
+                    for (key, value) in row {
+                        map.set(Value::Str(key), Value::Str(value));
+                    }
+                    Value::Dict(Rc::new(RefCell::new(map)))
+                })
+                .collect(),
+        )))
+    }
+
+    fn csv_write_rows_arg(&self, value: &Value) -> Result<Vec<Vec<String>>, String> {
+        let rows: Vec<Value> = match value {
+            Value::List(items) => items.borrow().clone(),
+            Value::Tuple(items) => items.iter().cloned().collect(),
+            other => {
+                return Err(self.err(&format!(
+                    "csv.write() rows must be a list or tuple, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+
+        let Some(first) = rows.first() else {
+            return Ok(Vec::new());
+        };
+
+        if matches!(first, Value::Dict(_)) {
+            let first_map = match first {
+                Value::Dict(map) => map.borrow(),
+                _ => unreachable!(),
+            };
+            let header_keys = first_map.keys.clone();
+            let header_row: Vec<String> = header_keys.iter().map(|key| format!("{}", key)).collect();
+            drop(first_map);
+
+            let mut out = Vec::with_capacity(rows.len() + 1);
+            out.push(header_row);
+            for row in rows {
+                let map = match row {
+                    Value::Dict(map) => map,
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.write() rows must all be dicts when the first row is a dict, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let map = map.borrow();
+                let mut cols = Vec::with_capacity(header_keys.len());
+                for key in &header_keys {
+                    cols.push(map.get(key).map(|value| format!("{}", value)).unwrap_or_default());
+                }
+                out.push(cols);
+            }
+            Ok(out)
+        } else {
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                match row {
+                    Value::List(items) => {
+                        out.push(items.borrow().iter().map(|value| format!("{}", value)).collect());
+                    }
+                    Value::Tuple(items) => {
+                        out.push(items.iter().map(|value| format!("{}", value)).collect());
+                    }
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.write() rows must contain only lists, tuples, or dicts, got {}",
+                            other.type_name()
+                        )))
+                    }
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    fn call_csv_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "rows" => {
+                if args.len() != 1 {
+                    return Err(self.err("csv.rows() takes exactly one string argument"));
+                }
+                let text = match &args[0] {
+                    Value::Str(s) => s,
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.rows() requires a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let rows = csv_runtime::parse_rows(text).map_err(|e| self.err(&e))?;
+                Ok(self.csv_rows_to_value(rows))
+            }
+            "dicts" => {
+                if args.len() != 1 {
+                    return Err(self.err("csv.dicts() takes exactly one string argument"));
+                }
+                let text = match &args[0] {
+                    Value::Str(s) => s,
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.dicts() requires a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let rows = csv_runtime::parse_dicts(text).map_err(|e| self.err(&e))?;
+                Ok(self.csv_dicts_to_value(rows))
+            }
+            "write" => {
+                if args.len() != 1 {
+                    return Err(self.err("csv.write() takes exactly one rows argument"));
+                }
+                Ok(Value::Str(csv_runtime::write_rows(&self.csv_write_rows_arg(&args[0])?)))
+            }
+            _ => Err(self.err(&format!("csv has no function '{}'", name))),
         }
     }
 

@@ -914,7 +914,7 @@
           </div>
           <div class="feature-card">
             <div class="fc-title">Standard Library</div>
-            <div class="fc-desc">math, json, re, time, random, collections, path, subprocess, argparse, logging, test, term.</div>
+            <div class="fc-desc">math, json, re, time, random, collections, path, csv, subprocess, argparse, logging, test, term.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Cool Shell</div>
@@ -2025,6 +2025,22 @@ s.push("b")
 s.pop()        # "b"  (LIFO)</code></pre>
         </div>
 
+        <h3>csv</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import csv
+
+text = "name,city\nAlice,\"New York, NY\"\nBob,Paris\n"
+
+rows = csv.rows(text)
+print(rows[1][1])         # New York, NY
+
+dicts = csv.dicts(text)
+print(dicts[0]["city"])   # New York, NY
+
+print(csv.write(dicts))   # name,city ... CSV text</code></pre>
+        </div>
+
         <h3>argparse</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
@@ -2896,7 +2912,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>6</td>
-                <td>Standard library — json, re, time, random, collections, string, list, path, subprocess, argparse, logging, test</td>
+                <td>Standard library — json, re, time, random, collections, string, list, path, csv, subprocess, argparse, logging, test</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -2931,7 +2947,7 @@ echo Done.</code></pre>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

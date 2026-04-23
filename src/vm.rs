@@ -1,5 +1,6 @@
 /// Stack-based bytecode VM for Cool.
 use crate::argparse_runtime::{self, ArgData};
+use crate::csv_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1523,6 +1524,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("argparse.") {
             return self.call_argparse_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("csv.") {
+            return self.call_csv_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("test.") {
             return self.call_test_module(rest, args);
@@ -3422,6 +3426,140 @@ impl VM {
         }
     }
 
+    fn csv_rows_to_value(&self, rows: Vec<Vec<String>>) -> VmValue {
+        VmValue::List(Rc::new(RefCell::new(
+            rows.into_iter()
+                .map(|row| {
+                    VmValue::List(Rc::new(RefCell::new(
+                        row.into_iter().map(VmValue::Str).collect::<Vec<_>>(),
+                    )))
+                })
+                .collect(),
+        )))
+    }
+
+    fn csv_dicts_to_value(&self, rows: Vec<Vec<(String, String)>>) -> VmValue {
+        VmValue::List(Rc::new(RefCell::new(
+            rows.into_iter()
+                .map(|row| {
+                    let mut map = VmDict::new();
+                    for (key, value) in row {
+                        map.set(VmValue::Str(key), VmValue::Str(value));
+                    }
+                    VmValue::Dict(Rc::new(RefCell::new(map)))
+                })
+                .collect(),
+        )))
+    }
+
+    fn csv_write_rows_arg(&self, value: &VmValue) -> Result<Vec<Vec<String>>, String> {
+        let rows: Vec<VmValue> = match value {
+            VmValue::List(items) => items.borrow().clone(),
+            VmValue::Tuple(items) => items.iter().cloned().collect(),
+            other => {
+                return Err(self.err(&format!(
+                    "csv.write() rows must be a list or tuple, got {}",
+                    other.type_name()
+                )))
+            }
+        };
+
+        let Some(first) = rows.first() else {
+            return Ok(Vec::new());
+        };
+
+        if matches!(first, VmValue::Dict(_)) {
+            let header_keys = match first {
+                VmValue::Dict(map) => map.borrow().keys.clone(),
+                _ => unreachable!(),
+            };
+            let header_row: Vec<String> = header_keys.iter().map(|key| key.to_string()).collect();
+            let mut out = Vec::with_capacity(rows.len() + 1);
+            out.push(header_row);
+            for row in rows {
+                let map = match row {
+                    VmValue::Dict(map) => map,
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.write() rows must all be dicts when the first row is a dict, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let map = map.borrow();
+                let mut cols = Vec::with_capacity(header_keys.len());
+                for key in &header_keys {
+                    cols.push(map.get(key).map(|value| value.to_string()).unwrap_or_default());
+                }
+                out.push(cols);
+            }
+            Ok(out)
+        } else {
+            let mut out = Vec::with_capacity(rows.len());
+            for row in rows {
+                match row {
+                    VmValue::List(items) => {
+                        out.push(items.borrow().iter().map(|value| value.to_string()).collect());
+                    }
+                    VmValue::Tuple(items) => {
+                        out.push(items.iter().map(|value| value.to_string()).collect());
+                    }
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.write() rows must contain only lists, tuples, or dicts, got {}",
+                            other.type_name()
+                        )))
+                    }
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    fn call_csv_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "rows" => {
+                if args.len() != 1 {
+                    return Err(self.err("csv.rows() takes exactly one string argument"));
+                }
+                let text = match &args[0] {
+                    VmValue::Str(s) => s,
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.rows() requires a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let rows = csv_runtime::parse_rows(text).map_err(|e| self.err(&e))?;
+                Ok(self.csv_rows_to_value(rows))
+            }
+            "dicts" => {
+                if args.len() != 1 {
+                    return Err(self.err("csv.dicts() takes exactly one string argument"));
+                }
+                let text = match &args[0] {
+                    VmValue::Str(s) => s,
+                    other => {
+                        return Err(self.err(&format!(
+                            "csv.dicts() requires a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let rows = csv_runtime::parse_dicts(text).map_err(|e| self.err(&e))?;
+                Ok(self.csv_dicts_to_value(rows))
+            }
+            "write" => {
+                if args.len() != 1 {
+                    return Err(self.err("csv.write() takes exactly one rows argument"));
+                }
+                Ok(VmValue::Str(csv_runtime::write_rows(&self.csv_write_rows_arg(&args[0])?)))
+            }
+            _ => Err(self.err(&format!("unknown csv function '{}'", name))),
+        }
+    }
+
     fn normalize_path_string(path: &str) -> String {
         use std::path::{Component, Path, PathBuf};
 
@@ -3953,6 +4091,11 @@ impl VM {
             "argparse" => {
                 for fname in &["parse", "help"] {
                     set(&mut d, fname, bf(&format!("argparse.{}", fname)));
+                }
+            }
+            "csv" => {
+                for fname in &["rows", "dicts", "write"] {
+                    set(&mut d, fname, bf(&format!("csv.{}", fname)));
                 }
             }
             "test" => {

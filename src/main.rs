@@ -1,6 +1,7 @@
 mod argparse_runtime;
 mod ast;
 mod compiler;
+mod csv_runtime;
 mod interpreter;
 mod lexer;
 mod llvm_codegen;
@@ -554,14 +555,14 @@ NOTES:
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
     source-relative file imports and project/package imports,
     native import ffi (ffi.open/ffi.func),
-    built-in import math/os/sys/path/subprocess/argparse/logging/test/time and import random
+    built-in import math/os/sys/path/csv/subprocess/argparse/logging/test/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
-    (Queue/Stack), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
+    (Queue/Stack), csv(rows/dicts/write), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
     test(equal/not_equal/truthy/falsey/is_nil/not_nil/fail/raises), open()/file methods, with/context managers on
     normal exit, return/break/continue, caught exceptions, and unhandled native raises,
     inline asm, and raw memory.

@@ -1325,6 +1325,226 @@ static CoolVal cool_test_raises(CoolVal callable, CoolVal args_value, CoolVal ex
     return exc;
 }
 
+static void cool_csv_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static void cool_csv_reset_field(CoolStrBuf* field) {
+    field->len = 0;
+    field->data[0] = '\0';
+}
+
+static void cool_csv_push_field(CoolVal row, CoolStrBuf* field) {
+    cool_list_push(row, cv_str(strdup(field->data)));
+    cool_csv_reset_field(field);
+}
+
+static const char* cool_csv_value_str(CoolVal value) {
+    return value.tag == TAG_STR ? (const char*)(intptr_t)value.payload : cool_to_str(value);
+}
+
+static CoolVal cool_csv_rows(CoolVal text) {
+    if (text.tag != TAG_STR) {
+        cool_csv_raisef("csv.rows() requires a string, got %s", cool_type_name(text.tag));
+    }
+
+    const char* input = (const char*)(intptr_t)text.payload;
+    CoolVal rows = cool_list_make(cv_int(8));
+    CoolVal row = cool_list_make(cv_int(4));
+    CoolStrBuf field;
+    sb_init(&field);
+    int in_quotes = 0;
+    int just_closed_quote = 0;
+    int just_finished_row = 0;
+    int saw_any = 0;
+
+    for (const char* p = input; *p; ) {
+        char c = *p++;
+        saw_any = 1;
+        if (in_quotes) {
+            if (c == '"') {
+                if (*p == '"') {
+                    sb_push_char(&field, '"');
+                    p++;
+                } else {
+                    in_quotes = 0;
+                    just_closed_quote = 1;
+                }
+            } else {
+                sb_push_char(&field, c);
+            }
+            continue;
+        }
+
+        switch (c) {
+            case '"':
+                if (field.len != 0 || just_closed_quote) {
+                    free(field.data);
+                    cool_csv_raisef("csv parse error: quote must start at beginning of field");
+                }
+                in_quotes = 1;
+                just_finished_row = 0;
+                break;
+            case ',':
+                cool_csv_push_field(row, &field);
+                just_closed_quote = 0;
+                just_finished_row = 0;
+                break;
+            case '\r':
+                if (*p == '\n') p++;
+                cool_csv_push_field(row, &field);
+                cool_list_push(rows, row);
+                row = cool_list_make(cv_int(4));
+                just_closed_quote = 0;
+                just_finished_row = 1;
+                break;
+            case '\n':
+                cool_csv_push_field(row, &field);
+                cool_list_push(rows, row);
+                row = cool_list_make(cv_int(4));
+                just_closed_quote = 0;
+                just_finished_row = 1;
+                break;
+            default:
+                if (just_closed_quote) {
+                    free(field.data);
+                    cool_csv_raisef("csv parse error: unexpected character after closing quote");
+                }
+                sb_push_char(&field, c);
+                just_finished_row = 0;
+                break;
+        }
+    }
+
+    if (in_quotes) {
+        free(field.data);
+        cool_csv_raisef("csv parse error: unterminated quoted field");
+    }
+
+    if (saw_any && (!just_finished_row || field.len > 0 || cool_list_len(row).payload > 0)) {
+        cool_csv_push_field(row, &field);
+        cool_list_push(rows, row);
+    }
+    free(field.data);
+    return rows;
+}
+
+static CoolVal cool_csv_dicts(CoolVal text) {
+    CoolVal parsed_rows = cool_csv_rows(text);
+    CoolList* rows = (CoolList*)(intptr_t)parsed_rows.payload;
+    CoolVal out = cool_list_make(cv_int(rows->length > 0 ? rows->length - 1 : 0));
+    if (rows->length == 0) return out;
+
+    CoolVal header_row = ((CoolVal*)rows->data)[0];
+    CoolList* headers = (CoolList*)(intptr_t)header_row.payload;
+    for (int64_t row_idx = 1; row_idx < rows->length; row_idx++) {
+        CoolVal row_val = ((CoolVal*)rows->data)[row_idx];
+        CoolList* row = (CoolList*)(intptr_t)row_val.payload;
+        CoolVal dict = cool_dict_new();
+        for (int64_t col_idx = 0; col_idx < headers->length; col_idx++) {
+            CoolVal key = ((CoolVal*)headers->data)[col_idx];
+            CoolVal value = col_idx < row->length ? ((CoolVal*)row->data)[col_idx] : cv_str("");
+            cool_dict_set(dict, key, value);
+        }
+        cool_list_push(out, dict);
+    }
+    return out;
+}
+
+static void cool_csv_write_field(CoolStrBuf* out, const char* field) {
+    size_t len = strlen(field);
+    int needs_quotes = 0;
+    if (len > 0 && (isspace((unsigned char)field[0]) || isspace((unsigned char)field[len - 1]))) {
+        needs_quotes = 1;
+    }
+    for (size_t i = 0; i < len && !needs_quotes; i++) {
+        char c = field[i];
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+            needs_quotes = 1;
+        }
+    }
+    if (!needs_quotes) {
+        sb_push_str(out, field);
+        return;
+    }
+    sb_push_char(out, '"');
+    for (size_t i = 0; i < len; i++) {
+        if (field[i] == '"') {
+            sb_push_char(out, '"');
+            sb_push_char(out, '"');
+        } else {
+            sb_push_char(out, field[i]);
+        }
+    }
+    sb_push_char(out, '"');
+}
+
+static void cool_csv_write_sequence_row(CoolStrBuf* out, CoolVal row_val) {
+    if (row_val.tag != TAG_LIST && row_val.tag != TAG_TUPLE) {
+        cool_csv_raisef(
+            "csv.write() rows must contain only lists, tuples, or dicts, got %s",
+            cool_type_name(row_val.tag)
+        );
+    }
+    CoolList* row = (CoolList*)(intptr_t)row_val.payload;
+    for (int64_t col_idx = 0; col_idx < row->length; col_idx++) {
+        if (col_idx > 0) sb_push_char(out, ',');
+        cool_csv_write_field(out, cool_csv_value_str(((CoolVal*)row->data)[col_idx]));
+    }
+}
+
+static CoolVal cool_csv_write(CoolVal rows_val) {
+    if (rows_val.tag != TAG_LIST && rows_val.tag != TAG_TUPLE) {
+        cool_csv_raisef("csv.write() rows must be a list or tuple, got %s", cool_type_name(rows_val.tag));
+    }
+
+    CoolList* rows = (CoolList*)(intptr_t)rows_val.payload;
+    if (rows->length == 0) return cv_str("");
+
+    CoolVal first = ((CoolVal*)rows->data)[0];
+    CoolStrBuf out;
+    sb_init(&out);
+
+    if (first.tag == TAG_DICT) {
+        CoolDict* first_dict = (CoolDict*)(intptr_t)first.payload;
+        for (int64_t col_idx = 0; col_idx < first_dict->len; col_idx++) {
+            if (col_idx > 0) sb_push_char(&out, ',');
+            cool_csv_write_field(&out, cool_csv_value_str(first_dict->keys[col_idx]));
+        }
+        for (int64_t row_idx = 0; row_idx < rows->length; row_idx++) {
+            CoolVal row_val = ((CoolVal*)rows->data)[row_idx];
+            if (row_val.tag != TAG_DICT) {
+                cool_csv_raisef(
+                    "csv.write() rows must all be dicts when the first row is a dict, got %s",
+                    cool_type_name(row_val.tag)
+                );
+            }
+            sb_push_char(&out, '\n');
+            for (int64_t col_idx = 0; col_idx < first_dict->len; col_idx++) {
+                if (col_idx > 0) sb_push_char(&out, ',');
+                CoolVal key = first_dict->keys[col_idx];
+                const char* field = "";
+                if (cool_truthy(cool_dict_contains(row_val, key))) {
+                    field = cool_csv_value_str(cool_dict_get_opt(row_val, key));
+                }
+                cool_csv_write_field(&out, field);
+            }
+        }
+        return cv_str(out.data);
+    }
+
+    for (int64_t row_idx = 0; row_idx < rows->length; row_idx++) {
+        if (row_idx > 0) sb_push_char(&out, '\n');
+        cool_csv_write_sequence_row(&out, ((CoolVal*)rows->data)[row_idx]);
+    }
+    return cv_str(out.data);
+}
+
 static CoolVal cool_list_map_copy(CoolVal func, CoolVal seq) {
     if (seq.tag != TAG_LIST) {
         fprintf(stderr, "TypeError: list.map() requires a list\n");
@@ -4176,6 +4396,12 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             else if (strcmp(name, "error") == 0) level = COOL_LOG_ERROR;
             return cool_logging_emit(level, cool_to_str(args[0]), nargs == 2 ? cool_to_str(args[1]) : NULL);
         }
+    }
+
+    if (strcmp(module, "csv") == 0) {
+        if (strcmp(name, "rows") == 0 && nargs == 1) return cool_csv_rows(args[0]);
+        if (strcmp(name, "dicts") == 0 && nargs == 1) return cool_csv_dicts(args[0]);
+        if (strcmp(name, "write") == 0 && nargs == 1) return cool_csv_write(args[0]);
     }
 
     if (strcmp(module, "test") == 0) {
@@ -7095,8 +7321,8 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "test" | "time" | "random" | "json"
-            | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
+            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "test" | "time" | "random"
+            | "json" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

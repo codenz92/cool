@@ -475,6 +475,74 @@ fn test_vm_argparse_uses_process_args_by_default() {
 }
 
 #[test]
+fn test_import_csv_module() {
+    let result = run_cool(
+        r#"import csv
+text = "name,city,quote\nAlice,\"New York, NY\",\"She said \"\"hi\"\"\"\nBob,Paris,\n"
+rows = csv.rows(text)
+print(rows[1][1])
+print(rows[1][2])
+dicts = csv.dicts(text)
+print(dicts[0]["city"])
+print(dicts[1]["quote"] == "")
+rendered = csv.write(dicts)
+print("name,city,quote" in rendered)
+print("\"New York, NY\"" in rendered)
+print("\"She said \"\"hi\"\"\"" in rendered)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "New York, NY",
+            "She said \"hi\"",
+            "New York, NY",
+            "true",
+            "true",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
+fn test_vm_import_csv_module() {
+    let result = run_cool_vm(
+        r#"import csv
+text = "name,city,quote\nAlice,\"New York, NY\",\"She said \"\"hi\"\"\"\nBob,Paris,\n"
+rows = csv.rows(text)
+print(rows[1][1])
+print(rows[1][2])
+dicts = csv.dicts(text)
+print(dicts[0]["city"])
+print(dicts[1]["quote"] == "")
+rendered = csv.write(dicts)
+print("name,city,quote" in rendered)
+print("\"New York, NY\"" in rendered)
+print("\"She said \"\"hi\"\"\"" in rendered)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "New York, NY",
+            "She said \"hi\"",
+            "New York, NY",
+            "true",
+            "true",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
 fn test_import_test_module() {
     let result = run_cool(
         r#"import test
