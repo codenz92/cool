@@ -34,6 +34,7 @@ const RUNTIME_C: &str = r#"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <regex.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
 #endif
@@ -797,6 +798,8 @@ static CoolVal cool_list_contains_local(CoolVal list, CoolVal item);
 static void sb_init(CoolStrBuf* sb);
 static void sb_push_char(CoolStrBuf* sb, char c);
 static void sb_push_str(CoolStrBuf* sb, const char* s);
+static char* re_translate_pattern(const char* pattern);
+static regex_t re_compile_regex(const char* pattern);
 
 static CoolVal cool_string_upper(CoolVal obj) {
     const char* s = (const char*)(intptr_t)obj.payload;
@@ -1651,6 +1654,45 @@ static void json_dump_value(CoolStrBuf* sb, CoolVal v) {
     }
 }
 
+static char* re_translate_pattern(const char* pattern) {
+    CoolStrBuf sb;
+    sb_init(&sb);
+    for (const char* p = pattern; *p; p++) {
+        if (*p == '\\' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'd': sb_push_str(&sb, "[[:digit:]]"); break;
+                case 'D': sb_push_str(&sb, "[^[:digit:]]"); break;
+                case 's': sb_push_str(&sb, "[[:space:]]"); break;
+                case 'S': sb_push_str(&sb, "[^[:space:]]"); break;
+                case 'w': sb_push_str(&sb, "[[:alnum:]_]"); break;
+                case 'W': sb_push_str(&sb, "[^[:alnum:]_]"); break;
+                default:
+                    sb_push_char(&sb, '\\');
+                    sb_push_char(&sb, *p);
+                    break;
+            }
+        } else {
+            sb_push_char(&sb, *p);
+        }
+    }
+    return sb.data;
+}
+
+static regex_t re_compile_regex(const char* pattern) {
+    char* translated = re_translate_pattern(pattern);
+    regex_t re;
+    int rc = regcomp(&re, translated, REG_EXTENDED);
+    free(translated);
+    if (rc != 0) {
+        char errbuf[256];
+        regerror(rc, &re, errbuf, sizeof(errbuf));
+        fprintf(stderr, "ValueError: invalid regex: %s\n", errbuf);
+        exit(1);
+    }
+    return re;
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -1942,6 +1984,139 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (strcmp(name, "reverse") == 0 && nargs == 1) return cool_list_reverse_copy(args[0]);
         if (strcmp(name, "flatten") == 0 && nargs == 1) return cool_list_flatten_copy(args[0]);
         if (strcmp(name, "unique") == 0 && nargs == 1) return cool_list_unique_copy(args[0]);
+    }
+
+    if (strcmp(module, "re") == 0) {
+        if (nargs < 2 || args[0].tag != TAG_STR || args[1].tag != TAG_STR) {
+            fprintf(stderr, "TypeError: re.%s() requires pattern and text strings\n", name);
+            exit(1);
+        }
+        const char* pattern = (const char*)(intptr_t)args[0].payload;
+        const char* text = (const char*)(intptr_t)args[1].payload;
+        regex_t re = re_compile_regex(pattern);
+        regmatch_t m;
+
+        if (strcmp(name, "match") == 0) {
+            int rc = regexec(&re, text, 1, &m, 0);
+            regfree(&re);
+            if (rc == 0 && m.rm_so == 0) {
+                size_t len = (size_t)(m.rm_eo - m.rm_so);
+                char* out = (char*)malloc(len + 1);
+                memcpy(out, text + m.rm_so, len);
+                out[len] = '\0';
+                return cv_str(out);
+            }
+            return cv_nil();
+        }
+
+        if (strcmp(name, "search") == 0) {
+            int rc = regexec(&re, text, 1, &m, 0);
+            regfree(&re);
+            if (rc == 0) {
+                size_t len = (size_t)(m.rm_eo - m.rm_so);
+                char* out = (char*)malloc(len + 1);
+                memcpy(out, text + m.rm_so, len);
+                out[len] = '\0';
+                return cv_str(out);
+            }
+            return cv_nil();
+        }
+
+        if (strcmp(name, "fullmatch") == 0) {
+            int rc = regexec(&re, text, 1, &m, 0);
+            regfree(&re);
+            if (rc == 0 && m.rm_so == 0 && (size_t)m.rm_eo == strlen(text)) {
+                size_t len = (size_t)(m.rm_eo - m.rm_so);
+                char* out = (char*)malloc(len + 1);
+                memcpy(out, text + m.rm_so, len);
+                out[len] = '\0';
+                return cv_str(out);
+            }
+            return cv_nil();
+        }
+
+        if (strcmp(name, "findall") == 0) {
+            CoolVal out = cool_list_make(cv_int(4));
+            const char* cur = text;
+            size_t offset = 0;
+            while (regexec(&re, cur, 1, &m, 0) == 0) {
+                if (m.rm_so < 0 || m.rm_eo < 0) break;
+                size_t start = offset + (size_t)m.rm_so;
+                size_t end = offset + (size_t)m.rm_eo;
+                size_t len = end - start;
+                char* part = (char*)malloc(len + 1);
+                memcpy(part, text + start, len);
+                part[len] = '\0';
+                cool_list_push(out, cv_str(part));
+                if (m.rm_eo == 0) {
+                    cur++;
+                    offset++;
+                } else {
+                    cur += m.rm_eo;
+                    offset += (size_t)m.rm_eo;
+                }
+            }
+            regfree(&re);
+            return out;
+        }
+
+        if (strcmp(name, "split") == 0) {
+            CoolVal out = cool_list_make(cv_int(4));
+            const char* cur = text;
+            size_t offset = 0;
+            while (regexec(&re, cur, 1, &m, 0) == 0) {
+                if (m.rm_so < 0 || m.rm_eo < 0) break;
+                size_t start = offset;
+                size_t end = offset + (size_t)m.rm_so;
+                size_t len = end - start;
+                char* part = (char*)malloc(len + 1);
+                memcpy(part, text + start, len);
+                part[len] = '\0';
+                cool_list_push(out, cv_str(part));
+                if (m.rm_eo == 0) {
+                    cur++;
+                    offset++;
+                } else {
+                    cur += m.rm_eo;
+                    offset += (size_t)m.rm_eo;
+                }
+            }
+            cool_list_push(out, cv_str(strdup(text + offset)));
+            regfree(&re);
+            return out;
+        }
+
+        if (strcmp(name, "sub") == 0 && nargs == 3 && args[2].tag == TAG_STR) {
+            const char* repl = (const char*)(intptr_t)args[2].payload;
+            CoolStrBuf sb;
+            sb_init(&sb);
+            const char* cur = text;
+            size_t offset = 0;
+            while (regexec(&re, cur, 1, &m, 0) == 0) {
+                if (m.rm_so < 0 || m.rm_eo < 0) break;
+                size_t start = offset;
+                size_t end = offset + (size_t)m.rm_so;
+                size_t len = end - start;
+                sb_reserve(&sb, len + strlen(repl));
+                memcpy(sb.data + sb.len, text + start, len);
+                sb.len += len;
+                sb.data[sb.len] = '\0';
+                sb_push_str(&sb, repl);
+                if (m.rm_eo == 0) {
+                    sb_push_char(&sb, *cur);
+                    cur++;
+                    offset++;
+                } else {
+                    cur += m.rm_eo;
+                    offset += (size_t)m.rm_eo;
+                }
+            }
+            sb_push_str(&sb, text + offset);
+            regfree(&re);
+            return cv_str(sb.data);
+        }
+
+        regfree(&re);
     }
 
     fprintf(stderr, "AttributeError: unknown module call %s.%s\n", module, name);
@@ -3621,7 +3796,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" => {
+            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" | "re" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -3630,7 +3805,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, and list)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, list, and re)",
                 name
             )),
         }

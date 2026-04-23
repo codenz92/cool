@@ -350,3 +350,26 @@ print(list.unique([1, 1, 2, 2, 3]))
     assert!(result.contains("[2, 1, 3]") || result.contains("[2,1,3]"));
     assert!(result.contains("[1, 2, 3, 4]") || result.contains("[1,2,3,4]"));
 }
+
+#[test]
+fn test_llvm_import_re_module() {
+    let result = compile_and_run_native(
+        r#"
+import re
+print(re)
+print(re.match("^\d+$", "123"))
+print(re.search("\d+", "abc123def"))
+print(re.fullmatch("\d+", "12345"))
+print(re.findall("\d+", "a1 b22 c333"))
+print(re.sub("\d", "a1b2c3", "X"))
+print(re.split(",\s*", "a, b,  c"))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module re>"));
+    assert!(result.contains("\n123\n"));
+    assert!(result.contains("[1, 22, 333]") || result.contains("[1,22,333]"));
+    assert!(result.contains("aXbXcX"));
+    assert!(result.contains("[a, b, c]") || result.contains("[a,b,c]"));
+}

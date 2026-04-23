@@ -177,7 +177,7 @@ cool coolapps/shell.cool
 run coolapps/snake.cool
 ```
 
-The interpreter and bytecode VM are functionally equivalent. The LLVM backend now also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), and the pure `list` helpers (`sort`, `reverse`, `flatten`, `unique`), but it still has some limitations:
+The interpreter and bytecode VM are functionally equivalent. The LLVM backend now also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `flatten`, `unique`), and the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), but it still has some limitations:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 |---------|-------------|-------------|------|
