@@ -475,6 +475,62 @@ fn test_vm_argparse_uses_process_args_by_default() {
 }
 
 #[test]
+fn test_import_test_module() {
+    let result = run_cool(
+        r#"import test
+
+def boom(msg):
+    raise msg
+
+def failer():
+    test.fail("bad")
+
+test.equal(2 + 2, 4)
+test.not_equal(2 + 2, 5)
+test.truthy(1 < 2)
+test.falsey(2 < 1)
+test.is_nil(nil)
+test.not_nil("x")
+print(test.raises(boom, ["boom"], "boom"))
+print(test.raises(failer, nil, "AssertionError"))
+print("ok")
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["boom", "AssertionError: bad", "ok"]);
+}
+
+#[test]
+fn test_vm_import_test_module() {
+    let result = run_cool_vm(
+        r#"import test
+
+def boom(msg):
+    raise msg
+
+def failer():
+    test.fail("bad")
+
+test.equal(2 + 2, 4)
+test.not_equal(2 + 2, 5)
+test.truthy(1 < 2)
+test.falsey(2 < 1)
+test.is_nil(nil)
+test.not_nil("x")
+print(test.raises(boom, ["boom"], "boom"))
+print(test.raises(failer, nil, "AssertionError"))
+print("ok")
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["boom", "AssertionError: bad", "ok"]);
+}
+
+#[test]
 fn test_import_random_choice_tuple() {
     let result =
         run_cool("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();

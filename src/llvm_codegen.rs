@@ -41,6 +41,7 @@ const RUNTIME_C: &str = r#"
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <dlfcn.h>
+#include <setjmp.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
 #endif
@@ -1208,6 +1209,120 @@ static CoolVal cool_call_callable2(CoolVal callable, CoolVal arg1, CoolVal arg2)
     int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
     CoolVal argv[2] = {arg1, arg2};
     return call_cool_fn_ptr(fn_ptr, 2, argv);
+}
+
+static void cool_test_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static CoolVal cool_test_raise_assertion(const char* message) {
+    CoolStrBuf sb;
+    sb_init(&sb);
+    sb_push_str(&sb, "AssertionError: ");
+    sb_push_str(&sb, message ? message : "assertion failed");
+    cool_raise(cv_str(sb.data));
+    return cv_nil();
+}
+
+static int cool_test_copy_args(CoolVal value, CoolVal* out, int32_t* out_count) {
+    if (value.tag == TAG_NIL) {
+        *out_count = 0;
+        return 1;
+    }
+    if (value.tag != TAG_LIST && value.tag != TAG_TUPLE) {
+        cool_test_raisef("test.raises() args must be a list or tuple, got %s", cool_type_name(value.tag));
+    }
+    CoolList* items = (CoolList*)(intptr_t)value.payload;
+    if (items->length > 8) {
+        cool_test_raisef("test.raises() supports at most 8 arguments in native mode");
+    }
+    for (int64_t i = 0; i < items->length; i++) {
+        out[i] = ((CoolVal*)items->data)[i];
+    }
+    *out_count = (int32_t)items->length;
+    return 1;
+}
+
+static CoolVal cool_test_call_callable(CoolVal callable, int32_t argc, CoolVal* argv) {
+    if (cool_is_closure(callable)) {
+        int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
+        return call_cool_fn_ptr(fn_ptr, argc, argv);
+    }
+    if (callable.tag == TAG_FFI_FUNC) {
+        switch (argc) {
+            case 0: return cool_ffi_call(callable, 0);
+            case 1: return cool_ffi_call(callable, 1, argv[0]);
+            case 2: return cool_ffi_call(callable, 2, argv[0], argv[1]);
+            case 3: return cool_ffi_call(callable, 3, argv[0], argv[1], argv[2]);
+            case 4: return cool_ffi_call(callable, 4, argv[0], argv[1], argv[2], argv[3]);
+            case 5: return cool_ffi_call(callable, 5, argv[0], argv[1], argv[2], argv[3], argv[4]);
+            case 6: return cool_ffi_call(callable, 6, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5]);
+            case 7: return cool_ffi_call(callable, 7, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5], argv[6]);
+            case 8:
+                return cool_ffi_call(callable, 8, argv[0], argv[1], argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
+            default:
+                fprintf(stderr, "RuntimeError: too many arguments for ffi function call (%d)\n", argc);
+                exit(1);
+        }
+    }
+    return cool_noncallable(callable);
+}
+
+static int cool_test_matches_expected(CoolVal exc, CoolVal expected) {
+    if (expected.tag == TAG_NIL) return 1;
+    if (expected.tag == TAG_CLASS) {
+        CoolClass* cls = (CoolClass*)(intptr_t)expected.payload;
+        if (!cls) return 0;
+        return cool_exception_matches(exc, (const char*)(intptr_t)cls->name);
+    }
+    if (expected.tag != TAG_STR) {
+        cool_test_raisef(
+            "test.raises() expected exception must be a string/class or nil, got %s",
+            cool_type_name(expected.tag)
+        );
+    }
+    const char* expected_name = (const char*)(intptr_t)expected.payload;
+    if (exc.tag == TAG_STR) {
+        const char* text = (const char*)(intptr_t)exc.payload;
+        size_t n = strlen(expected_name);
+        return strcmp(text, expected_name) == 0
+            || (strncmp(text, expected_name, n) == 0 && text[n] == ':')
+            || strcmp(expected_name, "Exception") == 0;
+    }
+    if (exc.tag == TAG_OBJECT) {
+        return cool_exception_matches(exc, expected_name);
+    }
+    return strcmp(cool_type_name(exc.tag), expected_name) == 0 || strcmp(expected_name, "Exception") == 0;
+}
+
+static CoolVal cool_test_raises(CoolVal callable, CoolVal args_value, CoolVal expected) {
+    CoolVal call_args[8];
+    int32_t argc = 0;
+    cool_test_copy_args(args_value, call_args, &argc);
+
+    jmp_buf buf;
+    cool_enter_try(&buf);
+    if (setjmp(buf) == 0) {
+        cool_test_call_callable(callable, argc, argc > 0 ? call_args : NULL);
+        cool_exit_try();
+        return cool_test_raise_assertion("expected exception, but call returned successfully");
+    }
+
+    cool_exit_try();
+    CoolVal exc = cool_get_exception();
+    if (!cool_test_matches_expected(exc, expected)) {
+        cool_test_raisef(
+            "expected exception %s, got %s",
+            cool_to_str(expected),
+            cool_to_str(exc)
+        );
+    }
+    return exc;
 }
 
 static CoolVal cool_list_map_copy(CoolVal func, CoolVal seq) {
@@ -4063,6 +4178,57 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
     }
 
+    if (strcmp(module, "test") == 0) {
+        if (strcmp(name, "equal") == 0 && (nargs == 2 || nargs == 3)) {
+            if (!cool_truthy(cool_eq(args[0], args[1]))) {
+                if (nargs == 3) return cool_test_raise_assertion(cool_to_str(args[2]));
+                cool_test_raisef("expected %s == %s", cool_to_str(args[0]), cool_to_str(args[1]));
+            }
+            return cv_nil();
+        }
+        if (strcmp(name, "not_equal") == 0 && (nargs == 2 || nargs == 3)) {
+            if (cool_truthy(cool_eq(args[0], args[1]))) {
+                if (nargs == 3) return cool_test_raise_assertion(cool_to_str(args[2]));
+                cool_test_raisef("expected %s != %s", cool_to_str(args[0]), cool_to_str(args[1]));
+            }
+            return cv_nil();
+        }
+        if ((strcmp(name, "true") == 0 || strcmp(name, "truthy") == 0) && (nargs == 1 || nargs == 2)) {
+            if (!cool_truthy(args[0])) {
+                if (nargs == 2) return cool_test_raise_assertion(cool_to_str(args[1]));
+                return cool_test_raise_assertion("expected truthy value");
+            }
+            return cv_nil();
+        }
+        if ((strcmp(name, "false") == 0 || strcmp(name, "falsey") == 0) && (nargs == 1 || nargs == 2)) {
+            if (cool_truthy(args[0])) {
+                if (nargs == 2) return cool_test_raise_assertion(cool_to_str(args[1]));
+                return cool_test_raise_assertion("expected falsey value");
+            }
+            return cv_nil();
+        }
+        if ((strcmp(name, "nil") == 0 || strcmp(name, "is_nil") == 0) && (nargs == 1 || nargs == 2)) {
+            if (args[0].tag != TAG_NIL) {
+                if (nargs == 2) return cool_test_raise_assertion(cool_to_str(args[1]));
+                cool_test_raisef("expected nil, got %s", cool_to_str(args[0]));
+            }
+            return cv_nil();
+        }
+        if (strcmp(name, "not_nil") == 0 && (nargs == 1 || nargs == 2)) {
+            if (args[0].tag == TAG_NIL) {
+                if (nargs == 2) return cool_test_raise_assertion(cool_to_str(args[1]));
+                return cool_test_raise_assertion("expected non-nil value");
+            }
+            return cv_nil();
+        }
+        if (strcmp(name, "fail") == 0 && nargs <= 1) {
+            return cool_test_raise_assertion(nargs == 1 ? cool_to_str(args[0]) : "test.fail() called");
+        }
+        if (strcmp(name, "raises") == 0 && (nargs >= 1 && nargs <= 3)) {
+            return cool_test_raises(args[0], nargs >= 2 ? args[1] : cv_nil(), nargs == 3 ? args[2] : cv_nil());
+        }
+    }
+
     if (strcmp(module, "time") == 0) {
         if (strcmp(name, "time") == 0 && nargs == 0) {
             struct timespec ts;
@@ -5908,6 +6074,8 @@ impl<'ctx> Compiler<'ctx> {
         let saved_tries = std::mem::take(&mut self.try_stack);
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
         self.allow_toplevel_defs = false;
+        self.imported_modules = saved_imports.clone();
+        self.imported_user_modules = saved_user_modules.clone();
 
         // Build entry block
         let entry = self.context.append_basic_block(fn_val, "entry");
@@ -6073,6 +6241,8 @@ impl<'ctx> Compiler<'ctx> {
                     let saved_class = self.current_class.replace(name.to_string());
                     let saved_allow_toplevel_defs = self.allow_toplevel_defs;
                     self.allow_toplevel_defs = false;
+                    self.imported_modules = saved_imports.clone();
+                    self.imported_user_modules = saved_user_modules.clone();
 
                     // Build entry
                     let entry = self.context.append_basic_block(fn_val, "entry");
@@ -6925,8 +7095,8 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "time" | "random" | "json" | "string"
-            | "list" | "re" | "collections" | "path" | "ffi" => {
+            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "test" | "time" | "random" | "json"
+            | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

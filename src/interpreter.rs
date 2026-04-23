@@ -1178,6 +1178,25 @@ impl Interpreter {
                 }
                 env.set_local("argparse".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "test" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &[
+                    "equal",
+                    "not_equal",
+                    "truthy",
+                    "falsey",
+                    "is_nil",
+                    "not_nil",
+                    "fail",
+                    "raises",
+                ] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("test.{}", fn_name)),
+                    );
+                }
+                env.set_local("test".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "logging" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &["basic_config", "log", "debug", "info", "warning", "warn", "error"] {
@@ -2291,6 +2310,9 @@ class Stack:
         if let Some(f) = name.strip_prefix("argparse.") {
             return self.call_argparse_fn(f, args);
         }
+        if let Some(f) = name.strip_prefix("test.") {
+            return self.call_test_fn(f, args, env);
+        }
         if let Some(f) = name.strip_prefix("logging.") {
             return self.call_logging_fn(f, args);
         }
@@ -3341,6 +3363,171 @@ class Stack:
                 Ok(Value::Str(rendered))
             }
             _ => Err(self.err(&format!("argparse has no function '{}'", name))),
+        }
+    }
+
+    fn test_message_arg(&self, args: &[Value], idx: usize, fname: &str) -> Result<Option<String>, String> {
+        match args.get(idx) {
+            None => Ok(None),
+            Some(Value::Nil) => Ok(None),
+            Some(value) => {
+                if args.len() > idx + 1 {
+                    return Err(self.err(&format!("test.{}() takes at most {} arguments", fname, idx + 1)));
+                }
+                Ok(Some(format!("{}", value)))
+            }
+        }
+    }
+
+    fn test_default_message(&self, message: Option<String>, default: impl FnOnce() -> String) -> String {
+        message.unwrap_or_else(default)
+    }
+
+    fn test_raise_assertion(&mut self, message: String) -> Result<Value, String> {
+        self.pending_raise = Some(Value::Str(format!("AssertionError: {}", message)));
+        Err("__raise__".to_string())
+    }
+
+    fn test_args_list(&self, value: Option<&Value>) -> Result<Vec<Value>, String> {
+        match value {
+            None | Some(Value::Nil) => Ok(Vec::new()),
+            Some(Value::List(items)) => Ok(items.borrow().clone()),
+            Some(Value::Tuple(items)) => Ok(items.iter().cloned().collect()),
+            Some(other) => Err(self.err(&format!(
+                "test.raises() args must be a list or tuple, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn test_expected_exc_name(&self, value: Option<&Value>) -> Result<Option<String>, String> {
+        match value {
+            None | Some(Value::Nil) => Ok(None),
+            Some(Value::Str(name)) => Ok(Some(name.clone())),
+            Some(Value::Class(cls)) => Ok(Some(cls.name.clone())),
+            Some(other) => Err(self.err(&format!(
+                "test.raises() expected exception must be a string/class or nil, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_test_fn(&mut self, name: &str, args: Vec<Value>, env: &Env) -> Result<Value, String> {
+        match name {
+            "equal" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(self.err("test.equal() takes actual, expected, and optional message"));
+                }
+                if !values_equal(&args[0], &args[1]) {
+                    let message = self.test_default_message(self.test_message_arg(&args, 2, name)?, || {
+                        format!("expected {} == {}", repr(&args[0]), repr(&args[1]))
+                    });
+                    return self.test_raise_assertion(message);
+                }
+                Ok(Value::Nil)
+            }
+            "not_equal" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(self.err("test.not_equal() takes actual, expected, and optional message"));
+                }
+                if values_equal(&args[0], &args[1]) {
+                    let message = self.test_default_message(self.test_message_arg(&args, 2, name)?, || {
+                        format!("expected {} != {}", repr(&args[0]), repr(&args[1]))
+                    });
+                    return self.test_raise_assertion(message);
+                }
+                Ok(Value::Nil)
+            }
+            "true" | "truthy" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.truthy() takes a value and optional message"));
+                }
+                if !args[0].is_truthy() {
+                    let message = self
+                        .test_default_message(self.test_message_arg(&args, 1, name)?, || "expected truthy value".into());
+                    return self.test_raise_assertion(message);
+                }
+                Ok(Value::Nil)
+            }
+            "false" | "falsey" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.falsey() takes a value and optional message"));
+                }
+                if args[0].is_truthy() {
+                    let message = self
+                        .test_default_message(self.test_message_arg(&args, 1, name)?, || "expected falsey value".into());
+                    return self.test_raise_assertion(message);
+                }
+                Ok(Value::Nil)
+            }
+            "nil" | "is_nil" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.is_nil() takes a value and optional message"));
+                }
+                if !matches!(args[0], Value::Nil) {
+                    let message = self.test_default_message(self.test_message_arg(&args, 1, name)?, || {
+                        format!("expected nil, got {}", repr(&args[0]))
+                    });
+                    return self.test_raise_assertion(message);
+                }
+                Ok(Value::Nil)
+            }
+            "not_nil" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.not_nil() takes a value and optional message"));
+                }
+                if matches!(args[0], Value::Nil) {
+                    let message = self
+                        .test_default_message(self.test_message_arg(&args, 1, name)?, || "expected non-nil value".into());
+                    return self.test_raise_assertion(message);
+                }
+                Ok(Value::Nil)
+            }
+            "fail" => {
+                if args.len() > 1 {
+                    return Err(self.err("test.fail() takes at most one message argument"));
+                }
+                let message = args
+                    .first()
+                    .map(|value| format!("{}", value))
+                    .unwrap_or_else(|| "test.fail() called".to_string());
+                self.test_raise_assertion(message)
+            }
+            "raises" => {
+                if args.is_empty() || args.len() > 3 {
+                    return Err(self.err("test.raises() takes a callable, optional args list, and optional expected exception"));
+                }
+                let callable = args[0].clone();
+                let call_args = self.test_args_list(args.get(1))?;
+                let expected = self.test_expected_exc_name(args.get(2))?;
+                match self.call_value(callable, call_args, vec![], env) {
+                    Ok(_) => self.test_raise_assertion("expected exception, but call returned successfully".to_string()),
+                    Err(err) if err == "__raise__" => {
+                        let exc = self.pending_raise.take().unwrap_or(Value::Nil);
+                        if let Some(expected_name) = expected {
+                            let matches = match &exc {
+                                Value::Instance(inst) => is_instance_of(&inst.class, &expected_name),
+                                Value::Str(s) => {
+                                    s == &expected_name
+                                        || s.starts_with(&format!("{}:", expected_name))
+                                        || expected_name == "Exception"
+                                }
+                                other => other.type_name() == expected_name,
+                            };
+                            if !matches {
+                                return self.test_raise_assertion(format!(
+                                    "expected exception {}, got {}",
+                                    expected_name,
+                                    repr(&exc)
+                                ));
+                            }
+                        }
+                        Ok(exc)
+                    }
+                    Err(err) => self.test_raise_assertion(format!("expected exception, got runtime error: {}", err)),
+                }
+            }
+            _ => Err(self.err(&format!("test has no function '{}'", name))),
         }
     }
 

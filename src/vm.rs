@@ -260,7 +260,11 @@ impl VM {
                 Ok(None) => {}               // normal: continue loop
                 Ok(Some(v)) => return Ok(v), // Return instruction
                 Err(e) => {
-                    let exc = VmValue::Str(e.clone());
+                    let exc = if e.starts_with("Unhandled exception (line ") {
+                        self.current_exc.clone().unwrap_or_else(|| VmValue::Str(e.clone()))
+                    } else {
+                        VmValue::Str(e.clone())
+                    };
                     self.current_exc = Some(exc.clone());
                     if !self.exc_handlers.is_empty() {
                         return self.handle_exception(exc);
@@ -1519,6 +1523,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("argparse.") {
             return self.call_argparse_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("test.") {
+            return self.call_test_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("logging.") {
             return self.call_logging_module(rest, args);
@@ -3213,6 +3220,208 @@ impl VM {
         }
     }
 
+    fn test_assertion_failure(&mut self, message: String) -> Result<VmValue, String> {
+        let exc = VmValue::Str(format!("AssertionError: {}", message));
+        let rendered = exc.to_string();
+        self.current_exc = Some(exc);
+        Err(format!("Unhandled exception (line {}): {}", self.current_line, rendered))
+    }
+
+    fn test_message_arg(&self, args: &[VmValue], idx: usize, fname: &str) -> Result<Option<String>, String> {
+        match args.get(idx) {
+            None => Ok(None),
+            Some(VmValue::Nil) => Ok(None),
+            Some(value) => {
+                if args.len() > idx + 1 {
+                    return Err(self.err(&format!("test.{}() takes at most {} arguments", fname, idx + 1)));
+                }
+                Ok(Some(value.to_string()))
+            }
+        }
+    }
+
+    fn test_default_message(&self, message: Option<String>, default: impl FnOnce() -> String) -> String {
+        message.unwrap_or_else(default)
+    }
+
+    fn test_args_list(&self, value: Option<&VmValue>) -> Result<Vec<VmValue>, String> {
+        match value {
+            None | Some(VmValue::Nil) => Ok(Vec::new()),
+            Some(VmValue::List(items)) => Ok(items.borrow().clone()),
+            Some(VmValue::Tuple(items)) => Ok(items.iter().cloned().collect()),
+            Some(other) => Err(self.err(&format!(
+                "test.raises() args must be a list or tuple, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn test_expected_exc_name(&self, value: Option<&VmValue>) -> Result<Option<String>, String> {
+        match value {
+            None | Some(VmValue::Nil) => Ok(None),
+            Some(VmValue::Str(name)) => Ok(Some(name.clone())),
+            Some(VmValue::Class(cls)) => Ok(Some(cls.name.clone())),
+            Some(other) => Err(self.err(&format!(
+                "test.raises() expected exception must be a string/class or nil, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn test_exception_value(&self, err: &str) -> VmValue {
+        match &self.current_exc {
+            Some(VmValue::Nil) | None => {
+                let parsed = err
+                    .split_once("): ")
+                    .map(|(_, tail)| tail.to_string())
+                    .unwrap_or_else(|| err.to_string());
+                VmValue::Str(parsed)
+            }
+            Some(value) => value.clone(),
+        }
+    }
+
+    fn call_test_module(&mut self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "equal" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(self.err("test.equal() takes actual, expected, and optional message"));
+                }
+                if !vm_eq(&args[0], &args[1]) {
+                    let message = self.test_default_message(self.test_message_arg(args, 2, name)?, || {
+                        format!("expected {} == {}", vm_repr(&args[0]), vm_repr(&args[1]))
+                    });
+                    return self.test_assertion_failure(message);
+                }
+                Ok(VmValue::Nil)
+            }
+            "not_equal" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(self.err("test.not_equal() takes actual, expected, and optional message"));
+                }
+                if vm_eq(&args[0], &args[1]) {
+                    let message = self.test_default_message(self.test_message_arg(args, 2, name)?, || {
+                        format!("expected {} != {}", vm_repr(&args[0]), vm_repr(&args[1]))
+                    });
+                    return self.test_assertion_failure(message);
+                }
+                Ok(VmValue::Nil)
+            }
+            "true" | "truthy" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.truthy() takes a value and optional message"));
+                }
+                if !args[0].is_truthy() {
+                    let message =
+                        self.test_default_message(self.test_message_arg(args, 1, name)?, || "expected truthy value".into());
+                    return self.test_assertion_failure(message);
+                }
+                Ok(VmValue::Nil)
+            }
+            "false" | "falsey" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.falsey() takes a value and optional message"));
+                }
+                if args[0].is_truthy() {
+                    let message =
+                        self.test_default_message(self.test_message_arg(args, 1, name)?, || "expected falsey value".into());
+                    return self.test_assertion_failure(message);
+                }
+                Ok(VmValue::Nil)
+            }
+            "nil" | "is_nil" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.is_nil() takes a value and optional message"));
+                }
+                if !matches!(args[0], VmValue::Nil) {
+                    let message = self.test_default_message(self.test_message_arg(args, 1, name)?, || {
+                        format!("expected nil, got {}", vm_repr(&args[0]))
+                    });
+                    return self.test_assertion_failure(message);
+                }
+                Ok(VmValue::Nil)
+            }
+            "not_nil" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("test.not_nil() takes a value and optional message"));
+                }
+                if matches!(args[0], VmValue::Nil) {
+                    let message =
+                        self.test_default_message(self.test_message_arg(args, 1, name)?, || "expected non-nil value".into());
+                    return self.test_assertion_failure(message);
+                }
+                Ok(VmValue::Nil)
+            }
+            "fail" => {
+                if args.len() > 1 {
+                    return Err(self.err("test.fail() takes at most one message argument"));
+                }
+                let message = args
+                    .first()
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "test.fail() called".to_string());
+                self.test_assertion_failure(message)
+            }
+            "raises" => {
+                if args.is_empty() || args.len() > 3 {
+                    return Err(self.err("test.raises() takes a callable, optional args list, and optional expected exception"));
+                }
+                let callable = args[0].clone();
+                let call_args = self.test_args_list(args.get(1))?;
+                let expected = self.test_expected_exc_name(args.get(2))?;
+                let frame_depth = self.frames.len();
+                let stack_depth = self.stack.len();
+                let handler_depth = self.exc_handlers.len();
+                let call_result = self.call_value_direct(callable, &call_args, &[]);
+                while self.frames.len() > frame_depth {
+                    let fb = self.frames.last().unwrap().base;
+                    self.close_upvalues_above(fb);
+                    self.stack.truncate(fb);
+                    self.frames.pop();
+                }
+                self.exc_handlers.truncate(handler_depth);
+                self.stack.truncate(stack_depth);
+                match call_result {
+                    Ok(_) => self.test_assertion_failure("expected exception, but call returned successfully".to_string()),
+                    Err(err) => {
+                        if !err.starts_with("Unhandled exception (line ") {
+                            return self
+                                .test_assertion_failure(format!("expected exception, got runtime error: {}", err));
+                        }
+                        let exc = self.test_exception_value(&err);
+                        if let Some(expected_name) = expected {
+                            let matches = match &exc {
+                                VmValue::Instance(inst) => {
+                                    let exc_cls = Rc::new(VmClass {
+                                        name: expected_name.clone(),
+                                        parent: None,
+                                        methods: HashMap::new(),
+                                        class_vars: RefCell::new(HashMap::new()),
+                                    });
+                                    self.is_instance_of(&inst.class, &exc_cls)
+                                }
+                                VmValue::Str(s) => {
+                                    s == &expected_name
+                                        || s.starts_with(&format!("{}:", expected_name))
+                                        || expected_name == "Exception"
+                                }
+                                other => other.type_name() == expected_name,
+                            };
+                            if !matches {
+                                return self.test_assertion_failure(format!(
+                                    "expected exception {}, got {}",
+                                    expected_name, err
+                                ));
+                            }
+                        }
+                        Ok(exc)
+                    }
+                }
+            }
+            _ => Err(self.err(&format!("unknown test function '{}'", name))),
+        }
+    }
+
     fn normalize_path_string(path: &str) -> String {
         use std::path::{Component, Path, PathBuf};
 
@@ -3744,6 +3953,20 @@ impl VM {
             "argparse" => {
                 for fname in &["parse", "help"] {
                     set(&mut d, fname, bf(&format!("argparse.{}", fname)));
+                }
+            }
+            "test" => {
+                for fname in &[
+                    "equal",
+                    "not_equal",
+                    "truthy",
+                    "falsey",
+                    "is_nil",
+                    "not_nil",
+                    "fail",
+                    "raises",
+                ] {
+                    set(&mut d, fname, bf(&format!("test.{}", fname)));
                 }
             }
             "logging" => {
