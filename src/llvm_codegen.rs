@@ -40,6 +40,7 @@ const RUNTIME_C: &str = r#"
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <dlfcn.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
 #endif
@@ -57,6 +58,8 @@ const RUNTIME_C: &str = r#"
 #define TAG_CLOSURE 10
 #define TAG_EXCEPTION 11
 #define TAG_FILE  12
+#define TAG_FFI_LIB 13
+#define TAG_FFI_FUNC 14
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -190,6 +193,21 @@ typedef struct {
 } CoolFile;
 
 typedef struct {
+    int32_t tag;
+    void* handle;
+} CoolFfiLib;
+
+typedef struct {
+    int32_t tag;
+    void* handle;
+    void* sym;
+    char* name;
+    int32_t ret_type;
+    int32_t argc;
+    int32_t arg_types[8];
+} CoolFfiFunc;
+
+typedef struct {
     int has_code;
     int code;
     int timed_out;
@@ -249,6 +267,11 @@ CoolVal cool_to_float_val(CoolVal);
 CoolVal cool_to_bool_val(CoolVal);
 CoolVal cool_module_get_attr(const char*, const char*);
 CoolVal cool_module_call(const char*, const char*, int32_t, ...);
+CoolVal cool_noncallable(CoolVal);
+CoolVal cool_ffi_open(CoolVal);
+CoolVal cool_ffi_func(CoolVal, CoolVal, CoolVal, CoolVal);
+CoolVal cool_ffi_call(CoolVal, int32_t, ...);
+int32_t cool_is_ffi_func(CoolVal);
 CoolVal cool_round(CoolVal, CoolVal);
 CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
@@ -514,6 +537,12 @@ char* cool_to_str(CoolVal v) {
         case TAG_FLOAT: snprintf(buf, 64, "%g",   cv_as_float(v));            break;
         case TAG_BOOL:  snprintf(buf, 64, "%s",   v.payload ? "true":"false"); break;
         case TAG_FILE:  snprintf(buf, 64, "<file>");                          break;
+        case TAG_FFI_LIB: snprintf(buf, 64, "<ffi library>");                break;
+        case TAG_FFI_FUNC: {
+            CoolFfiFunc* fn = (CoolFfiFunc*)(intptr_t)v.payload;
+            snprintf(buf, 64, "<ffi func %s>", fn && fn->name ? fn->name : "?");
+            break;
+        }
         case TAG_LIST: {
             CoolList* lst = (CoolList*)(intptr_t)v.payload;
             if (!lst || !lst->data) { snprintf(buf, 64, "[]"); break; }
@@ -603,6 +632,8 @@ const char* cool_type_name(int32_t tag) {
         case TAG_OBJECT: return "object";
         case TAG_TUPLE:  return "tuple";
         case TAG_FILE:   return "file";
+        case TAG_FFI_LIB: return "ffi_lib";
+        case TAG_FFI_FUNC: return "ffi_func";
         default:         return "unknown";
     }
 }
@@ -1505,6 +1536,18 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
         if (callable.tag == TAG_CLOSURE) {
             int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
             return call_cool_fn_ptr(fn_ptr, nargs, nargs > 0 ? &g_method_args[1] : NULL);
+        }
+        if (callable.tag == TAG_FFI_FUNC) {
+            switch (nargs) {
+                case 0: return cool_ffi_call(callable, 0);
+                case 1: return cool_ffi_call(callable, 1, g_method_args[1]);
+                case 2: return cool_ffi_call(callable, 2, g_method_args[1], g_method_args[2]);
+                case 3: return cool_ffi_call(callable, 3, g_method_args[1], g_method_args[2], g_method_args[3]);
+                case 4: return cool_ffi_call(callable, 4, g_method_args[1], g_method_args[2], g_method_args[3], g_method_args[4]);
+                default:
+                    fprintf(stderr, "RuntimeError: too many arguments for ffi method call (%d)\n", nargs);
+                    exit(1);
+            }
         }
     }
 
@@ -2978,6 +3021,485 @@ static CoolVal cool_path_split_val(const char* path) {
     return out;
 }
 
+enum {
+    FFI_T_VOID = 0,
+    FFI_T_I8,
+    FFI_T_I16,
+    FFI_T_I32,
+    FFI_T_I64,
+    FFI_T_U8,
+    FFI_T_U16,
+    FFI_T_U32,
+    FFI_T_U64,
+    FFI_T_F32,
+    FFI_T_F64,
+    FFI_T_PTR,
+    FFI_T_STR
+};
+
+typedef struct {
+    int is_float;
+    int64_t i;
+    double f;
+} CoolFfiSlot;
+
+static int cool_ffi_is_float_type(int32_t ty) {
+    return ty == FFI_T_F32 || ty == FFI_T_F64;
+}
+
+static const char* cool_ffi_type_name(int32_t ty) {
+    switch (ty) {
+        case FFI_T_VOID: return "void";
+        case FFI_T_I8: return "i8";
+        case FFI_T_I16: return "i16";
+        case FFI_T_I32: return "i32";
+        case FFI_T_I64: return "i64";
+        case FFI_T_U8: return "u8";
+        case FFI_T_U16: return "u16";
+        case FFI_T_U32: return "u32";
+        case FFI_T_U64: return "u64";
+        case FFI_T_F32: return "f32";
+        case FFI_T_F64: return "f64";
+        case FFI_T_PTR: return "ptr";
+        case FFI_T_STR: return "str";
+        default: return "<unknown>";
+    }
+}
+
+static int32_t cool_ffi_parse_type(const char* name) {
+    if (strcmp(name, "void") == 0) return FFI_T_VOID;
+    if (strcmp(name, "i8") == 0) return FFI_T_I8;
+    if (strcmp(name, "i16") == 0) return FFI_T_I16;
+    if (strcmp(name, "i32") == 0) return FFI_T_I32;
+    if (strcmp(name, "i64") == 0) return FFI_T_I64;
+    if (strcmp(name, "u8") == 0) return FFI_T_U8;
+    if (strcmp(name, "u16") == 0) return FFI_T_U16;
+    if (strcmp(name, "u32") == 0) return FFI_T_U32;
+    if (strcmp(name, "u64") == 0) return FFI_T_U64;
+    if (strcmp(name, "f32") == 0) return FFI_T_F32;
+    if (strcmp(name, "f64") == 0) return FFI_T_F64;
+    if (strcmp(name, "ptr") == 0) return FFI_T_PTR;
+    if (strcmp(name, "str") == 0) return FFI_T_STR;
+    fprintf(stderr, "ValueError: unknown FFI type '%s'\n", name);
+    exit(1);
+}
+
+static int64_t cool_ffi_value_to_i64(CoolVal v, int arg_index, const char* ty_name) {
+    switch (v.tag) {
+        case TAG_INT:
+            return v.payload;
+        case TAG_BOOL:
+            return v.payload ? 1 : 0;
+        case TAG_FLOAT:
+            return (int64_t)cv_as_float(v);
+        default:
+            fprintf(stderr, "TypeError: FFI arg %d cannot convert %s to %s\n", arg_index, cool_type_name(v.tag), ty_name);
+            exit(1);
+    }
+}
+
+static double cool_ffi_value_to_f64(CoolVal v, int arg_index, const char* ty_name) {
+    switch (v.tag) {
+        case TAG_FLOAT:
+            return cv_as_float(v);
+        case TAG_INT:
+            return (double)v.payload;
+        case TAG_BOOL:
+            return v.payload ? 1.0 : 0.0;
+        default:
+            fprintf(stderr, "TypeError: FFI arg %d cannot convert %s to %s\n", arg_index, cool_type_name(v.tag), ty_name);
+            exit(1);
+    }
+}
+
+static CoolFfiSlot cool_ffi_value_to_slot(CoolVal v, int32_t ty, char** owned_strings, int arg_index) {
+    CoolFfiSlot slot;
+    slot.is_float = 0;
+    slot.i = 0;
+    slot.f = 0.0;
+
+    if (ty == FFI_T_F32 || ty == FFI_T_F64) {
+        slot.is_float = 1;
+        slot.f = cool_ffi_value_to_f64(v, arg_index, cool_ffi_type_name(ty));
+        return slot;
+    }
+
+    if (ty == FFI_T_STR) {
+        const char* src = NULL;
+        if (v.tag == TAG_STR) src = (const char*)(intptr_t)v.payload;
+        else if (v.tag == TAG_NIL) src = "";
+        else src = cool_to_str(v);
+        owned_strings[arg_index] = strdup(src ? src : "");
+        if (!owned_strings[arg_index]) {
+            fprintf(stderr, "RuntimeError: out of memory preparing FFI string argument\n");
+            exit(1);
+        }
+        slot.i = (int64_t)(intptr_t)owned_strings[arg_index];
+        return slot;
+    }
+
+    slot.i = cool_ffi_value_to_i64(v, arg_index, cool_ffi_type_name(ty));
+    return slot;
+}
+
+static CoolVal cool_ffi_int_return(int64_t raw, int32_t ret_type) {
+    switch (ret_type) {
+        case FFI_T_I8: return cv_int((int8_t)raw);
+        case FFI_T_I16: return cv_int((int16_t)raw);
+        case FFI_T_I32: return cv_int((int32_t)raw);
+        case FFI_T_U8: return cv_int((uint8_t)raw);
+        case FFI_T_U16: return cv_int((uint16_t)raw);
+        case FFI_T_U32: return cv_int((uint32_t)raw);
+        default: return cv_int(raw);
+    }
+}
+
+static void* cool_ffi_try_open(const char* candidate) {
+    if (!candidate || !*candidate) return NULL;
+    dlerror();
+    return dlopen(candidate, RTLD_LAZY);
+}
+
+static void* cool_ffi_open_library(const char* name, const char** resolved_name) {
+    if (!name || !*name) return NULL;
+
+    if (strchr(name, '/') || strchr(name, '.')) {
+        void* handle = cool_ffi_try_open(name);
+        if (handle) {
+            if (resolved_name) *resolved_name = name;
+            return handle;
+        }
+    } else {
+        char a[512], b[512], c[512], d[512], e[512], f[512], g[512], h[512];
+#if defined(__APPLE__)
+        snprintf(a, sizeof(a), "lib%s.dylib", name);
+        snprintf(b, sizeof(b), "%s.dylib", name);
+        snprintf(c, sizeof(c), "/usr/lib/lib%s.dylib", name);
+        snprintf(d, sizeof(d), "/usr/local/lib/lib%s.dylib", name);
+        snprintf(e, sizeof(e), "/opt/homebrew/lib/lib%s.dylib", name);
+        const char* candidates[] = { a, b, c, d, e, NULL };
+#elif defined(__linux__)
+        snprintf(a, sizeof(a), "lib%s.so", name);
+        snprintf(b, sizeof(b), "%s.so", name);
+        snprintf(c, sizeof(c), "lib%s.so.6", name);
+        snprintf(d, sizeof(d), "%s.so.6", name);
+        snprintf(e, sizeof(e), "/usr/lib/lib%s.so", name);
+        snprintf(f, sizeof(f), "/usr/local/lib/lib%s.so", name);
+        snprintf(g, sizeof(g), "/lib/x86_64-linux-gnu/lib%s.so.6", name);
+        snprintf(h, sizeof(h), "/lib/aarch64-linux-gnu/lib%s.so.6", name);
+        const char* candidates[] = { a, b, c, d, e, f, g, h, NULL };
+#else
+        const char* candidates[] = { name, NULL };
+#endif
+        for (int i = 0; candidates[i] != NULL; i++) {
+            void* handle = cool_ffi_try_open(candidates[i]);
+            if (handle) {
+                if (resolved_name) *resolved_name = candidates[i];
+                return handle;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+CoolVal cool_ffi_open(CoolVal name_v) {
+    if (name_v.tag != TAG_STR) {
+        fprintf(stderr, "TypeError: ffi.open() requires a string path\n");
+        exit(1);
+    }
+    const char* requested = (const char*)(intptr_t)name_v.payload;
+    const char* resolved = requested;
+    void* handle = cool_ffi_open_library(requested, &resolved);
+    if (!handle) {
+        const char* err = dlerror();
+        fprintf(stderr, "RuntimeError: ffi.open(\"%s\") failed: %s\n", requested, err ? err : "unknown error");
+        exit(1);
+    }
+    CoolFfiLib* lib = (CoolFfiLib*)malloc(sizeof(CoolFfiLib));
+    if (!lib) {
+        fprintf(stderr, "RuntimeError: out of memory opening ffi library\n");
+        exit(1);
+    }
+    lib->tag = TAG_FFI_LIB;
+    lib->handle = handle;
+    (void)resolved;
+    CoolVal out;
+    out.tag = TAG_FFI_LIB;
+    out.payload = (int64_t)(intptr_t)lib;
+    return out;
+}
+
+CoolVal cool_ffi_func(CoolVal lib_v, CoolVal name_v, CoolVal ret_type_v, CoolVal arg_types_v) {
+    if (lib_v.tag != TAG_FFI_LIB) {
+        fprintf(stderr, "TypeError: ffi.func(): first argument must be an ffi library\n");
+        exit(1);
+    }
+    if (name_v.tag != TAG_STR) {
+        fprintf(stderr, "TypeError: ffi.func(): second argument must be a string\n");
+        exit(1);
+    }
+    if (ret_type_v.tag != TAG_STR) {
+        fprintf(stderr, "TypeError: ffi.func(): third argument must be a type string\n");
+        exit(1);
+    }
+
+    CoolFfiLib* lib = (CoolFfiLib*)(intptr_t)lib_v.payload;
+    const char* sym_name = (const char*)(intptr_t)name_v.payload;
+    const char* ret_name = (const char*)(intptr_t)ret_type_v.payload;
+
+    int32_t argc = 0;
+    int32_t arg_types[8] = {0};
+    if (arg_types_v.tag != TAG_NIL) {
+        if (arg_types_v.tag != TAG_LIST && arg_types_v.tag != TAG_TUPLE) {
+            fprintf(stderr, "TypeError: ffi.func(): fourth argument must be a list\n");
+            exit(1);
+        }
+        CoolList* list = (CoolList*)(intptr_t)arg_types_v.payload;
+        if (list->length > 8) {
+            fprintf(stderr, "ValueError: ffi.func(): supports at most 8 arguments\n");
+            exit(1);
+        }
+        for (int64_t i = 0; i < list->length; i++) {
+            CoolVal item = ((CoolVal*)list->data)[i];
+            if (item.tag != TAG_STR) {
+                fprintf(stderr, "TypeError: ffi.func(): arg_types list must contain strings\n");
+                exit(1);
+            }
+            arg_types[argc++] = cool_ffi_parse_type((const char*)(intptr_t)item.payload);
+        }
+    }
+
+    dlerror();
+    void* sym = dlsym(lib->handle, sym_name);
+    const char* err = dlerror();
+    if (!sym || err) {
+        fprintf(stderr, "RuntimeError: ffi.func(): symbol '%s' not found: %s\n", sym_name, err ? err : "unknown error");
+        exit(1);
+    }
+
+    CoolFfiFunc* fn = (CoolFfiFunc*)malloc(sizeof(CoolFfiFunc));
+    if (!fn) {
+        fprintf(stderr, "RuntimeError: out of memory creating ffi function\n");
+        exit(1);
+    }
+    fn->tag = TAG_FFI_FUNC;
+    fn->handle = lib->handle;
+    fn->sym = sym;
+    fn->name = strdup(sym_name);
+    fn->ret_type = cool_ffi_parse_type(ret_name);
+    fn->argc = argc;
+    for (int i = 0; i < 8; i++) fn->arg_types[i] = (i < argc) ? arg_types[i] : FFI_T_VOID;
+
+    CoolVal out;
+    out.tag = TAG_FFI_FUNC;
+    out.payload = (int64_t)(intptr_t)fn;
+    return out;
+}
+
+static CoolVal cool_ffi_dispatch(CoolFfiFunc* fn, CoolFfiSlot* slots) {
+    int n = fn->argc;
+    int32_t ret = fn->ret_type;
+    void* sym = fn->sym;
+#define FFI_AS_I(idx) ((slots[idx].is_float) ? (int64_t)slots[idx].f : slots[idx].i)
+#define FFI_AS_F64(idx) ((slots[idx].is_float) ? slots[idx].f : (double)slots[idx].i)
+#define FFI_AS_F32(idx) ((slots[idx].is_float) ? (float)slots[idx].f : (float)slots[idx].i)
+
+    if (n == 0) {
+        switch (ret) {
+            case FFI_T_VOID:
+                ((void (*)(void))sym)();
+                return cv_nil();
+            case FFI_T_F32:
+                return cv_float((double)((float (*)(void))sym)());
+            case FFI_T_F64:
+                return cv_float(((double (*)(void))sym)());
+            case FFI_T_STR: {
+                const char* out = ((const char* (*)(void))sym)();
+                return out ? cv_str(strdup(out)) : cv_nil();
+            }
+            default:
+                return cool_ffi_int_return(((int64_t (*)(void))sym)(), ret);
+        }
+    }
+
+    if (n == 1) {
+        int32_t t0 = fn->arg_types[0];
+        if (t0 == FFI_T_F64) {
+            double a = FFI_AS_F64(0);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(double))sym)(a); return cv_nil();
+                case FFI_T_F32: return cv_float((double)((float (*)(double))sym)(a));
+                case FFI_T_F64: return cv_float(((double (*)(double))sym)(a));
+                case FFI_T_STR: {
+                    const char* out = ((const char* (*)(double))sym)(a);
+                    return out ? cv_str(strdup(out)) : cv_nil();
+                }
+                default: return cool_ffi_int_return(((int64_t (*)(double))sym)(a), ret);
+            }
+        } else if (t0 == FFI_T_F32) {
+            float a = FFI_AS_F32(0);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(float))sym)(a); return cv_nil();
+                case FFI_T_F32: return cv_float((double)((float (*)(float))sym)(a));
+                case FFI_T_F64: return cv_float(((double (*)(float))sym)(a));
+                default: return cool_ffi_int_return(((int64_t (*)(float))sym)(a), ret);
+            }
+        } else {
+            int64_t a = FFI_AS_I(0);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(int64_t))sym)(a); return cv_nil();
+                case FFI_T_F32: return cv_float((double)((float (*)(int64_t))sym)(a));
+                case FFI_T_F64: return cv_float(((double (*)(int64_t))sym)(a));
+                case FFI_T_STR: {
+                    const char* out = ((const char* (*)(const char*))sym)((const char*)(intptr_t)a);
+                    return out ? cv_str(strdup(out)) : cv_nil();
+                }
+                default: return cool_ffi_int_return(((int64_t (*)(int64_t))sym)(a), ret);
+            }
+        }
+    }
+
+    if (n == 2) {
+        int32_t t0 = fn->arg_types[0];
+        int32_t t1 = fn->arg_types[1];
+        if (t0 == FFI_T_F64 && t1 == FFI_T_F64) {
+            double a = FFI_AS_F64(0), b = FFI_AS_F64(1);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(double, double))sym)(a, b); return cv_nil();
+                case FFI_T_F32: return cv_float((double)((float (*)(double, double))sym)(a, b));
+                case FFI_T_F64: return cv_float(((double (*)(double, double))sym)(a, b));
+                default: return cool_ffi_int_return(((int64_t (*)(double, double))sym)(a, b), ret);
+            }
+        } else if (t0 == FFI_T_F32 && t1 == FFI_T_F32) {
+            float a = FFI_AS_F32(0), b = FFI_AS_F32(1);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(float, float))sym)(a, b); return cv_nil();
+                case FFI_T_F32: return cv_float((double)((float (*)(float, float))sym)(a, b));
+                case FFI_T_F64: return cv_float(((double (*)(float, float))sym)(a, b));
+                default: return cool_ffi_int_return(((int64_t (*)(float, float))sym)(a, b), ret);
+            }
+        } else if (t0 == FFI_T_F64 && !cool_ffi_is_float_type(t1)) {
+            double a = FFI_AS_F64(0);
+            int64_t b = FFI_AS_I(1);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(double, int64_t))sym)(a, b); return cv_nil();
+                case FFI_T_F64: return cv_float(((double (*)(double, int64_t))sym)(a, b));
+                default: return cool_ffi_int_return(((int64_t (*)(double, int64_t))sym)(a, b), ret);
+            }
+        } else if (!cool_ffi_is_float_type(t0) && t1 == FFI_T_F64) {
+            int64_t a = FFI_AS_I(0);
+            double b = FFI_AS_F64(1);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(int64_t, double))sym)(a, b); return cv_nil();
+                case FFI_T_F64: return cv_float(((double (*)(int64_t, double))sym)(a, b));
+                default: return cool_ffi_int_return(((int64_t (*)(int64_t, double))sym)(a, b), ret);
+            }
+        } else {
+            int64_t a = FFI_AS_I(0), b = FFI_AS_I(1);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(int64_t, int64_t))sym)(a, b); return cv_nil();
+                case FFI_T_F32: return cv_float((double)((float (*)(int64_t, int64_t))sym)(a, b));
+                case FFI_T_F64: return cv_float(((double (*)(int64_t, int64_t))sym)(a, b));
+                default: return cool_ffi_int_return(((int64_t (*)(int64_t, int64_t))sym)(a, b), ret);
+            }
+        }
+    }
+
+    if (n == 3) {
+        int32_t t0 = fn->arg_types[0];
+        int32_t t1 = fn->arg_types[1];
+        int32_t t2 = fn->arg_types[2];
+        if (t0 == FFI_T_F64 && t1 == FFI_T_F64 && t2 == FFI_T_F64) {
+            double a = FFI_AS_F64(0), b = FFI_AS_F64(1), c = FFI_AS_F64(2);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(double, double, double))sym)(a, b, c); return cv_nil();
+                case FFI_T_F64: return cv_float(((double (*)(double, double, double))sym)(a, b, c));
+                default: return cool_ffi_int_return(((int64_t (*)(double, double, double))sym)(a, b, c), ret);
+            }
+        }
+        if (!cool_ffi_is_float_type(t0) && !cool_ffi_is_float_type(t1) && !cool_ffi_is_float_type(t2)) {
+            int64_t a = FFI_AS_I(0), b = FFI_AS_I(1), c = FFI_AS_I(2);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(int64_t, int64_t, int64_t))sym)(a, b, c); return cv_nil();
+                case FFI_T_F64: return cv_float(((double (*)(int64_t, int64_t, int64_t))sym)(a, b, c));
+                default: return cool_ffi_int_return(((int64_t (*)(int64_t, int64_t, int64_t))sym)(a, b, c), ret);
+            }
+        }
+    }
+
+    if (n == 4) {
+        int32_t t0 = fn->arg_types[0];
+        int32_t t1 = fn->arg_types[1];
+        int32_t t2 = fn->arg_types[2];
+        int32_t t3 = fn->arg_types[3];
+        if (t0 == FFI_T_F64 && t1 == FFI_T_F64 && t2 == FFI_T_F64 && t3 == FFI_T_F64) {
+            double a = FFI_AS_F64(0), b = FFI_AS_F64(1), c = FFI_AS_F64(2), d = FFI_AS_F64(3);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(double, double, double, double))sym)(a, b, c, d); return cv_nil();
+                case FFI_T_F64: return cv_float(((double (*)(double, double, double, double))sym)(a, b, c, d));
+                default: return cool_ffi_int_return(((int64_t (*)(double, double, double, double))sym)(a, b, c, d), ret);
+            }
+        }
+        if (!cool_ffi_is_float_type(t0) && !cool_ffi_is_float_type(t1) && !cool_ffi_is_float_type(t2) && !cool_ffi_is_float_type(t3)) {
+            int64_t a = FFI_AS_I(0), b = FFI_AS_I(1), c = FFI_AS_I(2), d = FFI_AS_I(3);
+            switch (ret) {
+                case FFI_T_VOID: ((void (*)(int64_t, int64_t, int64_t, int64_t))sym)(a, b, c, d); return cv_nil();
+                case FFI_T_F64: return cv_float(((double (*)(int64_t, int64_t, int64_t, int64_t))sym)(a, b, c, d));
+                default: return cool_ffi_int_return(((int64_t (*)(int64_t, int64_t, int64_t, int64_t))sym)(a, b, c, d), ret);
+            }
+        }
+    }
+
+    fprintf(stderr, "RuntimeError: FFI unsupported call signature (%s", cool_ffi_type_name(fn->arg_types[0]));
+    for (int i = 1; i < fn->argc; i++) fprintf(stderr, ", %s", cool_ffi_type_name(fn->arg_types[i]));
+    fprintf(stderr, ") -> %s\n", cool_ffi_type_name(fn->ret_type));
+    exit(1);
+}
+
+CoolVal cool_ffi_call(CoolVal fn_v, int32_t nargs, ...) {
+    if (fn_v.tag != TAG_FFI_FUNC) {
+        fprintf(stderr, "TypeError: value is not an ffi function\n");
+        exit(1);
+    }
+    CoolFfiFunc* fn = (CoolFfiFunc*)(intptr_t)fn_v.payload;
+    if (nargs != fn->argc) {
+        fprintf(stderr, "RuntimeError: FFI call expected %d args, got %d\n", fn->argc, nargs);
+        exit(1);
+    }
+    if (nargs > 8) {
+        fprintf(stderr, "RuntimeError: FFI supports at most 8 arguments\n");
+        exit(1);
+    }
+
+    va_list ap;
+    va_start(ap, nargs);
+    CoolVal argv[8];
+    for (int32_t i = 0; i < nargs; i++) argv[i] = va_arg(ap, CoolVal);
+    va_end(ap);
+
+    char* owned_strings[8] = {0};
+    CoolFfiSlot slots[8];
+    for (int32_t i = 0; i < nargs; i++) {
+        slots[i] = cool_ffi_value_to_slot(argv[i], fn->arg_types[i], owned_strings, i);
+    }
+
+    CoolVal result = cool_ffi_dispatch(fn, slots);
+    for (int32_t i = 0; i < nargs; i++) {
+        if (owned_strings[i]) free(owned_strings[i]);
+    }
+    return result;
+}
+
+int32_t cool_is_ffi_func(CoolVal v) {
+    return v.tag == TAG_FFI_FUNC ? 1 : 0;
+}
+
+CoolVal cool_noncallable(CoolVal v) {
+    fprintf(stderr, "TypeError: '%s' value is not callable\n", cool_type_name(v.tag));
+    exit(1);
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -3190,6 +3712,15 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             int code = 0;
             if (nargs == 1) code = (int)cool_to_int(args[0]).payload;
             exit(code);
+        }
+    }
+
+    if (strcmp(module, "ffi") == 0) {
+        if (strcmp(name, "open") == 0 && nargs == 1) {
+            return cool_ffi_open(args[0]);
+        }
+        if (strcmp(name, "func") == 0 && (nargs == 3 || nargs == 4)) {
+            return cool_ffi_func(args[0], args[1], args[2], nargs == 4 ? args[3] : cv_nil());
         }
     }
 
@@ -4016,6 +4547,9 @@ struct RuntimeFns<'ctx> {
     cool_to_int: FunctionValue<'ctx>,
     cool_to_float_val: FunctionValue<'ctx>,
     cool_to_bool_val: FunctionValue<'ctx>,
+    cool_noncallable: FunctionValue<'ctx>,
+    cool_is_ffi_func: FunctionValue<'ctx>,
+    cool_ffi_call: FunctionValue<'ctx>,
     cool_round: FunctionValue<'ctx>,
     cool_sorted: FunctionValue<'ctx>,
     cool_sum: FunctionValue<'ctx>,
@@ -4294,6 +4828,9 @@ impl<'ctx> Compiler<'ctx> {
             cool_to_int: decl!("cool_to_int", cv_type.fn_type(&[cv], false)),
             cool_to_float_val: decl!("cool_to_float_val", cv_type.fn_type(&[cv], false)),
             cool_to_bool_val: decl!("cool_to_bool_val", cv_type.fn_type(&[cv], false)),
+            cool_noncallable: decl!("cool_noncallable", cv_type.fn_type(&[cv], false)),
+            cool_is_ffi_func: decl!("cool_is_ffi_func", i32t.fn_type(&[cv], false)),
+            cool_ffi_call: decl!("cool_ffi_call", cv_type.fn_type(&[cv, i32m], true)),
             cool_round: decl!("cool_round", cv_type.fn_type(&[cv, cv], false)),
             cool_sorted: decl!("cool_sorted", cv_type.fn_type(&[cv], false)),
             cool_sum: decl!("cool_sum", cv_type.fn_type(&[cv], false)),
@@ -6094,7 +6631,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "subprocess" | "argparse" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" => {
+            "math" | "os" | "sys" | "subprocess" | "argparse" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -6682,6 +7219,31 @@ impl<'ctx> Compiler<'ctx> {
             .into_struct_value()
     }
 
+    fn call_ffi_value(
+        &mut self,
+        callable: StructValue<'ctx>,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+        name: &str,
+    ) -> Result<StructValue<'ctx>, String> {
+        if !kwargs.is_empty() {
+            return Err("FFI functions do not support keyword arguments".into());
+        }
+        let nargs_i32 = self.context.i32_type().const_int(args.len() as u64, false);
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![callable.into(), nargs_i32.into()];
+        for arg in args {
+            call_args.push(self.compile_expr(arg)?.into());
+        }
+        Ok(self
+            .builder
+            .build_call(self.rt.cool_ffi_call, &call_args, name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value())
+    }
+
     // ── Function call ─────────────────────────────────────────────────────────
 
     fn compile_call(
@@ -6837,7 +7399,6 @@ impl<'ctx> Compiler<'ctx> {
 
         // If we have a closure value, call it via the runtime
         if let Some(cv) = closure_val {
-            // Check if it's a closure using cool_is_closure
             let is_closure = self.builder
                 .build_call(self.rt.cool_is_closure, &[cv.into()], "is_closure")
                 .unwrap()
@@ -6845,15 +7406,38 @@ impl<'ctx> Compiler<'ctx> {
                 .left()
                 .unwrap()
                 .into_int_value();
+            let is_ffi = self.builder
+                .build_call(self.rt.cool_is_ffi_func, &[cv.into()], "is_ffi_func")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
 
             let fn_val = self.current_fn.unwrap();
+            let ffi_check_bb = self.context.append_basic_block(fn_val, "ffi_check");
             let direct_call_bb = self.context.append_basic_block(fn_val, "direct_call");
+            let ffi_call_bb = self.context.append_basic_block(fn_val, "ffi_call");
             let closure_call_bb = self.context.append_basic_block(fn_val, "closure_call");
             let after_bb = self.context.append_basic_block(fn_val, "call_after");
 
             let zero = self.context.i32_type().const_int(0, false);
-            let is_zero = self.builder.build_int_compare(IntPredicate::EQ, is_closure, zero, "is_zero").unwrap();
-            self.builder.build_conditional_branch(is_zero, direct_call_bb, closure_call_bb).unwrap();
+            let closure_check = self
+                .builder
+                .build_int_compare(IntPredicate::NE, is_closure, zero, "is_closure_nonzero")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(closure_check, closure_call_bb, ffi_check_bb)
+                .unwrap();
+
+            self.builder.position_at_end(ffi_check_bb);
+            let ffi_check = self
+                .builder
+                .build_int_compare(IntPredicate::NE, is_ffi, zero, "is_ffi_nonzero")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(ffi_check, ffi_call_bb, direct_call_bb)
+                .unwrap();
 
             // Direct call path (for regular function values stored in locals)
             self.builder.position_at_end(direct_call_bb);
@@ -6864,13 +7448,29 @@ impl<'ctx> Compiler<'ctx> {
                     let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
                     self.call_fn_with_struct_args(fn_val, &compiled, "direct_call")
                 } else {
-                    return Err(format!("undefined function '{}'", name));
+                    self.builder
+                        .build_call(self.rt.cool_noncallable, &[cv.into()], "noncallable")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_struct_value()
                 }
             } else {
-                // For non-identifier callees in direct call path, just compile and return nil
-                self.build_nil()
+                self.builder
+                    .build_call(self.rt.cool_noncallable, &[cv.into()], "noncallable")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value()
             };
             let direct_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(after_bb).unwrap();
+
+            self.builder.position_at_end(ffi_call_bb);
+            let ffi_result = self.call_ffi_value(cv, args, kwargs, "call_ffi_value")?;
+            let ffi_end = self.builder.get_insert_block().unwrap();
             self.builder.build_unconditional_branch(after_bb).unwrap();
 
             // Closure call path
@@ -6914,7 +7514,11 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.build_unconditional_branch(after_bb).unwrap();
             self.builder.position_at_end(after_bb);
             let phi = self.builder.build_phi(self.cv_type, "call_result").unwrap();
-            phi.add_incoming(&[(&direct_result, direct_end), (&closure_result, closure_call_bb)]);
+            phi.add_incoming(&[
+                (&direct_result, direct_end),
+                (&ffi_result, ffi_end),
+                (&closure_result, closure_call_bb),
+            ]);
             return Ok(phi.as_basic_value().into_struct_value());
         }
 
@@ -7365,14 +7969,16 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
     }
 
     // ── Link ──────────────────────────────────────────────────────────────────
-    let link_status = std::process::Command::new("cc")
+    let mut link_cmd = std::process::Command::new("cc");
+    link_cmd
         .arg(&rt_o_path)
         .arg(&obj_path)
         .arg("-o")
         .arg(output_path)
-        .arg("-lm")
-        .status()
-        .map_err(|e| format!("Linker error: {e}"))?;
+        .arg("-lm");
+    #[cfg(target_os = "linux")]
+    link_cmd.arg("-ldl");
+    let link_status = link_cmd.status().map_err(|e| format!("Linker error: {e}"))?;
 
     if !link_status.success() {
         return Err("Linking failed".into());

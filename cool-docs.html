@@ -2118,18 +2118,12 @@ abs_fn(-42)     # 42</code></pre>
         <h4>Memory Access</h4>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-python">import ffi
-
-# Allocate and free memory
-ptr = ffi.malloc(1024)           # allocate 1024 bytes
-ffi.free(ptr)                   # free memory
-
-# Read/write raw memory
-ptr = ffi.malloc(8)
-ffi.write_i64(ptr, 0, 42)       # write i64 value at offset 0
-value = ffi.read_i64(ptr, 0)    # read i64 value
+          <pre><code class="language-python"># Raw memory uses dedicated built-ins, not the ffi module
+ptr = malloc(8)
+write_i64(ptr, 42)
+value = read_i64(ptr)
 print(value)                    # 42
-ffi.free(ptr)</code></pre>
+free(ptr)</code></pre>
         </div>
 
         <div class="callout">
@@ -2897,12 +2891,12 @@ echo Done.</code></pre>
             <code>vm.rs</code>, <code>opcode.rs</code>)
           </li>
           <li>✅ LLVM backend — compile a large native subset of Cool → LLVM IR → native binary</li>
-          <li>✅ FFI — available in the interpreter and bytecode VM via <code>import ffi</code></li>
+          <li>✅ FFI — available in the interpreter and LLVM native builds via <code>import ffi</code></li>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, and <code>argparse.parse()</code>/<code>help()</code>, but still excludes closures/lambdas and <code>import ffi</code></li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

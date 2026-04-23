@@ -989,6 +989,34 @@ print(path.isabs("{file}"))
 }
 
 #[test]
+fn test_llvm_import_ffi_module() {
+    let result = compile_and_run_native(
+        r#"
+import ffi
+
+libm = ffi.open("libm")
+sqrt_fn = ffi.func(libm, "sqrt", "f64", ["f64"])
+pow_fn = ffi.func(libm, "pow", "f64", ["f64", "f64"])
+
+libc = ffi.open("libc")
+abs_fn = ffi.func(libc, "abs", "i32", ["i32"])
+strlen_fn = ffi.func(libc, "strlen", "u64", ["str"])
+dup_fn = ffi.func(libc, "strdup", "str", ["str"])
+
+print(sqrt_fn(81.0))
+print(pow_fn(2.0, 5.0))
+print(abs_fn(-42))
+print(strlen_fn("cool"))
+print(dup_fn("ffi-ok"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["9", "32", "42", "4", "ffi-ok"]);
+}
+
+#[test]
 fn test_llvm_import_dotted_module_package_path() {
     let temp_dir = unique_temp_dir("cool_llvm_import_package_test");
     let _ = fs::remove_dir_all(&temp_dir);
