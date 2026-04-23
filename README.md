@@ -159,6 +159,9 @@ clear
 - Tab completion and up-arrow history navigation in interactive TTY sessions
 - Shell scripting via `source <file>`
 
+Interactive terminal apps such as `coolapps/edit.cool`, `coolapps/top.cool`, and `coolapps/snake.cool`
+expect a real TTY because they rely on `import term` raw-mode input and screen control.
+
 ---
 
 ## Getting Started

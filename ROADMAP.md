@@ -283,9 +283,9 @@
 
 - [x] `calc` — calculator REPL with persistent variables, full math library support
 - [x] `notes` — note-taking app (new, show, append, delete, search commands)
-- [x] `top` — process/task viewer using `ps aux` and system stats
-- [x] `edit` — nano-like text editor (arrow keys, Ctrl+S save, Ctrl+X exit)
-- [x] `snake` — Snake game (ASCII, arrow keys, real-time with raw terminal mode)
+- [x] `top` — process/task viewer using `ps aux` and system stats (interactive TTY app)
+- [x] `edit` — nano-like text editor (arrow keys, Ctrl+S save, Ctrl+X exit, interactive TTY app)
+- [x] `snake` — Snake game (ASCII, arrow keys, real-time with raw terminal mode, interactive TTY app)
 - [x] `http` — HTTP client (`http get/post/head/getjson <url>`) backed by curl
 
 ---
