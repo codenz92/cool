@@ -2225,7 +2225,8 @@ impl VM {
                             Some(VmValue::Int(i)) => *i as f64,
                             Some(VmValue::Float(f)) => *f,
                             _ => return Err(self.err("time.sleep requires a number")),
-                        };
+                        }
+                        .max(0.0);
                         std::thread::sleep(std::time::Duration::from_secs_f64(secs));
                         Ok(VmValue::Nil)
                     }

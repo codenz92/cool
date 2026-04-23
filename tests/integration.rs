@@ -248,6 +248,18 @@ fn test_vm_random_randint_invalid_bounds() {
 }
 
 #[test]
+fn test_time_sleep_negative_is_clamped() {
+    let result = run_cool("import time\ntime.sleep(-0.01)\nprint(\"ok\")").unwrap();
+    assert!(result.contains("ok"));
+}
+
+#[test]
+fn test_vm_time_sleep_negative_is_clamped() {
+    let result = run_cool_vm("import time\ntime.sleep(-0.01)\nprint(\"ok\")").unwrap();
+    assert!(result.contains("ok"));
+}
+
+#[test]
 fn test_vm_import_string_module() {
     let result = run_cool_vm(
         "import string\nprint(string.upper(\"hello\"))\nprint(string.join(\" | \", [\"a\", \"b\", \"c\"]))",

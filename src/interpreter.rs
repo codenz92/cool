@@ -3361,7 +3361,7 @@ class Stack:
                 Ok(Value::Float(start.elapsed().as_secs_f64()))
             }
             "sleep" => {
-                let secs = as_float_arg(&args, 0, "time.sleep")?;
+                let secs = as_float_arg(&args, 0, "time.sleep")?.max(0.0);
                 std::thread::sleep(std::time::Duration::from_secs_f64(secs));
                 Ok(Value::Nil)
             }
