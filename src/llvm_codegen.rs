@@ -1767,6 +1767,703 @@ static CoolVal cool_make_argv(void) {
     return out;
 }
 
+typedef enum {
+    COOL_ARG_STR = 0,
+    COOL_ARG_INT = 1,
+    COOL_ARG_FLOAT = 2,
+    COOL_ARG_BOOL = 3
+} CoolArgType;
+
+typedef struct {
+    char* name;
+    char* help;
+    CoolArgType arg_type;
+    int required;
+    int has_default;
+    CoolVal default_value;
+} CoolArgPositional;
+
+typedef struct {
+    char* name;
+    char* long_flag;
+    char* short_flag;
+    char* help;
+    CoolArgType arg_type;
+    int required;
+    int has_default;
+    CoolVal default_value;
+} CoolArgOption;
+
+typedef struct {
+    char* prog;
+    char* description;
+    int positional_count;
+    CoolArgPositional* positionals;
+    int option_count;
+    CoolArgOption* options;
+} CoolArgParser;
+
+static void argparse_failf(const char* fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static int argparse_is_sequence(CoolVal value) {
+    return value.tag == TAG_LIST || value.tag == TAG_TUPLE;
+}
+
+static int argparse_dict_has_key(CoolVal dict, const char* key) {
+    if (dict.tag != TAG_DICT) return 0;
+    return cool_truthy(cool_dict_contains(dict, cv_str(key)));
+}
+
+static CoolVal argparse_dict_get_opt(CoolVal dict, const char* key) {
+    if (!argparse_dict_has_key(dict, key)) return cv_nil();
+    return cool_dict_get(dict, cv_str(key));
+}
+
+static char* argparse_basename(const char* path) {
+    if (!path || !*path) return strdup("program");
+    const char* slash = strrchr(path, '/');
+    const char* backslash = strrchr(path, '\\');
+    const char* base = path;
+    if (slash && backslash) {
+        base = slash > backslash ? slash + 1 : backslash + 1;
+    } else if (slash) {
+        base = slash + 1;
+    } else if (backslash) {
+        base = backslash + 1;
+    }
+    if (!*base) return strdup("program");
+    return strdup(base);
+}
+
+static char* argparse_default_prog_name(void) {
+    if (COOL_SCRIPT_PATH && *COOL_SCRIPT_PATH) {
+        return argparse_basename(COOL_SCRIPT_PATH);
+    }
+    CoolVal argv = cool_make_argv();
+    CoolList* list = (CoolList*)(intptr_t)argv.payload;
+    if (list && list->length > 0) {
+        CoolVal first = ((CoolVal*)list->data)[0];
+        if (first.tag == TAG_STR) return argparse_basename((const char*)(intptr_t)first.payload);
+    }
+    return strdup("program");
+}
+
+static char* argparse_normalize_long_flag(const char* src) {
+    if (!src || !*src) argparse_failf("argparse option long flag cannot be empty");
+    if (src[0] == '-' && src[1] == '-') return strdup(src);
+    size_t len = strlen(src);
+    char* out = (char*)malloc(len + 3);
+    out[0] = '-';
+    out[1] = '-';
+    for (size_t i = 0; i < len; i++) {
+        out[i + 2] = src[i] == '_' ? '-' : src[i];
+    }
+    out[len + 2] = '\0';
+    return out;
+}
+
+static char* argparse_normalize_short_flag(const char* src) {
+    if (!src || !*src) argparse_failf("argparse short option cannot be empty");
+    if (src[0] == '-' && src[1] && src[2] == '\0') return strdup(src);
+    if (src[0] != '-' && src[1] == '\0') {
+        char* out = (char*)malloc(3);
+        out[0] = '-';
+        out[1] = src[0];
+        out[2] = '\0';
+        return out;
+    }
+    argparse_failf("argparse short option '%s' must be a single-character flag", src);
+    return strdup("-?");
+}
+
+static int argparse_parse_bool_literal(const char* raw, int* out) {
+    if (!raw) return 0;
+    if (strcmp(raw, "1") == 0 || strcmp(raw, "true") == 0 || strcmp(raw, "True") == 0 ||
+        strcmp(raw, "TRUE") == 0 || strcmp(raw, "yes") == 0 || strcmp(raw, "Yes") == 0 ||
+        strcmp(raw, "YES") == 0 || strcmp(raw, "on") == 0 || strcmp(raw, "On") == 0 ||
+        strcmp(raw, "ON") == 0) {
+        *out = 1;
+        return 1;
+    }
+    if (strcmp(raw, "0") == 0 || strcmp(raw, "false") == 0 || strcmp(raw, "False") == 0 ||
+        strcmp(raw, "FALSE") == 0 || strcmp(raw, "no") == 0 || strcmp(raw, "No") == 0 ||
+        strcmp(raw, "NO") == 0 || strcmp(raw, "off") == 0 || strcmp(raw, "Off") == 0 ||
+        strcmp(raw, "OFF") == 0) {
+        *out = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static CoolArgType argparse_parse_type(CoolVal value) {
+    if (value.tag == TAG_NIL) return COOL_ARG_STR;
+    if (value.tag != TAG_STR) {
+        argparse_failf("argparse spec type must be a string, got %s", cool_to_str(value));
+    }
+    const char* s = (const char*)(intptr_t)value.payload;
+    if (strcmp(s, "str") == 0 || strcmp(s, "string") == 0) return COOL_ARG_STR;
+    if (strcmp(s, "int") == 0) return COOL_ARG_INT;
+    if (strcmp(s, "float") == 0) return COOL_ARG_FLOAT;
+    if (strcmp(s, "bool") == 0) return COOL_ARG_BOOL;
+    argparse_failf("argparse spec type must be one of str/int/float/bool, got '%s'", s);
+    return COOL_ARG_STR;
+}
+
+static CoolVal argparse_normalize_default(CoolArgType type, CoolVal value, const char* context) {
+    switch (type) {
+        case COOL_ARG_STR:
+            if (value.tag == TAG_STR || value.tag == TAG_NIL) return value;
+            argparse_failf("%s default must be a string or nil, got %s", context, cool_to_str(value));
+            break;
+        case COOL_ARG_INT:
+            if (value.tag == TAG_INT || value.tag == TAG_NIL) return value;
+            argparse_failf("%s default must be an int or nil, got %s", context, cool_to_str(value));
+            break;
+        case COOL_ARG_FLOAT:
+            if (value.tag == TAG_FLOAT || value.tag == TAG_NIL) return value;
+            if (value.tag == TAG_INT) return cv_float((double)value.payload);
+            argparse_failf("%s default must be a float/int or nil, got %s", context, cool_to_str(value));
+            break;
+        case COOL_ARG_BOOL:
+            if (value.tag == TAG_BOOL) return value;
+            argparse_failf("%s default must be a bool, got %s", context, cool_to_str(value));
+            break;
+    }
+    return value;
+}
+
+static CoolVal argparse_convert_text(CoolArgType type, const char* raw, const char* context) {
+    char* end = NULL;
+    errno = 0;
+    switch (type) {
+        case COOL_ARG_STR:
+            return cv_str(strdup(raw));
+        case COOL_ARG_INT: {
+            long long value = strtoll(raw, &end, 10);
+            if (errno != 0 || !end || *end != '\0') {
+                argparse_failf("%s expects an int, got '%s'", context, raw);
+            }
+            return cv_int((int64_t)value);
+        }
+        case COOL_ARG_FLOAT: {
+            double value = strtod(raw, &end);
+            if (errno != 0 || !end || *end != '\0') {
+                argparse_failf("%s expects a float, got '%s'", context, raw);
+            }
+            return cv_float(value);
+        }
+        case COOL_ARG_BOOL: {
+            int b = 0;
+            if (!argparse_parse_bool_literal(raw, &b)) {
+                argparse_failf("%s expects a bool, got '%s'", context, raw);
+            }
+            return cv_bool(b);
+        }
+    }
+    return cv_nil();
+}
+
+static const CoolArgOption* argparse_find_long_option(const CoolArgParser* parser, const char* flag, int* out_idx) {
+    for (int i = 0; i < parser->option_count; i++) {
+        if (strcmp(parser->options[i].long_flag, flag) == 0) {
+            if (out_idx) *out_idx = i;
+            return &parser->options[i];
+        }
+    }
+    return NULL;
+}
+
+static const CoolArgOption* argparse_find_short_option(const CoolArgParser* parser, const char* flag, int* out_idx) {
+    for (int i = 0; i < parser->option_count; i++) {
+        if (parser->options[i].short_flag && strcmp(parser->options[i].short_flag, flag) == 0) {
+            if (out_idx) *out_idx = i;
+            return &parser->options[i];
+        }
+    }
+    return NULL;
+}
+
+static CoolArgParser argparse_parse_spec(CoolVal spec_val) {
+    if (spec_val.tag != TAG_DICT) argparse_failf("argparse spec must be a dict");
+    CoolArgParser parser;
+    memset(&parser, 0, sizeof(parser));
+
+    CoolVal prog_val = argparse_dict_get_opt(spec_val, "prog");
+    if (prog_val.tag == TAG_NIL) {
+        parser.prog = argparse_default_prog_name();
+    } else if (prog_val.tag == TAG_STR) {
+        parser.prog = strdup((const char*)(intptr_t)prog_val.payload);
+    } else {
+        argparse_failf("argparse spec field 'prog' must be a string, got %s", cool_to_str(prog_val));
+    }
+
+    CoolVal desc_val = argparse_dict_get_opt(spec_val, "description");
+    if (desc_val.tag == TAG_STR) {
+        parser.description = strdup((const char*)(intptr_t)desc_val.payload);
+    } else if (desc_val.tag != TAG_NIL) {
+        argparse_failf(
+            "argparse spec field 'description' must be a string, got %s",
+            cool_to_str(desc_val)
+        );
+    }
+
+    CoolVal positionals_val = argparse_dict_get_opt(spec_val, "positionals");
+    if (positionals_val.tag != TAG_NIL) {
+        if (!argparse_is_sequence(positionals_val)) {
+            argparse_failf("argparse spec field 'positionals' must be a list or tuple");
+        }
+        CoolList* seq = (CoolList*)(intptr_t)positionals_val.payload;
+        parser.positional_count = (int)seq->length;
+        parser.positionals = (CoolArgPositional*)calloc((size_t)parser.positional_count, sizeof(CoolArgPositional));
+        for (int i = 0; i < parser.positional_count; i++) {
+            CoolVal entry = ((CoolVal*)seq->data)[i];
+            if (entry.tag != TAG_DICT) argparse_failf("argparse positional entries must be dicts");
+            CoolVal name_val = argparse_dict_get_opt(entry, "name");
+            if (name_val.tag != TAG_STR) {
+                argparse_failf("argparse positional field 'name' must be a string, got %s", cool_to_str(name_val));
+            }
+            const char* raw_name = (const char*)(intptr_t)name_val.payload;
+            if (!*raw_name) argparse_failf("argparse positional name cannot be empty");
+            for (int j = 0; j < i; j++) {
+                if (strcmp(parser.positionals[j].name, raw_name) == 0) {
+                    argparse_failf("argparse positional name '%s' is duplicated", raw_name);
+                }
+            }
+            parser.positionals[i].name = strdup(raw_name);
+            parser.positionals[i].arg_type = argparse_parse_type(argparse_dict_get_opt(entry, "type"));
+            CoolVal help_val = argparse_dict_get_opt(entry, "help");
+            if (help_val.tag == TAG_STR) {
+                parser.positionals[i].help = strdup((const char*)(intptr_t)help_val.payload);
+            } else if (help_val.tag != TAG_NIL) {
+                argparse_failf(
+                    "argparse positional '%s' field 'help' must be a string, got %s",
+                    raw_name,
+                    cool_to_str(help_val)
+                );
+            }
+            CoolVal default_val = argparse_dict_get_opt(entry, "default");
+            if (default_val.tag != TAG_NIL || argparse_dict_has_key(entry, "default")) {
+                char ctx[256];
+                snprintf(ctx, sizeof(ctx), "argparse positional '%s'", raw_name);
+                parser.positionals[i].default_value =
+                    argparse_normalize_default(parser.positionals[i].arg_type, default_val, ctx);
+                parser.positionals[i].has_default = 1;
+            }
+            CoolVal required_val = argparse_dict_get_opt(entry, "required");
+            if (required_val.tag == TAG_BOOL) {
+                parser.positionals[i].required = required_val.payload ? 1 : 0;
+            } else if (required_val.tag == TAG_NIL) {
+                parser.positionals[i].required = parser.positionals[i].has_default ? 0 : 1;
+            } else {
+                argparse_failf(
+                    "argparse positional '%s' field 'required' must be a bool, got %s",
+                    raw_name,
+                    cool_to_str(required_val)
+                );
+            }
+        }
+    }
+
+    CoolVal options_val = argparse_dict_get_opt(spec_val, "options");
+    if (options_val.tag != TAG_NIL) {
+        if (!argparse_is_sequence(options_val)) {
+            argparse_failf("argparse spec field 'options' must be a list or tuple");
+        }
+        CoolList* seq = (CoolList*)(intptr_t)options_val.payload;
+        parser.option_count = (int)seq->length;
+        parser.options = (CoolArgOption*)calloc((size_t)parser.option_count, sizeof(CoolArgOption));
+        for (int i = 0; i < parser.option_count; i++) {
+            CoolVal entry = ((CoolVal*)seq->data)[i];
+            if (entry.tag != TAG_DICT) argparse_failf("argparse option entries must be dicts");
+            CoolVal name_val = argparse_dict_get_opt(entry, "name");
+            if (name_val.tag != TAG_STR) {
+                argparse_failf("argparse option field 'name' must be a string, got %s", cool_to_str(name_val));
+            }
+            const char* raw_name = (const char*)(intptr_t)name_val.payload;
+            if (!*raw_name) argparse_failf("argparse option name cannot be empty");
+            for (int j = 0; j < i; j++) {
+                if (strcmp(parser.options[j].name, raw_name) == 0) {
+                    argparse_failf("argparse option name '%s' is duplicated", raw_name);
+                }
+            }
+            parser.options[i].name = strdup(raw_name);
+            parser.options[i].arg_type = argparse_parse_type(argparse_dict_get_opt(entry, "type"));
+            CoolVal help_val = argparse_dict_get_opt(entry, "help");
+            if (help_val.tag == TAG_STR) {
+                parser.options[i].help = strdup((const char*)(intptr_t)help_val.payload);
+            } else if (help_val.tag != TAG_NIL) {
+                argparse_failf(
+                    "argparse option '%s' field 'help' must be a string, got %s",
+                    raw_name,
+                    cool_to_str(help_val)
+                );
+            }
+            CoolVal default_val = argparse_dict_get_opt(entry, "default");
+            if (default_val.tag != TAG_NIL || argparse_dict_has_key(entry, "default")) {
+                char ctx[256];
+                snprintf(ctx, sizeof(ctx), "argparse option '%s'", raw_name);
+                parser.options[i].default_value =
+                    argparse_normalize_default(parser.options[i].arg_type, default_val, ctx);
+                parser.options[i].has_default = 1;
+            }
+            CoolVal required_val = argparse_dict_get_opt(entry, "required");
+            if (required_val.tag == TAG_BOOL) {
+                parser.options[i].required = required_val.payload ? 1 : 0;
+            } else if (required_val.tag == TAG_NIL) {
+                parser.options[i].required = 0;
+            } else {
+                argparse_failf(
+                    "argparse option '%s' field 'required' must be a bool, got %s",
+                    raw_name,
+                    cool_to_str(required_val)
+                );
+            }
+
+            CoolVal long_val = argparse_dict_get_opt(entry, "long");
+            parser.options[i].long_flag = argparse_normalize_long_flag(
+                long_val.tag == TAG_STR ? (const char*)(intptr_t)long_val.payload : raw_name
+            );
+            for (int j = 0; j < i; j++) {
+                if (strcmp(parser.options[j].long_flag, parser.options[i].long_flag) == 0) {
+                    argparse_failf("argparse option flag '%s' is duplicated", parser.options[i].long_flag);
+                }
+            }
+
+            CoolVal short_val = argparse_dict_get_opt(entry, "short");
+            if (short_val.tag == TAG_STR) {
+                parser.options[i].short_flag =
+                    argparse_normalize_short_flag((const char*)(intptr_t)short_val.payload);
+                for (int j = 0; j < i; j++) {
+                    if (parser.options[j].short_flag &&
+                        strcmp(parser.options[j].short_flag, parser.options[i].short_flag) == 0) {
+                        argparse_failf("argparse option flag '%s' is duplicated", parser.options[i].short_flag);
+                    }
+                }
+            } else if (short_val.tag != TAG_NIL) {
+                argparse_failf(
+                    "argparse option '%s' field 'short' must be a string, got %s",
+                    raw_name,
+                    cool_to_str(short_val)
+                );
+            }
+        }
+    }
+
+    return parser;
+}
+
+static CoolVal argparse_option_value(
+    const CoolArgOption* option,
+    const char* inline_value,
+    CoolVal argv_seq,
+    int idx,
+    int argc,
+    int allow_next_bool_literal,
+    int* consumed_next
+) {
+    char ctx[256];
+    snprintf(ctx, sizeof(ctx), "argparse option '%s'", option->long_flag);
+    *consumed_next = 0;
+
+    if (option->arg_type == COOL_ARG_BOOL) {
+        if (inline_value) return argparse_convert_text(option->arg_type, inline_value, ctx);
+        if (allow_next_bool_literal && idx + 1 < argc) {
+            CoolVal next = cool_list_get(argv_seq, cv_int(idx + 1));
+            if (next.tag != TAG_STR) {
+                argparse_failf("argparse.parse() argv items must be strings, got %s", cool_to_str(next));
+            }
+            int parsed = 0;
+            if (argparse_parse_bool_literal((const char*)(intptr_t)next.payload, &parsed)) {
+                *consumed_next = 1;
+                return cv_bool(parsed);
+            }
+        }
+        return cv_bool(1);
+    }
+
+    if (inline_value) return argparse_convert_text(option->arg_type, inline_value, ctx);
+    if (idx + 1 >= argc) {
+        argparse_failf("argparse.parse(): option '%s' requires a value", option->long_flag);
+    }
+    CoolVal next = cool_list_get(argv_seq, cv_int(idx + 1));
+    if (next.tag != TAG_STR) {
+        argparse_failf("argparse.parse() argv items must be strings, got %s", cool_to_str(next));
+    }
+    *consumed_next = 1;
+    return argparse_convert_text(option->arg_type, (const char*)(intptr_t)next.payload, ctx);
+}
+
+static void argparse_help_row(
+    CoolStrBuf* sb,
+    const char* label,
+    const char* help,
+    int required,
+    int show_default,
+    CoolVal default_value,
+    int show_false_default
+) {
+    sb_push_str(sb, "  ");
+    sb_push_str(sb, label);
+    size_t label_len = strlen(label);
+    size_t pad = label_len < 24 ? 24 - label_len : 0;
+    for (size_t i = 0; i < pad; i++) sb_push_char(sb, ' ');
+    sb_push_char(sb, ' ');
+    if (help && *help) sb_push_str(sb, help);
+    int has_suffix = required || show_default || show_false_default;
+    if (has_suffix) {
+        if (help && *help) sb_push_char(sb, ' ');
+        sb_push_char(sb, '(');
+        int need_comma = 0;
+        if (required) {
+            sb_push_str(sb, "required");
+            need_comma = 1;
+        }
+        if (show_default) {
+            if (need_comma) sb_push_str(sb, ", ");
+            sb_push_str(sb, "default: ");
+            sb_push_str(sb, cool_to_str(default_value));
+            need_comma = 1;
+        }
+        if (show_false_default) {
+            if (need_comma) sb_push_str(sb, ", ");
+            sb_push_str(sb, "default: false");
+        }
+        sb_push_char(sb, ')');
+    }
+    sb_push_char(sb, '\n');
+}
+
+static CoolVal cool_argparse_help(CoolVal spec_val) {
+    CoolArgParser parser = argparse_parse_spec(spec_val);
+    CoolStrBuf sb;
+    sb_init(&sb);
+    sb_push_str(&sb, "Usage: ");
+    sb_push_str(&sb, parser.prog);
+
+    for (int i = 0; i < parser.option_count; i++) {
+        CoolArgOption* option = &parser.options[i];
+        sb_push_char(&sb, ' ');
+        if (!option->required) sb_push_char(&sb, '[');
+        sb_push_str(&sb, option->long_flag);
+        if (option->arg_type != COOL_ARG_BOOL) {
+            sb_push_char(&sb, ' ');
+            char* upper = strdup(option->name);
+            for (char* p = upper; *p; p++) *p = (char)toupper((unsigned char)*p);
+            sb_push_str(&sb, upper);
+        }
+        if (!option->required) sb_push_char(&sb, ']');
+    }
+
+    for (int i = 0; i < parser.positional_count; i++) {
+        CoolArgPositional* positional = &parser.positionals[i];
+        sb_push_char(&sb, ' ');
+        if (!positional->required) sb_push_char(&sb, '[');
+        char* upper = strdup(positional->name);
+        for (char* p = upper; *p; p++) *p = (char)toupper((unsigned char)*p);
+        sb_push_str(&sb, upper);
+        if (!positional->required) sb_push_char(&sb, ']');
+    }
+
+    if (parser.description && *parser.description) {
+        sb_push_str(&sb, "\n\n");
+        sb_push_str(&sb, parser.description);
+    }
+
+    if (parser.positional_count > 0) {
+        sb_push_str(&sb, "\n\nPositional arguments:\n");
+        for (int i = 0; i < parser.positional_count; i++) {
+            CoolArgPositional* positional = &parser.positionals[i];
+            char* upper = strdup(positional->name);
+            for (char* p = upper; *p; p++) *p = (char)toupper((unsigned char)*p);
+            argparse_help_row(
+                &sb,
+                upper,
+                positional->help,
+                positional->required,
+                positional->has_default,
+                positional->default_value,
+                0
+            );
+        }
+    }
+
+    if (parser.option_count > 0) {
+        sb_push_str(&sb, "\n\nOptions:\n");
+        for (int i = 0; i < parser.option_count; i++) {
+            CoolArgOption* option = &parser.options[i];
+            CoolStrBuf label;
+            sb_init(&label);
+            if (option->short_flag) {
+                sb_push_str(&label, option->short_flag);
+                sb_push_str(&label, ", ");
+            }
+            sb_push_str(&label, option->long_flag);
+            if (option->arg_type != COOL_ARG_BOOL) {
+                sb_push_char(&label, ' ');
+                char* upper = strdup(option->name);
+                for (char* p = upper; *p; p++) *p = (char)toupper((unsigned char)*p);
+                sb_push_str(&label, upper);
+            }
+            argparse_help_row(
+                &sb,
+                label.data,
+                option->help,
+                option->required,
+                option->has_default,
+                option->default_value,
+                option->arg_type == COOL_ARG_BOOL && !option->has_default
+            );
+        }
+    }
+
+    return cv_str(sb.data);
+}
+
+static CoolVal cool_argparse_parse(CoolVal spec_val, int has_argv, CoolVal argv_val) {
+    CoolArgParser parser = argparse_parse_spec(spec_val);
+    CoolVal result = cool_dict_new();
+    for (int i = 0; i < parser.positional_count; i++) {
+        cool_setindex(
+            result,
+            cv_str(parser.positionals[i].name),
+            parser.positionals[i].has_default ? parser.positionals[i].default_value : cv_nil()
+        );
+    }
+    for (int i = 0; i < parser.option_count; i++) {
+        CoolVal value = cv_nil();
+        if (parser.options[i].has_default) {
+            value = parser.options[i].default_value;
+        } else if (parser.options[i].arg_type == COOL_ARG_BOOL) {
+            value = cv_bool(0);
+        }
+        cool_setindex(result, cv_str(parser.options[i].name), value);
+    }
+
+    CoolVal argv_seq = has_argv ? argv_val : cool_make_argv();
+    if (!argparse_is_sequence(argv_seq)) {
+        argparse_failf("argparse.parse() argv must be a list or tuple of strings, got %s", cool_to_str(argv_seq));
+    }
+    CoolList* argv_list = (CoolList*)(intptr_t)argv_seq.payload;
+    int argc = (int)argv_list->length;
+    int idx = has_argv ? 0 : (argc > 0 ? 1 : 0);
+    int* seen_options = parser.option_count > 0 ? (int*)calloc((size_t)parser.option_count, sizeof(int)) : NULL;
+    CoolVal positional_tokens = cool_list_make(cv_int(argc > 0 ? argc : 1));
+
+    while (idx < argc) {
+        CoolVal token_val = cool_list_get(argv_seq, cv_int(idx));
+        if (token_val.tag != TAG_STR) {
+            argparse_failf("argparse.parse() argv items must be strings, got %s", cool_to_str(token_val));
+        }
+        const char* token = (const char*)(intptr_t)token_val.payload;
+        if (strcmp(token, "--") == 0) {
+            for (int j = idx + 1; j < argc; j++) {
+                CoolVal rest = cool_list_get(argv_seq, cv_int(j));
+                if (rest.tag != TAG_STR) {
+                    argparse_failf("argparse.parse() argv items must be strings, got %s", cool_to_str(rest));
+                }
+                cool_list_push(positional_tokens, rest);
+            }
+            break;
+        }
+        if (token[0] == '-' && token[1] == '-' && token[2] != '\0') {
+            const char* inline_value = NULL;
+            char* flag_name = NULL;
+            const char* eq = strchr(token + 2, '=');
+            if (eq) {
+                size_t flag_len = (size_t)(eq - token);
+                flag_name = (char*)malloc(flag_len + 1);
+                memcpy(flag_name, token, flag_len);
+                flag_name[flag_len] = '\0';
+                inline_value = eq + 1;
+            } else {
+                flag_name = strdup(token);
+            }
+            int option_index = -1;
+            const CoolArgOption* option = argparse_find_long_option(&parser, flag_name, &option_index);
+            if (!option) argparse_failf("argparse.parse(): unknown option '%s'", token);
+            int consumed_next = 0;
+            CoolVal value = argparse_option_value(option, inline_value, argv_seq, idx, argc, 1, &consumed_next);
+            cool_setindex(result, cv_str(option->name), value);
+            if (option_index >= 0) seen_options[option_index] = 1;
+            idx += consumed_next ? 2 : 1;
+            continue;
+        }
+        if (token[0] == '-' && token[1] != '\0') {
+            size_t cluster_len = strlen(token + 1);
+            int consumed_next = 0;
+            for (size_t pos = 0; pos < cluster_len; pos++) {
+                char short_flag[3];
+                short_flag[0] = '-';
+                short_flag[1] = token[pos + 1];
+                short_flag[2] = '\0';
+                int option_index = -1;
+                const CoolArgOption* option = argparse_find_short_option(&parser, short_flag, &option_index);
+                if (!option) argparse_failf("argparse.parse(): unknown option '%s'", short_flag);
+                if (option->arg_type == COOL_ARG_BOOL && pos + 1 < cluster_len) {
+                    cool_setindex(result, cv_str(option->name), cv_bool(1));
+                    if (option_index >= 0) seen_options[option_index] = 1;
+                    continue;
+                }
+                const char* trailing = NULL;
+                if (option->arg_type != COOL_ARG_BOOL && pos + 1 < cluster_len) {
+                    trailing = token + pos + 2;
+                }
+                CoolVal value =
+                    argparse_option_value(option, trailing, argv_seq, idx, argc, trailing == NULL, &consumed_next);
+                cool_setindex(result, cv_str(option->name), value);
+                if (option_index >= 0) seen_options[option_index] = 1;
+                if (option->arg_type != COOL_ARG_BOOL) break;
+            }
+            idx += consumed_next ? 2 : 1;
+            continue;
+        }
+        cool_list_push(positional_tokens, token_val);
+        idx++;
+    }
+
+    CoolList* positional_list = (CoolList*)(intptr_t)positional_tokens.payload;
+    if ((int)positional_list->length > parser.positional_count) {
+        CoolVal extra = ((CoolVal*)positional_list->data)[parser.positional_count];
+        argparse_failf(
+            "argparse.parse(): unexpected positional argument '%s'",
+            extra.tag == TAG_STR ? (const char*)(intptr_t)extra.payload : cool_to_str(extra)
+        );
+    }
+
+    for (int i = 0; i < (int)positional_list->length; i++) {
+        CoolVal raw = ((CoolVal*)positional_list->data)[i];
+        if (raw.tag != TAG_STR) {
+            argparse_failf("argparse.parse() argv items must be strings, got %s", cool_to_str(raw));
+        }
+        char ctx[256];
+        snprintf(ctx, sizeof(ctx), "argparse positional '%s'", parser.positionals[i].name);
+        CoolVal value =
+            argparse_convert_text(parser.positionals[i].arg_type, (const char*)(intptr_t)raw.payload, ctx);
+        cool_setindex(result, cv_str(parser.positionals[i].name), value);
+    }
+
+    for (int i = (int)positional_list->length; i < parser.positional_count; i++) {
+        if (parser.positionals[i].required && !parser.positionals[i].has_default) {
+            argparse_failf("argparse.parse(): missing required positional '%s'", parser.positionals[i].name);
+        }
+    }
+
+    for (int i = 0; i < parser.option_count; i++) {
+        if (parser.options[i].required && !seen_options[i]) {
+            argparse_failf("argparse.parse(): missing required option '%s'", parser.options[i].long_flag);
+        }
+    }
+
+    return result;
+}
+
 static uint64_t cool_rng_state = 88172645463325252ull;
 
 static uint64_t cool_rng_next_u64(void) {
@@ -2453,6 +3150,15 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
                 cool_raise(cv_str(sb.data));
             }
             return cv_str(result.stdout_data);
+        }
+    }
+
+    if (strcmp(module, "argparse") == 0) {
+        if (strcmp(name, "parse") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_argparse_parse(args[0], nargs == 2, nargs == 2 ? args[1] : cv_nil());
+        }
+        if (strcmp(name, "help") == 0 && nargs == 1) {
+            return cool_argparse_help(args[0]);
         }
     }
 
@@ -4762,7 +5468,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "subprocess" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" => {
+            "math" | "os" | "sys" | "subprocess" | "argparse" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -4771,7 +5477,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, subprocess, time, random, json, string, list, re, collections, and path)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, subprocess, argparse, time, random, json, string, list, re, collections, and path)",
                 name
             )),
         }

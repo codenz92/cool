@@ -84,6 +84,30 @@ fn run_cool_path_with_args(path: &std::path::Path, extra_args: &[&str]) -> Resul
     }
 }
 
+fn run_cool_path_with_program_args(
+    path: &std::path::Path,
+    leading_args: &[&str],
+    program_args: &[&str],
+) -> Result<String, String> {
+    let mut cmd = Command::new(cool_bin());
+    for arg in leading_args {
+        cmd.arg(arg);
+    }
+    cmd.arg(path);
+    for arg in program_args {
+        cmd.arg(arg);
+    }
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(stderr)
+    }
+}
+
 fn run_cool_stdin_with_args(path: &str, extra_args: &[&str], stdin: &str) -> Result<String, String> {
     let mut cmd = Command::new(cool_bin());
     cmd.arg(path);
@@ -333,6 +357,104 @@ fn test_vm_import_subprocess_timeout() {
         run_cool_vm("import subprocess\nres = subprocess.run(\"sleep 1\", 0.05)\nprint(res[\"timed_out\"])\nprint(res[\"code\"] == nil)\nprint(res[\"ok\"])").unwrap();
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["true", "true", "false"]);
+}
+
+#[test]
+fn test_import_argparse_module() {
+    let result = run_cool(
+        r#"import argparse
+spec = {
+    "prog": "serve",
+    "description": "Serve static files",
+    "positionals": [
+        {"name": "root", "help": "root directory"}
+    ],
+    "options": [
+        {"name": "port", "short": "p", "type": "int", "default": 8000, "help": "listen port"},
+        {"name": "host", "type": "str", "default": "127.0.0.1", "help": "bind host"},
+        {"name": "verbose", "short": "v", "type": "bool", "help": "verbose output"}
+    ]
+}
+args = argparse.parse(spec, ["site", "-v", "--port", "9000", "--host=0.0.0.0"])
+print(args["root"])
+print(args["verbose"])
+print(args["port"])
+print(args["host"])
+print(argparse.help(spec))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().collect();
+    assert_eq!(lines[0..4], ["site", "true", "9000", "0.0.0.0"]);
+    assert!(result.contains("Usage: serve [--port PORT] [--host HOST] [--verbose] ROOT"));
+    assert!(result.contains("Serve static files"));
+    assert!(result.contains("-p, --port PORT"));
+    assert!(result.contains("(default: 8000)"));
+}
+
+#[test]
+fn test_vm_import_argparse_module() {
+    let result = run_cool_vm(
+        r#"import argparse
+spec = {
+    "prog": "serve",
+    "description": "Serve static files",
+    "positionals": [
+        {"name": "root", "help": "root directory"}
+    ],
+    "options": [
+        {"name": "port", "short": "p", "type": "int", "default": 8000, "help": "listen port"},
+        {"name": "host", "type": "str", "default": "127.0.0.1", "help": "bind host"},
+        {"name": "verbose", "short": "v", "type": "bool", "help": "verbose output"}
+    ]
+}
+args = argparse.parse(spec, ["site", "-v", "--port", "9000", "--host=0.0.0.0"])
+print(args["root"])
+print(args["verbose"])
+print(args["port"])
+print(args["host"])
+print(argparse.help(spec))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().collect();
+    assert_eq!(lines[0..4], ["site", "true", "9000", "0.0.0.0"]);
+    assert!(result.contains("Usage: serve [--port PORT] [--host HOST] [--verbose] ROOT"));
+    assert!(result.contains("Serve static files"));
+    assert!(result.contains("-p, --port PORT"));
+    assert!(result.contains("(default: 8000)"));
+}
+
+#[test]
+fn test_argparse_uses_process_args_by_default() {
+    let source_path = unique_temp_path("cool_argparse_process_args", "cool");
+    std::fs::write(
+        &source_path,
+        "import argparse\nspec = {\n    \"positionals\": [{\"name\": \"action\"}],\n    \"options\": [{\"name\": \"count\", \"short\": \"c\", \"type\": \"int\", \"default\": 1}]\n}\nargs = argparse.parse(spec)\nprint(args[\"action\"])\nprint(args[\"count\"])\n",
+    )
+    .unwrap();
+
+    let result = run_cool_path_with_program_args(&source_path, &[], &["deploy", "-c", "3"]).unwrap();
+    let _ = std::fs::remove_file(&source_path);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["deploy", "3"]);
+}
+
+#[test]
+fn test_vm_argparse_uses_process_args_by_default() {
+    let source_path = unique_temp_path("cool_vm_argparse_process_args", "cool");
+    std::fs::write(
+        &source_path,
+        "import argparse\nspec = {\n    \"positionals\": [{\"name\": \"action\"}],\n    \"options\": [{\"name\": \"count\", \"short\": \"c\", \"type\": \"int\", \"default\": 1}]\n}\nargs = argparse.parse(spec)\nprint(args[\"action\"])\nprint(args[\"count\"])\n",
+    )
+    .unwrap();
+
+    let result = run_cool_path_with_program_args(&source_path, &["--vm"], &["deploy", "-c", "3"]).unwrap();
+    let _ = std::fs::remove_file(&source_path);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["deploy", "3"]);
 }
 
 #[test]

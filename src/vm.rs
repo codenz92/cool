@@ -1,4 +1,5 @@
 /// Stack-based bytecode VM for Cool.
+use crate::argparse_runtime::{self, ArgData};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1513,6 +1514,9 @@ impl VM {
         if let Some(rest) = name.strip_prefix("subprocess.") {
             return self.call_subprocess_module(rest, args);
         }
+        if let Some(rest) = name.strip_prefix("argparse.") {
+            return self.call_argparse_module(rest, args);
+        }
         if let Some(rest) = name.strip_prefix("path.") {
             return self.call_path_module(rest, args);
         }
@@ -3000,6 +3004,119 @@ impl VM {
         }
     }
 
+    fn vm_value_to_arg_data(&self, value: &VmValue) -> Result<ArgData, String> {
+        match value {
+            VmValue::Int(n) => Ok(ArgData::Int(*n)),
+            VmValue::Float(f) => Ok(ArgData::Float(*f)),
+            VmValue::Str(s) => Ok(ArgData::Str(s.clone())),
+            VmValue::Bool(b) => Ok(ArgData::Bool(*b)),
+            VmValue::Nil => Ok(ArgData::Nil),
+            VmValue::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.vm_value_to_arg_data(item)?);
+                }
+                Ok(ArgData::List(out))
+            }
+            VmValue::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.vm_value_to_arg_data(item)?);
+                }
+                Ok(ArgData::Tuple(out))
+            }
+            VmValue::Dict(dict) => {
+                let dict = dict.borrow();
+                let mut out = Vec::with_capacity(dict.keys.len());
+                for (key, value) in dict.keys.iter().zip(dict.vals.iter()) {
+                    out.push((self.vm_value_to_arg_data(key)?, self.vm_value_to_arg_data(value)?));
+                }
+                Ok(ArgData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "argparse only accepts scalar/list/tuple/dict values, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn arg_data_to_vm_value(data: &ArgData) -> VmValue {
+        match data {
+            ArgData::Int(n) => VmValue::Int(*n),
+            ArgData::Float(f) => VmValue::Float(*f),
+            ArgData::Str(s) => VmValue::Str(s.clone()),
+            ArgData::Bool(b) => VmValue::Bool(*b),
+            ArgData::Nil => VmValue::Nil,
+            ArgData::List(items) => VmValue::List(Rc::new(RefCell::new(
+                items.iter().map(Self::arg_data_to_vm_value).collect(),
+            ))),
+            ArgData::Tuple(items) => VmValue::Tuple(Rc::new(items.iter().map(Self::arg_data_to_vm_value).collect())),
+            ArgData::Dict(items) => {
+                let mut out = VmDict::new();
+                for (key, value) in items {
+                    out.set(Self::arg_data_to_vm_value(key), Self::arg_data_to_vm_value(value));
+                }
+                VmValue::Dict(Rc::new(RefCell::new(out)))
+            }
+        }
+    }
+
+    fn argparse_argv_arg(&self, value: Option<&VmValue>) -> Result<Vec<String>, String> {
+        match value {
+            None | Some(VmValue::Nil) => Ok(argparse_runtime::current_process_argv().into_iter().skip(1).collect()),
+            Some(VmValue::List(items)) => items
+                .borrow()
+                .iter()
+                .map(|item| match item {
+                    VmValue::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "argparse.parse() argv items must be strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(VmValue::Tuple(items)) => items
+                .iter()
+                .map(|item| match item {
+                    VmValue::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "argparse.parse() argv items must be strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(other) => Err(self.err(&format!(
+                "argparse.parse() argv must be a list or tuple of strings, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_argparse_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "parse" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("argparse.parse() takes a spec dict and optional argv list"));
+                }
+                let spec = self.vm_value_to_arg_data(&args[0])?;
+                let argv = self.argparse_argv_arg(args.get(1))?;
+                let parsed = argparse_runtime::parse(&spec, &argv, Some(&argparse_runtime::default_prog_name()))
+                    .map_err(|e| self.err(&e))?;
+                Ok(Self::arg_data_to_vm_value(&parsed))
+            }
+            "help" => {
+                if args.len() != 1 {
+                    return Err(self.err("argparse.help() takes exactly one spec dict"));
+                }
+                let spec = self.vm_value_to_arg_data(&args[0])?;
+                let rendered =
+                    argparse_runtime::help(&spec, Some(&argparse_runtime::default_prog_name())).map_err(|e| self.err(&e))?;
+                Ok(VmValue::Str(rendered))
+            }
+            _ => Err(self.err(&format!("unknown argparse function '{}'", name))),
+        }
+    }
+
     fn normalize_path_string(path: &str) -> String {
         use std::path::{Component, Path, PathBuf};
 
@@ -3513,6 +3630,11 @@ impl VM {
             "subprocess" => {
                 for fname in &["run", "call", "check_output"] {
                     set(&mut d, fname, bf(&format!("subprocess.{}", fname)));
+                }
+            }
+            "argparse" => {
+                for fname in &["parse", "help"] {
+                    set(&mut d, fname, bf(&format!("argparse.{}", fname)));
                 }
             }
             "time" => {

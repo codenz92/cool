@@ -1,3 +1,4 @@
+use crate::argparse_runtime::{self, ArgData};
 use crate::ast::*;
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 /// Tree-walk interpreter for Cool.
@@ -1154,6 +1155,16 @@ impl Interpreter {
                 }
                 env.set_local("subprocess".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "argparse" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["parse", "help"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("argparse.{}", fn_name)),
+                    );
+                }
+                env.set_local("argparse".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "term" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2254,6 +2265,9 @@ class Stack:
         if let Some(f) = name.strip_prefix("subprocess.") {
             return self.call_subprocess_fn(f, args);
         }
+        if let Some(f) = name.strip_prefix("argparse.") {
+            return self.call_argparse_fn(f, args);
+        }
         if let Some(f) = name.strip_prefix("term.") {
             return self.call_term_fn(f, args);
         }
@@ -3188,6 +3202,119 @@ class Stack:
                 Ok(Value::Str(result.stdout))
             }
             _ => Err(self.err(&format!("subprocess has no function '{}'", name))),
+        }
+    }
+
+    fn value_to_arg_data(&self, value: &Value) -> Result<ArgData, String> {
+        match value {
+            Value::Int(n) => Ok(ArgData::Int(*n)),
+            Value::Float(f) => Ok(ArgData::Float(*f)),
+            Value::Str(s) => Ok(ArgData::Str(s.clone())),
+            Value::Bool(b) => Ok(ArgData::Bool(*b)),
+            Value::Nil => Ok(ArgData::Nil),
+            Value::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.value_to_arg_data(item)?);
+                }
+                Ok(ArgData::List(out))
+            }
+            Value::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.value_to_arg_data(item)?);
+                }
+                Ok(ArgData::Tuple(out))
+            }
+            Value::Dict(map) => {
+                let map = map.borrow();
+                let mut out = Vec::with_capacity(map.keys.len());
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    out.push((self.value_to_arg_data(key)?, self.value_to_arg_data(value)?));
+                }
+                Ok(ArgData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "argparse only accepts scalar/list/tuple/dict values, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn arg_data_to_value(data: &ArgData) -> Value {
+        match data {
+            ArgData::Int(n) => Value::Int(*n),
+            ArgData::Float(f) => Value::Float(*f),
+            ArgData::Str(s) => Value::Str(s.clone()),
+            ArgData::Bool(b) => Value::Bool(*b),
+            ArgData::Nil => Value::Nil,
+            ArgData::List(items) => Value::List(Rc::new(RefCell::new(
+                items.iter().map(Self::arg_data_to_value).collect(),
+            ))),
+            ArgData::Tuple(items) => Value::Tuple(Rc::new(items.iter().map(Self::arg_data_to_value).collect())),
+            ArgData::Dict(items) => {
+                let mut out = IndexedMap::new();
+                for (key, value) in items {
+                    out.set(Self::arg_data_to_value(key), Self::arg_data_to_value(value));
+                }
+                Value::Dict(Rc::new(RefCell::new(out)))
+            }
+        }
+    }
+
+    fn argparse_argv_arg(&self, value: Option<&Value>) -> Result<Vec<String>, String> {
+        match value {
+            None | Some(Value::Nil) => Ok(argparse_runtime::current_process_argv().into_iter().skip(1).collect()),
+            Some(Value::List(items)) => items
+                .borrow()
+                .iter()
+                .map(|item| match item {
+                    Value::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "argparse.parse() argv items must be strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(Value::Tuple(items)) => items
+                .iter()
+                .map(|item| match item {
+                    Value::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "argparse.parse() argv items must be strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(other) => Err(self.err(&format!(
+                "argparse.parse() argv must be a list or tuple of strings, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_argparse_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "parse" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("argparse.parse() takes a spec dict and optional argv list"));
+                }
+                let spec = self.value_to_arg_data(&args[0])?;
+                let argv = self.argparse_argv_arg(args.get(1))?;
+                let parsed = argparse_runtime::parse(&spec, &argv, Some(&argparse_runtime::default_prog_name()))
+                    .map_err(|e| self.err(&e))?;
+                Ok(Self::arg_data_to_value(&parsed))
+            }
+            "help" => {
+                if args.len() != 1 {
+                    return Err(self.err("argparse.help() takes exactly one spec dict"));
+                }
+                let spec = self.value_to_arg_data(&args[0])?;
+                let rendered =
+                    argparse_runtime::help(&spec, Some(&argparse_runtime::default_prog_name())).map_err(|e| self.err(&e))?;
+                Ok(Value::Str(rendered))
+            }
+            _ => Err(self.err(&format!("argparse has no function '{}'", name))),
         }
     }
 

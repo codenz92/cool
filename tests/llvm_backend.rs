@@ -343,6 +343,62 @@ print(sys.argv[1])
 }
 
 #[test]
+fn test_llvm_import_argparse_module() {
+    let result = compile_and_run_native(
+        r#"
+import argparse
+spec = {
+    "prog": "serve",
+    "description": "Serve static files",
+    "positionals": [
+        {"name": "root", "help": "root directory"}
+    ],
+    "options": [
+        {"name": "port", "short": "p", "type": "int", "default": 8000, "help": "listen port"},
+        {"name": "host", "type": "str", "default": "127.0.0.1", "help": "bind host"},
+        {"name": "verbose", "short": "v", "type": "bool", "help": "verbose output"}
+    ]
+}
+args = argparse.parse(spec, ["site", "-v", "--port", "9000", "--host=0.0.0.0"])
+print(args["root"])
+print(args["verbose"])
+print(args["port"])
+print(args["host"])
+print(argparse.help(spec))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().collect();
+    assert_eq!(lines[0..4], ["site", "true", "9000", "0.0.0.0"]);
+    assert!(result.contains("Usage: serve [--port PORT] [--host HOST] [--verbose] ROOT"));
+    assert!(result.contains("Serve static files"));
+    assert!(result.contains("-p, --port PORT"));
+    assert!(result.contains("(default: 8000)"));
+}
+
+#[test]
+fn test_llvm_argparse_uses_process_args_by_default() {
+    let result = compile_and_run_native_with_env(
+        r#"
+import argparse
+spec = {
+    "positionals": [{"name": "action"}],
+    "options": [{"name": "count", "short": "c", "type": "int", "default": 1}]
+}
+args = argparse.parse(spec)
+print(args["action"])
+print(args["count"])
+"#,
+        &[("COOL_PROGRAM_ARGS", "deploy\x1F-c\x1F3")],
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["deploy", "3"]);
+}
+
+#[test]
 fn test_llvm_import_time_module() {
     let result = compile_and_run_native(
         r#"

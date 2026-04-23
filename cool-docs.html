@@ -914,7 +914,7 @@
           </div>
           <div class="feature-card">
             <div class="fc-title">Standard Library</div>
-            <div class="fc-desc">math, json, re, time, random, collections, term.</div>
+            <div class="fc-desc">math, json, re, time, random, collections, path, subprocess, argparse, term.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Cool Shell</div>
@@ -2025,6 +2025,27 @@ s.push("b")
 s.pop()        # "b"  (LIFO)</code></pre>
         </div>
 
+        <h3>argparse</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import argparse
+
+spec = {
+  "prog": "serve",
+  "positionals": [{"name": "root"}],
+  "options": [
+    {"name": "port", "short": "p", "type": "int", "default": 8000},
+    {"name": "verbose", "short": "v", "type": "bool"}
+  ]
+}
+
+args = argparse.parse(spec, ["site", "-v", "--port", "9000"])
+print(args["root"])        # site
+print(args["verbose"])     # true
+print(args["port"])        # 9000
+print(argparse.help(spec)) # generated usage text</code></pre>
+        </div>
+
         <h3>term (Terminal Control)</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
@@ -2847,7 +2868,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>6</td>
-                <td>Standard library — json, re, time, random, collections, string, list</td>
+                <td>Standard library — json, re, time, random, collections, string, list, path, subprocess, argparse</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -2881,7 +2902,7 @@ echo Done.</code></pre>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, and unhandled native raises, plus built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, but still excludes caught exceptions, closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>path</code>/<code>subprocess</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, and unhandled native raises, plus built-in <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code> and <code>argparse.parse()</code>/<code>help()</code>, but still excludes caught exceptions, closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>path</code>/<code>subprocess</code>/<code>argparse</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>
