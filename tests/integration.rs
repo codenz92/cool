@@ -498,6 +498,50 @@ fn test_shell_http_app_launch() {
 }
 
 #[test]
+fn test_shell_alias_env_and_history() {
+    let input = "set NAME=Cool\necho $NAME\nalias hi echo hello\nhi\necho one\necho two\nhistory\nexit\n";
+    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], input).unwrap();
+    assert!(result.contains("Cool"));
+    assert!(result.contains("hello"));
+    assert!(result.contains("0  set NAME=Cool"));
+    assert!(result.contains("6  history"));
+}
+
+#[test]
+fn test_shell_source_and_pipe() {
+    let temp_dir = std::env::temp_dir().join("cool_shell_source_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let script_path = temp_dir.join("script.coolsh");
+    let pipe_path = temp_dir.join("pipe.txt");
+    std::fs::write(&script_path, "echo sourced\n").unwrap();
+    std::fs::write(&pipe_path, "echo alpha\necho beta\n").unwrap();
+
+    let input = format!("source {}\ncat {} | grep beta\nexit\n", script_path.display(), pipe_path.display());
+    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], &input).unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert!(result.contains("sourced"));
+    assert!(result.contains("echo beta"));
+}
+
+#[test]
+fn test_shell_run_passes_program_args() {
+    let temp_dir = std::env::temp_dir().join("cool_shell_run_args_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let script_path = temp_dir.join("argv_app.cool");
+    std::fs::write(&script_path, "import sys\nprint(sys.argv[1])\nprint(sys.argv[2])\n").unwrap();
+
+    let input = format!("run {} one two\nexit\n", script_path.display());
+    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], &input).unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert!(result.contains("one"));
+    assert!(result.contains("two"));
+}
+
+#[test]
 fn test_break_continue() {
     let result =
         run_cool("result = []\nfor i in range(10):\n\tif i == 5:\n\t\tbreak\n\tresult.append(i)\nprint(len(result))")

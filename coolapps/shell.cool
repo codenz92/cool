@@ -400,7 +400,12 @@ def cmd_run(args):
     if not path_exists(path):
         shell_print("run: file not found: " + path)
         return
-    runfile(path)
+    extra = []
+    i = 1
+    while i < args.len():
+        extra.append(args[i])
+        i += 1
+    runfile(path, extra)
 
 def cmd_source(args):
     if args.len() == 0:
