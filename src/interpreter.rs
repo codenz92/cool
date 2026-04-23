@@ -2,6 +2,7 @@ use crate::argparse_runtime::{self, ArgData};
 use crate::ast::*;
 use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
+use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 /// Tree-walk interpreter for Cool.
@@ -1200,6 +1201,16 @@ impl Interpreter {
                 }
                 env.set_local("datetime".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "hashlib" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["md5", "sha1", "sha256", "digest"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("hashlib.{}", fn_name)),
+                    );
+                }
+                env.set_local("hashlib".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "test" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2337,6 +2348,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("datetime.") {
             return self.call_datetime_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("hashlib.") {
+            return self.call_hashlib_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("test.") {
             return self.call_test_fn(f, args, env);
@@ -3788,6 +3802,41 @@ class Stack:
                 Ok(Value::Float(diff))
             }
             _ => Err(self.err(&format!("datetime has no function '{}'", name))),
+        }
+    }
+
+    fn hashlib_text_arg<'a>(&self, value: &'a Value, context: &str) -> Result<&'a str, String> {
+        match value {
+            Value::Str(s) => Ok(s.as_str()),
+            other => Err(self.err(&format!("{context} requires a string, got {}", other.type_name()))),
+        }
+    }
+
+    fn call_hashlib_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "md5" | "sha1" | "sha256" => {
+                if args.len() != 1 {
+                    return Err(self.err(&format!("hashlib.{}() takes exactly one text argument", name)));
+                }
+                let text = self.hashlib_text_arg(&args[0], &format!("hashlib.{}()", name))?;
+                let digest = match name {
+                    "md5" => hashlib_runtime::md5_hex(text),
+                    "sha1" => hashlib_runtime::sha1_hex(text),
+                    "sha256" => hashlib_runtime::sha256_hex(text),
+                    _ => unreachable!(),
+                };
+                Ok(Value::Str(digest))
+            }
+            "digest" => {
+                if args.len() != 2 {
+                    return Err(self.err("hashlib.digest() takes an algorithm name and text argument"));
+                }
+                let algo = self.hashlib_text_arg(&args[0], "hashlib.digest() algorithm")?;
+                let text = self.hashlib_text_arg(&args[1], "hashlib.digest() text")?;
+                let digest = hashlib_runtime::digest_hex(algo, text).map_err(|e| self.err(&e))?;
+                Ok(Value::Str(digest))
+            }
+            _ => Err(self.err(&format!("hashlib has no function '{}'", name))),
         }
     }
 

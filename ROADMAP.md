@@ -150,6 +150,7 @@
 #### Data And Serialization
 
 - [x] `csv` module — CSV reader/writer helpers for rows, header-based dicts, and basic quoting/escaping
+- [x] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
 - [ ] `json` extensions — schema-aware JSON transforms and streaming helpers
 - [ ] `toml` module — parse and write TOML for project/config tooling
 - [ ] `yaml` module — YAML parsing/serialization for config and automation
@@ -256,7 +257,7 @@
 
 #### Security And Crypto
 
-- [ ] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
+- [x] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
 - [ ] `crypto` module — symmetric encryption, signatures, random bytes, and key helpers
 
 #### Terminal, UI, And Presentation
@@ -316,7 +317,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -388,10 +389,11 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `path` module — path normalization, basename/dirname, extension helpers, splitting, and joins
 - [x] `csv` module — row parsing, header-based dict parsing, and CSV writing
 - [x] `datetime` module — local timestamps, formatting/parsing, parts, and duration helpers
+- [x] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
-- [ ] `toml` / `yaml` / `hashlib` / `sqlite` / `socket` / `http` as the first practical application stack
+- [ ] `toml` / `yaml` / `sqlite` / `socket` / `http` as the first practical application stack
 
 ### Packaging And Developer Tooling
 

@@ -9,6 +9,9 @@ regex = "1"
 crossterm = "0.28"
 libloading = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+md5 = "0.7"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [dependencies.inkwell]
 version = "0.4"

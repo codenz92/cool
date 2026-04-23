@@ -2,6 +2,7 @@
 use crate::argparse_runtime::{self, ArgData};
 use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
+use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1531,6 +1532,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("datetime.") {
             return self.call_datetime_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("hashlib.") {
+            return self.call_hashlib_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("test.") {
             return self.call_test_module(rest, args);
@@ -3662,6 +3666,41 @@ impl VM {
         }
     }
 
+    fn hashlib_text_arg<'a>(&self, value: &'a VmValue, context: &str) -> Result<&'a str, String> {
+        match value {
+            VmValue::Str(s) => Ok(s.as_str()),
+            other => Err(self.err(&format!("{context} requires a string, got {}", other.type_name()))),
+        }
+    }
+
+    fn call_hashlib_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "md5" | "sha1" | "sha256" => {
+                if args.len() != 1 {
+                    return Err(self.err(&format!("hashlib.{}() takes exactly one text argument", name)));
+                }
+                let text = self.hashlib_text_arg(&args[0], &format!("hashlib.{}()", name))?;
+                let digest = match name {
+                    "md5" => hashlib_runtime::md5_hex(text),
+                    "sha1" => hashlib_runtime::sha1_hex(text),
+                    "sha256" => hashlib_runtime::sha256_hex(text),
+                    _ => unreachable!(),
+                };
+                Ok(VmValue::Str(digest))
+            }
+            "digest" => {
+                if args.len() != 2 {
+                    return Err(self.err("hashlib.digest() takes an algorithm name and text argument"));
+                }
+                let algo = self.hashlib_text_arg(&args[0], "hashlib.digest() algorithm")?;
+                let text = self.hashlib_text_arg(&args[1], "hashlib.digest() text")?;
+                let digest = hashlib_runtime::digest_hex(algo, text).map_err(|e| self.err(&e))?;
+                Ok(VmValue::Str(digest))
+            }
+            _ => Err(self.err(&format!("unknown hashlib function '{}'", name))),
+        }
+    }
+
     fn normalize_path_string(path: &str) -> String {
         use std::path::{Component, Path, PathBuf};
 
@@ -4203,6 +4242,11 @@ impl VM {
             "datetime" => {
                 for fname in &["now", "format", "parse", "parts", "add_seconds", "diff_seconds"] {
                     set(&mut d, fname, bf(&format!("datetime.{}", fname)));
+                }
+            }
+            "hashlib" => {
+                for fname in &["md5", "sha1", "sha256", "digest"] {
+                    set(&mut d, fname, bf(&format!("hashlib.{}", fname)));
                 }
             }
             "test" => {
