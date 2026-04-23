@@ -1,5 +1,6 @@
 use crate::argparse_runtime::{self, ArgData};
 use crate::ast::*;
+use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 /// Tree-walk interpreter for Cool.
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -475,6 +476,7 @@ pub struct Interpreter {
     readline_editor: Option<RlEditor>,
     /// xorshift64 state for the random module.
     rng_state: u64,
+    logging_state: logging_runtime::LoggingState,
 }
 
 macro_rules! numeric_op {
@@ -523,6 +525,7 @@ impl Interpreter {
             pending_raise: None,
             readline_editor,
             rng_state,
+            logging_state: logging_runtime::LoggingState::default(),
         }
     }
 
@@ -1059,7 +1062,17 @@ impl Interpreter {
             }
             "path" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["join", "basename", "dirname", "ext", "stem", "split", "normalize", "exists", "isabs"] {
+                for fn_name in &[
+                    "join",
+                    "basename",
+                    "dirname",
+                    "ext",
+                    "stem",
+                    "split",
+                    "normalize",
+                    "exists",
+                    "isabs",
+                ] {
                     map.set(
                         Value::Str(fn_name.to_string()),
                         Value::BuiltinFn(format!("path.{}", fn_name)),
@@ -1164,6 +1177,16 @@ impl Interpreter {
                     );
                 }
                 env.set_local("argparse".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "logging" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["basic_config", "log", "debug", "info", "warning", "warn", "error"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("logging.{}", fn_name)),
+                    );
+                }
+                env.set_local("logging".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "term" => {
                 let mut map = IndexedMap::new();
@@ -2268,6 +2291,9 @@ class Stack:
         if let Some(f) = name.strip_prefix("argparse.") {
             return self.call_argparse_fn(f, args);
         }
+        if let Some(f) = name.strip_prefix("logging.") {
+            return self.call_logging_fn(f, args);
+        }
         if let Some(f) = name.strip_prefix("term.") {
             return self.call_term_fn(f, args);
         }
@@ -3310,11 +3336,107 @@ class Stack:
                     return Err(self.err("argparse.help() takes exactly one spec dict"));
                 }
                 let spec = self.value_to_arg_data(&args[0])?;
-                let rendered =
-                    argparse_runtime::help(&spec, Some(&argparse_runtime::default_prog_name())).map_err(|e| self.err(&e))?;
+                let rendered = argparse_runtime::help(&spec, Some(&argparse_runtime::default_prog_name()))
+                    .map_err(|e| self.err(&e))?;
                 Ok(Value::Str(rendered))
             }
             _ => Err(self.err(&format!("argparse has no function '{}'", name))),
+        }
+    }
+
+    fn value_to_log_data(&self, value: &Value) -> Result<LogData, String> {
+        match value {
+            Value::Int(n) => Ok(LogData::Int(*n)),
+            Value::Float(f) => Ok(LogData::Float(*f)),
+            Value::Str(s) => Ok(LogData::Str(s.clone())),
+            Value::Bool(b) => Ok(LogData::Bool(*b)),
+            Value::Nil => Ok(LogData::Nil),
+            Value::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.value_to_log_data(item)?);
+                }
+                Ok(LogData::List(out))
+            }
+            Value::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.value_to_log_data(item)?);
+                }
+                Ok(LogData::Tuple(out))
+            }
+            Value::Dict(map) => {
+                let map = map.borrow();
+                let mut out = Vec::with_capacity(map.keys.len());
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    out.push((self.value_to_log_data(key)?, self.value_to_log_data(value)?));
+                }
+                Ok(LogData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "logging only accepts scalar/list/tuple/dict values, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn logging_name_arg(&self, args: &[Value], idx: usize, fname: &str) -> Result<Option<String>, String> {
+        if args.len() > idx + 1 {
+            return Err(self.err(&format!("logging.{}() takes at most {} arguments", fname, idx + 1)));
+        }
+        Ok(args.get(idx).map(|value| format!("{}", value)))
+    }
+
+    fn call_logging_fn(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "basic_config" => {
+                if args.len() > 1 {
+                    return Err(self.err("logging.basic_config() takes at most one config dict"));
+                }
+                let config = match args.first() {
+                    None => None,
+                    Some(value) => Some(self.value_to_log_data(value)?),
+                };
+                logging_runtime::configure(&mut self.logging_state, config.as_ref()).map_err(|e| self.err(&e))?;
+                Ok(Value::Nil)
+            }
+            "log" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(self.err("logging.log() takes a level string, message, and optional logger name"));
+                }
+                let level = match &args[0] {
+                    Value::Str(s) => LogLevel::parse(s).map_err(|e| self.err(&e))?,
+                    other => {
+                        return Err(self.err(&format!(
+                            "logging.log() level must be a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let message = format!("{}", args[1]);
+                let logger_name = self.logging_name_arg(&args, 2, name)?;
+                logging_runtime::emit(&mut self.logging_state, level, &message, logger_name.as_deref())
+                    .map_err(|e| self.err(&e))?;
+                Ok(Value::Nil)
+            }
+            "debug" | "info" | "warning" | "warn" | "error" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err(&format!("logging.{}() takes a message and optional logger name", name)));
+                }
+                let level = match name {
+                    "debug" => LogLevel::Debug,
+                    "info" => LogLevel::Info,
+                    "warning" | "warn" => LogLevel::Warning,
+                    "error" => LogLevel::Error,
+                    _ => unreachable!(),
+                };
+                let message = format!("{}", args[0]);
+                let logger_name = self.logging_name_arg(&args, 1, name)?;
+                logging_runtime::emit(&mut self.logging_state, level, &message, logger_name.as_deref())
+                    .map_err(|e| self.err(&e))?;
+                Ok(Value::Nil)
+            }
+            _ => Err(self.err(&format!("logging has no function '{}'", name))),
         }
     }
 
@@ -3350,7 +3472,11 @@ class Stack:
         }
         let rendered = out.to_string_lossy().to_string();
         if rendered.is_empty() {
-            if is_abs { "/".to_string() } else { ".".to_string() }
+            if is_abs {
+                "/".to_string()
+            } else {
+                ".".to_string()
+            }
         } else {
             rendered
         }
@@ -3430,7 +3556,10 @@ class Stack:
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                Ok(Value::List(Rc::new(RefCell::new(vec![Value::Str(dir), Value::Str(base)]))))
+                Ok(Value::List(Rc::new(RefCell::new(vec![
+                    Value::Str(dir),
+                    Value::Str(base),
+                ]))))
             }
             "normalize" => {
                 let path = req_path_arg(&args, 0, || self.err("path.normalize() requires a path string"))?;

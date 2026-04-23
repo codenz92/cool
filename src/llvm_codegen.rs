@@ -3022,6 +3022,269 @@ static CoolVal cool_path_split_val(const char* path) {
 }
 
 enum {
+    COOL_LOG_DEBUG = 0,
+    COOL_LOG_INFO = 1,
+    COOL_LOG_WARNING = 2,
+    COOL_LOG_ERROR = 3
+};
+
+static int g_logging_level = COOL_LOG_INFO;
+static int g_logging_timestamp = 0;
+static int g_logging_stdout = 1;
+static char* g_logging_format = NULL;
+static char* g_logging_file = NULL;
+static int g_logging_file_needs_reset = 0;
+
+static void cool_logging_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static int cool_str_ieq(const char* a, const char* b) {
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 0;
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static const char* cool_logging_level_name(int level) {
+    switch (level) {
+        case COOL_LOG_DEBUG: return "DEBUG";
+        case COOL_LOG_INFO: return "INFO";
+        case COOL_LOG_WARNING: return "WARNING";
+        case COOL_LOG_ERROR: return "ERROR";
+        default: return "INFO";
+    }
+}
+
+static int cool_logging_parse_level(const char* raw) {
+    if (cool_str_ieq(raw, "debug")) return COOL_LOG_DEBUG;
+    if (cool_str_ieq(raw, "info")) return COOL_LOG_INFO;
+    if (cool_str_ieq(raw, "warning") || cool_str_ieq(raw, "warn")) return COOL_LOG_WARNING;
+    if (cool_str_ieq(raw, "error")) return COOL_LOG_ERROR;
+    cool_logging_raisef("logging level must be one of DEBUG/INFO/WARNING/ERROR, got '%s'", raw);
+    return COOL_LOG_INFO;
+}
+
+static int cool_logging_dict_has(CoolVal dict, const char* key) {
+    return cool_truthy(cool_dict_contains(dict, cv_str(key)));
+}
+
+static CoolVal cool_logging_dict_get(CoolVal dict, const char* key) {
+    return cool_dict_get_opt(dict, cv_str(key));
+}
+
+static void cool_logging_reset_defaults(void) {
+    g_logging_level = COOL_LOG_INFO;
+    g_logging_timestamp = 0;
+    g_logging_stdout = 1;
+    if (g_logging_format) free(g_logging_format);
+    if (g_logging_file) free(g_logging_file);
+    g_logging_format = NULL;
+    g_logging_file = NULL;
+    g_logging_file_needs_reset = 0;
+}
+
+static void cool_logging_apply_config(CoolVal config) {
+    if (config.tag == TAG_NIL) {
+        cool_logging_reset_defaults();
+        return;
+    }
+    if (config.tag != TAG_DICT) {
+        cool_logging_raisef("logging.basic_config() expects a config dict, got %s", cool_to_str(config));
+    }
+
+    CoolDict* dict = (CoolDict*)(intptr_t)config.payload;
+    for (int64_t i = 0; i < dict->len; i++) {
+        CoolVal key = dict->keys[i];
+        if (key.tag != TAG_STR) {
+            cool_logging_raisef("logging.basic_config() keys must be strings, got %s", cool_to_str(key));
+        }
+        const char* key_s = (const char*)(intptr_t)key.payload;
+        if (strcmp(key_s, "level") != 0 &&
+            strcmp(key_s, "format") != 0 &&
+            strcmp(key_s, "timestamp") != 0 &&
+            strcmp(key_s, "stdout") != 0 &&
+            strcmp(key_s, "file") != 0 &&
+            strcmp(key_s, "append") != 0) {
+            cool_logging_raisef("logging.basic_config() does not support field '%s'", key_s);
+        }
+    }
+
+    int new_level = COOL_LOG_INFO;
+    int new_timestamp = 0;
+    int new_stdout = 1;
+    int new_append = 0;
+    char* new_format = NULL;
+    char* new_file = NULL;
+
+    if (cool_logging_dict_has(config, "level")) {
+        CoolVal value = cool_logging_dict_get(config, "level");
+        if (value.tag != TAG_STR) {
+            cool_logging_raisef("logging.basic_config() field 'level' must be a string, got %s", cool_to_str(value));
+        }
+        new_level = cool_logging_parse_level((const char*)(intptr_t)value.payload);
+    }
+    if (cool_logging_dict_has(config, "format")) {
+        CoolVal value = cool_logging_dict_get(config, "format");
+        if (value.tag == TAG_NIL) {
+            new_format = NULL;
+        } else if (value.tag == TAG_STR) {
+            new_format = strdup((const char*)(intptr_t)value.payload);
+        } else {
+            cool_logging_raisef(
+                "logging.basic_config() field 'format' must be a string or nil, got %s",
+                cool_to_str(value)
+            );
+        }
+    }
+    if (cool_logging_dict_has(config, "timestamp")) {
+        CoolVal value = cool_logging_dict_get(config, "timestamp");
+        if (value.tag == TAG_NIL) {
+            new_timestamp = 0;
+        } else if (value.tag == TAG_BOOL) {
+            new_timestamp = value.payload != 0;
+        } else {
+            cool_logging_raisef(
+                "logging.basic_config() field 'timestamp' must be a bool, got %s",
+                cool_to_str(value)
+            );
+        }
+    }
+    if (cool_logging_dict_has(config, "stdout")) {
+        CoolVal value = cool_logging_dict_get(config, "stdout");
+        if (value.tag == TAG_NIL) {
+            new_stdout = 0;
+        } else if (value.tag == TAG_BOOL) {
+            new_stdout = value.payload != 0;
+        } else {
+            cool_logging_raisef(
+                "logging.basic_config() field 'stdout' must be a bool, got %s",
+                cool_to_str(value)
+            );
+        }
+    }
+    if (cool_logging_dict_has(config, "file")) {
+        CoolVal value = cool_logging_dict_get(config, "file");
+        if (value.tag == TAG_NIL) {
+            new_file = NULL;
+        } else if (value.tag == TAG_STR) {
+            const char* path = (const char*)(intptr_t)value.payload;
+            if (!*path) {
+                cool_logging_raisef("logging.basic_config() field 'file' cannot be empty");
+            }
+            new_file = strdup(path);
+        } else {
+            cool_logging_raisef(
+                "logging.basic_config() field 'file' must be a string or nil, got %s",
+                cool_to_str(value)
+            );
+        }
+    }
+    if (cool_logging_dict_has(config, "append")) {
+        CoolVal value = cool_logging_dict_get(config, "append");
+        if (value.tag == TAG_NIL) {
+            new_append = 0;
+        } else if (value.tag == TAG_BOOL) {
+            new_append = value.payload != 0;
+        } else {
+            cool_logging_raisef(
+                "logging.basic_config() field 'append' must be a bool, got %s",
+                cool_to_str(value)
+            );
+        }
+    }
+
+    if (g_logging_format) free(g_logging_format);
+    if (g_logging_file) free(g_logging_file);
+    g_logging_level = new_level;
+    g_logging_timestamp = new_timestamp;
+    g_logging_stdout = new_stdout;
+    g_logging_format = new_format;
+    g_logging_file = new_file;
+    g_logging_file_needs_reset = (new_file && !new_append) ? 1 : 0;
+}
+
+static char* cool_logging_render_line(int level, const char* message, const char* logger_name) {
+    const char* level_name = cool_logging_level_name(level);
+    const char* name = logger_name ? logger_name : "";
+    char timestamp_buf[32];
+    int needs_timestamp = g_logging_timestamp || (g_logging_format && strstr(g_logging_format, "{timestamp}") != NULL);
+    if (needs_timestamp) {
+        snprintf(timestamp_buf, sizeof(timestamp_buf), "%lld", (long long)time(NULL));
+    } else {
+        timestamp_buf[0] = '\0';
+    }
+
+    CoolStrBuf sb;
+    sb_init(&sb);
+    if (g_logging_format) {
+        const char* p = g_logging_format;
+        while (*p) {
+            if (strncmp(p, "{timestamp}", 11) == 0) {
+                sb_push_str(&sb, timestamp_buf);
+                p += 11;
+            } else if (strncmp(p, "{level}", 7) == 0) {
+                sb_push_str(&sb, level_name);
+                p += 7;
+            } else if (strncmp(p, "{name}", 6) == 0) {
+                sb_push_str(&sb, name);
+                p += 6;
+            } else if (strncmp(p, "{message}", 9) == 0) {
+                sb_push_str(&sb, message);
+                p += 9;
+            } else {
+                sb_push_char(&sb, *p);
+                p++;
+            }
+        }
+        return sb.data;
+    }
+
+    if (g_logging_timestamp) {
+        sb_push_str(&sb, timestamp_buf);
+        sb_push_char(&sb, ' ');
+    }
+    sb_push_char(&sb, '[');
+    sb_push_str(&sb, level_name);
+    sb_push_str(&sb, "] ");
+    if (name[0]) {
+        sb_push_str(&sb, name);
+        sb_push_str(&sb, ": ");
+    }
+    sb_push_str(&sb, message);
+    return sb.data;
+}
+
+static CoolVal cool_logging_emit(int level, const char* message, const char* logger_name) {
+    if (level < g_logging_level) return cv_nil();
+
+    char* line = cool_logging_render_line(level, message, logger_name);
+    if (g_logging_stdout) {
+        fprintf(stdout, "%s\n", line);
+        fflush(stdout);
+    }
+    if (g_logging_file) {
+        const char* mode = g_logging_file_needs_reset ? "w" : "a";
+        FILE* fp = fopen(g_logging_file, mode);
+        if (!fp) {
+            cool_logging_raisef("logging file error for '%s': %s", g_logging_file, strerror(errno));
+        }
+        fprintf(fp, "%s\n", line);
+        fclose(fp);
+        g_logging_file_needs_reset = 0;
+    }
+    free(line);
+    return cv_nil();
+}
+
+enum {
     FFI_T_VOID = 0,
     FFI_T_I8,
     FFI_T_I16,
@@ -3772,6 +4035,31 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
         if (strcmp(name, "help") == 0 && nargs == 1) {
             return cool_argparse_help(args[0]);
+        }
+    }
+
+    if (strcmp(module, "logging") == 0) {
+        if (strcmp(name, "basic_config") == 0 && nargs <= 1) {
+            cool_logging_apply_config(nargs == 1 ? args[0] : cv_nil());
+            return cv_nil();
+        }
+        if (strcmp(name, "log") == 0 && (nargs == 2 || nargs == 3)) {
+            if (args[0].tag != TAG_STR) {
+                cool_logging_raisef("logging.log() level must be a string, got %s", cool_to_str(args[0]));
+            }
+            return cool_logging_emit(
+                cool_logging_parse_level((const char*)(intptr_t)args[0].payload),
+                cool_to_str(args[1]),
+                nargs == 3 ? cool_to_str(args[2]) : NULL
+            );
+        }
+        if ((strcmp(name, "debug") == 0 || strcmp(name, "info") == 0 || strcmp(name, "warning") == 0 ||
+             strcmp(name, "warn") == 0 || strcmp(name, "error") == 0) && (nargs == 1 || nargs == 2)) {
+            int level = COOL_LOG_INFO;
+            if (strcmp(name, "debug") == 0) level = COOL_LOG_DEBUG;
+            else if (strcmp(name, "warning") == 0 || strcmp(name, "warn") == 0) level = COOL_LOG_WARNING;
+            else if (strcmp(name, "error") == 0) level = COOL_LOG_ERROR;
+            return cool_logging_emit(level, cool_to_str(args[0]), nargs == 2 ? cool_to_str(args[1]) : NULL);
         }
     }
 
@@ -5377,7 +5665,11 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_store(seq_ptr, seq).unwrap();
                 for (i, name) in names.iter().enumerate() {
                     let idx_val = self.build_int(i as i64);
-                    let seq_cur = self.builder.build_load(self.cv_type, seq_ptr, "unpack_seq").unwrap().into_struct_value();
+                    let seq_cur = self
+                        .builder
+                        .build_load(self.cv_type, seq_ptr, "unpack_seq")
+                        .unwrap()
+                        .into_struct_value();
                     let elem = self.call_binop_fn(self.rt.cool_index, seq_cur, idx_val, "unpack_elem");
                     let ptr = if let Some(&p) = self.locals.get(name) {
                         p
@@ -5399,7 +5691,12 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             // ── try / except / else / finally ────────────────────────────────
-            Stmt::Try { body, handlers, else_body, finally_body } => {
+            Stmt::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
                 self.compile_try(body, handlers, else_body.as_deref(), finally_body.as_deref())?;
             }
 
@@ -5710,9 +6007,7 @@ impl<'ctx> Compiler<'ctx> {
         for stmt in body {
             match stmt {
                 Stmt::FnDef {
-                    name: mname,
-                    params,
-                    ..
+                    name: mname, params, ..
                 } => {
                     if mname == "__init__" {
                         has_init = true;
@@ -5850,7 +6145,10 @@ impl<'ctx> Compiler<'ctx> {
             self.builder
                 .build_call(
                     self.rt.cool_register_class_parent,
-                    &[name_ptr.as_pointer_value().into(), parent_name_ptr.as_pointer_value().into()],
+                    &[
+                        name_ptr.as_pointer_value().into(),
+                        parent_name_ptr.as_pointer_value().into(),
+                    ],
                     "register_class_parent",
                 )
                 .unwrap();
@@ -5864,11 +6162,7 @@ impl<'ctx> Compiler<'ctx> {
         let method_data_size_val = self.build_int(method_data_size);
         let method_data_ptr = self
             .builder
-            .build_call(
-                self.rt.cool_malloc,
-                &[method_data_size_val.into()],
-                "method_data_ptr",
-            )
+            .build_call(self.rt.cool_malloc, &[method_data_size_val.into()], "method_data_ptr")
             .unwrap()
             .try_as_basic_value()
             .left()
@@ -6269,7 +6563,8 @@ impl<'ctx> Compiler<'ctx> {
                 let next_bb = if idx + 1 == handlers.len() {
                     no_match_bb
                 } else {
-                    self.context.append_basic_block(fn_val, &format!("handler_check_{}", idx + 1))
+                    self.context
+                        .append_basic_block(fn_val, &format!("handler_check_{}", idx + 1))
                 };
                 let exc_cur = self
                     .builder
@@ -6436,7 +6731,11 @@ impl<'ctx> Compiler<'ctx> {
         for (i, cv) in compiled.iter().enumerate() {
             let idx_val = i32t.const_int(i as u64, false);
             self.builder
-                .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), (*cv).into()], "set_global_arg")
+                .build_call(
+                    self.rt.cool_set_global_arg,
+                    &[idx_val.into(), (*cv).into()],
+                    "set_global_arg",
+                )
                 .unwrap();
         }
         Ok(self
@@ -6450,25 +6749,18 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn compile_module_function(&mut self, module_path: &Path) -> Result<ModuleInfo<'ctx>, String> {
-        let canonical_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canonical_path = module_path.canonicalize().unwrap_or_else(|_| module_path.to_path_buf());
         if let Some(info) = self.compiled_modules.get(&canonical_path) {
             return Ok(info.clone());
         }
         if self.compiling_modules.contains(&canonical_path) {
-            return Err(format!(
-                "circular import detected for '{}'",
-                canonical_path.display()
-            ));
+            return Err(format!("circular import detected for '{}'", canonical_path.display()));
         }
 
         let source = std::fs::read_to_string(&canonical_path)
             .map_err(|e| format!("import {}: {}", canonical_path.display(), e))?;
         let mut lexer = crate::lexer::Lexer::new(&source);
-        let tokens = lexer
-            .tokenize()
-            .map_err(|e| format!("import parse error: {}", e))?;
+        let tokens = lexer.tokenize().map_err(|e| format!("import parse error: {}", e))?;
         let mut parser = crate::parser::Parser::new(tokens);
         let program = parser
             .parse_program()
@@ -6478,7 +6770,9 @@ impl<'ctx> Compiler<'ctx> {
 
         let init_base = format!("__module_init_{}", self.fresh_name());
         let init_name = self.mangle_global_name(&init_base);
-        let init_fn = self.module.add_function(&init_name, self.cv_type.fn_type(&[], false), None);
+        let init_fn = self
+            .module
+            .add_function(&init_name, self.cv_type.fn_type(&[], false), None);
 
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
@@ -6499,10 +6793,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let entry = self.context.append_basic_block(init_fn, "entry");
         self.builder.position_at_end(entry);
-        self.current_source_dir = canonical_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        self.current_source_dir = canonical_path.parent().unwrap_or(Path::new(".")).to_path_buf();
         self.allow_toplevel_defs = true;
 
         let compile_result = (|| -> Result<ModuleInfo<'ctx>, String> {
@@ -6524,7 +6815,11 @@ impl<'ctx> Compiler<'ctx> {
                 for export in &exports {
                     let value = self
                         .builder
-                        .build_load(self.cv_type, *self.locals.get(export).expect("module export local missing"), export)
+                        .build_load(
+                            self.cv_type,
+                            *self.locals.get(export).expect("module export local missing"),
+                            export,
+                        )
                         .unwrap()
                         .into_struct_value();
                     let name_ptr = self
@@ -6572,8 +6867,7 @@ impl<'ctx> Compiler<'ctx> {
         self.compiling_modules.pop();
 
         let info = compile_result?;
-        self.compiled_modules
-            .insert(canonical_path, info.clone());
+        self.compiled_modules.insert(canonical_path, info.clone());
         Ok(info)
     }
 
@@ -6631,7 +6925,8 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "subprocess" | "argparse" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
+            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "time" | "random" | "json" | "string"
+            | "list" | "re" | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -6661,8 +6956,7 @@ impl<'ctx> Compiler<'ctx> {
                     p
                 };
                 self.builder.build_store(ptr, namespace).unwrap();
-                self.imported_user_modules
-                    .insert(binding_name.to_string(), module_path);
+                self.imported_user_modules.insert(binding_name.to_string(), module_path);
                 Ok(())
             }
         }
@@ -6879,27 +7173,33 @@ impl<'ctx> Compiler<'ctx> {
                 // Store each local's current value to globals that the lambda can access
                 let i32t = self.context.i32_type();
                 for (i, (_, ptr)) in self.locals.iter().enumerate() {
-                    let val = self.builder.build_load(self.cv_type, *ptr, "capture_load").unwrap().into_struct_value();
+                    let val = self
+                        .builder
+                        .build_load(self.cv_type, *ptr, "capture_load")
+                        .unwrap()
+                        .into_struct_value();
                     let idx_val = i32t.const_int(i as u64, false);
-                    self.builder.build_call(
-                        self.rt.cool_set_closure_capture,
-                        &[idx_val.into(), val.into()],
-                        "set_capture",
-                    ).unwrap();
+                    self.builder
+                        .build_call(
+                            self.rt.cool_set_closure_capture,
+                            &[idx_val.into(), val.into()],
+                            "set_capture",
+                        )
+                        .unwrap();
                 }
 
                 // Get function pointer as i64 using pointer-to-int cast
                 let fn_ptr_val = lambda_fn.as_global_value().as_pointer_value();
-                let fn_ptr_int = self.builder.build_ptr_to_int(
-                    fn_ptr_val,
-                    self.context.i64_type(),
-                    "fn_ptr_int"
-                ).unwrap();
-                
+                let fn_ptr_int = self
+                    .builder
+                    .build_ptr_to_int(fn_ptr_val, self.context.i64_type(), "fn_ptr_int")
+                    .unwrap();
+
                 // Create null pointer for captures array (we use global storage instead)
                 let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
-                
-                let closure = self.builder
+
+                let closure = self
+                    .builder
                     .build_call(
                         self.rt.cool_closure_new,
                         &[fn_ptr_int.into(), captures_i64.into(), null_ptr.into()],
@@ -6912,11 +7212,8 @@ impl<'ctx> Compiler<'ctx> {
                     .into_struct_value();
 
                 // Store this closure's function for later compilation
-                self.nested_functions.push((
-                    fn_name.clone(),
-                    params.clone(),
-                    vec![Stmt::Return(Some(*body.clone()))],
-                ));
+                self.nested_functions
+                    .push((fn_name.clone(), params.clone(), vec![Stmt::Return(Some(*body.clone()))]));
 
                 // We'll compile nested functions at the end. For now, return the closure.
                 // Note: We need to register the function for later compilation.
@@ -6925,7 +7222,11 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(closure)
             }
 
-            Expr::Ternary { condition, then_expr, else_expr } => {
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let fn_val = self.current_fn.unwrap();
                 let then_bb = self.context.append_basic_block(fn_val, "tern_then");
                 let else_bb = self.context.append_basic_block(fn_val, "tern_else");
@@ -6951,7 +7252,12 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(phi.as_basic_value().into_struct_value())
             }
 
-            Expr::ListComp { expr, var, iter, condition } => {
+            Expr::ListComp {
+                expr,
+                var,
+                iter,
+                condition,
+            } => {
                 let fn_val = self.current_fn.unwrap();
 
                 // Allocate result list
@@ -6978,7 +7284,11 @@ impl<'ctx> Compiler<'ctx> {
 
                 // Condition: idx < len
                 self.builder.position_at_end(cond_bb);
-                let idx_cv = self.builder.build_load(self.cv_type, idx_ptr, "lc_idx_load").unwrap().into_struct_value();
+                let idx_cv = self
+                    .builder
+                    .build_load(self.cv_type, idx_ptr, "lc_idx_load")
+                    .unwrap()
+                    .into_struct_value();
                 let len_cv = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "lc_len");
                 let lt = self.call_binop_fn(self.rt.cool_lt, idx_cv, len_cv, "lc_lt");
                 let i1 = self.truthy_i1(lt);
@@ -6997,7 +7307,11 @@ impl<'ctx> Compiler<'ctx> {
                     self.builder.build_conditional_branch(ci1, push_bb, skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                     // Increment idx and loop back
-                    let old_idx = self.builder.build_load(self.cv_type, idx_ptr, "lc_skip_idx").unwrap().into_struct_value();
+                    let old_idx = self
+                        .builder
+                        .build_load(self.cv_type, idx_ptr, "lc_skip_idx")
+                        .unwrap()
+                        .into_struct_value();
                     let one_skip = self.build_int(1);
                     let new_idx = self.call_binop_fn(self.rt.cool_add, old_idx, one_skip, "lc_inc");
                     self.builder.build_store(idx_ptr, new_idx).unwrap();
@@ -7010,16 +7324,27 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.position_at_end(push_bb);
                 let push_elem = if condition.is_some() {
                     // re-load var (it was stored before the filter branch)
-                    self.builder.build_load(self.cv_type, var_ptr, "lc_var").unwrap().into_struct_value();
+                    self.builder
+                        .build_load(self.cv_type, var_ptr, "lc_var")
+                        .unwrap()
+                        .into_struct_value();
                     self.compile_expr(expr)?
                 } else {
                     self.compile_expr(expr)?
                 };
-                let result_cv = self.builder.build_load(self.cv_type, result_ptr, "lc_res_load").unwrap().into_struct_value();
+                let result_cv = self
+                    .builder
+                    .build_load(self.cv_type, result_ptr, "lc_res_load")
+                    .unwrap()
+                    .into_struct_value();
                 self.call_binop_fn(self.rt.cool_list_push, result_cv, push_elem, "lc_push");
 
                 // Increment idx
-                let old_idx2 = self.builder.build_load(self.cv_type, idx_ptr, "lc_old_idx").unwrap().into_struct_value();
+                let old_idx2 = self
+                    .builder
+                    .build_load(self.cv_type, idx_ptr, "lc_old_idx")
+                    .unwrap()
+                    .into_struct_value();
                 let one_inc = self.build_int(1);
                 let new_idx2 = self.call_binop_fn(self.rt.cool_add, old_idx2, one_inc, "lc_inc2");
                 self.builder.build_store(idx_ptr, new_idx2).unwrap();
@@ -7029,11 +7354,19 @@ impl<'ctx> Compiler<'ctx> {
 
                 // Restore shadowed variable if any
                 match saved_var {
-                    Some(ptr) => { self.locals.insert(var.clone(), ptr); }
-                    None => { self.locals.remove(var); }
+                    Some(ptr) => {
+                        self.locals.insert(var.clone(), ptr);
+                    }
+                    None => {
+                        self.locals.remove(var);
+                    }
                 }
 
-                Ok(self.builder.build_load(self.cv_type, result_ptr, "lc_final").unwrap().into_struct_value())
+                Ok(self
+                    .builder
+                    .build_load(self.cv_type, result_ptr, "lc_final")
+                    .unwrap()
+                    .into_struct_value())
             }
 
             // tuple literal: (a, b, c)
@@ -7049,7 +7382,8 @@ impl<'ctx> Compiler<'ctx> {
 
             // dict literal: {k: v, ...}
             Expr::Dict(pairs) => {
-                let dict_val = self.builder
+                let dict_val = self
+                    .builder
                     .build_call(self.rt.cool_dict_new, &[], "dict")
                     .unwrap()
                     .try_as_basic_value()
@@ -7061,13 +7395,20 @@ impl<'ctx> Compiler<'ctx> {
                 for (k_expr, v_expr) in pairs {
                     let k_val = self.compile_expr(k_expr)?;
                     let v_val = self.compile_expr(v_expr)?;
-                    let cur = self.builder.build_load(self.cv_type, dict_ptr, "dict_cur").unwrap().into_struct_value();
+                    let cur = self
+                        .builder
+                        .build_load(self.cv_type, dict_ptr, "dict_cur")
+                        .unwrap()
+                        .into_struct_value();
                     let updated = self.call_triop_fn(self.rt.cool_setindex, cur, k_val, v_val, "dict_set");
                     self.builder.build_store(dict_ptr, updated).unwrap();
                 }
-                Ok(self.builder.build_load(self.cv_type, dict_ptr, "dict_final").unwrap().into_struct_value())
+                Ok(self
+                    .builder
+                    .build_load(self.cv_type, dict_ptr, "dict_final")
+                    .unwrap()
+                    .into_struct_value())
             }
-
         }
     }
 
@@ -7284,11 +7625,7 @@ impl<'ctx> Compiler<'ctx> {
                 if let Some(module_path) = self.imported_user_modules.get(module_name).cloned() {
                     if let Some(module_info) = self.compiled_modules.get(&module_path).cloned() {
                         if let Some(&fn_val) = module_info.functions.get(member) {
-                            let params = module_info
-                                .function_params
-                                .get(member)
-                                .cloned()
-                                .unwrap_or_default();
+                            let params = module_info.function_params.get(member).cloned().unwrap_or_default();
                             let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
                             return Ok(self.call_fn_with_struct_args(fn_val, &compiled, "module_fn_call"));
                         }
@@ -7311,20 +7648,35 @@ impl<'ctx> Compiler<'ctx> {
             name: method_name,
         } = callee
         {
-            if let Expr::Call { callee, args: super_args, kwargs: super_kwargs } = object.as_ref() {
-                if matches!(callee.as_ref(), Expr::Ident(name) if name == "super") && super_args.is_empty() && super_kwargs.is_empty() {
+            if let Expr::Call {
+                callee,
+                args: super_args,
+                kwargs: super_kwargs,
+            } = object.as_ref()
+            {
+                if matches!(callee.as_ref(), Expr::Ident(name) if name == "super")
+                    && super_args.is_empty()
+                    && super_kwargs.is_empty()
+                {
                     let current_class = self.current_class.clone().ok_or("super() used outside method")?;
                     let parent_name = self
                         .classes
                         .get(&current_class)
                         .and_then(|c| c.parent.clone())
                         .ok_or("super(): class has no parent")?;
-                    let parent_info = self.classes.get(&parent_name).ok_or("super(): missing parent metadata")?;
+                    let parent_info = self
+                        .classes
+                        .get(&parent_name)
+                        .ok_or("super(): missing parent metadata")?;
                     let parent_method = *parent_info
                         .methods
                         .get(method_name)
                         .ok_or_else(|| format!("super(): parent has no method '{method_name}'"))?;
-                    let self_ptr = self.locals.get("self").copied().ok_or("super() called outside of a method")?;
+                    let self_ptr = self
+                        .locals
+                        .get("self")
+                        .copied()
+                        .ok_or("super() called outside of a method")?;
                     let self_val = self
                         .builder
                         .build_load(self.cv_type, self_ptr, "super_self")
@@ -7345,8 +7697,11 @@ impl<'ctx> Compiler<'ctx> {
             // Call method - the runtime looks up the method from the class structure
             let i32t = self.context.i32_type();
             let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
-            let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-                vec![obj_val.into(), attr_name_ptr.as_pointer_value().into(), nargs_i32.into()];
+            let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                obj_val.into(),
+                attr_name_ptr.as_pointer_value().into(),
+                nargs_i32.into(),
+            ];
             for arg in args {
                 call_args.push(self.compile_expr(arg)?.into());
             }
@@ -7382,10 +7737,12 @@ impl<'ctx> Compiler<'ctx> {
                     return Ok(self.call_fn_with_struct_args(fn_val, &compiled, "call"));
                 }
                 // Otherwise, load the variable (might be a closure stored in a local)
-                self.locals.get(n).copied()
-                    .map(|ptr| {
-                        self.builder.build_load(self.cv_type, ptr, n).unwrap().into_struct_value()
-                    })
+                self.locals.get(n).copied().map(|ptr| {
+                    self.builder
+                        .build_load(self.cv_type, ptr, n)
+                        .unwrap()
+                        .into_struct_value()
+                })
             }
             Expr::Attr { object: _, name: _ } => {
                 // Method calls are handled above, but for closures we might get here
@@ -7399,14 +7756,16 @@ impl<'ctx> Compiler<'ctx> {
 
         // If we have a closure value, call it via the runtime
         if let Some(cv) = closure_val {
-            let is_closure = self.builder
+            let is_closure = self
+                .builder
                 .build_call(self.rt.cool_is_closure, &[cv.into()], "is_closure")
                 .unwrap()
                 .try_as_basic_value()
                 .left()
                 .unwrap()
                 .into_int_value();
-            let is_ffi = self.builder
+            let is_ffi = self
+                .builder
                 .build_call(self.rt.cool_is_ffi_func, &[cv.into()], "is_ffi_func")
                 .unwrap()
                 .try_as_basic_value()
@@ -7480,15 +7839,14 @@ impl<'ctx> Compiler<'ctx> {
             for (i, arg) in args.iter().enumerate() {
                 let cv = self.compile_expr(arg)?;
                 let idx_val = i32t.const_int(i as u64, false);
-                self.builder.build_call(
-                    self.rt.cool_set_global_arg,
-                    &[idx_val.into(), cv.into()],
-                    "set_arg",
-                ).unwrap();
+                self.builder
+                    .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), cv.into()], "set_arg")
+                    .unwrap();
             }
 
             // Get function pointer from closure
-            let fn_ptr = self.builder
+            let fn_ptr = self
+                .builder
                 .build_call(self.rt.cool_closure_get_fn_ptr, &[cv.into()], "get_fn_ptr")
                 .unwrap()
                 .try_as_basic_value()
@@ -7502,7 +7860,8 @@ impl<'ctx> Compiler<'ctx> {
             for arg in args {
                 closure_call_args.push(self.compile_expr(arg)?.into());
             }
-            let closure_result = self.builder
+            let closure_result = self
+                .builder
                 .build_call(self.rt.cool_call_fn_ptr, &closure_call_args, "call_closure")
                 .unwrap()
                 .try_as_basic_value()
@@ -7888,10 +8247,7 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
 
     let context = Context::create();
     let mut compiler = Compiler::new(&context);
-    compiler.current_source_dir = script_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    compiler.current_source_dir = script_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     // ── Pass 1: forward-declare all top-level functions ──────────────────────
     compiler.declare_top_level_functions(program)?;

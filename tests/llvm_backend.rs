@@ -11,21 +11,13 @@ fn cool_bin() -> &'static str {
 }
 
 fn unique_test_path(stem: &str, ext: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     PathBuf::from(format!("{stem}_{nonce}.{ext}"))
 }
 
 fn unique_temp_dir(stem: &str) -> PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::current_dir()
-        .unwrap()
-        .join(format!("{stem}_{nonce}"))
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    std::env::current_dir().unwrap().join(format!("{stem}_{nonce}"))
 }
 
 fn cleanup_native_artifacts(source_path: &PathBuf, binary_path: &PathBuf) {
@@ -94,9 +86,7 @@ fn compile_and_run_native_path(source_path: &PathBuf) -> Result<String, String> 
         return Err(format!("{stdout}{stderr}"));
     }
 
-    let run_output = Command::new(&binary_path)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let run_output = Command::new(&binary_path).output().map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&binary_path);
 
     if run_output.status.success() {
@@ -175,6 +165,16 @@ fn compile_and_run_native_manual(source: &str, envs: &[(&str, &str)]) -> Result<
     } else {
         Err(String::from_utf8_lossy(&run_output.stderr).to_string())
     }
+}
+
+fn assert_logging_file_output(contents: &str) {
+    let lines: Vec<&str> = contents.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].chars().next().unwrap_or_default().is_ascii_digit());
+    assert!(lines[0].contains("|INFO|demo|shown"));
+    assert!(lines[1].contains("|WARNING|demo|warned"));
+    assert!(lines[2].contains("|ERROR|demo|boom"));
+    assert!(!contents.contains("hidden"));
 }
 
 #[test]
@@ -395,6 +395,30 @@ print(argparse.help(spec))
 }
 
 #[test]
+fn test_llvm_import_logging_module() {
+    let cwd = std::env::current_dir().unwrap();
+    let log_path = cwd.join(unique_test_path("temp_llvm_logging_module", "log"));
+    let source = format!(
+        r#"
+import logging
+logging.basic_config({{"level": "INFO", "format": "{{timestamp}}|{{level}}|{{name}}|{{message}}", "stdout": false, "file": "{file}", "append": false}})
+logging.debug("hidden", "demo")
+logging.info("shown", "demo")
+logging.warning("warned", "demo")
+logging.error("boom", "demo")
+"#,
+        file = log_path.display()
+    );
+
+    let result = compile_and_run_native(&source).unwrap();
+    let contents = fs::read_to_string(&log_path).unwrap();
+    let _ = fs::remove_file(&log_path);
+
+    assert!(result.trim().is_empty());
+    assert_logging_file_output(&contents);
+}
+
+#[test]
 fn test_llvm_argparse_uses_process_args_by_default() {
     let result = compile_and_run_native_with_env(
         r#"
@@ -563,7 +587,12 @@ print(list.unique([1, 1, 2, 2, 3]))
     assert!(result.contains("<module list>"));
     assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
     assert!(result.contains("[2, 1, 3]") || result.contains("[2,1,3]"));
-    assert!(result.contains("[6, 2, 4]") || result.contains("[6,2,4]") || result.contains("[2, 6, 4]") || result.contains("[2,6,4]"));
+    assert!(
+        result.contains("[6, 2, 4]")
+            || result.contains("[6,2,4]")
+            || result.contains("[2, 6, 4]")
+            || result.contains("[2,6,4]")
+    );
     assert!(result.contains("[3, 4]") || result.contains("[3,4]"));
     assert!(result.contains("\n10\n10\n"));
     assert!(result.contains("[1, 2, 3, 4]") || result.contains("[1,2,3,4]"));
@@ -882,7 +911,10 @@ with C("outer"):
     .unwrap();
 
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
-    assert_eq!(lines, ["enter outer", "enter inner", "exit inner", "after", "exit outer"]);
+    assert_eq!(
+        lines,
+        ["enter outer", "enter inner", "exit inner", "after", "exit outer"]
+    );
 }
 
 #[test]

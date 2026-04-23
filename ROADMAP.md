@@ -203,7 +203,7 @@
 #### Parsing, Language, And Tooling
 
 - [x] `argparse` module — command-line flag parsing, positional args, and help generation
-- [ ] `logging` module — leveled logs, timestamps, formatters, and file/stdout handlers
+- [x] `logging` module — leveled logs, timestamps, formatters, and file/stdout handlers
 - [ ] `doc` module — markdown, manpage, and HTML document generation helpers
 - [ ] `template` module — string/file templating with variables, loops, and partials
 - [ ] `parser` module — parser combinators and token-stream helpers for DSLs
@@ -316,7 +316,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import subprocess` / `import argparse` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import subprocess` / `import argparse` / `import logging` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -388,7 +388,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `path` module — path normalization, basename/dirname, extension helpers, splitting, and joins
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
-- [ ] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
+- [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
 - [ ] `csv` / `toml` / `yaml` / `datetime` / `hashlib` / `sqlite` / `socket` / `http` as the first practical application stack
 
 ### Packaging And Developer Tooling

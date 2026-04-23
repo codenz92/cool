@@ -9,10 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn unique_temp_path(stem: &str, ext: &str) -> std::path::PathBuf {
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let seq = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("{stem}_{nonce}_{seq}.{ext}"))
 }
@@ -33,11 +30,7 @@ fn run_cool_vm(source: &str) -> Result<String, String> {
     run_cool_with_args(source, &["--vm"])
 }
 
-fn run_cool_with_args_and_env(
-    source: &str,
-    extra_args: &[&str],
-    envs: &[(&str, &str)],
-) -> Result<String, String> {
+fn run_cool_with_args_and_env(source: &str, extra_args: &[&str], envs: &[(&str, &str)]) -> Result<String, String> {
     let temp = unique_temp_path("temp_cool_test", "cool");
     let mut file = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(source.as_bytes()).map_err(|e| e.to_string())?;
@@ -153,6 +146,16 @@ fn run_cool_with_pty_input(path: &str, extra_args: &[&str], input: &[u8]) -> Res
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     Ok((stdout, stderr, output.status.code().unwrap_or(-1)))
+}
+
+fn assert_logging_file_output(contents: &str) {
+    let lines: Vec<&str> = contents.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines.len(), 3);
+    assert!(lines[0].chars().next().unwrap_or_default().is_ascii_digit());
+    assert!(lines[0].contains("|INFO|demo|shown"));
+    assert!(lines[1].contains("|WARNING|demo|warned"));
+    assert!(lines[2].contains("|ERROR|demo|boom"));
+    assert!(!contents.contains("hidden"));
 }
 
 #[test]
@@ -318,7 +321,8 @@ fn test_import() {
 
 #[test]
 fn test_vm_import_math_module() {
-    let result = run_cool_vm("import math\nprint(math.round(3.5))\nprint(math.round(3.14159, 2))\nprint(math.abs(-7))").unwrap();
+    let result =
+        run_cool_vm("import math\nprint(math.round(3.5))\nprint(math.round(3.14159, 2))\nprint(math.abs(-7))").unwrap();
     assert!(result.contains("4"));
     assert!(result.contains("3.14"));
     assert!(result.contains("7"));
@@ -459,13 +463,15 @@ fn test_vm_argparse_uses_process_args_by_default() {
 
 #[test]
 fn test_import_random_choice_tuple() {
-    let result = run_cool("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
+    let result =
+        run_cool("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
     assert!(result.contains("true"));
 }
 
 #[test]
 fn test_vm_import_random_choice_tuple() {
-    let result = run_cool_vm("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
+    let result =
+        run_cool_vm("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
     assert!(result.contains("true"));
 }
 
@@ -541,6 +547,38 @@ fn test_vm_import_os_module() {
 }
 
 #[test]
+fn test_import_logging_module() {
+    let log_path = unique_temp_path("cool_logging_module_test", "log");
+    let source = format!(
+        "import logging\nlogging.basic_config({{\"level\": \"INFO\", \"format\": \"{{timestamp}}|{{level}}|{{name}}|{{message}}\", \"stdout\": false, \"file\": \"{file}\", \"append\": false}})\nlogging.debug(\"hidden\", \"demo\")\nlogging.info(\"shown\", \"demo\")\nlogging.warn(\"warned\", \"demo\")\nlogging.error(\"boom\", \"demo\")\n",
+        file = log_path.display()
+    );
+
+    let result = run_cool(&source).unwrap();
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    let _ = std::fs::remove_file(&log_path);
+
+    assert!(result.trim().is_empty());
+    assert_logging_file_output(&contents);
+}
+
+#[test]
+fn test_vm_import_logging_module() {
+    let log_path = unique_temp_path("cool_vm_logging_module_test", "log");
+    let source = format!(
+        "import logging\nlogging.basic_config({{\"level\": \"INFO\", \"format\": \"{{timestamp}}|{{level}}|{{name}}|{{message}}\", \"stdout\": false, \"file\": \"{file}\", \"append\": false}})\nlogging.debug(\"hidden\", \"demo\")\nlogging.info(\"shown\", \"demo\")\nlogging.warning(\"warned\", \"demo\")\nlogging.error(\"boom\", \"demo\")\n",
+        file = log_path.display()
+    );
+
+    let result = run_cool_vm(&source).unwrap();
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    let _ = std::fs::remove_file(&log_path);
+
+    assert!(result.trim().is_empty());
+    assert_logging_file_output(&contents);
+}
+
+#[test]
 fn test_import_path_module() {
     let file_path = unique_temp_path("cool_path_module_test", "txt");
     std::fs::write(&file_path, "ok").unwrap();
@@ -586,10 +624,9 @@ fn test_vm_import_path_module() {
 
 #[test]
 fn test_vm_import_list_module() {
-    let result = run_cool_vm(
-        "import list\nnums = [3, 1, 2]\nprint(list.sort(nums))\nprint(list.unique([1, 1, 2, 2, 3]))",
-    )
-    .unwrap();
+    let result =
+        run_cool_vm("import list\nnums = [3, 1, 2]\nprint(list.sort(nums))\nprint(list.unique([1, 1, 2, 2, 3]))")
+            .unwrap();
     assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
     assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
 }
@@ -694,7 +731,10 @@ fn test_vm_with_context_manager_break_only_cleans_exited_scope() {
     )
     .unwrap();
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
-    assert_eq!(lines, ["enter outer", "enter inner", "exit inner", "after", "exit outer"]);
+    assert_eq!(
+        lines,
+        ["enter outer", "enter inner", "exit inner", "after", "exit outer"]
+    );
 }
 
 #[test]
@@ -729,10 +769,7 @@ fn test_vm_import_dotted_module_package_path() {
 
 #[test]
 fn test_self_hosted_compiler_suite_runs() {
-    let output = Command::new(cool_bin())
-        .arg("coolc/compiler_vm.cool")
-        .output()
-        .unwrap();
+    let output = Command::new(cool_bin()).arg("coolc/compiler_vm.cool").output().unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -818,7 +855,11 @@ fn test_runfile_passes_program_args() {
     std::fs::create_dir_all(&temp_dir).unwrap();
     let child_path = temp_dir.join("child.cool");
     let main_path = temp_dir.join("main.cool");
-    std::fs::write(&child_path, "import sys\nprint(sys.argv[0])\nprint(sys.argv[1])\nprint(sys.argv[2])\n").unwrap();
+    std::fs::write(
+        &child_path,
+        "import sys\nprint(sys.argv[0])\nprint(sys.argv[1])\nprint(sys.argv[2])\n",
+    )
+    .unwrap();
     std::fs::write(
         &main_path,
         format!("runfile(\"{}\", [\"one\", \"two\"])\n", child_path.display()),
@@ -862,7 +903,11 @@ fn test_shell_source_and_pipe() {
     std::fs::write(&script_path, "echo sourced\n").unwrap();
     std::fs::write(&pipe_path, "echo alpha\necho beta\n").unwrap();
 
-    let input = format!("source {}\ncat {} | grep beta\nexit\n", script_path.display(), pipe_path.display());
+    let input = format!(
+        "source {}\ncat {} | grep beta\nexit\n",
+        script_path.display(),
+        pipe_path.display()
+    );
     let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], &input).unwrap();
 
     let _ = std::fs::remove_dir_all(&temp_dir);

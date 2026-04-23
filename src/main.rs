@@ -4,6 +4,7 @@ mod compiler;
 mod interpreter;
 mod lexer;
 mod llvm_codegen;
+mod logging_runtime;
 mod opcode;
 mod parser;
 mod subprocess_runtime;
@@ -286,14 +287,14 @@ NOTES:
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
     source-relative file imports and project/package imports,
     native import ffi (ffi.open/ffi.func),
-    built-in import math/os/sys/path/subprocess/argparse/time and import random
+    built-in import math/os/sys/path/subprocess/argparse/logging/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
-    (Queue/Stack), subprocess(run/call/check_output), argparse(parse/help), open()/file methods, with/context managers on
+    (Queue/Stack), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error), open()/file methods, with/context managers on
     normal exit, return/break/continue, caught exceptions, and unhandled native raises,
     inline asm, and raw memory.
     Closures/lambdas still require the interpreter or bytecode VM.

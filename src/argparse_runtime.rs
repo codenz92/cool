@@ -179,7 +179,11 @@ impl ParserSpec {
             }
             let arg_type = ArgType::from_spec(dict_get(&item, "type"))?;
             let default = match dict_get(&item, "default") {
-                Some(value) => Some(normalize_default_value(&arg_type, value, &format!("argparse positional '{}'", name))?),
+                Some(value) => Some(normalize_default_value(
+                    &arg_type,
+                    value,
+                    &format!("argparse positional '{}'", name),
+                )?),
                 None => None,
             };
             let required = match dict_get(&item, "required") {
@@ -236,7 +240,11 @@ impl ParserSpec {
 
             let arg_type = ArgType::from_spec(dict_get(&item, "type"))?;
             let default = match dict_get(&item, "default") {
-                Some(value) => Some(normalize_default_value(&arg_type, value, &format!("argparse option '{}'", name))?),
+                Some(value) => Some(normalize_default_value(
+                    &arg_type,
+                    value,
+                    &format!("argparse option '{}'", name),
+                )?),
                 None => None,
             };
             let required = match dict_get(&item, "required") {
@@ -264,7 +272,9 @@ impl ParserSpec {
 
             let long_flag = normalize_long_flag(match dict_get(&item, "long") {
                 Some(ArgData::Str(s)) if !s.is_empty() => s,
-                Some(ArgData::Str(_)) => return Err(format!("argparse option '{}' field 'long' cannot be empty", name)),
+                Some(ArgData::Str(_)) => {
+                    return Err(format!("argparse option '{}' field 'long' cannot be empty", name))
+                }
                 Some(ArgData::Nil) | None => name.clone(),
                 Some(other) => {
                     return Err(format!(
@@ -287,7 +297,9 @@ impl ParserSpec {
                     }
                     Some(short)
                 }
-                Some(ArgData::Str(_)) => return Err(format!("argparse option '{}' field 'short' cannot be empty", name)),
+                Some(ArgData::Str(_)) => {
+                    return Err(format!("argparse option '{}' field 'short' cannot be empty", name))
+                }
                 Some(ArgData::Nil) | None => None,
                 Some(other) => {
                     return Err(format!(
@@ -369,7 +381,10 @@ impl ParserSpec {
                 let mut cluster_idx = 0;
                 while cluster_idx < chars.len() {
                     let short = format!("-{}", chars[cluster_idx]);
-                    let Some(option) = self.options.iter().find(|opt| opt.short_flag.as_deref() == Some(short.as_str()))
+                    let Some(option) = self
+                        .options
+                        .iter()
+                        .find(|opt| opt.short_flag.as_deref() == Some(short.as_str()))
                     else {
                         return Err(format!("argparse.parse(): unknown option '{}'", short));
                     };
@@ -407,7 +422,11 @@ impl ParserSpec {
         }
 
         for (positional, raw_value) in self.positionals.iter().zip(positional_tokens.iter()) {
-            let value = convert_value(&positional.arg_type, raw_value, &format!("argparse positional '{}'", positional.name))?;
+            let value = convert_value(
+                &positional.arg_type,
+                raw_value,
+                &format!("argparse positional '{}'", positional.name),
+            )?;
             set_dict_entry(&mut out, &positional.name, value);
         }
 
@@ -442,7 +461,11 @@ impl ParserSpec {
         if !option.arg_type.takes_value() {
             if let Some(value) = inline_value {
                 return Ok((
-                    convert_value(&option.arg_type, &value, &format!("argparse option '{}'", option.long_flag))?,
+                    convert_value(
+                        &option.arg_type,
+                        &value,
+                        &format!("argparse option '{}'", option.long_flag),
+                    )?,
                     false,
                 ));
             }
@@ -456,7 +479,11 @@ impl ParserSpec {
 
         if let Some(value) = inline_value {
             return Ok((
-                convert_value(&option.arg_type, &value, &format!("argparse option '{}'", option.long_flag))?,
+                convert_value(
+                    &option.arg_type,
+                    &value,
+                    &format!("argparse option '{}'", option.long_flag),
+                )?,
                 false,
             ));
         }
@@ -469,7 +496,11 @@ impl ParserSpec {
         };
 
         Ok((
-            convert_value(&option.arg_type, next, &format!("argparse option '{}'", option.long_flag))?,
+            convert_value(
+                &option.arg_type,
+                next,
+                &format!("argparse option '{}'", option.long_flag),
+            )?,
             true,
         ))
     }
@@ -638,11 +669,7 @@ fn normalize_default_value(arg_type: &ArgType, value: ArgData, context: &str) ->
         },
         ArgType::Bool => match value {
             ArgData::Bool(_) => Ok(value),
-            other => Err(format!(
-                "{} default must be a bool, got {}",
-                context,
-                other.type_name()
-            )),
+            other => Err(format!("{} default must be a bool, got {}", context, other.type_name())),
         },
     }
 }

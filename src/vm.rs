@@ -1,5 +1,6 @@
 /// Stack-based bytecode VM for Cool.
 use crate::argparse_runtime::{self, ArgData};
+use crate::logging_runtime::{self, LogData, LogLevel};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -41,6 +42,7 @@ pub struct VM {
     /// Lets us close upvalues for any slot when it leaves the stack.
     open_upvalues: Vec<UpvalueCell>,
     importing_modules: Vec<std::path::PathBuf>,
+    logging_state: logging_runtime::LoggingState,
 }
 
 impl VM {
@@ -60,6 +62,7 @@ impl VM {
             rng: if seed == 0 { 1 } else { seed },
             open_upvalues: Vec::new(),
             importing_modules: Vec::new(),
+            logging_state: logging_runtime::LoggingState::default(),
         };
         vm.register_builtins();
         vm
@@ -1517,6 +1520,9 @@ impl VM {
         if let Some(rest) = name.strip_prefix("argparse.") {
             return self.call_argparse_module(rest, args);
         }
+        if let Some(rest) = name.strip_prefix("logging.") {
+            return self.call_logging_module(rest, args);
+        }
         if let Some(rest) = name.strip_prefix("path.") {
             return self.call_path_module(rest, args);
         }
@@ -2654,8 +2660,12 @@ impl VM {
             "replace" => Ok(VmValue::Str(
                 req_str(0, method, args)?.replace(&req_str(1, method, args)?, &req_str(2, method, args)?),
             )),
-            "startswith" => Ok(VmValue::Bool(req_str(0, method, args)?.starts_with(&req_str(1, method, args)?))),
-            "endswith" => Ok(VmValue::Bool(req_str(0, method, args)?.ends_with(&req_str(1, method, args)?))),
+            "startswith" => Ok(VmValue::Bool(
+                req_str(0, method, args)?.starts_with(&req_str(1, method, args)?),
+            )),
+            "endswith" => Ok(VmValue::Bool(
+                req_str(0, method, args)?.ends_with(&req_str(1, method, args)?),
+            )),
             "find" => Ok(VmValue::Int(
                 req_str(0, method, args)?
                     .find(&req_str(1, method, args)?)
@@ -2993,10 +3003,7 @@ impl VM {
                     } else {
                         format!(": {}", result.stderr.trim_end())
                     };
-                    return Err(self.err(&format!(
-                        "subprocess.check_output exited with code {}{}",
-                        code, detail
-                    )));
+                    return Err(self.err(&format!("subprocess.check_output exited with code {}{}", code, detail)));
                 }
                 Ok(VmValue::Str(result.stdout))
             }
@@ -3109,11 +3116,100 @@ impl VM {
                     return Err(self.err("argparse.help() takes exactly one spec dict"));
                 }
                 let spec = self.vm_value_to_arg_data(&args[0])?;
-                let rendered =
-                    argparse_runtime::help(&spec, Some(&argparse_runtime::default_prog_name())).map_err(|e| self.err(&e))?;
+                let rendered = argparse_runtime::help(&spec, Some(&argparse_runtime::default_prog_name()))
+                    .map_err(|e| self.err(&e))?;
                 Ok(VmValue::Str(rendered))
             }
             _ => Err(self.err(&format!("unknown argparse function '{}'", name))),
+        }
+    }
+
+    fn vm_value_to_log_data(&self, value: &VmValue) -> Result<LogData, String> {
+        match value {
+            VmValue::Int(n) => Ok(LogData::Int(*n)),
+            VmValue::Float(f) => Ok(LogData::Float(*f)),
+            VmValue::Str(s) => Ok(LogData::Str(s.clone())),
+            VmValue::Bool(b) => Ok(LogData::Bool(*b)),
+            VmValue::Nil => Ok(LogData::Nil),
+            VmValue::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.vm_value_to_log_data(item)?);
+                }
+                Ok(LogData::List(out))
+            }
+            VmValue::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.vm_value_to_log_data(item)?);
+                }
+                Ok(LogData::Tuple(out))
+            }
+            VmValue::Dict(map) => {
+                let map = map.borrow();
+                let mut out = Vec::with_capacity(map.keys.len());
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    out.push((self.vm_value_to_log_data(key)?, self.vm_value_to_log_data(value)?));
+                }
+                Ok(LogData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "logging only accepts scalar/list/tuple/dict values, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_logging_module(&mut self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "basic_config" => {
+                if args.len() > 1 {
+                    return Err(self.err("logging.basic_config() takes at most one config dict"));
+                }
+                let config = match args.first() {
+                    None => None,
+                    Some(value) => Some(self.vm_value_to_log_data(value)?),
+                };
+                logging_runtime::configure(&mut self.logging_state, config.as_ref()).map_err(|e| self.err(&e))?;
+                Ok(VmValue::Nil)
+            }
+            "log" => {
+                if args.len() < 2 || args.len() > 3 {
+                    return Err(self.err("logging.log() takes a level string, message, and optional logger name"));
+                }
+                let level = match &args[0] {
+                    VmValue::Str(s) => LogLevel::parse(s).map_err(|e| self.err(&e))?,
+                    other => {
+                        return Err(self.err(&format!(
+                            "logging.log() level must be a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let message = args[1].to_string();
+                let logger_name = args.get(2).map(|value| value.to_string());
+                logging_runtime::emit(&mut self.logging_state, level, &message, logger_name.as_deref())
+                    .map_err(|e| self.err(&e))?;
+                Ok(VmValue::Nil)
+            }
+            "debug" | "info" | "warning" | "warn" | "error" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err(&format!("logging.{}() takes a message and optional logger name", name)));
+                }
+                let level = match name {
+                    "debug" => LogLevel::Debug,
+                    "info" => LogLevel::Info,
+                    "warning" | "warn" => LogLevel::Warning,
+                    "error" => LogLevel::Error,
+                    _ => unreachable!(),
+                };
+                let message = args[0].to_string();
+                let logger_name = args.get(1).map(|value| value.to_string());
+                logging_runtime::emit(&mut self.logging_state, level, &message, logger_name.as_deref())
+                    .map_err(|e| self.err(&e))?;
+                Ok(VmValue::Nil)
+            }
+            _ => Err(self.err(&format!("unknown logging function '{}'", name))),
         }
     }
 
@@ -3149,7 +3245,11 @@ impl VM {
         }
         let rendered = out.to_string_lossy().to_string();
         if rendered.is_empty() {
-            if is_abs { "/".to_string() } else { ".".to_string() }
+            if is_abs {
+                "/".to_string()
+            } else {
+                ".".to_string()
+            }
         } else {
             rendered
         }
@@ -3228,7 +3328,10 @@ impl VM {
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                Ok(VmValue::List(Rc::new(RefCell::new(vec![VmValue::Str(dir), VmValue::Str(base)]))))
+                Ok(VmValue::List(Rc::new(RefCell::new(vec![
+                    VmValue::Str(dir),
+                    VmValue::Str(base),
+                ]))))
             }
             "normalize" => {
                 let path = req_path_arg(0, "path.normalize requires a path string")?;
@@ -3488,10 +3591,7 @@ impl VM {
             if path.exists() {
                 let module_path = path.canonicalize().unwrap_or_else(|_| path.clone());
                 if self.importing_modules.contains(&module_path) {
-                    return Err(self.err(&format!(
-                        "circular import detected for '{}'",
-                        module_path.display()
-                    )));
+                    return Err(self.err(&format!("circular import detected for '{}'", module_path.display())));
                 }
                 self.importing_modules.push(module_path);
                 let source = std::fs::read_to_string(path).map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
@@ -3500,8 +3600,7 @@ impl VM {
                 let module_dir = path.parent().unwrap_or(&self.source_dir).to_path_buf();
                 let mut module_vm = VM::new(module_dir);
                 module_vm.importing_modules = self.importing_modules.clone();
-                let builtin_keys: std::collections::HashSet<String> =
-                    module_vm.globals.keys().cloned().collect();
+                let builtin_keys: std::collections::HashSet<String> = module_vm.globals.keys().cloned().collect();
                 let mut lexer = crate::lexer::Lexer::new(&source);
                 let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
                     Ok(tokens) => tokens,
@@ -3623,7 +3722,17 @@ impl VM {
                 set(&mut d, "exit", bf("exit"));
             }
             "path" => {
-                for fname in &["join", "basename", "dirname", "ext", "stem", "split", "normalize", "exists", "isabs"] {
+                for fname in &[
+                    "join",
+                    "basename",
+                    "dirname",
+                    "ext",
+                    "stem",
+                    "split",
+                    "normalize",
+                    "exists",
+                    "isabs",
+                ] {
                     set(&mut d, fname, bf(&format!("path.{}", fname)));
                 }
             }
@@ -3635,6 +3744,11 @@ impl VM {
             "argparse" => {
                 for fname in &["parse", "help"] {
                     set(&mut d, fname, bf(&format!("argparse.{}", fname)));
+                }
+            }
+            "logging" => {
+                for fname in &["basic_config", "log", "debug", "info", "warning", "warn", "error"] {
+                    set(&mut d, fname, bf(&format!("logging.{}", fname)));
                 }
             }
             "time" => {
