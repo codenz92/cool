@@ -148,6 +148,19 @@ fn run_cool_with_pty_input(path: &str, extra_args: &[&str], input: &[u8]) -> Res
     Ok((stdout, stderr, output.status.code().unwrap_or(-1)))
 }
 
+fn run_cool_subcommand_in_dir(cwd: &std::path::Path, args: &[&str]) -> Result<(String, String, i32), String> {
+    let output = Command::new(cool_bin())
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok((
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.code().unwrap_or(-1),
+    ))
+}
+
 fn assert_logging_file_output(contents: &str) {
     let lines: Vec<&str> = contents.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines.len(), 3);
@@ -576,6 +589,92 @@ fn test_vm_import_logging_module() {
 
     assert!(result.trim().is_empty());
     assert_logging_file_output(&contents);
+}
+
+#[test]
+fn test_cool_test_discovers_named_tests() {
+    let temp_dir = unique_temp_dir("cool_test_command_discovery");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("tests").join("nested")).unwrap();
+    std::fs::write(temp_dir.join("tests").join("test_math.cool"), "assert 2 + 2 == 4\n").unwrap();
+    std::fs::write(
+        temp_dir.join("tests").join("nested").join("strings_test.cool"),
+        "assert \"co\" + \"ol\" == \"cool\"\n",
+    )
+    .unwrap();
+    std::fs::write(temp_dir.join("tests").join("helper.cool"), "assert false\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["test"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    assert!(stdout.contains("running 2 Cool test file(s) with interpreter"));
+    assert!(stdout.contains("ok tests/test_math.cool"));
+    assert!(stdout.contains("ok tests/nested/strings_test.cool"));
+    assert!(stdout.contains("test result: ok. 2 passed; 0 failed"));
+    assert!(!stdout.contains("helper.cool"));
+    assert!(stderr.trim().is_empty());
+}
+
+#[test]
+fn test_cool_test_reports_failures() {
+    let temp_dir = unique_temp_dir("cool_test_command_failure");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("tests")).unwrap();
+    std::fs::write(
+        temp_dir.join("tests").join("test_fail.cool"),
+        "assert false, \"boom\"\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["test"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_ne!(code, 0);
+    assert!(stdout.contains("FAILED tests/test_fail.cool"));
+    assert!(stdout.contains("test result: FAILED. 0 passed; 1 failed"));
+    assert!(stderr.contains("AssertionError: boom"));
+    assert!(stderr.contains("cool test: 1 test file(s) failed"));
+}
+
+#[test]
+fn test_cool_test_vm_mode() {
+    let temp_dir = unique_temp_dir("cool_test_command_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("tests")).unwrap();
+    std::fs::write(
+        temp_dir.join("tests").join("test_vm.cool"),
+        "items = [1, 2, 3]\nassert len(items) == 3\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["test", "--vm"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    assert!(stdout.contains("with bytecode VM"));
+    assert!(stdout.contains("ok tests/test_vm.cool"));
+    assert!(stdout.contains("test result: ok. 1 passed; 0 failed"));
+}
+
+#[test]
+fn test_cool_test_compile_mode() {
+    let temp_dir = unique_temp_dir("cool_test_command_compile");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("tests")).unwrap();
+    std::fs::write(
+        temp_dir.join("tests").join("test_native.cool"),
+        "assert sum([1, 2, 3]) == 6\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["test", "--compile"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    assert!(stdout.contains("with native"));
+    assert!(stdout.contains("ok tests/test_native.cool"));
+    assert!(stdout.contains("test result: ok. 1 passed; 0 failed"));
 }
 
 #[test]

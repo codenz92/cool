@@ -15,6 +15,7 @@ use lexer::Lexer;
 use parser::Parser;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // ── Runners ───────────────────────────────────────────────────────────────────
 
@@ -127,6 +128,262 @@ impl CoolProject {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TestMode {
+    Interpreter,
+    Vm,
+    Native,
+}
+
+impl TestMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Interpreter => "interpreter",
+            Self::Vm => "bytecode VM",
+            Self::Native => "native",
+        }
+    }
+}
+
+struct TestFailure {
+    stdout: String,
+    stderr: String,
+}
+
+fn unique_temp_executable_path(stem: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let file_name = if std::env::consts::EXE_EXTENSION.is_empty() {
+        format!("{stem}_{pid}_{nonce}")
+    } else {
+        format!("{stem}_{pid}_{nonce}.{}", std::env::consts::EXE_EXTENSION)
+    };
+    std::env::temp_dir().join(file_name)
+}
+
+fn is_named_test_file(path: &Path) -> bool {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("cool") {
+        return false;
+    }
+    let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or("");
+    stem.starts_with("test_") || stem.ends_with("_test")
+}
+
+fn collect_test_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("cool test: cannot read '{}': {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cool test: cannot read '{}': {e}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_test_files(&path, out)?;
+        } else if is_named_test_file(&path) {
+            out.push(path.canonicalize().unwrap_or(path));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_test_targets(args: &[&String]) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    if args.is_empty() {
+        let tests_dir = Path::new("tests");
+        if !tests_dir.exists() {
+            return Err(
+                "cool test: no tests directory found.\nCreate tests/test_*.cool or pass explicit test files/directories."
+                    .to_string(),
+            );
+        }
+        collect_test_files(tests_dir, &mut files)?;
+    } else {
+        for raw in args {
+            let path = Path::new(raw.as_str());
+            if !path.exists() {
+                return Err(format!("cool test: path not found: {}", raw));
+            }
+            if path.is_dir() {
+                collect_test_files(path, &mut files)?;
+            } else {
+                if path.extension().and_then(|ext| ext.to_str()) != Some("cool") {
+                    return Err(format!("cool test: explicit test files must end in .cool: {}", raw));
+                }
+                files.push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+            }
+        }
+    }
+
+    files.sort();
+    files.dedup();
+    if files.is_empty() {
+        return Err(
+            "cool test: no test files found.\nExpected files named test_*.cool or *_test.cool, or pass explicit .cool files."
+                .to_string(),
+        );
+    }
+    Ok(files)
+}
+
+fn display_test_path(path: &Path, cwd: &Path) -> String {
+    path.strip_prefix(cwd).unwrap_or(path).display().to_string()
+}
+
+fn run_script_test(path: &Path, mode: TestMode) -> Result<(), TestFailure> {
+    let exe = std::env::current_exe().map_err(|e| TestFailure {
+        stdout: String::new(),
+        stderr: format!("failed to resolve current executable: {e}"),
+    })?;
+    let mut cmd = Command::new(exe);
+    cmd.env_remove("COOL_SCRIPT_PATH");
+    cmd.env_remove("COOL_PROGRAM_ARGS");
+    if mode == TestMode::Vm {
+        cmd.arg("--vm");
+    }
+    let output = cmd.arg(path).output().map_err(|e| TestFailure {
+        stdout: String::new(),
+        stderr: format!("failed to launch test: {e}"),
+    })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(TestFailure {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
+    }
+}
+
+fn run_native_test(path: &Path) -> Result<(), TestFailure> {
+    let source = fs::read_to_string(path).map_err(|e| TestFailure {
+        stdout: String::new(),
+        stderr: format!("failed to read '{}': {e}", path.display()),
+    })?;
+    let binary_path = unique_temp_executable_path(
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("cool_test_native"),
+    );
+    let compile_result = compile_to_native(&source, &binary_path, path);
+    if let Err(err) = compile_result {
+        let _ = fs::remove_file(&binary_path);
+        return Err(TestFailure {
+            stdout: String::new(),
+            stderr: err,
+        });
+    }
+
+    let output = Command::new(&binary_path)
+        .env_remove("COOL_SCRIPT_PATH")
+        .env_remove("COOL_PROGRAM_ARGS")
+        .output()
+        .map_err(|e| TestFailure {
+            stdout: String::new(),
+            stderr: format!("failed to run compiled test '{}': {e}", path.display()),
+        });
+    let _ = fs::remove_file(&binary_path);
+
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(TestFailure {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }),
+        Err(err) => Err(err),
+    }
+}
+
+fn run_test_file(path: &Path, mode: TestMode) -> Result<(), TestFailure> {
+    match mode {
+        TestMode::Interpreter | TestMode::Vm => run_script_test(path, mode),
+        TestMode::Native => run_native_test(path),
+    }
+}
+
+fn cmd_test(args: &[&String]) -> Result<(), String> {
+    let mut use_vm = false;
+    let mut use_compile = false;
+    let mut targets = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "--vm" => use_vm = true,
+            "--compile" => use_compile = true,
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool test [--vm | --compile] [path ...]
+
+With no path arguments, `cool test` discovers files named `test_*.cool` or `*_test.cool`
+under `tests/` recursively.
+
+Examples:
+  cool test
+  cool test tests/parser_test.cool
+  cool test tests/unit tests/integration
+  cool test --vm
+  cool test --compile"
+                );
+                return Ok(());
+            }
+            _ => targets.push(*arg),
+        }
+    }
+    if use_vm && use_compile {
+        return Err("cool test: choose either --vm or --compile, not both".to_string());
+    }
+
+    let mode = if use_compile {
+        TestMode::Native
+    } else if use_vm {
+        TestMode::Vm
+    } else {
+        TestMode::Interpreter
+    };
+
+    let cwd = std::env::current_dir().map_err(|e| format!("cool test: cannot read current directory: {e}"))?;
+    let tests = resolve_test_targets(&targets)?;
+    println!("running {} Cool test file(s) with {}", tests.len(), mode.label());
+
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for path in &tests {
+        let display = display_test_path(path, &cwd);
+        match run_test_file(path, mode) {
+            Ok(()) => {
+                println!("ok {}", display);
+                passed += 1;
+            }
+            Err(failure) => {
+                println!("FAILED {}", display);
+                if !failure.stdout.trim().is_empty() {
+                    println!("---- {} stdout ----", display);
+                    print!("{}", failure.stdout);
+                    if !failure.stdout.ends_with('\n') {
+                        println!();
+                    }
+                }
+                if !failure.stderr.trim().is_empty() {
+                    println!("---- {} stderr ----", display);
+                    eprint!("{}", failure.stderr);
+                    if !failure.stderr.ends_with('\n') {
+                        eprintln!();
+                    }
+                }
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    if failed == 0 {
+        println!("test result: ok. {} passed; 0 failed", passed);
+        Ok(())
+    } else {
+        println!("test result: FAILED. {} passed; {} failed", passed, failed);
+        Err(format!("cool test: {} test file(s) failed", failed))
+    }
+}
+
 // ── `cool build` ─────────────────────────────────────────────────────────────
 
 /// Build a Cool project or file to a native binary.
@@ -225,6 +482,7 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
 
     // Create directory structure
     fs::create_dir_all(project_dir.join("src")).map_err(|e| format!("cool new: {e}"))?;
+    fs::create_dir_all(project_dir.join("tests")).map_err(|e| format!("cool new: {e}"))?;
 
     // cool.toml
     let manifest = format!("name = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n");
@@ -234,6 +492,10 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     let main_src = format!("# {name}\n\nprint(\"Hello from {name}!\")\n");
     fs::write(project_dir.join("src").join("main.cool"), main_src).map_err(|e| format!("cool new: {e}"))?;
 
+    // tests/test_main.cool
+    let test_src = "assert 1 + 1 == 2\n";
+    fs::write(project_dir.join("tests").join("test_main.cool"), test_src).map_err(|e| format!("cool new: {e}"))?;
+
     // .gitignore
     fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n")).map_err(|e| format!("cool new: {e}"))?;
 
@@ -241,12 +503,15 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     println!("  ├── cool.toml");
     println!("  ├── src/");
     println!("  │   └── main.cool");
+    println!("  ├── tests/");
+    println!("  │   └── test_main.cool");
     println!("  └── .gitignore");
     println!();
     println!("  Run your project:");
     println!("    cd {name}");
     println!("    cool src/main.cool          # interpret");
     println!("    cool build                  # compile to native");
+    println!("    cool test                   # run tests/");
     Ok(())
 }
 
@@ -264,6 +529,7 @@ USAGE:
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
+    cool test [path ...]          Run discovered or explicit Cool tests
     cool new <name>               Scaffold a new Cool project
     cool help                     Show this help message
 
@@ -274,6 +540,7 @@ FLAGS:
 EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
+    cool test                     # run test_*.cool / *_test.cool under tests/
     cool new myapp                # create myapp/ project
     cool build                    # compile using myapp/cool.toml
 
@@ -323,6 +590,14 @@ fn main() {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_new(&rest) {
                     eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "test" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_test(&rest) {
+                    eprintln!("{e}");
                     std::process::exit(1);
                 }
                 return;

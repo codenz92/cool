@@ -393,7 +393,8 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Packaging And Developer Tooling
 
-- [ ] `cool test` command and a standard `test` module for unit/integration tests
+- [x] `cool test` command for discovered and explicit Cool test files, with interpreter / VM / native runner modes
+- [ ] Standard `test` module for in-language unit/integration helpers and assertions
 - [ ] Package/dependency metadata beyond `cool.toml`, including manifests, semver, and dependency resolution
 - [ ] App bundling / release tooling (`package`, `bundle`, `release`)
 - [ ] AST / inspect / modulegraph / diff helpers for tooling and static analysis

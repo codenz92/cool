@@ -131,6 +131,7 @@ Bytecode VM and LLVM backend for native binaries.
 - [x] FFI (`import ffi` — load shared libs, call C functions)
 - [x] `cool build` command (compile to native binary)
 - [x] `cool new` command (scaffold new projects with `cool.toml`)
+- [x] `cool test` command (discover and run `test_*.cool` / `*_test.cool` files with interpreter, VM, or native runners)
 - [x] Inline assembly (`asm("template")`)
 - [x] Pointer types / raw memory access (`malloc`, `free`, `read_i64`, `write_i64`)
 - [x] Lists in LLVM

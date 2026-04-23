@@ -208,6 +208,9 @@ cd myapp
 # Interpret during development
 cool src/main.cool
 
+# Run tests
+cool test
+
 # Compile for release
 cool build          # reads cool.toml, produces ./myapp
 ./myapp
@@ -222,6 +225,8 @@ main = "src/main.cool"
 output = "myapp"    # optional, defaults to name
 ```
 
+`cool new` also scaffolds `tests/test_main.cool`, so `cool test` works immediately in new projects. By default the runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+
 ---
 
 ## CLI Reference
@@ -234,6 +239,7 @@ output = "myapp"    # optional, defaults to name
 | `cool --compile <file.cool>` | Compile to a native binary (LLVM) |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
+| `cool test [path ...]` | Discover and run Cool tests |
 | `cool new <name>` | Scaffold a new Cool project |
 | `cool help` | Show usage help |
 
