@@ -4,8 +4,17 @@
 use std::io::Write;
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEMP_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+
+fn unique_temp_path(stem: &str, ext: &str) -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("{stem}_{nonce}.{ext}"))
+}
 
 fn cool_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cool")
@@ -98,6 +107,27 @@ fn run_cool_stdin_with_args(path: &str, extra_args: &[&str], stdin: &str) -> Res
     } else {
         Err(stderr)
     }
+}
+
+fn run_cool_with_pty_input(path: &str, extra_args: &[&str], input: &[u8]) -> Result<(String, String, i32), String> {
+    let mut cmd = Command::new("script");
+    cmd.arg("-q").arg("/dev/null").arg(cool_bin()).arg(path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    {
+        let mut child_stdin = child.stdin.take().ok_or_else(|| "missing stdin pipe".to_string())?;
+        child_stdin.write_all(input).map_err(|e| e.to_string())?;
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok((stdout, stderr, output.status.code().unwrap_or(-1)))
 }
 
 #[test]
@@ -643,6 +673,29 @@ fn test_notes_app_crud_flow() {
     assert!(stdout.contains("extra"));
     assert!(stdout.contains("Deleted 'demo'."));
     assert!(stdout.contains("No notes yet. Use 'new <name>' to create one."));
+}
+
+#[test]
+fn test_edit_app_can_save_empty_existing_file() {
+    let file_path = unique_temp_path("cool_edit_app_test", "txt");
+    std::fs::write(&file_path, "").unwrap();
+
+    let (stdout, _stderr, status) =
+        run_cool_with_pty_input("coolapps/edit.cool", &[file_path.to_str().unwrap()], b"abc\x18y").unwrap();
+
+    let saved = std::fs::read_to_string(&file_path).unwrap();
+    let _ = std::fs::remove_file(&file_path);
+
+    assert_eq!(status, 0);
+    assert!(stdout.contains("Save before exit? (y/n)"));
+    assert_eq!(saved, "abc\n");
+}
+
+#[test]
+fn test_snake_app_quits_on_q() {
+    let (stdout, _stderr, status) = run_cool_with_pty_input("coolapps/snake.cool", &[], b"q").unwrap();
+    assert_eq!(status, 0);
+    assert!(stdout.contains("Game over! Final score:"));
 }
 
 #[test]
