@@ -288,7 +288,8 @@ NOTES:
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/flatten/unique), plus re
-    (match/search/fullmatch/findall/sub/split), inline asm, and raw memory.
+    (match/search/fullmatch/findall/sub/split), plus collections
+    (Queue/Stack), inline asm, and raw memory.
     Closures/lambdas, broader import support beyond those built-ins, and try/except still require the interpreter or bytecode VM.
 "
     );

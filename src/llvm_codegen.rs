@@ -230,6 +230,7 @@ CoolVal cool_module_call(const char*, const char*, int32_t, ...);
 CoolVal cool_round(CoolVal, CoolVal);
 CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
+void cool_raise(CoolVal);
 void cool_print(int32_t, ...);
 
 /* ── class / object support ─────────────────────────────────────────── */
@@ -1074,6 +1075,117 @@ static CoolVal cool_list_unique_copy(CoolVal seq) {
     return out;
 }
 
+static CoolVal g_queue_class = { TAG_NIL, 0 };
+static CoolVal g_stack_class = { TAG_NIL, 0 };
+
+static CoolVal collections_get_items(CoolVal self) {
+    CoolVal items = cool_get_attr(self, "items");
+    if (items.tag != TAG_LIST) {
+        items = cool_list_make(cv_int(4));
+        cool_set_attr(self, "items", items);
+    }
+    return items;
+}
+
+static CoolVal collections_queue_push(CoolVal self, CoolVal item) {
+    cool_list_push(collections_get_items(self), item);
+    return cv_nil();
+}
+
+static CoolVal collections_queue_enqueue(CoolVal self, CoolVal item) {
+    return collections_queue_push(self, item);
+}
+
+static CoolVal collections_queue_pop(CoolVal self) {
+    CoolVal items = collections_get_items(self);
+    CoolList* lst = (CoolList*)(intptr_t)items.payload;
+    if (lst->length == 0) cool_raise(cv_str("Queue is empty"));
+    CoolVal first = ((CoolVal*)lst->data)[0];
+    for (int64_t i = 1; i < lst->length; i++) {
+        ((CoolVal*)lst->data)[i - 1] = ((CoolVal*)lst->data)[i];
+    }
+    lst->length--;
+    return first;
+}
+
+static CoolVal collections_queue_dequeue(CoolVal self) {
+    return collections_queue_pop(self);
+}
+
+static CoolVal collections_queue_peek(CoolVal self) {
+    CoolVal items = collections_get_items(self);
+    CoolList* lst = (CoolList*)(intptr_t)items.payload;
+    if (lst->length == 0) cool_raise(cv_str("Queue is empty"));
+    return ((CoolVal*)lst->data)[0];
+}
+
+static CoolVal collections_queue_is_empty(CoolVal self) {
+    CoolVal items = collections_get_items(self);
+    return cv_bool(cool_len(items).payload == 0);
+}
+
+static CoolVal collections_queue_size(CoolVal self) {
+    return cool_len(collections_get_items(self));
+}
+
+static CoolVal collections_stack_push(CoolVal self, CoolVal item) {
+    cool_list_push(collections_get_items(self), item);
+    return cv_nil();
+}
+
+static CoolVal collections_stack_pop(CoolVal self) {
+    CoolVal items = collections_get_items(self);
+    CoolList* lst = (CoolList*)(intptr_t)items.payload;
+    if (lst->length == 0) cool_raise(cv_str("Stack is empty"));
+    return cool_list_pop(items);
+}
+
+static CoolVal collections_stack_peek(CoolVal self) {
+    CoolVal items = collections_get_items(self);
+    CoolList* lst = (CoolList*)(intptr_t)items.payload;
+    if (lst->length == 0) cool_raise(cv_str("Stack is empty"));
+    return ((CoolVal*)lst->data)[lst->length - 1];
+}
+
+static CoolVal collections_stack_is_empty(CoolVal self) {
+    CoolVal items = collections_get_items(self);
+    return cv_bool(cool_len(items).payload == 0);
+}
+
+static CoolVal collections_stack_size(CoolVal self) {
+    return cool_len(collections_get_items(self));
+}
+
+static void cool_init_collections_classes(void) {
+    if (g_queue_class.tag == TAG_CLASS && g_stack_class.tag == TAG_CLASS) return;
+
+    int64_t queue_methods[] = {
+        (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_queue_push,
+        (int64_t)(intptr_t)"method_enqueue", (int64_t)(intptr_t)collections_queue_enqueue,
+        (int64_t)(intptr_t)"method_pop", (int64_t)(intptr_t)collections_queue_pop,
+        (int64_t)(intptr_t)"method_dequeue", (int64_t)(intptr_t)collections_queue_dequeue,
+        (int64_t)(intptr_t)"method_peek", (int64_t)(intptr_t)collections_queue_peek,
+        (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_queue_is_empty,
+        (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_queue_size,
+    };
+    g_queue_class = cool_class_new("Queue", 7, queue_methods);
+
+    int64_t stack_methods[] = {
+        (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_stack_push,
+        (int64_t)(intptr_t)"method_pop", (int64_t)(intptr_t)collections_stack_pop,
+        (int64_t)(intptr_t)"method_peek", (int64_t)(intptr_t)collections_stack_peek,
+        (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_stack_is_empty,
+        (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_stack_size,
+    };
+    g_stack_class = cool_class_new("Stack", 5, stack_methods);
+}
+
+static CoolVal collections_make_instance(CoolVal cls) {
+    CoolVal obj = cool_object_new(cls);
+    cool_set_attr(obj, "items", cool_list_make(cv_int(4)));
+    return obj;
+}
+
 CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
@@ -1704,6 +1816,11 @@ CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "sys") == 0) {
         if (strcmp(name, "argv") == 0) return cool_make_argv();
     }
+    if (strcmp(module, "collections") == 0) {
+        cool_init_collections_classes();
+        if (strcmp(name, "Queue") == 0) return g_queue_class;
+        if (strcmp(name, "Stack") == 0) return g_stack_class;
+    }
     return cv_nil();
 }
 
@@ -2117,6 +2234,12 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
 
         regfree(&re);
+    }
+
+    if (strcmp(module, "collections") == 0) {
+        cool_init_collections_classes();
+        if (strcmp(name, "Queue") == 0 && nargs == 0) return collections_make_instance(g_queue_class);
+        if (strcmp(name, "Stack") == 0 && nargs == 0) return collections_make_instance(g_stack_class);
     }
 
     fprintf(stderr, "AttributeError: unknown module call %s.%s\n", module, name);
@@ -3803,7 +3926,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" | "re" => {
+            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -3812,7 +3935,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, list, and re)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, list, re, and collections)",
                 name
             )),
         }

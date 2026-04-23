@@ -18,6 +18,11 @@ fn unique_test_path(stem: &str, ext: &str) -> PathBuf {
     PathBuf::from(format!("{stem}_{nonce}.{ext}"))
 }
 
+fn cleanup_native_artifacts(source_path: &PathBuf, binary_path: &PathBuf) {
+    let _ = fs::remove_file(source_path);
+    let _ = fs::remove_file(binary_path);
+}
+
 fn compile_and_run_native(source: &str) -> Result<String, String> {
     compile_and_run_native_with_env(source, &[])
 }
@@ -38,8 +43,7 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
     if !build_output.status.success() {
         let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
         let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
-        let _ = fs::remove_file(&source_path);
-        let _ = fs::remove_file(&binary_path);
+        cleanup_native_artifacts(&source_path, &binary_path);
         return Err(format!("{stdout}{stderr}"));
     }
 
@@ -47,10 +51,15 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
     for (k, v) in envs {
         run_cmd.env(k, v);
     }
-    let run_output = run_cmd.output().map_err(|e| e.to_string())?;
+    let run_output = match run_cmd.output() {
+        Ok(output) => output,
+        Err(e) => {
+            cleanup_native_artifacts(&source_path, &binary_path);
+            return Err(e.to_string());
+        }
+    };
 
-    let _ = fs::remove_file(&source_path);
-    let _ = fs::remove_file(&binary_path);
+    cleanup_native_artifacts(&source_path, &binary_path);
 
     if run_output.status.success() {
         Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
@@ -72,8 +81,7 @@ fn compile_native_expect_error(source: &str) -> String {
         .output()
         .unwrap();
 
-    let _ = fs::remove_file(&source_path);
-    let _ = fs::remove_file(&binary_path);
+    cleanup_native_artifacts(&source_path, &binary_path);
 
     assert!(!build_output.status.success(), "expected native build to fail");
     let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
@@ -213,8 +221,7 @@ print(os.listdir("{dir}"))
 
     let result = compile_and_run_native(&source).unwrap();
 
-    let _ = fs::remove_file(temp_dir.join("sample.txt"));
-    let _ = fs::remove_dir(&temp_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(result.contains("<module os>"));
     assert!(result.contains(&cwd.display().to_string()));
@@ -412,4 +419,31 @@ except:
     );
 
     assert!(output.contains("try/except is not yet supported in LLVM backend"));
+}
+
+#[test]
+fn test_llvm_import_collections_module() {
+    let result = compile_and_run_native(
+        r#"
+import collections
+print(collections)
+q = collections.Queue()
+q.enqueue("first")
+q.enqueue("second")
+print(q.dequeue())
+print(q.size())
+s = collections.Stack()
+s.push("a")
+s.push("b")
+print(s.pop())
+print(s.is_empty())
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module collections>"));
+    assert!(result.contains("first"));
+    assert!(result.contains("\n1\n"));
+    assert!(result.contains("\nb\n"));
+    assert!(result.contains("false"));
 }
