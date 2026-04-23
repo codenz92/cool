@@ -281,8 +281,9 @@ NOTES:
     functions with default/keyword args, lists/dicts/tuples, slicing,
     classes with inheritance/super(), list comprehensions,
     ternary expressions, in/not in, print()/str(), range(), len(),
-    min()/max()/sum()/round()/sorted(), inline asm, and raw memory.
-    Closures/lambdas, import, and try/except still require the interpreter or bytecode VM.
+    min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
+    built-in import math/os, inline asm, and raw memory.
+    Closures/lambdas, general import support beyond math/os, and try/except still require the interpreter or bytecode VM.
 "
     );
 }

@@ -108,3 +108,82 @@ print(obj.area(2))
     assert!(result.contains("\n9\n"));
     assert!(result.contains("true"));
 }
+
+#[test]
+fn test_llvm_scalar_conversion_builtins() {
+    let result = compile_and_run_native(
+        r#"
+print(abs(-7))
+print(abs(-3.5))
+print(int("42"))
+print(int(true))
+print(float("2.5"))
+print(float(4))
+print(bool(""))
+print(bool("cool"))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("\n7\n") || result.starts_with("7\n"));
+    assert!(result.contains("3.5"));
+    assert!(result.contains("42"));
+    assert!(result.contains("\n1\n"));
+    assert!(result.contains("2.5"));
+    assert!(result.contains("\n4\n"));
+    assert!(result.contains("false"));
+    assert!(result.contains("true"));
+}
+
+#[test]
+fn test_llvm_import_math_module() {
+    let result = compile_and_run_native(
+        r#"
+import math
+print(math)
+print(math.pi)
+print(math.sqrt(4))
+print(math.pow(2, 5))
+print(math.floor(3.9))
+print(math.isfinite(1.0))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module math>"));
+    assert!(result.contains("3.14159"));
+    assert!(result.contains("\n2\n") || result.contains("\n2.0\n"));
+    assert!(result.contains("32"));
+    assert!(result.contains("\n3\n") || result.contains("\n3.0\n"));
+    assert!(result.contains("true"));
+}
+
+#[test]
+fn test_llvm_import_os_module() {
+    let cwd = std::env::current_dir().unwrap();
+    let temp_dir = cwd.join(unique_test_path("temp_llvm_os_dir", "d"));
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(temp_dir.join("sample.txt"), "ok").unwrap();
+
+    let source = format!(
+        r#"
+import os
+print(os)
+print(os.getcwd())
+joined = os.join("{dir}", "sample.txt")
+print(os.exists(joined))
+print(os.listdir("{dir}"))
+"#,
+        dir = temp_dir.display()
+    );
+
+    let result = compile_and_run_native(&source).unwrap();
+
+    let _ = fs::remove_file(temp_dir.join("sample.txt"));
+    let _ = fs::remove_dir(&temp_dir);
+
+    assert!(result.contains("<module os>"));
+    assert!(result.contains(&cwd.display().to_string()));
+    assert!(result.contains("true"));
+    assert!(result.contains("sample.txt"));
+}

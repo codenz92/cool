@@ -17,7 +17,7 @@ use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Tar
 use inkwell::types::StructType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 // ── Embedded C runtime ────────────────────────────────────────────────────────
@@ -30,6 +30,9 @@ const RUNTIME_C: &str = r#"
 #include <stdarg.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #define TAG_NIL    0
 #define TAG_INT    1
@@ -213,6 +216,12 @@ CoolVal cool_dict_contains(CoolVal, CoolVal);
 CoolVal cool_index(CoolVal, CoolVal);
 CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
+CoolVal cool_abs(CoolVal);
+CoolVal cool_to_int(CoolVal);
+CoolVal cool_to_float_val(CoolVal);
+CoolVal cool_to_bool_val(CoolVal);
+CoolVal cool_module_get_attr(const char*, const char*);
+CoolVal cool_module_call(const char*, const char*, int32_t, ...);
 CoolVal cool_round(CoolVal, CoolVal);
 CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
@@ -1052,6 +1061,214 @@ CoolVal cool_sum(CoolVal iterable) {
     return total;
 }
 
+CoolVal cool_abs(CoolVal v) {
+    if (v.tag == TAG_INT) return cv_int(llabs(v.payload));
+    if (v.tag == TAG_FLOAT) return cv_float(fabs(cv_as_float(v)));
+    fprintf(stderr, "TypeError: abs() requires a number\n");
+    exit(1);
+}
+
+CoolVal cool_to_int(CoolVal v) {
+    switch (v.tag) {
+        case TAG_INT: return v;
+        case TAG_FLOAT: return cv_int((int64_t)cv_as_float(v));
+        case TAG_BOOL: return cv_int(v.payload ? 1 : 0);
+        case TAG_STR: {
+            const char* s = (const char*)(intptr_t)v.payload;
+            while (*s && isspace((unsigned char)*s)) s++;
+            char* end = NULL;
+            long long n = strtoll(s, &end, 0);
+            if (end == s) {
+                fprintf(stderr, "ValueError: invalid int\n");
+                exit(1);
+            }
+            return cv_int((int64_t)n);
+        }
+        default:
+            fprintf(stderr, "TypeError: cannot convert to int\n");
+            exit(1);
+    }
+}
+
+CoolVal cool_to_float_val(CoolVal v) {
+    switch (v.tag) {
+        case TAG_FLOAT: return v;
+        case TAG_INT: return cv_float((double)v.payload);
+        case TAG_STR: {
+            const char* s = (const char*)(intptr_t)v.payload;
+            while (*s && isspace((unsigned char)*s)) s++;
+            char* end = NULL;
+            double n = strtod(s, &end);
+            if (end == s) {
+                fprintf(stderr, "ValueError: invalid float\n");
+                exit(1);
+            }
+            return cv_float(n);
+        }
+        default:
+            fprintf(stderr, "TypeError: cannot convert to float\n");
+            exit(1);
+    }
+}
+
+CoolVal cool_to_bool_val(CoolVal v) {
+    return cv_bool(cool_truthy(v));
+}
+
+CoolVal cool_module_get_attr(const char* module, const char* name) {
+    if (strcmp(module, "math") == 0) {
+        if (strcmp(name, "pi") == 0) return cv_float(M_PI);
+        if (strcmp(name, "e") == 0) return cv_float(M_E);
+        if (strcmp(name, "tau") == 0) return cv_float(M_PI * 2.0);
+        if (strcmp(name, "inf") == 0) return cv_float(INFINITY);
+        if (strcmp(name, "nan") == 0) return cv_float(NAN);
+    }
+    return cv_nil();
+}
+
+CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ...) {
+    va_list ap;
+    va_start(ap, nargs);
+    CoolVal args[8];
+    for (int32_t i = 0; i < nargs && i < 8; i++) args[i] = va_arg(ap, CoolVal);
+    va_end(ap);
+
+    if (strcmp(module, "math") == 0) {
+        if (nargs == 1) {
+            double x = cv_to_float(args[0]);
+            if (strcmp(name, "sqrt") == 0) return cv_float(sqrt(x));
+            if (strcmp(name, "floor") == 0) return cv_float(floor(x));
+            if (strcmp(name, "ceil") == 0) return cv_float(ceil(x));
+            if (strcmp(name, "sin") == 0) return cv_float(sin(x));
+            if (strcmp(name, "cos") == 0) return cv_float(cos(x));
+            if (strcmp(name, "tan") == 0) return cv_float(tan(x));
+            if (strcmp(name, "asin") == 0) return cv_float(asin(x));
+            if (strcmp(name, "acos") == 0) return cv_float(acos(x));
+            if (strcmp(name, "atan") == 0) return cv_float(atan(x));
+            if (strcmp(name, "log") == 0) return cv_float(log(x));
+            if (strcmp(name, "log10") == 0) return cv_float(log10(x));
+            if (strcmp(name, "exp") == 0) return cv_float(exp(x));
+            if (strcmp(name, "degrees") == 0) return cv_float(x * 180.0 / M_PI);
+            if (strcmp(name, "radians") == 0) return cv_float(x * M_PI / 180.0);
+            if (strcmp(name, "sinh") == 0) return cv_float(sinh(x));
+            if (strcmp(name, "cosh") == 0) return cv_float(cosh(x));
+            if (strcmp(name, "tanh") == 0) return cv_float(tanh(x));
+            if (strcmp(name, "round") == 0) return cool_round(args[0], cv_nil());
+            if (strcmp(name, "abs") == 0) return cool_abs(args[0]);
+            if (strcmp(name, "isnan") == 0) return cv_bool(isnan(x));
+            if (strcmp(name, "isinf") == 0) return cv_bool(isinf(x));
+            if (strcmp(name, "isfinite") == 0) return cv_bool(isfinite(x));
+            if (strcmp(name, "factorial") == 0) {
+                int64_t n = cool_to_int(args[0]).payload;
+                if (n < 0) {
+                    fprintf(stderr, "ValueError: factorial() requires non-negative integer\n");
+                    exit(1);
+                }
+                int64_t acc = 1;
+                for (int64_t i = 2; i <= n; i++) acc *= i;
+                return cv_int(acc);
+            }
+        }
+        if (nargs == 2) {
+            double x = cv_to_float(args[0]);
+            double y = cv_to_float(args[1]);
+            if (strcmp(name, "pow") == 0) return cv_float(pow(x, y));
+            if (strcmp(name, "atan2") == 0) return cv_float(atan2(x, y));
+            if (strcmp(name, "hypot") == 0) return cv_float(hypot(x, y));
+            if (strcmp(name, "gcd") == 0) {
+                int64_t a = llabs(cool_to_int(args[0]).payload);
+                int64_t b = llabs(cool_to_int(args[1]).payload);
+                while (b != 0) { int64_t t = b; b = a % b; a = t; }
+                return cv_int(a);
+            }
+            if (strcmp(name, "lcm") == 0) {
+                int64_t a = cool_to_int(args[0]).payload;
+                int64_t b = cool_to_int(args[1]).payload;
+                int64_t aa = llabs(a), bb = llabs(b);
+                int64_t g = aa;
+                int64_t t = bb;
+                while (t != 0) { int64_t n = t; t = g % t; g = n; }
+                return cv_int((a == 0 || b == 0) ? 0 : llabs(a / g * b));
+            }
+        }
+    }
+
+    if (strcmp(module, "os") == 0) {
+        if (strcmp(name, "getcwd") == 0 && nargs == 0) {
+            char buf[4096];
+            if (!getcwd(buf, sizeof(buf))) {
+                fprintf(stderr, "RuntimeError: os.getcwd failed\n");
+                exit(1);
+            }
+            return cv_str(strdup(buf));
+        }
+        if (strcmp(name, "exists") == 0 && nargs == 1) {
+            const char* path = cool_to_str(args[0]);
+            struct stat st;
+            return cv_bool(stat(path, &st) == 0);
+        }
+        if (strcmp(name, "join") == 0 && nargs >= 1) {
+            size_t total = 1;
+            for (int32_t i = 0; i < nargs; i++) total += strlen(cool_to_str(args[i])) + 1;
+            char* out = (char*)malloc(total);
+            char* p = out;
+            for (int32_t i = 0; i < nargs; i++) {
+                const char* part = cool_to_str(args[i]);
+                size_t len = strlen(part);
+                if (i > 0 && p > out && p[-1] != '/') *p++ = '/';
+                memcpy(p, part, len);
+                p += len;
+            }
+            *p = '\0';
+            return cv_str(out);
+        }
+        if (strcmp(name, "listdir") == 0 && nargs == 1) {
+            const char* path = cool_to_str(args[0]);
+            DIR* dir = opendir(path);
+            if (!dir) {
+                fprintf(stderr, "RuntimeError: os.listdir failed\n");
+                exit(1);
+            }
+            CoolVal out = cool_list_make(cv_int(8));
+            struct dirent* ent;
+            while ((ent = readdir(dir)) != NULL) {
+                if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+                cool_list_push(out, cv_str(strdup(ent->d_name)));
+            }
+            closedir(dir);
+            return out;
+        }
+        if (strcmp(name, "mkdir") == 0 && nargs == 1) {
+            const char* path = cool_to_str(args[0]);
+            if (mkdir(path, 0777) != 0) {
+                fprintf(stderr, "RuntimeError: os.mkdir failed\n");
+                exit(1);
+            }
+            return cv_nil();
+        }
+        if (strcmp(name, "remove") == 0 && nargs == 1) {
+            const char* path = cool_to_str(args[0]);
+            if (remove(path) != 0) {
+                fprintf(stderr, "RuntimeError: os.remove failed\n");
+                exit(1);
+            }
+            return cv_nil();
+        }
+        if (strcmp(name, "rename") == 0 && nargs == 2) {
+            const char* src = cool_to_str(args[0]);
+            const char* dst = cool_to_str(args[1]);
+            if (rename(src, dst) != 0) {
+                fprintf(stderr, "RuntimeError: os.rename failed\n");
+                exit(1);
+            }
+            return cv_nil();
+        }
+    }
+
+    fprintf(stderr, "AttributeError: unknown module call %s.%s\n", module, name);
+    exit(1);
+}
+
 static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
     if (list.tag != TAG_LIST && list.tag != TAG_TUPLE) return cv_bool(0);
     CoolList* l = (CoolList*)(intptr_t)list.payload;
@@ -1358,6 +1575,10 @@ struct RuntimeFns<'ctx> {
     cool_index: FunctionValue<'ctx>,
     cool_slice: FunctionValue<'ctx>,
     cool_setindex: FunctionValue<'ctx>,
+    cool_abs: FunctionValue<'ctx>,
+    cool_to_int: FunctionValue<'ctx>,
+    cool_to_float_val: FunctionValue<'ctx>,
+    cool_to_bool_val: FunctionValue<'ctx>,
     cool_round: FunctionValue<'ctx>,
     cool_sorted: FunctionValue<'ctx>,
     cool_sum: FunctionValue<'ctx>,
@@ -1385,6 +1606,8 @@ struct RuntimeFns<'ctx> {
     cool_get_module: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_module_exists: FunctionValue<'ctx>,
+    cool_module_get_attr: FunctionValue<'ctx>,
+    cool_module_call: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_call_fn_ptr: FunctionValue<'ctx>,
 }
@@ -1418,6 +1641,8 @@ struct Compiler<'ctx> {
     nested_functions: Vec<(String, Vec<crate::ast::Param>, Vec<crate::ast::Stmt>)>,
     /// Class currently being compiled, if any.
     current_class: Option<String>,
+    /// Names of imported built-in modules visible to the native backend.
+    imported_modules: HashSet<String>,
 }
 
 /// Information about a compiled class
@@ -1467,6 +1692,7 @@ impl<'ctx> Compiler<'ctx> {
             captured_vars: HashMap::new(),
             nested_functions: Vec::new(),
             current_class: None,
+            imported_modules: HashSet::new(),
         }
     }
 
@@ -1563,6 +1789,10 @@ impl<'ctx> Compiler<'ctx> {
             cool_index: decl!("cool_index", cv_type.fn_type(&[cv, cv], false)),
             cool_slice: decl!("cool_slice", cv_type.fn_type(&[cv, cv, cv], false)),
             cool_setindex: decl!("cool_setindex", cv_type.fn_type(&[cv, cv, cv], false)),
+            cool_abs: decl!("cool_abs", cv_type.fn_type(&[cv], false)),
+            cool_to_int: decl!("cool_to_int", cv_type.fn_type(&[cv], false)),
+            cool_to_float_val: decl!("cool_to_float_val", cv_type.fn_type(&[cv], false)),
+            cool_to_bool_val: decl!("cool_to_bool_val", cv_type.fn_type(&[cv], false)),
             cool_round: decl!("cool_round", cv_type.fn_type(&[cv, cv], false)),
             cool_sorted: decl!("cool_sorted", cv_type.fn_type(&[cv], false)),
             cool_sum: decl!("cool_sum", cv_type.fn_type(&[cv], false)),
@@ -1581,6 +1811,8 @@ impl<'ctx> Compiler<'ctx> {
             // module/import
             cool_get_module: decl!("cool_get_module", cv_type.fn_type(&[ptrm], false)),
             cool_module_exists: decl!("cool_module_exists", i32t.fn_type(&[ptrm], false)),
+            cool_module_get_attr: decl!("cool_module_get_attr", cv_type.fn_type(&[ptrm, ptrm], false)),
+            cool_module_call: decl!("cool_module_call", cv_type.fn_type(&[ptrm, ptrm, i32m], true)),
             cool_call_fn_ptr: decl!("cool_call_fn_ptr", cv_type.fn_type(&[i64m, i32m], true)),
         }
     }
@@ -2710,27 +2942,16 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "time" | "random" | "json" | "re" | "string"
-            | "list" | "collections" => {
-                // Built-in modules are handled via the runtime's module registry
-                // Get the module dict from runtime
-                let module_name_ptr = self.builder.build_global_string_ptr(name, &format!("mod_{}", name)).unwrap();
-                let dict_val = self
-                    .builder
-                    .build_call(self.rt.cool_get_module, &[module_name_ptr.as_pointer_value().into()], "module_dict")
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_struct_value();
-                // Create a local variable to store the module reference
+            "math" | "os" => {
+                self.imported_modules.insert(name.to_string());
+                let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
-                self.builder.build_store(ptr, dict_val).unwrap();
+                self.builder.build_store(ptr, module_val).unwrap();
                 self.locals.insert(name.to_string(), ptr);
                 Ok(())
             }
             _ => Err(format!(
-                "import: unknown module '{}' (only math, os, sys, time, random, json, re, string, list, collections supported in LLVM backend)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math and os)",
                 name
             )),
         }
@@ -2865,6 +3086,30 @@ impl<'ctx> Compiler<'ctx> {
 
             // attribute access: obj.attr
             Expr::Attr { object, name } => {
+                if let Expr::Ident(module_name) = object.as_ref() {
+                    if self.imported_modules.contains(module_name) {
+                        let module_ptr = self
+                            .builder
+                            .build_global_string_ptr(module_name, &format!("module_{}_name", module_name))
+                            .unwrap();
+                        let attr_ptr = self
+                            .builder
+                            .build_global_string_ptr(name, &format!("module_{}_attr_{}", module_name, name))
+                            .unwrap();
+                        return Ok(self
+                            .builder
+                            .build_call(
+                                self.rt.cool_module_get_attr,
+                                &[module_ptr.as_pointer_value().into(), attr_ptr.as_pointer_value().into()],
+                                "module_attr",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap()
+                            .into_struct_value());
+                    }
+                }
                 if let Expr::Ident(class_name) = object.as_ref() {
                     if let Some(class_info) = self.classes.get(class_name) {
                         if let Some((_, expr)) = class_info.attributes.iter().find(|(attr, _)| attr == name) {
@@ -3271,6 +3516,38 @@ impl<'ctx> Compiler<'ctx> {
         args: &[Expr],
         kwargs: &[(String, Expr)],
     ) -> Result<StructValue<'ctx>, String> {
+        if let Expr::Attr { object, name: member } = callee {
+            if let Expr::Ident(module_name) = object.as_ref() {
+                if self.imported_modules.contains(module_name) {
+                    let module_ptr = self
+                        .builder
+                        .build_global_string_ptr(module_name, &format!("module_call_{}_name", module_name))
+                        .unwrap();
+                    let member_ptr = self
+                        .builder
+                        .build_global_string_ptr(member, &format!("module_call_{}_{}", module_name, member))
+                        .unwrap();
+                    let nargs_i32 = self.context.i32_type().const_int(args.len() as u64, false);
+                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                        module_ptr.as_pointer_value().into(),
+                        member_ptr.as_pointer_value().into(),
+                        nargs_i32.into(),
+                    ];
+                    for arg in args {
+                        call_args.push(self.compile_expr(arg)?.into());
+                    }
+                    return Ok(self
+                        .builder
+                        .build_call(self.rt.cool_module_call, &call_args, "module_call")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_struct_value());
+                }
+            }
+        }
+
         // Handle method calls: obj.method(args)
         if let Expr::Attr {
             object,
@@ -3636,6 +3913,30 @@ impl<'ctx> Compiler<'ctx> {
                 .into_struct_value());
         }
 
+        if name == "int" {
+            if args.len() != 1 {
+                return Err("int() takes exactly 1 argument".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_to_int, value, "int"));
+        }
+
+        if name == "float" {
+            if args.len() != 1 {
+                return Err("float() takes exactly 1 argument".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_to_float_val, value, "float"));
+        }
+
+        if name == "bool" {
+            if args.len() != 1 {
+                return Err("bool() takes exactly 1 argument".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_to_bool_val, value, "bool"));
+        }
+
         if name == "round" {
             if args.is_empty() || args.len() > 2 {
                 return Err("round() takes 1 or 2 arguments".into());
@@ -3663,6 +3964,14 @@ impl<'ctx> Compiler<'ctx> {
             }
             let iterable = self.compile_expr(&args[0])?;
             return Ok(self.call_unop_fn(self.rt.cool_sum, iterable, "sum"));
+        }
+
+        if name == "abs" {
+            if args.len() != 1 {
+                return Err("abs() takes exactly 1 argument".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_abs, value, "abs"));
         }
 
         if name == "min" || name == "max" {

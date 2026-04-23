@@ -68,9 +68,9 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, native `import math`, native `import os`, f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
-**LLVM limitations:** Closures/lambdas, `import`, and `try`/`except` are still interpreter/VM-only in practice. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
+**LLVM limitations:** Closures/lambdas, general `import` support beyond the built-in `math` and `os` modules, and `try`/`except` are still interpreter/VM-only in practice. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :---------: | :---------: | :--: |
@@ -82,13 +82,15 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | Lists, indexing, slicing, `len()`, `range()` | ✅ | ✅ | ✅ |
 | Dicts (`{k:v}`, `d[k]`, `d[k]=v`, `in`) | ✅ | ✅ | ✅ |
 | Tuples (literals, index, unpack, `in`) | ✅ | ✅ | ✅ |
-| `str()`, `isinstance()`, `min()`, `max()`, `sum()`, `round()`, `sorted()` | ✅ | ✅ | ✅ |
+| `str()`, `isinstance()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()` | ✅ | ✅ | ✅ |
+| `import math` | ✅ | ✅ | ✅ |
+| `import os` | ✅ | ✅ | ✅ |
 | f-strings | ✅ | ✅ | ✅ |
 | Ternary expressions | ✅ | ✅ | ✅ |
 | List comprehensions | ✅ | ✅ | ✅ |
 | `in` / `not in` | ✅ | ✅ | ✅ |
 | Closures / lambdas | ✅ | ✅ | ❌ |
-| `import` | ✅ | ✅ | ❌ |
+| General `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory access | ❌ | ❌ | ✅ |
