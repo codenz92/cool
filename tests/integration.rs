@@ -420,6 +420,27 @@ fn test_self_hosted_compiler_suite_runs() {
 }
 
 #[test]
+fn test_http_app_cli_args() {
+    let temp_dir = std::env::temp_dir().join("cool_http_app_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let body_path = temp_dir.join("body.txt");
+    std::fs::write(&body_path, "hello from cool http app\n").unwrap();
+    let url = format!("file://{}", body_path.display());
+
+    let output = Command::new(cool_bin())
+        .args(["coolapps/http.cool", "get", &url])
+        .output()
+        .unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("hello from cool http app"));
+}
+
+#[test]
 fn test_break_continue() {
     let result =
         run_cool("result = []\nfor i in range(10):\n\tif i == 5:\n\t\tbreak\n\tresult.append(i)\nprint(len(result))")
