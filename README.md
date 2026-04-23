@@ -334,6 +334,7 @@ examples/
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
 | 9 — Self-hosted compiler | ✅ Complete |
+| 10 — Production readiness and ecosystem | 🚧 Planned |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

@@ -373,6 +373,42 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 10 — Production Readiness And Ecosystem 🚧 Planned
+
+> Goal: make Cool feel default for real applications, not just impressive for demos, scripts, and experiments
+
+### Runtime Parity
+
+- [ ] Bytecode VM: full `with` / context-manager cleanup semantics, including `return`, `break`, `continue`, and exceptions
+- [ ] LLVM: `with` / context managers
+- [ ] LLVM: `try` / `except` / `finally` / `raise`
+- [ ] LLVM: broader `import` support beyond built-in native modules
+- [ ] LLVM: `import ffi`
+
+### First-Wave Library Modules
+
+- [ ] `path` module — path normalization, basename/dirname, extension helpers, splitting, and joins
+- [ ] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
+- [ ] `argparse` module — positional/flag parsing, defaults, and generated help text
+- [ ] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
+- [ ] `csv` / `toml` / `yaml` / `datetime` / `hashlib` / `sqlite` / `socket` / `http` as the first practical application stack
+
+### Packaging And Developer Tooling
+
+- [ ] `cool test` command and a standard `test` module for unit/integration tests
+- [ ] Package/dependency metadata beyond `cool.toml`, including manifests, semver, and dependency resolution
+- [ ] App bundling / release tooling (`package`, `bundle`, `release`)
+- [ ] AST / inspect / modulegraph / diff helpers for tooling and static analysis
+- [ ] Language-server and editor tooling (`lsp`)
+
+### Flagship Cool Software
+
+- [ ] A real package manager or project tool written in Cool
+- [ ] A build/task runner that demonstrates modules, subprocesses, and packaging
+- [ ] A flagship TUI or networked app that proves Cool works for medium-sized software
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -386,3 +422,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
 | 9 — Self-Hosted Compiler | ✅ Complete |
+| 10 — Production Readiness And Ecosystem | 🚧 Planned |
