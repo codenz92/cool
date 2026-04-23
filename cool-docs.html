@@ -1519,7 +1519,7 @@ print(len(v1))     # 2</code></pre>
         </div>
 
         <h3>Context Managers (with)</h3>
-        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in both the tree-walk interpreter and the bytecode VM, including cleanup on normal exit, control-flow exits, and raised exceptions. The LLVM native backend does not support <code>with</code> yet.</p>
+        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in both the tree-walk interpreter and the bytecode VM, including cleanup on normal exit, control-flow exits, and raised exceptions. LLVM native builds also support custom context managers on normal exit and control-flow exits, but not exception unwinding yet.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python">class Timer:
@@ -2175,7 +2175,7 @@ eval("print('hello from eval')")</code></pre>
         </div>
 
         <h3>with Statement (Recommended)</h3>
-        <p>Use <code>with</code> for structured file cleanup. Both the tree-walk interpreter and the bytecode VM close files on normal exit and raised exceptions; LLVM native builds do not support <code>with</code> yet.</p>
+        <p>Use <code>with</code> for structured file cleanup. Both the tree-walk interpreter and the bytecode VM close files on normal exit and raised exceptions. LLVM native builds support custom context-manager objects, but native <code>open()</code> / file context managers are still unavailable, so the file examples below remain interpreter/VM-only for now.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python"># Read entire file
@@ -2881,7 +2881,7 @@ echo Done.</code></pre>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM still excludes <code>with</code> / context managers, closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers on normal exit and <code>return</code>/<code>break</code>/<code>continue</code>, but still excludes exception unwinding, native <code>open()</code> / file context managers, closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code>/<code>random</code>/<code>json</code>/<code>string</code>/<code>list</code>/<code>re</code>/<code>collections</code>, plus <code>try</code>/<code>except</code> and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

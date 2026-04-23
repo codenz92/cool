@@ -505,6 +505,110 @@ except:
 }
 
 #[test]
+fn test_llvm_with_context_manager_uses_enter_result() {
+    let result = compile_and_run_native(
+        r#"
+class C:
+    def __enter__(self):
+        print("enter")
+        return 42
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("exit")
+
+with C() as value:
+    print(value)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "42", "exit"]);
+}
+
+#[test]
+fn test_llvm_with_context_manager_cleans_on_return() {
+    let result = compile_and_run_native(
+        r#"
+class C:
+    def __enter__(self):
+        print("enter")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("exit")
+
+def f():
+    with C():
+        return 7
+
+print(f())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "exit", "7"]);
+}
+
+#[test]
+fn test_llvm_with_context_manager_cleans_on_continue() {
+    let result = compile_and_run_native(
+        r#"
+class C:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        print("enter " + self.name)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("exit " + self.name)
+
+for i in range(2):
+    with C(str(i)):
+        if i == 0:
+            continue
+        print("body")
+print("done")
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter 0", "exit 0", "enter 1", "body", "exit 1", "done"]);
+}
+
+#[test]
+fn test_llvm_with_context_manager_break_only_cleans_exited_scope() {
+    let result = compile_and_run_native(
+        r#"
+class C:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        print("enter " + self.name)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("exit " + self.name)
+
+with C("outer"):
+    for i in range(2):
+        with C("inner"):
+            break
+    print("after")
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter outer", "enter inner", "exit inner", "after", "exit outer"]);
+}
+
+#[test]
 fn test_llvm_import_collections_module() {
     let result = compile_and_run_native(
         r#"

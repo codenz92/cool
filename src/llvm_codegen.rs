@@ -2496,8 +2496,8 @@ int32_t cool_enter_try(void) {
     if (g_exception_frame_count < MAX_EXCEPTION_FRAMES) {
         int idx = g_exception_frame_count;
         g_exception_frames[idx].active = 1;
-        int result = setjmp(g_exception_frames[idx].buf);
         g_exception_frame_count++;
+        int result = setjmp(g_exception_frames[idx].buf);
         if (result == 0) {
             return 0;  /* normal execution */
         } else {
@@ -2750,7 +2750,7 @@ struct Compiler<'ctx> {
     classes: HashMap<String, ClassInfo<'ctx>>,
     str_counter: usize,
     /// (continue_target, break_target) for each enclosing loop.
-    loop_stack: Vec<(BasicBlock<'ctx>, BasicBlock<'ctx>)>,
+    loop_stack: Vec<LoopFrame<'ctx>>,
     /// The function currently being compiled (Some(main_fn) at top level).
     current_fn: Option<FunctionValue<'ctx>>,
     /// Captured variables for closures (var name → capture index).
@@ -2762,6 +2762,8 @@ struct Compiler<'ctx> {
     current_class: Option<String>,
     /// Names of imported built-in modules visible to the native backend.
     imported_modules: HashSet<String>,
+    /// Active `with` blocks in the current function, stored by manager slot.
+    with_stack: Vec<WithCleanup<'ctx>>,
 }
 
 /// Information about a compiled class
@@ -2780,6 +2782,18 @@ struct ClassInfo<'ctx> {
     parent: Option<String>,
     /// Constructor parameter list, excluding the implicit `self`.
     constructor_params: Vec<crate::ast::Param>,
+}
+
+#[derive(Clone, Copy)]
+struct LoopFrame<'ctx> {
+    continue_bb: BasicBlock<'ctx>,
+    break_bb: BasicBlock<'ctx>,
+    with_depth: usize,
+}
+
+#[derive(Clone, Copy)]
+struct WithCleanup<'ctx> {
+    manager_ptr: PointerValue<'ctx>,
 }
 
 // ── Constructor & runtime declarations ───────────────────────────────────────
@@ -2812,6 +2826,7 @@ impl<'ctx> Compiler<'ctx> {
             nested_functions: Vec::new(),
             current_class: None,
             imported_modules: HashSet::new(),
+            with_stack: Vec::new(),
         }
     }
 
@@ -2969,6 +2984,61 @@ impl<'ctx> Compiler<'ctx> {
             builder.position_at_end(entry);
         }
         builder.build_alloca(self.cv_type, name).unwrap()
+    }
+
+    fn current_with_depth(&self) -> usize {
+        self.with_stack.len()
+    }
+
+    fn call_method_named(
+        &mut self,
+        obj: StructValue<'ctx>,
+        method_name: &str,
+        args: &[StructValue<'ctx>],
+        name: &str,
+    ) -> StructValue<'ctx> {
+        let method_label = format!("method_{}", method_name);
+        let global_name = format!("{}_{}", name, self.fresh_name());
+        let method_ptr = self
+            .builder
+            .build_global_string_ptr(&method_label, &global_name)
+            .unwrap();
+        let nargs_i32 = self.context.i32_type().const_int(args.len() as u64, false);
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+            vec![obj.into(), method_ptr.as_pointer_value().into(), nargs_i32.into()];
+        for arg in args {
+            call_args.push((*arg).into());
+        }
+        self.builder
+            .build_call(self.rt.cool_call_method_vararg, &call_args, name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
+    fn emit_with_exit_call(&mut self, manager_ptr: PointerValue<'ctx>) {
+        let manager = self
+            .builder
+            .build_load(self.cv_type, manager_ptr, "with_manager")
+            .unwrap()
+            .into_struct_value();
+        let nil0 = self.build_nil();
+        let nil1 = self.build_nil();
+        let nil2 = self.build_nil();
+        let _ = self.call_method_named(manager, "__exit__", &[nil0, nil1, nil2], "with_exit");
+    }
+
+    fn emit_with_cleanup(&mut self, manager_ptr: PointerValue<'ctx>) {
+        self.emit_with_exit_call(manager_ptr);
+    }
+
+    fn emit_cleanup_from_with_depth(&mut self, depth: usize) {
+        let manager_ptrs: Vec<_> = self.with_stack[depth..].iter().map(|cleanup| cleanup.manager_ptr).collect();
+        for manager_ptr in manager_ptrs.into_iter().rev() {
+            self.emit_with_cleanup(manager_ptr);
+        }
     }
 
     // ── CoolVal constructors ──────────────────────────────────────────────────
@@ -3208,6 +3278,7 @@ impl<'ctx> Compiler<'ctx> {
                     if let Some(e) = opt_expr {
                         self.compile_expr(e)?; // side-effects only
                     }
+                    self.emit_cleanup_from_with_depth(0);
                     let zero = self.context.i32_type().const_int(0, false);
                     self.builder.build_return(Some(&zero)).unwrap();
                 } else {
@@ -3215,18 +3286,21 @@ impl<'ctx> Compiler<'ctx> {
                         Some(e) => self.compile_expr(e)?,
                         None => self.build_nil(),
                     };
+                    self.emit_cleanup_from_with_depth(0);
                     self.builder.build_return(Some(&val)).unwrap();
                 }
             }
 
             // ── break / continue ─────────────────────────────────────────────
             Stmt::Break => {
-                let (_, break_bb) = *self.loop_stack.last().ok_or("'break' used outside loop")?;
-                self.builder.build_unconditional_branch(break_bb).unwrap();
+                let loop_frame = *self.loop_stack.last().ok_or("'break' used outside loop")?;
+                self.emit_cleanup_from_with_depth(loop_frame.with_depth);
+                self.builder.build_unconditional_branch(loop_frame.break_bb).unwrap();
             }
             Stmt::Continue => {
-                let (cont_bb, _) = *self.loop_stack.last().ok_or("'continue' used outside loop")?;
-                self.builder.build_unconditional_branch(cont_bb).unwrap();
+                let loop_frame = *self.loop_stack.last().ok_or("'continue' used outside loop")?;
+                self.emit_cleanup_from_with_depth(loop_frame.with_depth);
+                self.builder.build_unconditional_branch(loop_frame.continue_bb).unwrap();
             }
 
             // ── if / elif / else ─────────────────────────────────────────────
@@ -3257,6 +3331,11 @@ impl<'ctx> Compiler<'ctx> {
             // ── class definition ────────────────────────────────────────────
             Stmt::Class { name, parent, body } => {
                 self.compile_class(name, parent.as_deref(), body)?;
+            }
+
+            // ── with expr as name ───────────────────────────────────────────
+            Stmt::With { expr, as_name, body } => {
+                self.compile_with(expr, as_name.as_deref(), body)?;
             }
 
             // ── assert ────────────────────────────────────────────────────────
@@ -3396,7 +3475,11 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_conditional_branch(i1, body_bb, after_bb).unwrap();
 
         // Body — push (continue→cond_bb, break→after_bb)
-        self.loop_stack.push((cond_bb, after_bb));
+        self.loop_stack.push(LoopFrame {
+            continue_bb: cond_bb,
+            break_bb: after_bb,
+            with_depth: self.current_with_depth(),
+        });
         self.builder.position_at_end(body_bb);
         self.compile_stmts(body)?;
         if !self.current_block_terminated() {
@@ -3411,9 +3494,10 @@ impl<'ctx> Compiler<'ctx> {
     // ── for var in iterable ─────────────────────────────────────────────────
     fn compile_for(&mut self, var: &str, iter: &Expr, body: &[Stmt]) -> Result<(), String> {
         let fn_val = self.current_fn.unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "for_cond");
         let body_bb = self.context.append_basic_block(fn_val, "for_body");
+        let step_bb = self.context.append_basic_block(fn_val, "for_step");
         let after_bb = self.context.append_basic_block(fn_val, "for_after");
-        let update_bb = self.context.append_basic_block(fn_val, "for_update");
 
         // Compile the iterable into an index variable
         let iter_val = self.compile_expr(iter)?;
@@ -3425,14 +3509,11 @@ impl<'ctx> Compiler<'ctx> {
         let var_ptr = self.build_entry_alloca(var);
         self.locals.insert(var.to_string(), var_ptr);
 
-        // Get length of list (computed but not needed at runtime yet)
-        let _len_for_unused = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "len");
-
         // Jump to condition check
-        self.builder.build_unconditional_branch(update_bb).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
 
-        // Update: check idx < len
-        self.builder.position_at_end(update_bb);
+        // Condition: check idx < len
+        self.builder.position_at_end(cond_bb);
         let idx_cv = self
             .builder
             .build_load(self.cv_type, idx_ptr, "idx_load")
@@ -3445,23 +3526,35 @@ impl<'ctx> Compiler<'ctx> {
 
         // Body: get element at idx and execute body
         self.builder.position_at_end(body_bb);
-        self.loop_stack.push((update_bb, after_bb));
-        let elem = self.call_binop_fn(self.rt.cool_list_get, iter_val.clone(), idx_cv, "get");
+        self.loop_stack.push(LoopFrame {
+            continue_bb: step_bb,
+            break_bb: after_bb,
+            with_depth: self.current_with_depth(),
+        });
+        let body_idx = self
+            .builder
+            .build_load(self.cv_type, idx_ptr, "body_idx")
+            .unwrap()
+            .into_struct_value();
+        let elem = self.call_binop_fn(self.rt.cool_list_get, iter_val.clone(), body_idx, "get");
         self.builder.build_store(var_ptr, elem).unwrap();
         self.compile_stmts(body)?;
         if !self.current_block_terminated() {
-            // Increment index
-            let one = self.build_int(1);
-            let old_idx = self
-                .builder
-                .build_load(self.cv_type, idx_ptr, "old_idx")
-                .unwrap()
-                .into_struct_value();
-            let new_idx = self.call_binop_fn(self.rt.cool_add, old_idx, one, "add");
-            self.builder.build_store(idx_ptr, new_idx).unwrap();
-            self.builder.build_unconditional_branch(update_bb).unwrap();
+            self.builder.build_unconditional_branch(step_bb).unwrap();
         }
         self.loop_stack.pop();
+
+        // Step: increment index and loop back to the condition.
+        self.builder.position_at_end(step_bb);
+        let one = self.build_int(1);
+        let old_idx = self
+            .builder
+            .build_load(self.cv_type, idx_ptr, "old_idx")
+            .unwrap()
+            .into_struct_value();
+        let new_idx = self.call_binop_fn(self.rt.cool_add, old_idx, one, "add");
+        self.builder.build_store(idx_ptr, new_idx).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
 
         self.builder.position_at_end(after_bb);
         Ok(())
@@ -3484,6 +3577,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_fn = self.current_fn.replace(fn_val);
         let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_withs = std::mem::take(&mut self.with_stack);
 
         // Build entry block
         let entry = self.context.append_basic_block(fn_val, "entry");
@@ -3514,6 +3608,7 @@ impl<'ctx> Compiler<'ctx> {
         self.locals = saved_locals;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
+        self.with_stack = saved_withs;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -3633,6 +3728,7 @@ impl<'ctx> Compiler<'ctx> {
                     let saved_locals = std::mem::take(&mut self.locals);
                     let saved_fn = self.current_fn.replace(fn_val);
                     let saved_loops = std::mem::take(&mut self.loop_stack);
+                    let saved_withs = std::mem::take(&mut self.with_stack);
                     let saved_class = self.current_class.replace(name.to_string());
 
                     // Build entry
@@ -3664,6 +3760,7 @@ impl<'ctx> Compiler<'ctx> {
                     self.locals = saved_locals;
                     self.current_fn = saved_fn;
                     self.loop_stack = saved_loops;
+                    self.with_stack = saved_withs;
                     self.current_class = saved_class;
                     if let Some(bb) = saved_bb {
                         self.builder.position_at_end(bb);
@@ -3682,6 +3779,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_fn = self.current_fn.replace(constructor);
         let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_withs = std::mem::take(&mut self.with_stack);
 
         let entry = self.context.append_basic_block(constructor, "entry");
         self.builder.position_at_end(entry);
@@ -3855,6 +3953,7 @@ impl<'ctx> Compiler<'ctx> {
         self.locals = saved_locals;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
+        self.with_stack = saved_withs;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -3920,6 +4019,35 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_bb);
+        Ok(())
+    }
+
+    // ── with / context manager ───────────────────────────────────────────────
+
+    fn compile_with(&mut self, expr: &Expr, as_name: Option<&str>, body: &[Stmt]) -> Result<(), String> {
+        let manager_name = format!("__with_manager_{}", self.fresh_name());
+        let manager_ptr = self.build_entry_alloca(&manager_name);
+        let manager_val = self.compile_expr(expr)?;
+        self.builder.build_store(manager_ptr, manager_val).unwrap();
+
+        let entered = self.call_method_named(manager_val, "__enter__", &[], "with_enter");
+        if let Some(name) = as_name {
+            let ptr = if let Some(&p) = self.locals.get(name) {
+                p
+            } else {
+                let p = self.build_entry_alloca(name);
+                self.locals.insert(name.to_string(), p);
+                p
+            };
+            self.builder.build_store(ptr, entered).unwrap();
+        }
+
+        self.with_stack.push(WithCleanup { manager_ptr });
+        self.compile_stmts(body)?;
+        self.with_stack.pop();
+        if !self.current_block_terminated() {
+            self.emit_with_cleanup(manager_ptr);
+        }
         Ok(())
     }
 
