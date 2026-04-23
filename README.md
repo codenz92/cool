@@ -93,7 +93,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`) | ✅ | ✅ | ✅ |
 | `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`) | ✅ | ✅ | ✅ |
 | `import collections` (`Queue`, `Stack`) | ✅ | ✅ | ✅ |
-| `with` / context managers | ✅ | ⚠️ | ❌ |
+| `with` / context managers | ✅ | ✅ | ❌ |
 | f-strings | ✅ | ✅ | ✅ |
 | Ternary expressions | ✅ | ✅ | ✅ |
 | List comprehensions | ✅ | ✅ | ✅ |
@@ -104,8 +104,6 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import ffi` | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory access | ❌ | ❌ | ✅ |
-
-`⚠️` for the bytecode VM means simple `with` flows run `__enter__` / `__exit__`, but exception and early-exit cleanup semantics are still more complete in the tree-walk interpreter.
 
 ### Inline Assembly (LLVM backend)
 
@@ -334,7 +332,7 @@ examples/
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
 | 9 — Self-hosted compiler | ✅ Complete |
-| 10 — Production readiness and ecosystem | 🚧 Planned |
+| 10 — Production readiness and ecosystem | 🚧 In Progress |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

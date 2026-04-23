@@ -142,6 +142,7 @@ pub struct Chunk {
     pub constants: Vec<VmValue>,
     pub names: Vec<String>, // global/attr names
     pub lines: Vec<usize>,  // parallel to code
+    pub local_count: usize,
 }
 
 impl Chunk {
@@ -151,6 +152,7 @@ impl Chunk {
             constants: Vec::new(),
             names: Vec::new(),
             lines: Vec::new(),
+            local_count: 0,
         }
     }
 

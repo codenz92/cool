@@ -36,6 +36,8 @@ struct FnScope {
     next_slot: usize,
     /// Current nesting depth of break/continue-able loops.
     loop_stack: Vec<LoopInfo>,
+    /// Active `with` blocks in this function, stored as manager local slots.
+    with_cleanups: Vec<usize>,
 }
 
 struct LoopInfo {
@@ -46,6 +48,8 @@ struct LoopInfo {
     /// Whether the loop has an iterator on the stack (for-loops do; while-loops don't).
     /// A `break` must pop the iterator before jumping out.
     has_iter_on_stack: bool,
+    /// Number of active `with` blocks when the loop was entered.
+    with_depth: usize,
 }
 
 impl FnScope {
@@ -57,6 +61,7 @@ impl FnScope {
             nonlocals_declared: HashSet::new(),
             next_slot: 0,
             loop_stack: Vec::new(),
+            with_cleanups: Vec::new(),
         }
     }
 
@@ -144,6 +149,37 @@ impl Compiler {
     fn patch(&mut self, idx: usize) {
         let target = self.chunks.last().unwrap().current_ip();
         self.chunks.last_mut().unwrap().patch_jump(idx, target);
+    }
+
+    fn current_with_depth(&self) -> usize {
+        self.scopes.last().unwrap().with_cleanups.len()
+    }
+
+    fn alloc_hidden_local(&mut self, prefix: &str) -> usize {
+        let name = {
+            let scope = self.scopes.last().unwrap();
+            format!("{}{}", prefix, scope.next_slot)
+        };
+        self.scopes.last_mut().unwrap().add_local(&name)
+    }
+
+    fn emit_with_exit_call(&mut self, slot: usize) {
+        let exit_idx = self.add_name("__exit__");
+        self.emit(Op::GetLocal(slot));
+        self.emit(Op::GetAttr(exit_idx));
+        self.emit(Op::Nil);
+        self.emit(Op::Nil);
+        self.emit(Op::Nil);
+        self.emit(Op::Call(3, vec![]));
+        self.emit(Op::Pop);
+    }
+
+    fn emit_cleanup_from_with_depth(&mut self, depth: usize) {
+        let slots = self.scopes.last().unwrap().with_cleanups[depth..].to_vec();
+        for slot in slots.into_iter().rev() {
+            self.emit(Op::PopExcept);
+            self.emit_with_exit_call(slot);
+        }
     }
 
     fn add_constant(&mut self, v: VmValue) -> usize {
@@ -275,6 +311,7 @@ impl Compiler {
         // Implicit nil return.
         self.emit(Op::Nil);
         self.emit(Op::Return);
+        self.chunks[0].local_count = self.scopes[0].next_slot;
         Ok(self.chunks.remove(0))
     }
 
@@ -393,6 +430,7 @@ impl Compiler {
                         self.emit(Op::Nil);
                     }
                 }
+                self.emit_cleanup_from_with_depth(0);
                 self.emit(Op::Return);
             }
 
@@ -406,9 +444,10 @@ impl Compiler {
                     .unwrap()
                     .loop_stack
                     .last()
-                    .map(|l| l.has_iter_on_stack)
+                    .map(|l| (l.has_iter_on_stack, l.with_depth))
                     .ok_or_else(|| "break outside loop".to_string())?;
-                if has_iter {
+                self.emit_cleanup_from_with_depth(has_iter.1);
+                if has_iter.0 {
                     self.emit(Op::Pop); // discard the VmIter
                 }
                 let patch_idx = self.emit_jump(Op::Jump);
@@ -426,9 +465,10 @@ impl Compiler {
                     .unwrap()
                     .loop_stack
                     .last()
-                    .map(|l| l.continue_target)
+                    .map(|l| (l.continue_target, l.with_depth))
                     .ok_or_else(|| "continue outside loop".to_string())?;
-                self.emit(Op::Jump(target));
+                self.emit_cleanup_from_with_depth(target.1);
+                self.emit(Op::Jump(target.0));
             }
 
             Stmt::If {
@@ -482,10 +522,12 @@ impl Compiler {
 
             Stmt::While { condition, body } => {
                 let loop_start = self.chunk().current_ip();
+                let with_depth = self.current_with_depth();
                 self.scope().loop_stack.push(LoopInfo {
                     break_patches: Vec::new(),
                     continue_target: loop_start,
                     has_iter_on_stack: false,
+                    with_depth,
                 });
 
                 self.compile_expr(condition)?;
@@ -514,10 +556,12 @@ impl Compiler {
                 self.emit(Op::GetIter);
 
                 let loop_start = self.chunk().current_ip();
+                let with_depth = self.current_with_depth();
                 self.scope().loop_stack.push(LoopInfo {
                     break_patches: Vec::new(),
                     continue_target: loop_start,
                     has_iter_on_stack: true,
+                    with_depth,
                 });
 
                 let exit_patch = self.emit_jump(Op::ForIter);
@@ -649,10 +693,12 @@ impl Compiler {
             }
 
             Stmt::With { expr, as_name, body } => {
+                let manager_slot = self.alloc_hidden_local("__with_manager_");
                 self.compile_expr(expr)?;
+                self.emit(Op::SetLocal(manager_slot));
                 // Call __enter__ on the context manager.
                 let enter_idx = self.add_name("__enter__");
-                self.emit(Op::DupTop);
+                self.emit(Op::GetLocal(manager_slot));
                 self.emit(Op::GetAttr(enter_idx));
                 self.emit(Op::Call(0, vec![]));
                 if let Some(var) = as_name {
@@ -661,18 +707,19 @@ impl Compiler {
                 } else {
                     self.emit(Op::Pop);
                 }
-                // TODO: proper __exit__ on exception; for now just compile body
+                self.scopes.last_mut().unwrap().with_cleanups.push(manager_slot);
+                let setup_idx = self.emit_jump(Op::SetupExcept);
                 for s in body {
                     self.compile_stmt(s)?;
                 }
-                // Call __exit__(None, None, None)
-                let exit_idx = self.add_name("__exit__");
-                self.emit(Op::GetAttr(exit_idx));
-                self.emit(Op::Nil);
-                self.emit(Op::Nil);
-                self.emit(Op::Nil);
-                self.emit(Op::Call(3, vec![]));
-                self.emit(Op::Pop);
+                self.emit(Op::PopExcept);
+                self.emit_with_exit_call(manager_slot);
+                let end_jump = self.emit_jump(Op::Jump);
+                self.patch(setup_idx);
+                self.emit_with_exit_call(manager_slot);
+                self.emit(Op::Raise);
+                self.patch(end_jump);
+                self.scopes.last_mut().unwrap().with_cleanups.pop();
             }
 
             Stmt::Global(names) => {
@@ -1142,6 +1189,7 @@ impl Compiler {
                 // Stack: [..., acc, iterator]
 
                 let loop_start = self.chunk().current_ip();
+                let with_depth = self.current_with_depth();
                 self.scope().loop_stack.push(LoopInfo {
                     break_patches: Vec::new(),
                     continue_target: loop_start,
@@ -1151,6 +1199,7 @@ impl Compiler {
                     // Since you can't break inside a list comprehension in Cool, this is
                     // effectively dead code, but keeping it safe.
                     has_iter_on_stack: true,
+                    with_depth,
                 });
 
                 let exit_patch = self.emit_jump(Op::ForIter);

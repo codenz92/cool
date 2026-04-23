@@ -1519,7 +1519,7 @@ print(len(v1))     # 2</code></pre>
         </div>
 
         <h3>Context Managers (with)</h3>
-        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in the tree-walk interpreter and bytecode VM. The interpreter currently has the most complete cleanup behavior; the bytecode VM handles simple fallthrough <code>with</code> blocks, while the LLVM native backend does not support <code>with</code> yet.</p>
+        <p>Custom <code>__enter__</code> / <code>__exit__</code> context managers work in both the tree-walk interpreter and the bytecode VM, including cleanup on normal exit, control-flow exits, and raised exceptions. The LLVM native backend does not support <code>with</code> yet.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python">class Timer:
@@ -2175,7 +2175,7 @@ eval("print('hello from eval')")</code></pre>
         </div>
 
         <h3>with Statement (Recommended)</h3>
-        <p>Use <code>with</code> for structured file cleanup. The tree-walk interpreter closes files on both normal exit and raised exceptions; the bytecode VM guarantees cleanup for simple fallthrough <code>with</code> blocks, and LLVM native builds do not support <code>with</code> yet.</p>
+        <p>Use <code>with</code> for structured file cleanup. Both the tree-walk interpreter and the bytecode VM close files on normal exit and raised exceptions; LLVM native builds do not support <code>with</code> yet.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python"># Read entire file

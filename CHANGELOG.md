@@ -177,20 +177,18 @@ cool coolapps/shell.cool
 run coolapps/snake.cool
 ```
 
-The interpreter and bytecode VM cover the same core language surface, although context-manager cleanup semantics are still more complete in the tree-walk interpreter. The LLVM backend now also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), and `collections.Queue()` / `collections.Stack()`, but it still has some limitations:
+The interpreter and bytecode VM now share full context-manager cleanup semantics, and the LLVM backend also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), and `collections.Queue()` / `collections.Stack()`, but it still has some limitations:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 |---------|-------------|-------------|------|
 | Classes | ✅ | ✅ | ✅ |
-| `with` / context managers | ✅ | ⚠️ | ❌ |
+| `with` / context managers | ✅ | ✅ | ❌ |
 | Closures / lambdas | ✅ | ✅ | ❌ |
 | `while` loops | ✅ | ✅ | ✅ |
 | General `import` | ✅ | ✅ | ❌ |
 | `try`/`except` | ✅ | ✅ | ❌ |
 | FFI (`import ffi`) | ✅ | ✅ | ❌ |
 | Inline asm | ❌ | ❌ | ✅ |
-
-`⚠️` for the bytecode VM means simple `with` flows run `__enter__` / `__exit__`, but exception and early-exit cleanup semantics are still more complete in the tree-walk interpreter.
 
 ---
 

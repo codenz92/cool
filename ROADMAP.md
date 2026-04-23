@@ -326,15 +326,13 @@ The LLVM backend now covers most day-to-day language features, including default
 | `in` / `not in` | ✅ | ✅ | ✅ |
 | Dicts | ✅ | ✅ | ✅ |
 | Tuples | ✅ | ✅ | ✅ |
-| `with` / `context managers` | ✅ | ⚠️ | ❌ |
+| `with` / `context managers` | ✅ | ✅ | ❌ |
 | Closures / lambdas | ✅ | ✅ | ❌ |
 | General `import` | ✅ | ✅ | ❌ |
 | `try` / `except` | ✅ | ✅ | ❌ |
 | `import ffi` | ✅ | ✅ | ❌ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory | ❌ | ❌ | ✅ |
-
-`⚠️` for the bytecode VM means simple `with` flows run `__enter__` / `__exit__`, but exception and early-exit cleanup semantics are still more complete in the tree-walk interpreter.
 
 ---
 
@@ -373,13 +371,13 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 10 — Production Readiness And Ecosystem 🚧 Planned
+## Phase 10 — Production Readiness And Ecosystem 🚧 In Progress
 
 > Goal: make Cool feel default for real applications, not just impressive for demos, scripts, and experiments
 
 ### Runtime Parity
 
-- [ ] Bytecode VM: full `with` / context-manager cleanup semantics, including `return`, `break`, `continue`, and exceptions
+- [x] Bytecode VM: full `with` / context-manager cleanup semantics, including `return`, `break`, `continue`, and exceptions
 - [ ] LLVM: `with` / context managers
 - [ ] LLVM: `try` / `except` / `finally` / `raise`
 - [ ] LLVM: broader `import` support beyond built-in native modules
@@ -422,4 +420,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
 | 9 — Self-Hosted Compiler | ✅ Complete |
-| 10 — Production Readiness And Ecosystem | 🚧 Planned |
+| 10 — Production Readiness And Ecosystem | 🚧 In Progress |

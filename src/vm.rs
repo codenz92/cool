@@ -218,10 +218,11 @@ impl VM {
                 c.constants = chunk.constants.clone();
                 c.names = chunk.names.clone();
                 c.lines = chunk.lines.clone();
+                c.local_count = chunk.local_count;
                 c
             },
             upvalue_count: 0,
-            local_count: 0,
+            local_count: chunk.local_count,
         });
         let closure = Rc::new(VmClosure {
             proto,
@@ -230,6 +231,7 @@ impl VM {
         // base = current stack height so that Op::Return truncates back to here,
         // not to 0 (which would destroy callers' locals when run() is called mid-execution).
         let base = self.stack.len();
+        self.stack.resize(base + chunk.local_count, VmValue::Nil);
         self.frames.push(CallFrame { closure, ip: 0, base });
 
         match self.execute() {

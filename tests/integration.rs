@@ -457,6 +457,46 @@ fn test_vm_with_context_manager_uses_enter_result() {
 }
 
 #[test]
+fn test_vm_with_context_manager_cleans_on_exception() {
+    let result = run_cool_vm(
+        "class C:\n\tdef __enter__(self):\n\t\tprint(\"enter\")\n\t\treturn self\n\tdef __exit__(self, exc_type, exc_val, exc_tb):\n\t\tprint(\"exit\")\ntry:\n\twith C() as value:\n\t\tx = 1 / 0\nexcept:\n\tprint(\"caught\")",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "exit", "caught"]);
+}
+
+#[test]
+fn test_vm_with_context_manager_cleans_on_return() {
+    let result = run_cool_vm(
+        "class C:\n\tdef __enter__(self):\n\t\tprint(\"enter\")\n\t\treturn self\n\tdef __exit__(self, exc_type, exc_val, exc_tb):\n\t\tprint(\"exit\")\ndef f():\n\twith C():\n\t\treturn 7\nprint(f())",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter", "exit", "7"]);
+}
+
+#[test]
+fn test_vm_with_context_manager_cleans_on_continue() {
+    let result = run_cool_vm(
+        "class C:\n\tdef __init__(self, name):\n\t\tself.name = name\n\tdef __enter__(self):\n\t\tprint(\"enter \" + self.name)\n\t\treturn self\n\tdef __exit__(self, exc_type, exc_val, exc_tb):\n\t\tprint(\"exit \" + self.name)\nfor i in range(2):\n\twith C(str(i)):\n\t\tif i == 0:\n\t\t\tcontinue\n\t\tprint(\"body\")\nprint(\"done\")",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter 0", "exit 0", "enter 1", "body", "exit 1", "done"]);
+}
+
+#[test]
+fn test_vm_with_context_manager_break_only_cleans_exited_scope() {
+    let result = run_cool_vm(
+        "class C:\n\tdef __init__(self, name):\n\t\tself.name = name\n\tdef __enter__(self):\n\t\tprint(\"enter \" + self.name)\n\t\treturn self\n\tdef __exit__(self, exc_type, exc_val, exc_tb):\n\t\tprint(\"exit \" + self.name)\nwith C(\"outer\"):\n\tfor i in range(2):\n\t\twith C(\"inner\"):\n\t\t\tbreak\n\tprint(\"after\")",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["enter outer", "enter inner", "exit inner", "after", "exit outer"]);
+}
+
+#[test]
 fn test_import_dotted_module_package_path() {
     let temp_dir = unique_temp_dir("cool_import_package_test");
     let _ = std::fs::remove_dir_all(&temp_dir);

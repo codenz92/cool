@@ -292,8 +292,7 @@ NOTES:
     (Queue/Stack), inline asm, and raw memory.
     Closures/lambdas, with/context managers, broader import support
     beyond those built-ins, import ffi, and try/except still require
-    the interpreter or bytecode VM. For the most complete context-
-    manager cleanup semantics, prefer the tree-walk interpreter.
+    the interpreter or bytecode VM.
 "
     );
 }
