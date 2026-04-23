@@ -6,6 +6,7 @@ use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 use crate::toml_runtime::{self, TomlData};
+use crate::yaml_runtime::{self, YamlData};
 /// Tree-walk interpreter for Cool.
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -1143,6 +1144,18 @@ impl Interpreter {
                     Value::BuiltinFn("toml.dumps".to_string()),
                 );
                 env.set_local("toml".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "yaml" => {
+                let mut map = IndexedMap::new();
+                map.set(
+                    Value::Str("loads".to_string()),
+                    Value::BuiltinFn("yaml.loads".to_string()),
+                );
+                map.set(
+                    Value::Str("dumps".to_string()),
+                    Value::BuiltinFn("yaml.dumps".to_string()),
+                );
+                env.set_local("yaml".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "re" => {
                 let mut map = IndexedMap::new();
@@ -2343,6 +2356,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("toml.") {
             return self.call_toml_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("yaml.") {
+            return self.call_yaml_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("re.") {
             return self.call_re_fn(f, args);
@@ -4411,6 +4427,93 @@ class Stack:
                 ))
             }
             _ => Err(self.err(&format!("toml has no function '{}'", name))),
+        }
+    }
+
+    fn value_to_yaml_data(&self, value: &Value) -> Result<YamlData, String> {
+        match value {
+            Value::Nil => Ok(YamlData::Nil),
+            Value::Int(n) => Ok(YamlData::Int(*n)),
+            Value::Float(f) if f.is_finite() => Ok(YamlData::Float(*f)),
+            Value::Float(_) => Err(self.err("yaml.dumps() does not support NaN or infinite floats")),
+            Value::Str(s) => Ok(YamlData::Str(s.clone())),
+            Value::Bool(b) => Ok(YamlData::Bool(*b)),
+            Value::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.value_to_yaml_data(item)?);
+                }
+                Ok(YamlData::List(out))
+            }
+            Value::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.value_to_yaml_data(item)?);
+                }
+                Ok(YamlData::List(out))
+            }
+            Value::Dict(map) => {
+                let map = map.borrow();
+                let mut out = Vec::with_capacity(map.keys.len());
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    let key = match key {
+                        Value::Str(s) => s.clone(),
+                        other => {
+                            return Err(self.err(&format!(
+                                "yaml.dumps() dict keys must be strings, got {}",
+                                other.type_name()
+                            )))
+                        }
+                    };
+                    out.push((key, self.value_to_yaml_data(value)?));
+                }
+                Ok(YamlData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "yaml.dumps() only supports nil/ints/floats/strings/bools/lists/tuples/dicts, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn yaml_data_to_value(data: &YamlData) -> Value {
+        match data {
+            YamlData::Nil => Value::Nil,
+            YamlData::Int(n) => Value::Int(*n),
+            YamlData::Float(f) => Value::Float(*f),
+            YamlData::Str(s) => Value::Str(s.clone()),
+            YamlData::Bool(b) => Value::Bool(*b),
+            YamlData::List(items) => Value::List(Rc::new(RefCell::new(
+                items.iter().map(Self::yaml_data_to_value).collect(),
+            ))),
+            YamlData::Dict(items) => {
+                let mut out = IndexedMap::new();
+                for (key, value) in items {
+                    out.set(Value::Str(key.clone()), Self::yaml_data_to_value(value));
+                }
+                Value::Dict(Rc::new(RefCell::new(out)))
+            }
+        }
+    }
+
+    fn call_yaml_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "loads" => {
+                let s = req_str_arg(&args, 0, "yaml.loads")?;
+                Ok(Self::yaml_data_to_value(
+                    &yaml_runtime::loads(&s).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "dumps" => {
+                let value = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("yaml.dumps() requires 1 argument"))?;
+                Ok(Value::Str(
+                    yaml_runtime::dumps(&self.value_to_yaml_data(&value)?).map_err(|e| self.err(&e))?,
+                ))
+            }
+            _ => Err(self.err(&format!("yaml has no function '{}'", name))),
         }
     }
 

@@ -1174,6 +1174,61 @@ print("debug = true" in rendered)
 }
 
 #[test]
+fn test_llvm_import_yaml_module() {
+    let result = compile_and_run_native(
+        r#"
+import yaml
+text = "name: cool\nenabled: true\nports:\n  - 8000\n  - 8001\nservice:\n  host: 127.0.0.1\n  retries: 3\nnote: null\n"
+data = yaml.loads(text)
+print(data["name"])
+print(data["enabled"])
+print(data["ports"][1])
+print(data["service"]["host"])
+print(data["service"]["retries"])
+print(data["note"] == nil)
+rendered = yaml.dumps({
+    "name": "cool",
+    "enabled": true,
+    "ports": [8000, 8001],
+    "service": {
+        "host": "127.0.0.1",
+        "retries": 3
+    },
+    "note": nil
+})
+print("name: cool" in rendered)
+print("enabled: true" in rendered)
+print("ports:" in rendered)
+print("- 8000" in rendered)
+print("service:" in rendered)
+print("host: 127.0.0.1" in rendered)
+print("note: null" in rendered)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "cool",
+            "true",
+            "8001",
+            "127.0.0.1",
+            "3",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
 fn test_llvm_import_test_module() {
     let result = compile_and_run_native(
         r#"

@@ -3673,6 +3673,483 @@ static CoolVal cool_toml_dumps(CoolVal value) {
     return cv_str(sb.data);
 }
 
+typedef struct {
+    int indent;
+    char* text;
+} CoolYamlLine;
+
+static void yaml_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static int yaml_count_indent(const char* line) {
+    int indent = 0;
+    while (line[indent] == ' ') indent++;
+    if (line[indent] == '\t') {
+        yaml_raisef("yaml.loads() does not support tab indentation");
+    }
+    return indent;
+}
+
+static int yaml_is_seq_item(const char* text) {
+    return text[0] == '-' && (text[1] == '\0' || isspace((unsigned char)text[1]));
+}
+
+static char* yaml_parse_key_text(const char* text) {
+    char* copy = strdup(text);
+    if (!copy) yaml_raisef("yaml: out of memory");
+    char* trimmed = toml_trim_inplace(copy);
+    if (*trimmed == '\0') yaml_raisef("yaml mapping key cannot be empty");
+    if (*trimmed == '"' || *trimmed == '\'') {
+        const char* p = trimmed;
+        char* parsed = toml_parse_quoted_string_raw(&p);
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p != '\0') yaml_raisef("yaml mapping key has trailing characters");
+        return parsed;
+    }
+    return strdup(trimmed);
+}
+
+static CoolVal yaml_parse_inline_value_text(const char* text);
+
+static CoolVal yaml_parse_inline_list_text(const char* text) {
+    size_t len = strlen(text);
+    if (len < 2 || text[0] != '[' || text[len - 1] != ']') {
+        yaml_raisef("yaml inline list must be enclosed in []");
+    }
+    CoolVal out = cool_list_make(cv_int(4));
+    char* inner = toml_slice_trimmed(text + 1, len - 2);
+    if (!*inner) return out;
+    char* start = inner;
+    int in_double = 0, in_single = 0, escaped = 0;
+    int depth_bracket = 0, depth_brace = 0;
+    for (char* p = inner;; p++) {
+        char ch = *p;
+        int at_end = (ch == '\0');
+        if (!at_end) {
+            if (in_double) {
+                if (escaped) escaped = 0;
+                else if (ch == '\\') escaped = 1;
+                else if (ch == '"') in_double = 0;
+            } else if (in_single) {
+                if (ch == '\'') in_single = 0;
+            } else if (ch == '"') {
+                in_double = 1;
+            } else if (ch == '\'') {
+                in_single = 1;
+            } else if (ch == '[') {
+                depth_bracket++;
+            } else if (ch == ']') {
+                depth_bracket--;
+            } else if (ch == '{') {
+                depth_brace++;
+            } else if (ch == '}') {
+                depth_brace--;
+            }
+        }
+        if (at_end || (ch == ',' && !in_double && !in_single && depth_bracket == 0 && depth_brace == 0)) {
+            char saved = *p;
+            *p = '\0';
+            char* segment = toml_trim_inplace(start);
+            if (*segment) {
+                cool_list_push(out, yaml_parse_inline_value_text(segment));
+            }
+            if (saved == '\0') break;
+            start = p + 1;
+        }
+    }
+    return out;
+}
+
+static CoolVal yaml_parse_inline_dict_text(const char* text) {
+    size_t len = strlen(text);
+    if (len < 2 || text[0] != '{' || text[len - 1] != '}') {
+        yaml_raisef("yaml inline map must be enclosed in {}");
+    }
+    CoolVal out = cool_dict_new();
+    char* inner = toml_slice_trimmed(text + 1, len - 2);
+    if (!*inner) return out;
+    char* start = inner;
+    int in_double = 0, in_single = 0, escaped = 0;
+    int depth_bracket = 0, depth_brace = 0;
+    for (char* p = inner;; p++) {
+        char ch = *p;
+        int at_end = (ch == '\0');
+        if (!at_end) {
+            if (in_double) {
+                if (escaped) escaped = 0;
+                else if (ch == '\\') escaped = 1;
+                else if (ch == '"') in_double = 0;
+            } else if (in_single) {
+                if (ch == '\'') in_single = 0;
+            } else if (ch == '"') {
+                in_double = 1;
+            } else if (ch == '\'') {
+                in_single = 1;
+            } else if (ch == '[') {
+                depth_bracket++;
+            } else if (ch == ']') {
+                depth_bracket--;
+            } else if (ch == '{') {
+                depth_brace++;
+            } else if (ch == '}') {
+                depth_brace--;
+            }
+        }
+        if (at_end || (ch == ',' && !in_double && !in_single && depth_bracket == 0 && depth_brace == 0)) {
+            char saved = *p;
+            *p = '\0';
+            char* pair = toml_trim_inplace(start);
+            if (*pair) {
+                const char* colon = toml_find_top_level_char(pair, ':');
+                if (!colon) yaml_raisef("yaml inline map entries must be key: value");
+                char* key = toml_slice_trimmed(pair, (size_t)(colon - pair));
+                char* parsed_key = yaml_parse_key_text(key);
+                char* value = toml_slice_trimmed(colon + 1, strlen(colon + 1));
+                cool_dict_set(out, cv_str(parsed_key), yaml_parse_inline_value_text(value));
+            }
+            if (saved == '\0') break;
+            start = p + 1;
+        }
+    }
+    return out;
+}
+
+static CoolVal yaml_parse_inline_value_text(const char* text) {
+    char* copy = strdup(text);
+    if (!copy) yaml_raisef("yaml: out of memory");
+    char* t = toml_trim_inplace(copy);
+    size_t len = strlen(t);
+    if (len == 0) yaml_raisef("yaml value cannot be empty");
+    if (t[0] == '"' || t[0] == '\'') {
+        const char* p = t;
+        char* s = toml_parse_quoted_string_raw(&p);
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p != '\0') yaml_raisef("yaml string has trailing characters");
+        return cv_str(s);
+    }
+    if (t[0] == '[') return yaml_parse_inline_list_text(t);
+    if (t[0] == '{') return yaml_parse_inline_dict_text(t);
+    if (strcmp(t, "null") == 0 || strcmp(t, "nil") == 0 || strcmp(t, "~") == 0) return cv_nil();
+    if (strcmp(t, "true") == 0) return cv_bool(1);
+    if (strcmp(t, "false") == 0) return cv_bool(0);
+    CoolVal number;
+    if (toml_try_parse_number(t, &number)) return number;
+    return cv_str(strdup(t));
+}
+
+static CoolVal yaml_parse_block_lines(CoolYamlLine* lines, int count, int* idx, int indent);
+
+static CoolVal yaml_parse_list_lines(CoolYamlLine* lines, int count, int* idx, int indent) {
+    CoolVal out = cool_list_make(cv_int(4));
+    while (*idx < count) {
+        CoolYamlLine* line = &lines[*idx];
+        if (line->indent < indent) break;
+        if (line->indent > indent) {
+            yaml_raisef("yaml indentation error: unexpected nested indent %d", line->indent);
+        }
+        if (!yaml_is_seq_item(line->text)) {
+            yaml_raisef("yaml cannot mix mapping entries into a sequence block");
+        }
+        char* content = toml_trim_inplace(line->text + 1);
+        (*idx)++;
+        CoolVal value;
+        if (*content == '\0') {
+            if (*idx < count && lines[*idx].indent > indent) {
+                value = yaml_parse_block_lines(lines, count, idx, lines[*idx].indent);
+            } else {
+                value = cv_nil();
+            }
+        } else {
+            value = yaml_parse_inline_value_text(content);
+        }
+        cool_list_push(out, value);
+    }
+    return out;
+}
+
+static CoolVal yaml_parse_dict_lines(CoolYamlLine* lines, int count, int* idx, int indent) {
+    CoolVal out = cool_dict_new();
+    while (*idx < count) {
+        CoolYamlLine* line = &lines[*idx];
+        if (line->indent < indent) break;
+        if (line->indent > indent) {
+            yaml_raisef("yaml indentation error: unexpected nested indent %d", line->indent);
+        }
+        if (yaml_is_seq_item(line->text)) {
+            yaml_raisef("yaml cannot mix sequence items into a mapping block");
+        }
+        const char* colon = toml_find_top_level_char(line->text, ':');
+        if (!colon) yaml_raisef("yaml mapping entries must contain ':'");
+        char* key_text = toml_slice_trimmed(line->text, (size_t)(colon - line->text));
+        char* key = yaml_parse_key_text(key_text);
+        char* rest = toml_slice_trimmed(colon + 1, strlen(colon + 1));
+        (*idx)++;
+        CoolVal value;
+        if (*rest == '\0') {
+            if (*idx < count && lines[*idx].indent > indent) {
+                value = yaml_parse_block_lines(lines, count, idx, lines[*idx].indent);
+            } else {
+                value = cv_nil();
+            }
+        } else {
+            value = yaml_parse_inline_value_text(rest);
+        }
+        cool_dict_set(out, cv_str(key), value);
+    }
+    return out;
+}
+
+static CoolVal yaml_parse_block_lines(CoolYamlLine* lines, int count, int* idx, int indent) {
+    if (*idx >= count) yaml_raisef("yaml document ended unexpectedly");
+    if (lines[*idx].indent != indent) {
+        yaml_raisef("yaml indentation error: expected indent %d, got %d", indent, lines[*idx].indent);
+    }
+    if (yaml_is_seq_item(lines[*idx].text)) {
+        return yaml_parse_list_lines(lines, count, idx, indent);
+    }
+    return yaml_parse_dict_lines(lines, count, idx, indent);
+}
+
+static CoolVal cool_yaml_loads(CoolVal text_v) {
+    if (text_v.tag != TAG_STR) {
+        yaml_raisef("yaml.loads() requires a string, got %s", cool_to_str(text_v));
+    }
+    char* src = strdup((const char*)(intptr_t)text_v.payload);
+    if (!src) yaml_raisef("yaml.loads(): out of memory");
+    CoolYamlLine* lines = NULL;
+    int count = 0;
+    int cap = 0;
+    char* save = NULL;
+    for (char* raw = strtok_r(src, "\n", &save); raw; raw = strtok_r(NULL, "\n", &save)) {
+        size_t raw_len = strlen(raw);
+        if (raw_len > 0 && raw[raw_len - 1] == '\r') raw[raw_len - 1] = '\0';
+        int indent = yaml_count_indent(raw);
+        char* text = strdup(raw + indent);
+        if (!text) yaml_raisef("yaml.loads(): out of memory");
+        toml_strip_comment_inplace(text);
+        char* trimmed = toml_trim_inplace(text);
+        if (*trimmed == '\0') continue;
+        if (trimmed != text) memmove(text, trimmed, strlen(trimmed) + 1);
+        if (count >= cap) {
+            cap = cap ? cap * 2 : 16;
+            lines = (CoolYamlLine*)realloc(lines, (size_t)cap * sizeof(CoolYamlLine));
+            if (!lines) yaml_raisef("yaml.loads(): out of memory");
+        }
+        lines[count].indent = indent;
+        lines[count].text = text;
+        count++;
+    }
+    if (count == 0) {
+        free(src);
+        return cool_dict_new();
+    }
+    int idx = 0;
+    CoolVal out = yaml_parse_block_lines(lines, count, &idx, lines[0].indent);
+    if (idx != count) yaml_raisef("yaml.loads() could not consume the full document");
+    free(src);
+    return out;
+}
+
+static int yaml_string_needs_quotes(const char* s) {
+    if (!s || !*s) return 1;
+    size_t len = strlen(s);
+    if (isspace((unsigned char)s[0]) || isspace((unsigned char)s[len - 1])) return 1;
+    if (strcmp(s, "true") == 0 || strcmp(s, "false") == 0 || strcmp(s, "null") == 0 ||
+        strcmp(s, "nil") == 0 || strcmp(s, "~") == 0) {
+        return 1;
+    }
+    CoolVal number;
+    if (toml_try_parse_number(s, &number)) return 1;
+    switch (s[0]) {
+        case '-':
+        case '?':
+        case '!':
+        case '&':
+        case '*':
+        case '@':
+        case '`':
+            return 1;
+        default:
+            break;
+    }
+    for (const char* p = s; *p; p++) {
+        switch (*p) {
+            case ':':
+            case '#':
+            case '{':
+            case '}':
+            case '[':
+            case ']':
+            case ',':
+            case '"':
+            case '\'':
+            case '\n':
+            case '\r':
+            case '\t':
+                return 1;
+            default:
+                break;
+        }
+    }
+    return 0;
+}
+
+static void yaml_dump_key(CoolStrBuf* sb, const char* key) {
+    if (yaml_string_needs_quotes(key)) toml_dump_string(sb, key);
+    else sb_push_str(sb, key);
+}
+
+static void yaml_dump_string(CoolStrBuf* sb, const char* s) {
+    if (yaml_string_needs_quotes(s)) toml_dump_string(sb, s);
+    else sb_push_str(sb, s);
+}
+
+static int yaml_is_inline_value(CoolVal value) {
+    switch (value.tag) {
+        case TAG_NIL:
+        case TAG_BOOL:
+        case TAG_INT:
+        case TAG_FLOAT:
+        case TAG_STR:
+            return 1;
+        case TAG_LIST:
+        case TAG_TUPLE: {
+            CoolList* list = (CoolList*)(intptr_t)value.payload;
+            return !list || list->length == 0;
+        }
+        case TAG_DICT: {
+            CoolDict* dict = (CoolDict*)(intptr_t)value.payload;
+            return !dict || dict->len == 0;
+        }
+        default:
+            return 0;
+    }
+}
+
+static void yaml_dump_inline_value(CoolStrBuf* sb, CoolVal value) {
+    switch (value.tag) {
+        case TAG_NIL:
+            sb_push_str(sb, "null");
+            break;
+        case TAG_BOOL:
+            sb_push_str(sb, value.payload ? "true" : "false");
+            break;
+        case TAG_INT: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%lld", (long long)value.payload);
+            sb_push_str(sb, buf);
+            break;
+        }
+        case TAG_FLOAT: {
+            double f = cv_as_float(value);
+            if (!isfinite(f)) yaml_raisef("yaml.dumps() does not support NaN or infinite floats");
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", f);
+            sb_push_str(sb, buf);
+            break;
+        }
+        case TAG_STR:
+            yaml_dump_string(sb, (const char*)(intptr_t)value.payload);
+            break;
+        case TAG_LIST:
+        case TAG_TUPLE: {
+            CoolList* list = (CoolList*)(intptr_t)value.payload;
+            sb_push_char(sb, '[');
+            if (list) {
+                for (int64_t i = 0; i < list->length; i++) {
+                    if (i > 0) sb_push_str(sb, ", ");
+                    yaml_dump_inline_value(sb, ((CoolVal*)list->data)[i]);
+                }
+            }
+            sb_push_char(sb, ']');
+            break;
+        }
+        case TAG_DICT: {
+            CoolDict* dict = (CoolDict*)(intptr_t)value.payload;
+            sb_push_char(sb, '{');
+            if (dict) {
+                for (int64_t i = 0; i < dict->len; i++) {
+                    if (dict->keys[i].tag != TAG_STR) yaml_raisef("yaml.dumps() dict keys must be strings");
+                    if (i > 0) sb_push_str(sb, ", ");
+                    yaml_dump_key(sb, (const char*)(intptr_t)dict->keys[i].payload);
+                    sb_push_str(sb, ": ");
+                    yaml_dump_inline_value(sb, dict->vals[i]);
+                }
+            }
+            sb_push_char(sb, '}');
+            break;
+        }
+        default:
+            yaml_raisef("yaml.dumps() cannot serialize %s", cool_type_name(value.tag));
+    }
+}
+
+static void yaml_push_indent(CoolStrBuf* sb, int indent) {
+    for (int i = 0; i < indent; i++) sb_push_char(sb, ' ');
+}
+
+static void yaml_dump_block(CoolStrBuf* sb, CoolVal value, int indent) {
+    if (value.tag == TAG_LIST || value.tag == TAG_TUPLE) {
+        CoolList* list = (CoolList*)(intptr_t)value.payload;
+        if (!list || list->length == 0) {
+            yaml_push_indent(sb, indent);
+            sb_push_str(sb, "[]\n");
+            return;
+        }
+        for (int64_t i = 0; i < list->length; i++) {
+            CoolVal item = ((CoolVal*)list->data)[i];
+            yaml_push_indent(sb, indent);
+            if (yaml_is_inline_value(item)) {
+                sb_push_str(sb, "- ");
+                yaml_dump_inline_value(sb, item);
+                sb_push_char(sb, '\n');
+            } else {
+                sb_push_str(sb, "-\n");
+                yaml_dump_block(sb, item, indent + 2);
+            }
+        }
+        return;
+    }
+    if (value.tag == TAG_DICT) {
+        CoolDict* dict = (CoolDict*)(intptr_t)value.payload;
+        if (!dict || dict->len == 0) {
+            yaml_push_indent(sb, indent);
+            sb_push_str(sb, "{}\n");
+            return;
+        }
+        for (int64_t i = 0; i < dict->len; i++) {
+            if (dict->keys[i].tag != TAG_STR) yaml_raisef("yaml.dumps() dict keys must be strings");
+            yaml_push_indent(sb, indent);
+            yaml_dump_key(sb, (const char*)(intptr_t)dict->keys[i].payload);
+            if (yaml_is_inline_value(dict->vals[i])) {
+                sb_push_str(sb, ": ");
+                yaml_dump_inline_value(sb, dict->vals[i]);
+                sb_push_char(sb, '\n');
+            } else {
+                sb_push_str(sb, ":\n");
+                yaml_dump_block(sb, dict->vals[i], indent + 2);
+            }
+        }
+        return;
+    }
+    yaml_push_indent(sb, indent);
+    yaml_dump_inline_value(sb, value);
+    sb_push_char(sb, '\n');
+}
+
+static CoolVal cool_yaml_dumps(CoolVal value) {
+    CoolStrBuf sb;
+    sb_init(&sb);
+    yaml_dump_block(&sb, value, 0);
+    return cv_str(sb.data);
+}
+
 static char* re_translate_pattern(const char* pattern) {
     CoolStrBuf sb;
     sb_init(&sb);
@@ -5306,6 +5783,11 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             const char* text = cool_hashlib_text_arg(args[1], "hashlib.digest() text");
             return cv_str(cool_hashlib_digest_hex(algo, (const uint8_t*)text, strlen(text)));
         }
+    }
+
+    if (strcmp(module, "yaml") == 0) {
+        if (strcmp(name, "loads") == 0 && nargs == 1) return cool_yaml_loads(args[0]);
+        if (strcmp(name, "dumps") == 0 && nargs == 1) return cool_yaml_dumps(args[0]);
     }
 
     if (strcmp(module, "test") == 0) {
@@ -8231,7 +8713,8 @@ impl<'ctx> Compiler<'ctx> {
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
-            | "time" | "random" | "json" | "toml" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
+            | "time" | "random" | "json" | "toml" | "yaml" | "string" | "list" | "re" | "collections" | "path"
+            | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
