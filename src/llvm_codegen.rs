@@ -1835,8 +1835,8 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (nargs == 1) {
             double x = cv_to_float(args[0]);
             if (strcmp(name, "sqrt") == 0) return cv_float(sqrt(x));
-            if (strcmp(name, "floor") == 0) return cv_float(floor(x));
-            if (strcmp(name, "ceil") == 0) return cv_float(ceil(x));
+            if (strcmp(name, "floor") == 0) return cv_int((int64_t)floor(x));
+            if (strcmp(name, "ceil") == 0) return cv_int((int64_t)ceil(x));
             if (strcmp(name, "round") == 0) return cool_round(args[0], cv_nil());
             if (strcmp(name, "sin") == 0) return cv_float(sin(x));
             if (strcmp(name, "cos") == 0) return cv_float(cos(x));
