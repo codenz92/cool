@@ -1873,6 +1873,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (nargs == 2) {
             double x = cv_to_float(args[0]);
             double y = cv_to_float(args[1]);
+            if (strcmp(name, "log") == 0) return cv_float(log(x) / log(y));
             if (strcmp(name, "pow") == 0) return cv_float(pow(x, y));
             if (strcmp(name, "atan2") == 0) return cv_float(atan2(x, y));
             if (strcmp(name, "hypot") == 0) return cv_float(hypot(x, y));

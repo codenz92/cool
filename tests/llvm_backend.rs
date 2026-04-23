@@ -188,6 +188,7 @@ print(math.sqrt(4))
 print(math.pow(2, 5))
 print(math.floor(3.9))
 print(math.trunc(3.9))
+print(math.log(100, 10))
 print(math.log2(8))
 print(math.exp2(4))
 print(math.isfinite(1.0))
@@ -200,6 +201,7 @@ print(math.isfinite(1.0))
     assert!(result.contains("\n2\n") || result.contains("\n2.0\n"));
     assert!(result.contains("32"));
     assert!(result.contains("\n3\n") || result.contains("\n3.0\n"));
+    assert!(result.matches("\n2\n").count() >= 1 || result.contains("\n2.0\n"));
     assert!(result.matches("\n3\n").count() >= 2 || result.matches("\n3.0\n").count() >= 2);
     assert!(result.contains("\n16\n") || result.contains("\n16.0\n"));
     assert!(result.contains("true"));
