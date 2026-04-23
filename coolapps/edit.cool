@@ -11,6 +11,8 @@ def load_file(path):
         # Remove trailing empty line from split
         if len(lines) > 0 and lines[len(lines) - 1] == "":
             lines.pop()
+        if len(lines) == 0:
+            return [""]
         return lines
     return [""]
 

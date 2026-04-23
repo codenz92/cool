@@ -582,6 +582,13 @@ fn test_shell_calc_app_launch() {
 }
 
 #[test]
+fn test_calc_app_persistent_variables() {
+    let input = "x = 5\nx * 2\nexit\n";
+    let result = run_cool_stdin_with_args("coolapps/calc.cool", &[], input).unwrap();
+    assert!(result.contains("= 10"));
+}
+
+#[test]
 fn test_shell_notes_app_launch() {
     let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "notes\nexit\nexit\n").unwrap();
     assert!(result.contains("notes v1.0 — commands:"));
