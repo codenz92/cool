@@ -3410,16 +3410,16 @@ class Stack:
                 Ok(Value::Float(a + t * (b - a)))
             }
             "choice" => {
-                let lst = match args.into_iter().next() {
-                    Some(Value::List(l)) => l,
-                    _ => return Err(self.err("random.choice() requires a list")),
+                let items = match args.into_iter().next() {
+                    Some(Value::List(l)) => l.borrow().clone(),
+                    Some(Value::Tuple(t)) => t.as_ref().clone(),
+                    _ => return Err(self.err("random.choice() requires a list or tuple")),
                 };
-                let v = lst.borrow();
-                if v.is_empty() {
-                    return Err(self.err("random.choice() called on empty list"));
+                if items.is_empty() {
+                    return Err(self.err("random.choice() called on empty sequence"));
                 }
-                let idx = (self.xorshift64() % v.len() as u64) as usize;
-                Ok(v[idx].clone())
+                let idx = (self.xorshift64() % items.len() as u64) as usize;
+                Ok(items[idx].clone())
             }
             "shuffle" => {
                 let lst = match args.into_iter().next() {

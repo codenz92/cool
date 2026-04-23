@@ -221,6 +221,18 @@ fn test_vm_import_math_module() {
 }
 
 #[test]
+fn test_import_random_choice_tuple() {
+    let result = run_cool("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
+    assert!(result.contains("true"));
+}
+
+#[test]
+fn test_vm_import_random_choice_tuple() {
+    let result = run_cool_vm("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
+    assert!(result.contains("true"));
+}
+
+#[test]
 fn test_vm_import_string_module() {
     let result = run_cool_vm(
         "import string\nprint(string.upper(\"hello\"))\nprint(string.join(\" | \", [\"a\", \"b\", \"c\"]))",
