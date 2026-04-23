@@ -240,7 +240,12 @@ CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
 int64_t cool_closure_get_fn_ptr(CoolVal);
 int32_t cool_is_closure(CoolVal);
+int32_t cool_enter_try(void);
+void cool_exit_try(void);
+CoolVal cool_get_exception(void);
 void cool_raise(CoolVal);
+void cool_push_with(CoolVal);
+void cool_pop_with(void);
 void cool_print(int32_t, ...);
 
 /* ── class / object support ─────────────────────────────────────────── */
@@ -2771,20 +2776,50 @@ int32_t cool_get_num_closure_captures(void) {
 /* ── Exception handling with setjmp/longjmp ────────────────────────────── */
 
 #define MAX_EXCEPTION_FRAMES 16
+#define MAX_WITH_MANAGERS 64
 
 typedef struct {
     jmp_buf buf;
     int active;
+    int with_depth;
 } ExceptionFrame;
 static ExceptionFrame g_exception_frames[MAX_EXCEPTION_FRAMES];
 static int g_exception_frame_count = 0;
 static CoolVal g_current_exception;
+static CoolVal g_with_managers[MAX_WITH_MANAGERS];
+static int g_with_manager_count = 0;
+
+static void cool_call_with_exit(CoolVal manager) {
+    cool_call_method_vararg(manager, "method___exit__", 3, cv_nil(), cv_nil(), cv_nil());
+}
+
+void cool_push_with(CoolVal manager) {
+    if (g_with_manager_count >= MAX_WITH_MANAGERS) {
+        fprintf(stderr, "RuntimeError: too many nested with blocks\n");
+        exit(1);
+    }
+    g_with_managers[g_with_manager_count++] = manager;
+}
+
+void cool_pop_with(void) {
+    if (g_with_manager_count > 0) {
+        g_with_manager_count--;
+    }
+}
+
+static void cool_unwind_withs_to(int depth) {
+    while (g_with_manager_count > depth) {
+        CoolVal manager = g_with_managers[--g_with_manager_count];
+        cool_call_with_exit(manager);
+    }
+}
 
 /* Set up an exception frame, returns 0 if first time, 1 if longjmp occurred */
 int32_t cool_enter_try(void) {
     if (g_exception_frame_count < MAX_EXCEPTION_FRAMES) {
         int idx = g_exception_frame_count;
         g_exception_frames[idx].active = 1;
+        g_exception_frames[idx].with_depth = g_with_manager_count;
         g_exception_frame_count++;
         int result = setjmp(g_exception_frames[idx].buf);
         if (result == 0) {
@@ -2811,10 +2846,12 @@ void cool_raise(CoolVal exc) {
     g_current_exception = exc;
     for (int i = g_exception_frame_count - 1; i >= 0; i--) {
         if (g_exception_frames[i].active) {
+            cool_unwind_withs_to(g_exception_frames[i].with_depth);
             g_exception_frames[i].active = 0;
             longjmp(g_exception_frames[i].buf, 1);
         }
     }
+    cool_unwind_withs_to(0);
     /* No try frame found - print and exit */
     char* msg = cool_to_str(exc);
     fprintf(stderr, "Unhandled exception: %s\n", msg);
@@ -3010,6 +3047,8 @@ struct RuntimeFns<'ctx> {
     cool_raise: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_get_exception: FunctionValue<'ctx>,
+    cool_push_with: FunctionValue<'ctx>,
+    cool_pop_with: FunctionValue<'ctx>,
     // module/import
     #[allow(dead_code)]
     cool_get_module: FunctionValue<'ctx>,
@@ -3233,6 +3272,8 @@ impl<'ctx> Compiler<'ctx> {
             cool_exit_try: decl!("cool_exit_try", voidt.fn_type(&[], false)),
             cool_raise: decl!("cool_raise", voidt.fn_type(&[cv], false)),
             cool_get_exception: decl!("cool_get_exception", cv_type.fn_type(&[], false)),
+            cool_push_with: decl!("cool_push_with", voidt.fn_type(&[cv], false)),
+            cool_pop_with: decl!("cool_pop_with", voidt.fn_type(&[], false)),
             // module/import
             cool_get_module: decl!("cool_get_module", cv_type.fn_type(&[ptrm], false)),
             cool_module_exists: decl!("cool_module_exists", i32t.fn_type(&[ptrm], false)),
@@ -3319,6 +3360,7 @@ impl<'ctx> Compiler<'ctx> {
         let nil1 = self.build_nil();
         let nil2 = self.build_nil();
         let _ = self.call_method_named(manager, "__exit__", &[nil0, nil1, nil2], "with_exit");
+        self.builder.build_call(self.rt.cool_pop_with, &[], "with_pop").unwrap();
     }
 
     fn emit_with_cleanup(&mut self, manager_ptr: PointerValue<'ctx>) {
@@ -4322,6 +4364,9 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_store(manager_ptr, manager_val).unwrap();
 
         let entered = self.call_method_named(manager_val, "__enter__", &[], "with_enter");
+        self.builder
+            .build_call(self.rt.cool_push_with, &[manager_val.into()], "with_push")
+            .unwrap();
         if let Some(name) = as_name {
             let ptr = if let Some(&p) = self.locals.get(name) {
                 p
@@ -4343,11 +4388,6 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     // ── try / except / else / finally ────────────────────────────────────────
-    //
-    // Uses setjmp/longjmp for exception handling. cool_enter_try() returns 0 on
-    // normal entry, 1 on longjmp (exception caught). cool_exit_try() cleans up.
-    // cool_raise() transfers control to the nearest try frame.
-    //
     #[allow(dead_code)]
     fn compile_try(
         &mut self,
@@ -4496,11 +4536,9 @@ impl<'ctx> Compiler<'ctx> {
             self.build_str("Exception")
         };
 
-        // Call cool_raise - this does longjmp if a try frame is active
         self.builder
             .build_call(self.rt.cool_raise, &[exc_val.into()], "raise")
             .unwrap();
-        // If longjmp doesn't happen (no try frame), we continue
         self.builder.build_unreachable().unwrap();
         Ok(())
     }

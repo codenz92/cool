@@ -89,6 +89,35 @@ fn compile_native_expect_error(source: &str) -> String {
     format!("{stdout}{stderr}")
 }
 
+fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let cwd = std::env::current_dir().unwrap();
+    let source_path = cwd.join(unique_test_path("temp_llvm_test", "cool"));
+    let binary_path = source_path.with_extension("");
+
+    fs::write(&source_path, source).unwrap();
+
+    let build_output = Command::new(cool_bin())
+        .args(["build", source_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
+        cleanup_native_artifacts(&source_path, &binary_path);
+        panic!("expected native build to succeed, got:\n{stdout}{stderr}");
+    }
+
+    let run_output = Command::new(&binary_path).output().unwrap();
+    cleanup_native_artifacts(&source_path, &binary_path);
+
+    assert!(!run_output.status.success(), "expected native run to fail");
+    let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
+    format!("{stdout}{stderr}")
+}
+
 fn compile_and_run_native_manual(source: &str, envs: &[(&str, &str)]) -> Result<(String, PathBuf), String> {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -502,6 +531,31 @@ except:
     );
 
     assert!(output.contains("try/except is not yet supported in LLVM backend"));
+}
+
+#[test]
+fn test_llvm_with_context_manager_cleans_on_unhandled_exception() {
+    let output = compile_and_run_native_expect_runtime_error(
+        r#"
+import collections
+
+class C:
+    def __enter__(self):
+        print("enter")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("exit")
+
+with C():
+    s = collections.Stack()
+    s.pop()
+"#,
+    );
+
+    let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
+    assert!(lines.starts_with(&["enter", "exit"]));
+    assert!(output.contains("Unhandled exception: Stack is empty"));
 }
 
 #[test]
