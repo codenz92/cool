@@ -15,6 +15,10 @@ fn unique_test_path(stem: &str, ext: &str) -> PathBuf {
 }
 
 fn compile_and_run_native(source: &str) -> Result<String, String> {
+    compile_and_run_native_with_env(source, &[])
+}
+
+fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Result<String, String> {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let source_path = cwd.join(unique_test_path("temp_llvm_test", "cool"));
@@ -35,7 +39,11 @@ fn compile_and_run_native(source: &str) -> Result<String, String> {
         return Err(format!("{stdout}{stderr}"));
     }
 
-    let run_output = Command::new(&binary_path).output().map_err(|e| e.to_string())?;
+    let mut run_cmd = Command::new(&binary_path);
+    for (k, v) in envs {
+        run_cmd.env(k, v);
+    }
+    let run_output = run_cmd.output().map_err(|e| e.to_string())?;
 
     let _ = fs::remove_file(&source_path);
     let _ = fs::remove_file(&binary_path);
@@ -186,4 +194,67 @@ print(os.listdir("{dir}"))
     assert!(result.contains(&cwd.display().to_string()));
     assert!(result.contains("true"));
     assert!(result.contains("sample.txt"));
+}
+
+#[test]
+fn test_llvm_import_sys_module() {
+    let result = compile_and_run_native_with_env(
+        r#"
+import sys
+print(sys)
+print(len(sys.argv))
+print(sys.argv[1])
+"#,
+        &[("COOL_PROGRAM_ARGS", "alpha\x1Fbeta")],
+    )
+    .unwrap();
+
+    assert!(result.contains("<module sys>"));
+    assert!(result.contains("alpha"));
+}
+
+#[test]
+fn test_llvm_import_time_module() {
+    let result = compile_and_run_native(
+        r#"
+import time
+print(time)
+t1 = time.monotonic()
+time.sleep(0.01)
+t2 = time.monotonic()
+print(t1 > 0)
+print(t2 >= t1)
+print(time.time() > 0)
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module time>"));
+    assert!(result.matches("true").count() >= 3);
+}
+
+#[test]
+fn test_llvm_import_random_module() {
+    let result = compile_and_run_native(
+        r#"
+import random
+print(random)
+random.seed(42)
+a = random.random()
+b = random.random()
+random.seed(42)
+print(a == random.random())
+print(b == random.random())
+n = random.randint(3, 7)
+print(n >= 3)
+print(n <= 7)
+u = random.uniform(10, 20)
+print(u >= 10)
+print(u <= 20)
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module random>"));
+    assert!(result.matches("true").count() >= 6);
 }

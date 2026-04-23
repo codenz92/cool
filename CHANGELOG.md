@@ -177,7 +177,7 @@ cool coolapps/shell.cool
 run coolapps/snake.cool
 ```
 
-The interpreter and bytecode VM are functionally equivalent. The LLVM backend now also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, and built-in `import math` / `import os`, but it still has some limitations:
+The interpreter and bytecode VM are functionally equivalent. The LLVM backend now also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import time`, and the core `random` helpers (`seed`, `random`, `randint`, `uniform`), but it still has some limitations:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 |---------|-------------|-------------|------|

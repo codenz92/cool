@@ -33,6 +33,10 @@ const RUNTIME_C: &str = r#"
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
+#ifdef __APPLE__
+#include <crt_externs.h>
+#endif
 
 #define TAG_NIL    0
 #define TAG_INT    1
@@ -1115,6 +1119,70 @@ CoolVal cool_to_bool_val(CoolVal v) {
     return cv_bool(cool_truthy(v));
 }
 
+static CoolVal cool_make_argv(void) {
+    CoolVal out = cool_list_make(cv_int(8));
+#ifdef __APPLE__
+    char*** argvp = _NSGetArgv();
+    int argc = *_NSGetArgc();
+    if (argvp && *argvp) {
+        for (int i = 0; i < argc; i++) {
+            cool_list_push(out, cv_str(strdup((*argvp)[i])));
+        }
+    }
+#elif defined(__linux__)
+    FILE* f = fopen("/proc/self/cmdline", "rb");
+    if (f) {
+        char buf[4096];
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        fclose(f);
+        size_t start = 0;
+        for (size_t i = 0; i < n; i++) {
+            if (buf[i] == '\0') {
+                if (i > start) {
+                    char* s = (char*)malloc(i - start + 1);
+                    memcpy(s, &buf[start], i - start);
+                    s[i - start] = '\0';
+                    cool_list_push(out, cv_str(s));
+                }
+                start = i + 1;
+            }
+        }
+    }
+#endif
+    const char* extra = getenv("COOL_PROGRAM_ARGS");
+    if (extra && *extra) {
+        const char* start = extra;
+        for (const char* p = extra;; p++) {
+            if (*p == '\x1F' || *p == '\0') {
+                size_t len = (size_t)(p - start);
+                char* s = (char*)malloc(len + 1);
+                memcpy(s, start, len);
+                s[len] = '\0';
+                cool_list_push(out, cv_str(s));
+                if (*p == '\0') break;
+                start = p + 1;
+            }
+        }
+    }
+    return out;
+}
+
+static uint64_t cool_rng_state = 88172645463325252ull;
+
+static uint64_t cool_rng_next_u64(void) {
+    uint64_t x = cool_rng_state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    cool_rng_state = x ? x : 1;
+    return cool_rng_state;
+}
+
+static double cool_rng_next_f64(void) {
+    uint64_t bits = cool_rng_next_u64();
+    return (double)(bits >> 11) / (double)(1ull << 53);
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -1122,6 +1190,9 @@ CoolVal cool_module_get_attr(const char* module, const char* name) {
         if (strcmp(name, "tau") == 0) return cv_float(M_PI * 2.0);
         if (strcmp(name, "inf") == 0) return cv_float(INFINITY);
         if (strcmp(name, "nan") == 0) return cv_float(NAN);
+    }
+    if (strcmp(module, "sys") == 0) {
+        if (strcmp(name, "argv") == 0) return cool_make_argv();
     }
     return cv_nil();
 }
@@ -1262,6 +1333,71 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
                 exit(1);
             }
             return cv_nil();
+        }
+    }
+
+    if (strcmp(module, "sys") == 0) {
+        if (strcmp(name, "exit") == 0 && nargs <= 1) {
+            int code = 0;
+            if (nargs == 1) code = (int)cool_to_int(args[0]).payload;
+            exit(code);
+        }
+    }
+
+    if (strcmp(module, "time") == 0) {
+        if (strcmp(name, "time") == 0 && nargs == 0) {
+            struct timespec ts;
+#if defined(CLOCK_REALTIME)
+            clock_gettime(CLOCK_REALTIME, &ts);
+            return cv_float((double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0);
+#else
+            return cv_float((double)time(NULL));
+#endif
+        }
+        if (strcmp(name, "monotonic") == 0 && nargs == 0) {
+            struct timespec ts;
+#if defined(CLOCK_MONOTONIC)
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            return cv_float((double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0);
+#else
+            return cv_float((double)clock() / (double)CLOCKS_PER_SEC);
+#endif
+        }
+        if (strcmp(name, "sleep") == 0 && nargs == 1) {
+            double secs = cv_to_float(args[0]);
+            if (secs < 0.0) secs = 0.0;
+            struct timespec req;
+            req.tv_sec = (time_t)secs;
+            req.tv_nsec = (long)((secs - (double)req.tv_sec) * 1000000000.0);
+            if (req.tv_nsec < 0) req.tv_nsec = 0;
+            nanosleep(&req, NULL);
+            return cv_nil();
+        }
+    }
+
+    if (strcmp(module, "random") == 0) {
+        if (strcmp(name, "random") == 0 && nargs == 0) {
+            return cv_float(cool_rng_next_f64());
+        }
+        if (strcmp(name, "seed") == 0 && nargs == 1) {
+            uint64_t seed = (uint64_t)cv_to_float(args[0]);
+            cool_rng_state = seed ? seed : 1;
+            return cv_nil();
+        }
+        if (strcmp(name, "randint") == 0 && nargs == 2) {
+            int64_t a = cool_to_int(args[0]).payload;
+            int64_t b = cool_to_int(args[1]).payload;
+            if (a > b) {
+                fprintf(stderr, "ValueError: random.randint() a must be <= b\n");
+                exit(1);
+            }
+            uint64_t range = (uint64_t)(b - a + 1);
+            return cv_int(a + (int64_t)(cool_rng_next_u64() % range));
+        }
+        if (strcmp(name, "uniform") == 0 && nargs == 2) {
+            double a = cv_to_float(args[0]);
+            double b = cv_to_float(args[1]);
+            return cv_float(a + cool_rng_next_f64() * (b - a));
         }
     }
 
@@ -2942,7 +3078,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" => {
+            "math" | "os" | "sys" | "time" | "random" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -2951,7 +3087,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math and os)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, and random)",
                 name
             )),
         }
@@ -4121,10 +4257,16 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
         .map_err(|e| format!("Write object file error: {e}"))?;
 
     // ── Compile C runtime ─────────────────────────────────────────────────────
-    let rt_c_path = std::path::Path::new("/tmp/cool_runtime.c");
-    let rt_o_path = std::path::Path::new("/tmp/cool_runtime.o");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let tmp_dir = std::env::temp_dir();
+    let rt_c_path = tmp_dir.join(format!("cool_runtime_{pid}_{nonce}.c"));
+    let rt_o_path = tmp_dir.join(format!("cool_runtime_{pid}_{nonce}.o"));
 
-    std::fs::write(rt_c_path, RUNTIME_C).map_err(|e| format!("Failed to write runtime source: {e}"))?;
+    std::fs::write(&rt_c_path, RUNTIME_C).map_err(|e| format!("Failed to write runtime source: {e}"))?;
 
     let cc_status = std::process::Command::new("cc")
         .args([
@@ -4143,7 +4285,7 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
 
     // ── Link ──────────────────────────────────────────────────────────────────
     let link_status = std::process::Command::new("cc")
-        .arg(rt_o_path)
+        .arg(&rt_o_path)
         .arg(&obj_path)
         .arg("-o")
         .arg(output_path)
@@ -4157,7 +4299,8 @@ pub fn compile_program(program: &Program, output_path: &Path) -> Result<(), Stri
 
     // ── Clean up temp files ───────────────────────────────────────────────────
     std::fs::remove_file(&obj_path).ok();
-    std::fs::remove_file(rt_o_path).ok();
+    std::fs::remove_file(&rt_c_path).ok();
+    std::fs::remove_file(&rt_o_path).ok();
 
     Ok(())
 }

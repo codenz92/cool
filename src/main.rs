@@ -282,8 +282,9 @@ NOTES:
     classes with inheritance/super(), list comprehensions,
     ternary expressions, in/not in, print()/str(), range(), len(),
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
-    built-in import math/os, inline asm, and raw memory.
-    Closures/lambdas, general import support beyond math/os, and try/except still require the interpreter or bytecode VM.
+    built-in import math/os/sys/time and import random
+    (seed/random/randint/uniform), inline asm, and raw memory.
+    Closures/lambdas, broader import support beyond those built-ins, and try/except still require the interpreter or bytecode VM.
 "
     );
 }
