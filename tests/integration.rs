@@ -220,13 +220,14 @@ fn test_vm_import_string_module() {
 #[test]
 fn test_vm_import_os_module() {
     let result = run_cool_with_args_and_env(
-        "import os\nprint(os.getenv(\"COOL_VM_OS_ENV\"))\nprint(os.getenv(\"COOL_VM_MISSING_ENV\"))",
+        "import os\nprint(os.getenv(\"COOL_VM_OS_ENV\"))\nprint(os.getenv(\"COOL_VM_MISSING_ENV\"))\nprint(os.popen(\"printf vm-os\"))",
         &["--vm"],
         &[("COOL_VM_OS_ENV", "present")],
     )
     .unwrap();
     assert!(result.contains("present"));
     assert!(result.contains("nil"));
+    assert!(result.contains("vm-os"));
 }
 
 #[test]

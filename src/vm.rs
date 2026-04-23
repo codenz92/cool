@@ -2165,6 +2165,18 @@ impl VM {
                             Err(_) => VmValue::Nil,
                         })
                     }
+                    "popen" => {
+                        let cmd = match args.first() {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => return Err(self.err("os.popen requires a string")),
+                        };
+                        let output = std::process::Command::new("sh")
+                            .arg("-c")
+                            .arg(&cmd)
+                            .output()
+                            .map_err(|e| self.err(&e.to_string()))?;
+                        Ok(VmValue::Str(String::from_utf8_lossy(&output.stdout).to_string()))
+                    }
                     "join" | "path" => {
                         let parts: Vec<String> = args.iter().map(|v| v.to_string()).collect();
                         Ok(VmValue::Str(parts.join("/")))
@@ -3211,7 +3223,7 @@ impl VM {
             }
             "os" => {
                 for fname in &[
-                    "listdir", "mkdir", "remove", "rename", "exists", "getenv", "getcwd", "join", "path",
+                    "listdir", "mkdir", "remove", "rename", "exists", "getenv", "getcwd", "join", "path", "popen",
                 ] {
                     set(&mut d, fname, bf(&format!("os.{}", fname)));
                 }

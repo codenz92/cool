@@ -215,6 +215,7 @@ print(os.getcwd())
 joined = os.join("{dir}", "sample.txt")
 print(os.exists(joined))
 print(os.getenv("COOL_LLVM_OS_ENV"))
+print(os.popen("printf llvm-os"))
 print(os.listdir("{dir}"))
 "#,
         dir = temp_dir.display()
@@ -228,6 +229,7 @@ print(os.listdir("{dir}"))
     assert!(result.contains(&cwd.display().to_string()));
     assert!(result.contains("true"));
     assert!(result.contains("present"));
+    assert!(result.contains("llvm-os"));
     assert!(result.contains("sample.txt"));
 }
 

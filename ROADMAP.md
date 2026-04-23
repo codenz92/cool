@@ -50,7 +50,7 @@
 - [x] `*args` (variadic functions)
 - [x] Keyword arguments (`greet("Jamie", greeting="Hi")`)
 - [x] `import math` (sqrt, floor, ceil, pi, pow, etc.)
-- [x] `import os` (listdir, mkdir, remove, rename, exists, getenv, getcwd, join)
+- [x] `import os` (listdir, mkdir, remove, rename, exists, getenv, getcwd, join, popen)
 - [x] `import sys` (argv, exit)
 - [x] File I/O (`open`, `read`, `write`, `readlines`, `close`, `append` mode)
 - [x] `**` power operator

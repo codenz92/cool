@@ -1911,6 +1911,25 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             if (!value) return cv_nil();
             return cv_str(strdup(value));
         }
+        if (strcmp(name, "popen") == 0 && nargs == 1) {
+            const char* cmd = cool_to_str(args[0]);
+            FILE* pipe = popen(cmd, "r");
+            if (!pipe) {
+                fprintf(stderr, "RuntimeError: os.popen failed\n");
+                exit(1);
+            }
+            CoolStrBuf sb;
+            sb_init(&sb);
+            char buf[1024];
+            while (fgets(buf, sizeof(buf), pipe) != NULL) {
+                sb_push_str(&sb, buf);
+            }
+            if (pclose(pipe) == -1) {
+                fprintf(stderr, "RuntimeError: os.popen failed\n");
+                exit(1);
+            }
+            return cv_str(sb.data);
+        }
         if (strcmp(name, "join") == 0 && nargs >= 1) {
             size_t total = 1;
             for (int32_t i = 0; i < nargs; i++) total += strlen(cool_to_str(args[i])) + 1;
