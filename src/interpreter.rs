@@ -1035,6 +1035,7 @@ impl Interpreter {
                 os_fn!("exists");
                 os_fn!("getenv");
                 os_fn!("join");
+                os_fn!("path");
                 os_fn!("mkdir");
                 os_fn!("remove");
                 os_fn!("rename");
@@ -2995,7 +2996,7 @@ class Stack:
                     Err(_) => Value::Nil,
                 })
             }
-            "join" => {
+            "join" | "path" => {
                 if args.is_empty() {
                     return Ok(Value::Str(String::new()));
                 }

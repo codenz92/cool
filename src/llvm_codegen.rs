@@ -1962,7 +1962,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             }
             return cv_str(sb.data);
         }
-        if (strcmp(name, "join") == 0 && nargs >= 1) {
+        if ((strcmp(name, "join") == 0 || strcmp(name, "path") == 0) && nargs >= 1) {
             size_t total = 1;
             for (int32_t i = 0; i < nargs; i++) total += strlen(cool_to_str(args[i])) + 1;
             char* out = (char*)malloc(total);
