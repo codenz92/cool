@@ -2238,7 +2238,12 @@ impl VM {
                 match fname {
                     "random" => Ok(VmValue::Float(self.rng_next_f64())),
                     "seed" => {
-                        /* ignore seed in VM */
+                        let seed = match args.first() {
+                            Some(VmValue::Int(i)) => *i as u64,
+                            Some(VmValue::Float(f)) => *f as u64,
+                            _ => return Err(self.err("random.seed requires a number")),
+                        };
+                        self.rng = if seed == 0 { 1 } else { seed };
                         Ok(VmValue::Nil)
                     }
                     "randint" => {

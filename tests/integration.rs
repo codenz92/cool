@@ -233,6 +233,15 @@ fn test_vm_import_random_choice_tuple() {
 }
 
 #[test]
+fn test_vm_random_seed_reproducible() {
+    let result = run_cool_vm(
+        "import random\nrandom.seed(42)\na = random.random()\nb = random.random()\nrandom.seed(42)\nprint(a == random.random())\nprint(b == random.random())",
+    )
+    .unwrap();
+    assert!(result.matches("true").count() >= 2);
+}
+
+#[test]
 fn test_vm_import_string_module() {
     let result = run_cool_vm(
         "import string\nprint(string.upper(\"hello\"))\nprint(string.join(\" | \", [\"a\", \"b\", \"c\"]))",
