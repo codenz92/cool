@@ -1658,7 +1658,7 @@ impl VM {
                 let items = match args.first() {
                     Some(VmValue::List(v)) => v.borrow().clone(),
                     Some(VmValue::Tuple(t)) => t.as_ref().clone(),
-                    _ => return Err(self.err("sum() requires a list")),
+                    _ => return Err(self.err("sum() requires a list or tuple")),
                 };
                 let mut total: i64 = 0;
                 let mut ftotal: f64 = 0.0;
@@ -1673,7 +1673,7 @@ impl VM {
                             ftotal += f;
                             is_float = true;
                         }
-                        _ => return Err(self.err("sum() requires a list of numbers")),
+                        _ => return Err(self.err("sum() requires a list or tuple of numbers")),
                     }
                 }
                 if is_float {

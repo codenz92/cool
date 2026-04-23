@@ -2489,11 +2489,11 @@ class Stack:
                 Ok(Value::Bool(true))
             }
             "sum" => {
-                let lst = match args.into_iter().next() {
-                    Some(Value::List(l)) => l,
-                    _ => return Err(self.err("sum() requires a list")),
+                let items: Vec<Value> = match args.into_iter().next() {
+                    Some(Value::List(l)) => l.borrow().clone(),
+                    Some(Value::Tuple(t)) => t.as_ref().clone(),
+                    _ => return Err(self.err("sum() requires a list or tuple")),
                 };
-                let items: Vec<Value> = lst.borrow().clone();
                 items
                     .into_iter()
                     .try_fold(Value::Int(0), |acc, x| self.apply_binop(&BinOp::Add, acc, x))
