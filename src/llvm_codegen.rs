@@ -1399,6 +1399,34 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             double b = cv_to_float(args[1]);
             return cv_float(a + cool_rng_next_f64() * (b - a));
         }
+        if (strcmp(name, "choice") == 0 && nargs == 1) {
+            if (args[0].tag != TAG_LIST && args[0].tag != TAG_TUPLE) {
+                fprintf(stderr, "TypeError: random.choice() requires a list or tuple\n");
+                exit(1);
+            }
+            CoolList* seq = (CoolList*)(intptr_t)args[0].payload;
+            if (seq->length == 0) {
+                fprintf(stderr, "ValueError: random.choice() called on empty sequence\n");
+                exit(1);
+            }
+            int64_t idx = (int64_t)(cool_rng_next_u64() % (uint64_t)seq->length);
+            return ((CoolVal*)seq->data)[idx];
+        }
+        if (strcmp(name, "shuffle") == 0 && nargs == 1) {
+            if (args[0].tag != TAG_LIST) {
+                fprintf(stderr, "TypeError: random.shuffle() requires a list\n");
+                exit(1);
+            }
+            CoolList* seq = (CoolList*)(intptr_t)args[0].payload;
+            CoolVal* items = (CoolVal*)seq->data;
+            for (int64_t i = seq->length - 1; i > 0; i--) {
+                int64_t j = (int64_t)(cool_rng_next_u64() % (uint64_t)(i + 1));
+                CoolVal tmp = items[i];
+                items[i] = items[j];
+                items[j] = tmp;
+            }
+            return cv_nil();
+        }
     }
 
     fprintf(stderr, "AttributeError: unknown module call %s.%s\n", module, name);

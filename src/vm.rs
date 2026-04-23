@@ -38,6 +38,7 @@ pub struct VM {
     /// All currently-open upvalue cells (regardless of which closure owns them).
     /// Lets us close upvalues for any slot when it leaves the stack.
     open_upvalues: Vec<UpvalueCell>,
+    importing_modules: Vec<std::path::PathBuf>,
 }
 
 impl VM {
@@ -56,6 +57,7 @@ impl VM {
             current_line: 0,
             rng: if seed == 0 { 1 } else { seed },
             open_upvalues: Vec::new(),
+            importing_modules: Vec::new(),
         };
         vm.register_builtins();
         vm
@@ -1505,6 +1507,12 @@ impl VM {
         if let Some(_f) = name.strip_prefix("ffi.") {
             return Err(self.err("FFI is only supported in the tree-walk interpreter (run without --vm)"));
         }
+        if let Some(rest) = name.strip_prefix("listmod.") {
+            return self.call_list_module(rest, args, kwargs);
+        }
+        if let Some(rest) = name.strip_prefix("stringmod.") {
+            return self.call_string_module(rest, args, kwargs);
+        }
         if let Some(rest) = name.strip_prefix("list.") {
             return self.call_list_method(rest, args, kwargs);
         }
@@ -2411,6 +2419,200 @@ impl VM {
         }
     }
 
+    fn call_list_module(
+        &mut self,
+        method: &str,
+        args: &[VmValue],
+        _kwargs: &[(String, VmValue)],
+    ) -> Result<VmValue, String> {
+        match method {
+            "sort" => {
+                let list = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.sort() requires a list")),
+                };
+                let mut out = list;
+                out.sort_by(vm_cmp_order);
+                Ok(VmValue::List(Rc::new(RefCell::new(out))))
+            }
+            "reverse" => {
+                let list = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.reverse() requires a list")),
+                };
+                let mut out = list;
+                out.reverse();
+                Ok(VmValue::List(Rc::new(RefCell::new(out))))
+            }
+            "map" => {
+                if args.len() < 2 {
+                    return Err(self.err("list.map() requires (fn, list)"));
+                }
+                let func = args[0].clone();
+                let list = match args.get(1) {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.map() 2nd argument must be a list")),
+                };
+                let mut out = Vec::with_capacity(list.len());
+                for item in list {
+                    out.push(self.call_value_direct(func.clone(), &[item], &[])?);
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(out))))
+            }
+            "filter" => {
+                if args.len() < 2 {
+                    return Err(self.err("list.filter() requires (fn, list)"));
+                }
+                let func = args[0].clone();
+                let list = match args.get(1) {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.filter() 2nd argument must be a list")),
+                };
+                let mut out = Vec::new();
+                for item in list {
+                    if self.call_value_direct(func.clone(), &[item.clone()], &[])?.is_truthy() {
+                        out.push(item);
+                    }
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(out))))
+            }
+            "reduce" => {
+                if args.len() < 2 {
+                    return Err(self.err("list.reduce() requires (fn, list[, initial])"));
+                }
+                let func = args[0].clone();
+                let list = match args.get(1) {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.reduce() 2nd argument must be a list")),
+                };
+                let mut iter = list.into_iter();
+                let mut acc = if let Some(initial) = args.get(2) {
+                    initial.clone()
+                } else {
+                    iter.next()
+                        .ok_or_else(|| self.err("list.reduce() called on empty list with no initial value"))?
+                };
+                for item in iter {
+                    acc = self.call_value_direct(func.clone(), &[acc, item], &[])?;
+                }
+                Ok(acc)
+            }
+            "flatten" => {
+                let list = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.flatten() requires a list")),
+                };
+                let mut out = Vec::new();
+                for item in list {
+                    match item {
+                        VmValue::List(inner) => out.extend(inner.borrow().clone()),
+                        other => out.push(other),
+                    }
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(out))))
+            }
+            "unique" => {
+                let list = match args.first() {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("list.unique() requires a list")),
+                };
+                let mut out = Vec::new();
+                for item in list {
+                    if !out.iter().any(|existing| vm_eq(existing, &item)) {
+                        out.push(item);
+                    }
+                }
+                Ok(VmValue::List(Rc::new(RefCell::new(out))))
+            }
+            _ => Err(self.err(&format!("list module has no function '{}'", method))),
+        }
+    }
+
+    fn call_string_module(
+        &mut self,
+        method: &str,
+        args: &[VmValue],
+        _kwargs: &[(String, VmValue)],
+    ) -> Result<VmValue, String> {
+        let req_str = |idx: usize, name: &str, args: &[VmValue]| -> Result<String, String> {
+            match args.get(idx) {
+                Some(VmValue::Str(s)) => Ok(s.clone()),
+                _ => Err(self.err(&format!("string.{}() requires string argument {}", name, idx + 1))),
+            }
+        };
+        match method {
+            "split" => {
+                let s = req_str(0, method, args)?;
+                let parts: Vec<VmValue> = match args.get(1) {
+                    Some(VmValue::Str(sep)) => s.split(sep).map(|p| VmValue::Str(p.to_string())).collect(),
+                    None => s.split_whitespace().map(|p| VmValue::Str(p.to_string())).collect(),
+                    _ => return Err(self.err("string.split() separator must be a string")),
+                };
+                Ok(VmValue::List(Rc::new(RefCell::new(parts))))
+            }
+            "join" => {
+                let sep = req_str(0, method, args)?;
+                let list = match args.get(1) {
+                    Some(VmValue::List(v)) => v.borrow().clone(),
+                    _ => return Err(self.err("string.join() requires a list as 2nd argument")),
+                };
+                Ok(VmValue::Str(
+                    list.into_iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&sep),
+                ))
+            }
+            "strip" => Ok(VmValue::Str(req_str(0, method, args)?.trim().to_string())),
+            "lstrip" => Ok(VmValue::Str(req_str(0, method, args)?.trim_start().to_string())),
+            "rstrip" => Ok(VmValue::Str(req_str(0, method, args)?.trim_end().to_string())),
+            "upper" => Ok(VmValue::Str(req_str(0, method, args)?.to_uppercase())),
+            "lower" => Ok(VmValue::Str(req_str(0, method, args)?.to_lowercase())),
+            "title" => Ok(VmValue::Str(
+                req_str(0, method, args)?
+                    .split_whitespace()
+                    .map(|w| {
+                        let mut c = w.chars();
+                        c.next()
+                            .map(|f| f.to_uppercase().to_string() + c.as_str())
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )),
+            "capitalize" => {
+                let s = req_str(0, method, args)?;
+                let mut c = s.chars();
+                Ok(VmValue::Str(
+                    c.next()
+                        .map(|f| f.to_uppercase().to_string() + c.as_str())
+                        .unwrap_or_default(),
+                ))
+            }
+            "replace" => Ok(VmValue::Str(
+                req_str(0, method, args)?.replace(&req_str(1, method, args)?, &req_str(2, method, args)?),
+            )),
+            "startswith" => Ok(VmValue::Bool(req_str(0, method, args)?.starts_with(&req_str(1, method, args)?))),
+            "endswith" => Ok(VmValue::Bool(req_str(0, method, args)?.ends_with(&req_str(1, method, args)?))),
+            "find" => Ok(VmValue::Int(
+                req_str(0, method, args)?
+                    .find(&req_str(1, method, args)?)
+                    .map(|i| i as i64)
+                    .unwrap_or(-1),
+            )),
+            "count" => Ok(VmValue::Int(
+                req_str(0, method, args)?.matches(&req_str(1, method, args)?).count() as i64,
+            )),
+            "format" => {
+                let mut result = req_str(0, method, args)?;
+                for arg in args.iter().skip(1) {
+                    if let Some(pos) = result.find("{}") {
+                        result.replace_range(pos..pos + 2, &arg.to_string());
+                    }
+                }
+                Ok(VmValue::Str(result))
+            }
+            _ => Err(self.err(&format!("string has no function '{}'", method))),
+        }
+    }
+
     // ── Dict method dispatch ──────────────────────────────────────────────────
 
     fn call_dict_method(
@@ -2886,18 +3088,52 @@ impl VM {
         ];
         for path in &candidates {
             if path.exists() {
+                let module_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if self.importing_modules.contains(&module_path) {
+                    return Err(self.err(&format!(
+                        "circular import detected for '{}'",
+                        module_path.display()
+                    )));
+                }
+                self.importing_modules.push(module_path);
                 let source = std::fs::read_to_string(path).map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
                 // Compile and run in a sub-scope; collect exported names into a dict.
                 let old_source_dir = self.source_dir.clone();
                 self.source_dir = path.parent().unwrap_or(&old_source_dir).to_path_buf();
                 let mut lexer = crate::lexer::Lexer::new(&source);
-                let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
+                let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
+                    Ok(tokens) => tokens,
+                    Err(err) => {
+                        self.source_dir = old_source_dir;
+                        self.importing_modules.pop();
+                        return Err(err);
+                    }
+                };
                 let mut parser = crate::parser::Parser::new(tokens);
-                let program = parser.parse_program().map_err(|e| self.err(&e))?;
-                let chunk = crate::compiler::compile(&program).map_err(|e| self.err(&e))?;
+                let program = match parser.parse_program().map_err(|e| self.err(&e)) {
+                    Ok(program) => program,
+                    Err(err) => {
+                        self.source_dir = old_source_dir;
+                        self.importing_modules.pop();
+                        return Err(err);
+                    }
+                };
+                let chunk = match crate::compiler::compile(&program).map_err(|e| self.err(&e)) {
+                    Ok(chunk) => chunk,
+                    Err(err) => {
+                        self.source_dir = old_source_dir;
+                        self.importing_modules.pop();
+                        return Err(err);
+                    }
+                };
                 // Run the module — it populates globals directly (simple approach).
-                self.run(&chunk)?;
+                if let Err(err) = self.run(&chunk) {
+                    self.source_dir = old_source_dir;
+                    self.importing_modules.pop();
+                    return Err(err);
+                }
                 self.source_dir = old_source_dir;
+                self.importing_modules.pop();
                 // Return the module's global dict as a namespace object.
                 let mut d = VmDict::new();
                 for (k, v) in &self.globals {
@@ -3003,7 +3239,33 @@ impl VM {
                     set(&mut d, fname, bf(&format!("re.{}", fname)));
                 }
             }
-            "string" | "list" | "collections" => {
+            "string" => {
+                for fname in &[
+                    "split",
+                    "join",
+                    "strip",
+                    "lstrip",
+                    "rstrip",
+                    "upper",
+                    "lower",
+                    "replace",
+                    "startswith",
+                    "endswith",
+                    "find",
+                    "count",
+                    "format",
+                    "title",
+                    "capitalize",
+                ] {
+                    set(&mut d, fname, bf(&format!("stringmod.{}", fname)));
+                }
+            }
+            "list" => {
+                for fname in &["sort", "reverse", "filter", "map", "reduce", "flatten", "unique"] {
+                    set(&mut d, fname, bf(&format!("listmod.{}", fname)));
+                }
+            }
+            "collections" => {
                 // These are Cool stdlib modules; they'll be loaded as .cool files.
                 // If not found, return empty namespace.
             }

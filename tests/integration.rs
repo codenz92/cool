@@ -8,6 +8,14 @@ use std::sync::Mutex;
 static TEMP_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
 fn run_cool(source: &str) -> Result<String, String> {
+    run_cool_with_args(source, &[])
+}
+
+fn run_cool_vm(source: &str) -> Result<String, String> {
+    run_cool_with_args(source, &["--vm"])
+}
+
+fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, String> {
     let mut path_guard = TEMP_FILE.lock().unwrap();
 
     // Create temp file in current directory to avoid permission issues
@@ -17,10 +25,11 @@ fn run_cool(source: &str) -> Result<String, String> {
     drop(file);
     *path_guard = Some(temp.clone());
 
-    let output = Command::new("./target/debug/cool")
-        .arg(&temp)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut cmd = Command::new("./target/debug/cool");
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let output = cmd.arg(&temp).output().map_err(|e| e.to_string())?;
 
     // Clean up
     let _ = std::fs::remove_file(&temp);
@@ -182,6 +191,47 @@ fn test_super() {
 fn test_import() {
     let result = run_cool("import math\nprint(math.sqrt(4))").unwrap();
     assert!(result.contains("2"));
+}
+
+#[test]
+fn test_vm_import_string_module() {
+    let result = run_cool_vm(
+        "import string\nprint(string.upper(\"hello\"))\nprint(string.join(\" | \", [\"a\", \"b\", \"c\"]))",
+    )
+    .unwrap();
+    assert!(result.contains("HELLO"));
+    assert!(result.contains("a | b | c"));
+}
+
+#[test]
+fn test_vm_import_list_module() {
+    let result = run_cool_vm(
+        "import list\nnums = [3, 1, 2]\nprint(list.sort(nums))\nprint(list.unique([1, 1, 2, 2, 3]))",
+    )
+    .unwrap();
+    assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
+    assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
+}
+
+#[test]
+fn test_vm_self_import_reports_error() {
+    let temp_dir = std::env::temp_dir().join("cool_vm_self_import_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let source_path = temp_dir.join("string.cool");
+    std::fs::write(&source_path, "import string\nprint(\"unreachable\")\n").unwrap();
+
+    let output = Command::new("./target/debug/cool")
+        .args(["--vm", source_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let _ = std::fs::remove_file(&source_path);
+    let _ = std::fs::remove_dir(&temp_dir);
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("circular import detected"));
 }
 
 #[test]

@@ -251,10 +251,22 @@ print(n <= 7)
 u = random.uniform(10, 20)
 print(u >= 10)
 print(u <= 20)
+items = [1, 2, 3, 4]
+random.seed(7)
+picked = random.choice(items)
+print(picked >= 1)
+print(picked <= 4)
+pair = ("x", "y")
+print(random.choice(pair) in pair)
+random.shuffle(items)
+print(len(items))
+print(sum(items))
 "#,
     )
     .unwrap();
 
     assert!(result.contains("<module random>"));
-    assert!(result.matches("true").count() >= 6);
+    assert!(result.matches("true").count() >= 9);
+    assert!(result.contains("\n4\n"));
+    assert!(result.contains("\n10\n"));
 }

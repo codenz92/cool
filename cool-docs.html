@@ -2370,7 +2370,7 @@ f.close()    # always close manually when not using `with`</code></pre>
           <pre><code class="language-python">import string
 
 string.split("a,b,c", ",")           # ["a", "b", "c"]
-string.join(["a", "b", "c"], " | ")  # "a | b | c"
+string.join(" | ", ["a", "b", "c"])  # "a | b | c"
 string.strip("  hello  ")            # "hello"
 string.lstrip("  hello  ")           # "hello  "
 string.rstrip("  hello  ")           # "  hello"
@@ -2878,7 +2878,7 @@ echo Done.</code></pre>
           <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM still excludes closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code> and core <code>random</code> helpers, <code>try</code>/<code>except</code>, and <code>import ffi</code></li>
+          <li>⚠️ LLVM still excludes closures/lambdas, general <code>import</code> support beyond built-in <code>math</code>/<code>os</code>/<code>sys</code>/<code>time</code> and core <code>random</code> helpers such as <code>seed</code>/<code>random</code>/<code>randint</code>/<code>uniform</code>/<code>choice</code>/<code>shuffle</code>, <code>try</code>/<code>except</code>, and <code>import ffi</code></li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

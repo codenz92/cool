@@ -68,7 +68,7 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, native `import math`, native `import os`, native `import sys`, native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`), f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, native `import math`, native `import os`, native `import sys`, native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** Closures/lambdas, general `import` support beyond the built-in `math`, `os`, `sys`, `time`, and core `random` helpers, and `try`/`except` are still interpreter/VM-only in practice. Use the interpreter or bytecode VM (`--vm`) for programs that need those features.
 
@@ -87,7 +87,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import os` | ✅ | ✅ | ✅ |
 | `import sys` | ✅ | ✅ | ✅ |
 | `import time` | ✅ | ✅ | ✅ |
-| `import random` (`seed`, `random`, `randint`, `uniform`) | ✅ | ✅ | ✅ |
+| `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`) | ✅ | ✅ | ✅ |
 | f-strings | ✅ | ✅ | ✅ |
 | Ternary expressions | ✅ | ✅ | ✅ |
 | List comprehensions | ✅ | ✅ | ✅ |
