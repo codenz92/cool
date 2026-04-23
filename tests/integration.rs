@@ -204,12 +204,13 @@ fn test_super() {
 #[test]
 fn test_import() {
     let result =
-        run_cool("import math\nprint(math.sqrt(4))\nprint(math.round(3.5))\nprint(math.abs(-7))\nimport os\nprint(os.path(\"a\", \"b\"))")
+        run_cool("import math\nprint(math.sqrt(4))\nprint(math.round(3.5))\nprint(math.abs(-7))\nprint(math.log(100, 10))\nimport os\nprint(os.path(\"a\", \"b\"))")
             .unwrap();
     assert!(result.contains("2"));
     assert!(result.contains("4"));
     assert!(result.contains("7"));
     assert!(result.contains("a/b"));
+    assert!(result.matches("\n2\n").count() >= 2 || result.contains("\n2.0\n"));
 }
 
 #[test]

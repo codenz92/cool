@@ -2936,7 +2936,13 @@ class Stack:
                     _ => Ok(Value::Float(n.abs())),
                 };
             }
-            "log" => n.ln(),
+            "log" => {
+                if args.len() >= 2 {
+                    let base = as_float_arg(&args, 1, "math.log")?;
+                    return Ok(Value::Float(n.log(base)));
+                }
+                n.ln()
+            }
             "log2" => n.log2(),
             "log10" => n.log10(),
             "exp" => n.exp(),
