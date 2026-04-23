@@ -3619,6 +3619,145 @@ static CoolVal cool_logging_emit(int level, const char* message, const char* log
     return cv_nil();
 }
 
+static void cool_datetime_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static double cool_datetime_number_arg(CoolVal value, const char* context) {
+    if (value.tag != TAG_INT && value.tag != TAG_FLOAT) {
+        cool_datetime_raisef("%s must be a number, got %s", context, cool_to_str(value));
+    }
+    double out = cv_to_float(value);
+    if (!isfinite(out)) {
+        cool_datetime_raisef("%s must be a finite number", context);
+    }
+    return out;
+}
+
+static const char* cool_datetime_format_arg(CoolVal value, const char* context) {
+    if (value.tag == TAG_NIL) return "%Y-%m-%d %H:%M:%S";
+    if (value.tag != TAG_STR) {
+        cool_datetime_raisef("%s format must be a string or nil, got %s", context, cool_to_str(value));
+    }
+    const char* fmt = (const char*)(intptr_t)value.payload;
+    if (!fmt || !*fmt) {
+        cool_datetime_raisef("datetime format must not be empty");
+    }
+    return fmt;
+}
+
+static int cool_datetime_local_tm(double timestamp, struct tm* out) {
+    time_t raw = (time_t)floor(timestamp);
+#if defined(_POSIX_VERSION)
+    return localtime_r(&raw, out) != NULL;
+#else
+    struct tm* tmp = localtime(&raw);
+    if (!tmp) return 0;
+    *out = *tmp;
+    return 1;
+#endif
+}
+
+static CoolVal cool_datetime_now(void) {
+    struct timespec ts;
+#if defined(CLOCK_REALTIME)
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return cv_float((double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0);
+#else
+    return cv_float((double)time(NULL));
+#endif
+}
+
+static CoolVal cool_datetime_format(CoolVal timestamp_v, CoolVal fmt_v) {
+    double timestamp = cool_datetime_number_arg(timestamp_v, "datetime.format() timestamp");
+    const char* fmt = cool_datetime_format_arg(fmt_v, "datetime.format()");
+    struct tm tm_value;
+    if (!cool_datetime_local_tm(timestamp, &tm_value)) {
+        cool_datetime_raisef("datetime.format() timestamp out of range");
+    }
+
+    size_t cap = 128;
+    while (cap <= 8192) {
+        char* buf = (char*)malloc(cap);
+        if (!buf) {
+            cool_datetime_raisef("datetime.format() out of memory");
+        }
+        size_t written = strftime(buf, cap, fmt, &tm_value);
+        if (written > 0) {
+            return cv_str(buf);
+        }
+        free(buf);
+        cap *= 2;
+    }
+
+    cool_datetime_raisef("datetime.format() failed for format '%s'", fmt);
+    return cv_nil();
+}
+
+static CoolVal cool_datetime_parse(CoolVal text_v, CoolVal fmt_v) {
+    if (text_v.tag != TAG_STR) {
+        cool_datetime_raisef("datetime.parse() text must be a string, got %s", cool_to_str(text_v));
+    }
+    const char* text = (const char*)(intptr_t)text_v.payload;
+    const char* fmt = cool_datetime_format_arg(fmt_v, "datetime.parse()");
+    struct tm tm_value;
+    memset(&tm_value, 0, sizeof(tm_value));
+    tm_value.tm_isdst = -1;
+    char* rest = strptime(text, fmt, &tm_value);
+    if (!rest || *rest != '\0') {
+        cool_datetime_raisef("datetime.parse() could not parse '%s' with format '%s'", text, fmt);
+    }
+    time_t parsed = mktime(&tm_value);
+    if (parsed == (time_t)-1) {
+        cool_datetime_raisef("datetime.parse() produced an out-of-range time for '%s'", text);
+    }
+    return cv_float((double)parsed);
+}
+
+static CoolVal cool_datetime_parts(CoolVal timestamp_v) {
+    double timestamp = cool_datetime_number_arg(timestamp_v, "datetime.parts() timestamp");
+    struct tm tm_value;
+    if (!cool_datetime_local_tm(timestamp, &tm_value)) {
+        cool_datetime_raisef("datetime.parts() timestamp out of range");
+    }
+
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("year"), cv_int((int64_t)tm_value.tm_year + 1900));
+    cool_dict_set(out, cv_str("month"), cv_int((int64_t)tm_value.tm_mon + 1));
+    cool_dict_set(out, cv_str("day"), cv_int((int64_t)tm_value.tm_mday));
+    cool_dict_set(out, cv_str("hour"), cv_int((int64_t)tm_value.tm_hour));
+    cool_dict_set(out, cv_str("minute"), cv_int((int64_t)tm_value.tm_min));
+    cool_dict_set(out, cv_str("second"), cv_int((int64_t)tm_value.tm_sec));
+    cool_dict_set(out, cv_str("weekday"), cv_int((int64_t)tm_value.tm_wday));
+    cool_dict_set(out, cv_str("yearday"), cv_int((int64_t)tm_value.tm_yday + 1));
+    return out;
+}
+
+static CoolVal cool_datetime_add_seconds(CoolVal timestamp_v, CoolVal seconds_v) {
+    double timestamp = cool_datetime_number_arg(timestamp_v, "datetime.add_seconds() timestamp");
+    double seconds = cool_datetime_number_arg(seconds_v, "datetime.add_seconds() seconds");
+    double out = timestamp + seconds;
+    if (!isfinite(out)) {
+        cool_datetime_raisef("datetime.add_seconds() result must be a finite number");
+    }
+    return cv_float(out);
+}
+
+static CoolVal cool_datetime_diff_seconds(CoolVal left_v, CoolVal right_v) {
+    double left = cool_datetime_number_arg(left_v, "datetime.diff_seconds() left timestamp");
+    double right = cool_datetime_number_arg(right_v, "datetime.diff_seconds() right timestamp");
+    double out = left - right;
+    if (!isfinite(out)) {
+        cool_datetime_raisef("datetime.diff_seconds() result must be a finite number");
+    }
+    return cv_float(out);
+}
+
 enum {
     FFI_T_VOID = 0,
     FFI_T_I8,
@@ -4402,6 +4541,19 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (strcmp(name, "rows") == 0 && nargs == 1) return cool_csv_rows(args[0]);
         if (strcmp(name, "dicts") == 0 && nargs == 1) return cool_csv_dicts(args[0]);
         if (strcmp(name, "write") == 0 && nargs == 1) return cool_csv_write(args[0]);
+    }
+
+    if (strcmp(module, "datetime") == 0) {
+        if (strcmp(name, "now") == 0 && nargs == 0) return cool_datetime_now();
+        if (strcmp(name, "format") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_datetime_format(args[0], nargs == 2 ? args[1] : cv_nil());
+        }
+        if (strcmp(name, "parse") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_datetime_parse(args[0], nargs == 2 ? args[1] : cv_nil());
+        }
+        if (strcmp(name, "parts") == 0 && nargs == 1) return cool_datetime_parts(args[0]);
+        if (strcmp(name, "add_seconds") == 0 && nargs == 2) return cool_datetime_add_seconds(args[0], args[1]);
+        if (strcmp(name, "diff_seconds") == 0 && nargs == 2) return cool_datetime_diff_seconds(args[0], args[1]);
     }
 
     if (strcmp(module, "test") == 0) {
@@ -7321,8 +7473,8 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "test" | "time" | "random"
-            | "json" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
+            "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "test" | "time"
+            | "random" | "json" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

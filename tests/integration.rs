@@ -543,6 +543,96 @@ print("\"She said \"\"hi\"\"\"" in rendered)
 }
 
 #[test]
+fn test_import_datetime_module() {
+    let result = run_cool(
+        r#"import datetime
+print(datetime.now() > 1000000000)
+ts = datetime.parse("2024-01-02 03:04:05")
+print(datetime.format(ts))
+parts = datetime.parts(ts)
+print(parts["year"])
+print(parts["month"])
+print(parts["day"])
+print(parts["hour"])
+print(parts["minute"])
+print(parts["second"])
+print(parts["weekday"])
+print(parts["yearday"])
+shifted = datetime.add_seconds(ts, 90)
+print(datetime.format(shifted))
+print(datetime.diff_seconds(shifted, ts) == 90)
+print(datetime.format(datetime.parse("2024/05/06", "%Y/%m/%d"), "%Y/%m/%d"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "true",
+            "2024-01-02 03:04:05",
+            "2024",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "2",
+            "2",
+            "2024-01-02 03:05:35",
+            "true",
+            "2024/05/06",
+        ]
+    );
+}
+
+#[test]
+fn test_vm_import_datetime_module() {
+    let result = run_cool_vm(
+        r#"import datetime
+print(datetime.now() > 1000000000)
+ts = datetime.parse("2024-01-02 03:04:05")
+print(datetime.format(ts))
+parts = datetime.parts(ts)
+print(parts["year"])
+print(parts["month"])
+print(parts["day"])
+print(parts["hour"])
+print(parts["minute"])
+print(parts["second"])
+print(parts["weekday"])
+print(parts["yearday"])
+shifted = datetime.add_seconds(ts, 90)
+print(datetime.format(shifted))
+print(datetime.diff_seconds(shifted, ts) == 90)
+print(datetime.format(datetime.parse("2024/05/06", "%Y/%m/%d"), "%Y/%m/%d"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "true",
+            "2024-01-02 03:04:05",
+            "2024",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "2",
+            "2",
+            "2024-01-02 03:05:35",
+            "true",
+            "2024/05/06",
+        ]
+    );
+}
+
+#[test]
 fn test_import_test_module() {
     let result = run_cool(
         r#"import test

@@ -231,14 +231,14 @@
 - [ ] `metrics` module — counters, timers, histograms, and lightweight instrumentation
 - [ ] `trace` module — spans, trace IDs, and execution tracing helpers
 - [ ] `profile` module — runtime profiling hooks, flame summaries, and hotspot reporting
-- [ ] `test` module — assertions, fixtures, discovery helpers, and a standard unit-test API
+- [x] `test` module — assertions, fixtures, discovery helpers, and a standard unit-test API
 - [ ] `bench` module — lightweight benchmarking helpers for timing and comparison
 - [ ] `notebook` module — executable notes, cells, saved outputs, and literate-programming helpers
 - [ ] `secrets` module — secret lookup, redaction, encrypted storage, and runtime injection
 
 #### Math, Data Science, And Finance
 
-- [ ] `datetime` module — timestamps, date formatting/parsing, and duration helpers
+- [x] `datetime` module — timestamps, local date formatting/parsing, and duration helpers
 - [ ] `decimal` module — exact decimal arithmetic for finance and configuration math
 - [ ] `money` module — decimal-safe currency values, formatting, and exchange abstractions
 - [ ] `stats` module — descriptive statistics, sampling, percentiles, and distributions
@@ -387,10 +387,11 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [x] `path` module — path normalization, basename/dirname, extension helpers, splitting, and joins
 - [x] `csv` module — row parsing, header-based dict parsing, and CSV writing
+- [x] `datetime` module — local timestamps, formatting/parsing, parts, and duration helpers
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
-- [ ] `toml` / `yaml` / `datetime` / `hashlib` / `sqlite` / `socket` / `http` as the first practical application stack
+- [ ] `toml` / `yaml` / `hashlib` / `sqlite` / `socket` / `http` as the first practical application stack
 
 ### Packaging And Developer Tooling
 

@@ -4,7 +4,7 @@ All notable changes to the Cool language project.
 
 ## [1.0.0] - 2026-04-17 - The Complete Language
 
-Cool now has a working interpreter, bytecode VM, LLVM backend, FFI, a self-hosted compiler, full bootstrap self-hosting for `coolc/compiler_vm.cool`, and a steadily growing standard library. That library now includes cross-runtime `csv`, `argparse`, `logging`, and `test`, plus native LLVM `try` / `except` / `finally` / `raise` support with matching `with` / context-manager cleanup through caught exceptions.
+Cool now has a working interpreter, bytecode VM, LLVM backend, FFI, a self-hosted compiler, full bootstrap self-hosting for `coolc/compiler_vm.cool`, and a steadily growing standard library. That library now includes cross-runtime `csv`, `datetime`, `argparse`, `logging`, and `test`, plus native LLVM `try` / `except` / `finally` / `raise` support with matching `with` / context-manager cleanup through caught exceptions.
 
 ### Phase 1 - Core Interpreter (Complete)
 The foundational tree-walk interpreter.
@@ -110,6 +110,7 @@ A built-in library shipped with the language across runtimes.
 - [x] `random` module — `random()`, `randint()`, `choice()`, `shuffle()`, `uniform()`, `seed()`
 - [x] `collections` module — `Queue` and `Stack` classes
 - [x] `csv` module — row parsing, header-based dict parsing, and CSV writing
+- [x] `datetime` module — local timestamps, formatting/parsing, parts, and duration helpers
 - [x] `argparse` module — positional/flag parsing and generated help text
 - [x] `logging` module — leveled logs, timestamps, formatters, and file/stdout handlers
 - [x] `test` module — in-language assertions and `test.raises()` helpers across runtimes

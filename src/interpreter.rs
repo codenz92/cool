@@ -1,6 +1,7 @@
 use crate::argparse_runtime::{self, ArgData};
 use crate::ast::*;
 use crate::csv_runtime;
+use crate::datetime_runtime::{self, DateTimeParts};
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 /// Tree-walk interpreter for Cool.
@@ -1189,6 +1190,16 @@ impl Interpreter {
                 }
                 env.set_local("csv".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "datetime" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["now", "format", "parse", "parts", "add_seconds", "diff_seconds"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("datetime.{}", fn_name)),
+                    );
+                }
+                env.set_local("datetime".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "test" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2324,6 +2335,9 @@ class Stack:
         if let Some(f) = name.strip_prefix("csv.") {
             return self.call_csv_fn(f, args);
         }
+        if let Some(f) = name.strip_prefix("datetime.") {
+            return self.call_datetime_fn(f, args);
+        }
         if let Some(f) = name.strip_prefix("test.") {
             return self.call_test_fn(f, args, env);
         }
@@ -3457,8 +3471,9 @@ class Stack:
                     return Err(self.err("test.truthy() takes a value and optional message"));
                 }
                 if !args[0].is_truthy() {
-                    let message = self
-                        .test_default_message(self.test_message_arg(&args, 1, name)?, || "expected truthy value".into());
+                    let message = self.test_default_message(self.test_message_arg(&args, 1, name)?, || {
+                        "expected truthy value".into()
+                    });
                     return self.test_raise_assertion(message);
                 }
                 Ok(Value::Nil)
@@ -3468,8 +3483,9 @@ class Stack:
                     return Err(self.err("test.falsey() takes a value and optional message"));
                 }
                 if args[0].is_truthy() {
-                    let message = self
-                        .test_default_message(self.test_message_arg(&args, 1, name)?, || "expected falsey value".into());
+                    let message = self.test_default_message(self.test_message_arg(&args, 1, name)?, || {
+                        "expected falsey value".into()
+                    });
                     return self.test_raise_assertion(message);
                 }
                 Ok(Value::Nil)
@@ -3491,8 +3507,9 @@ class Stack:
                     return Err(self.err("test.not_nil() takes a value and optional message"));
                 }
                 if matches!(args[0], Value::Nil) {
-                    let message = self
-                        .test_default_message(self.test_message_arg(&args, 1, name)?, || "expected non-nil value".into());
+                    let message = self.test_default_message(self.test_message_arg(&args, 1, name)?, || {
+                        "expected non-nil value".into()
+                    });
                     return self.test_raise_assertion(message);
                 }
                 Ok(Value::Nil)
@@ -3509,13 +3526,17 @@ class Stack:
             }
             "raises" => {
                 if args.is_empty() || args.len() > 3 {
-                    return Err(self.err("test.raises() takes a callable, optional args list, and optional expected exception"));
+                    return Err(
+                        self.err("test.raises() takes a callable, optional args list, and optional expected exception")
+                    );
                 }
                 let callable = args[0].clone();
                 let call_args = self.test_args_list(args.get(1))?;
                 let expected = self.test_expected_exc_name(args.get(2))?;
                 match self.call_value(callable, call_args, vec![], env) {
-                    Ok(_) => self.test_raise_assertion("expected exception, but call returned successfully".to_string()),
+                    Ok(_) => {
+                        self.test_raise_assertion("expected exception, but call returned successfully".to_string())
+                    }
                     Err(err) if err == "__raise__" => {
                         let exc = self.pending_raise.take().unwrap_or(Value::Nil);
                         if let Some(expected_name) = expected {
@@ -3646,12 +3667,7 @@ class Stack:
                 }
                 let text = match &args[0] {
                     Value::Str(s) => s,
-                    other => {
-                        return Err(self.err(&format!(
-                            "csv.rows() requires a string, got {}",
-                            other.type_name()
-                        )))
-                    }
+                    other => return Err(self.err(&format!("csv.rows() requires a string, got {}", other.type_name()))),
                 };
                 let rows = csv_runtime::parse_rows(text).map_err(|e| self.err(&e))?;
                 Ok(self.csv_rows_to_value(rows))
@@ -3662,12 +3678,7 @@ class Stack:
                 }
                 let text = match &args[0] {
                     Value::Str(s) => s,
-                    other => {
-                        return Err(self.err(&format!(
-                            "csv.dicts() requires a string, got {}",
-                            other.type_name()
-                        )))
-                    }
+                    other => return Err(self.err(&format!("csv.dicts() requires a string, got {}", other.type_name()))),
                 };
                 let rows = csv_runtime::parse_dicts(text).map_err(|e| self.err(&e))?;
                 Ok(self.csv_dicts_to_value(rows))
@@ -3679,6 +3690,104 @@ class Stack:
                 Ok(Value::Str(csv_runtime::write_rows(&self.csv_write_rows_arg(&args[0])?)))
             }
             _ => Err(self.err(&format!("csv has no function '{}'", name))),
+        }
+    }
+
+    fn datetime_parts_to_value(&self, parts: DateTimeParts) -> Value {
+        let mut map = IndexedMap::new();
+        map.set(Value::Str("year".to_string()), Value::Int(parts.year));
+        map.set(Value::Str("month".to_string()), Value::Int(parts.month));
+        map.set(Value::Str("day".to_string()), Value::Int(parts.day));
+        map.set(Value::Str("hour".to_string()), Value::Int(parts.hour));
+        map.set(Value::Str("minute".to_string()), Value::Int(parts.minute));
+        map.set(Value::Str("second".to_string()), Value::Int(parts.second));
+        map.set(Value::Str("weekday".to_string()), Value::Int(parts.weekday));
+        map.set(Value::Str("yearday".to_string()), Value::Int(parts.yearday));
+        Value::Dict(Rc::new(RefCell::new(map)))
+    }
+
+    fn datetime_number_arg(&self, value: &Value, context: &str) -> Result<f64, String> {
+        match value {
+            Value::Int(n) => Ok(*n as f64),
+            Value::Float(f) if f.is_finite() => Ok(*f),
+            Value::Float(_) => Err(self.err(&format!("{context} must be a finite number"))),
+            other => Err(self.err(&format!("{context} must be a number, got {}", other.type_name()))),
+        }
+    }
+
+    fn datetime_format_arg<'a>(&self, value: Option<&'a Value>, name: &str) -> Result<Option<&'a str>, String> {
+        match value {
+            None | Some(Value::Nil) => Ok(None),
+            Some(Value::Str(s)) => Ok(Some(s.as_str())),
+            Some(other) => Err(self.err(&format!(
+                "datetime.{}() format must be a string or nil, got {}",
+                name,
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_datetime_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "now" => {
+                if !args.is_empty() {
+                    return Err(self.err("datetime.now() takes no arguments"));
+                }
+                Ok(Value::Float(datetime_runtime::now()))
+            }
+            "format" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("datetime.format() takes a timestamp and optional format string"));
+                }
+                let timestamp = self.datetime_number_arg(&args[0], "datetime.format() timestamp")?;
+                let rendered = datetime_runtime::format(timestamp, self.datetime_format_arg(args.get(1), name)?)
+                    .map_err(|e| self.err(&e))?;
+                Ok(Value::Str(rendered))
+            }
+            "parse" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(self.err("datetime.parse() takes a text string and optional format string"));
+                }
+                let text = match &args[0] {
+                    Value::Str(s) => s.as_str(),
+                    other => {
+                        return Err(self.err(&format!(
+                            "datetime.parse() text must be a string, got {}",
+                            other.type_name()
+                        )))
+                    }
+                };
+                let timestamp = datetime_runtime::parse(text, self.datetime_format_arg(args.get(1), name)?)
+                    .map_err(|e| self.err(&e))?;
+                Ok(Value::Float(timestamp))
+            }
+            "parts" => {
+                if args.len() != 1 {
+                    return Err(self.err("datetime.parts() takes exactly one timestamp argument"));
+                }
+                let timestamp = self.datetime_number_arg(&args[0], "datetime.parts() timestamp")?;
+                let parts = datetime_runtime::parts(timestamp).map_err(|e| self.err(&e))?;
+                Ok(self.datetime_parts_to_value(parts))
+            }
+            "add_seconds" => {
+                if args.len() != 2 {
+                    return Err(self.err("datetime.add_seconds() takes a timestamp and seconds value"));
+                }
+                let timestamp = self.datetime_number_arg(&args[0], "datetime.add_seconds() timestamp")?;
+                let seconds = self.datetime_number_arg(&args[1], "datetime.add_seconds() seconds")?;
+                let shifted = datetime_runtime::add_seconds(timestamp, seconds).map_err(|e| self.err(&e))?;
+                Ok(Value::Float(shifted))
+            }
+            "diff_seconds" => {
+                if args.len() != 2 {
+                    return Err(self.err("datetime.diff_seconds() takes two timestamp values"));
+                }
+                let left = self.datetime_number_arg(&args[0], "datetime.diff_seconds() left timestamp")?;
+                let right = self.datetime_number_arg(&args[1], "datetime.diff_seconds() right timestamp")?;
+                let diff = datetime_runtime::diff_seconds(left, right).map_err(|e| self.err(&e))?;
+                Ok(Value::Float(diff))
+            }
+            _ => Err(self.err(&format!("datetime has no function '{}'", name))),
         }
     }
 
