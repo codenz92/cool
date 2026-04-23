@@ -33,6 +33,7 @@ const RUNTIME_C: &str = r#"
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <time.h>
 #include <regex.h>
 #ifdef __APPLE__
@@ -799,6 +800,7 @@ static CoolVal cool_list_contains_local(CoolVal list, CoolVal item);
 static void sb_init(CoolStrBuf* sb);
 static void sb_push_char(CoolStrBuf* sb, char c);
 static void sb_push_str(CoolStrBuf* sb, const char* s);
+static int cool_mkdir_p(const char* path);
 static char* re_translate_pattern(const char* pattern);
 static regex_t re_compile_regex(const char* pattern);
 
@@ -1554,6 +1556,30 @@ static void sb_push_str(CoolStrBuf* sb, const char* s) {
     sb->data[sb->len] = '\0';
 }
 
+static int cool_mkdir_p(const char* path) {
+    if (!path || !*path) return 0;
+    char* copy = strdup(path);
+    if (!copy) return -1;
+    size_t len = strlen(copy);
+    if (len > 1 && copy[len - 1] == '/') copy[len - 1] = '\0';
+    for (char* p = copy + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(copy, 0777) != 0 && errno != EEXIST) {
+                free(copy);
+                return -1;
+            }
+            *p = '/';
+        }
+    }
+    if (mkdir(copy, 0777) != 0 && errno != EEXIST) {
+        free(copy);
+        return -1;
+    }
+    free(copy);
+    return 0;
+}
+
 static void sb_push_json_escaped(CoolStrBuf* sb, const char* s) {
     sb_push_char(sb, '"');
     for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
@@ -1969,7 +1995,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
         if (strcmp(name, "mkdir") == 0 && nargs == 1) {
             const char* path = cool_to_str(args[0]);
-            if (mkdir(path, 0777) != 0) {
+            if (cool_mkdir_p(path) != 0) {
                 fprintf(stderr, "RuntimeError: os.mkdir failed\n");
                 exit(1);
             }

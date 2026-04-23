@@ -229,6 +229,9 @@ joined = os.join("{dir}", "sample.txt")
 print(os.exists(joined))
 print(os.getenv("COOL_LLVM_OS_ENV"))
 print(os.popen("printf llvm-os"))
+nested = os.join("{dir}", "nested", "deeper")
+os.mkdir(nested)
+print(os.exists(nested))
 print(os.listdir("{dir}"))
 "#,
         dir = temp_dir.display()
@@ -243,6 +246,7 @@ print(os.listdir("{dir}"))
     assert!(result.contains("true"));
     assert!(result.contains("present"));
     assert!(result.contains("llvm-os"));
+    assert!(result.matches("true").count() >= 2);
     assert!(result.contains("sample.txt"));
 }
 
