@@ -681,6 +681,98 @@ print(hashlib.digest("sha256", "abc"))
 }
 
 #[test]
+fn test_import_toml_module() {
+    let result = run_cool(
+        r#"import toml
+text = "title = \"cool\"\nports = [8000, 8001]\nrelease = 1.5\n[server]\nhost = \"127.0.0.1\"\ndebug = true\n"
+data = toml.loads(text)
+print(data["title"])
+print(data["ports"][1])
+print(data["release"])
+print(data["server"]["host"])
+print(data["server"]["debug"])
+rendered = toml.dumps({
+    "title": "cool",
+    "ports": [8000, 8001],
+    "server": {
+        "host": "127.0.0.1",
+        "debug": true
+    }
+})
+print("title = \"cool\"" in rendered)
+print("ports = [8000, 8001]" in rendered or "ports = [8000,8001]" in rendered)
+print("[server]" in rendered)
+print("host = \"127.0.0.1\"" in rendered)
+print("debug = true" in rendered)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "cool",
+            "8001",
+            "1.5",
+            "127.0.0.1",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
+fn test_vm_import_toml_module() {
+    let result = run_cool_vm(
+        r#"import toml
+text = "title = \"cool\"\nports = [8000, 8001]\nrelease = 1.5\n[server]\nhost = \"127.0.0.1\"\ndebug = true\n"
+data = toml.loads(text)
+print(data["title"])
+print(data["ports"][1])
+print(data["release"])
+print(data["server"]["host"])
+print(data["server"]["debug"])
+rendered = toml.dumps({
+    "title": "cool",
+    "ports": [8000, 8001],
+    "server": {
+        "host": "127.0.0.1",
+        "debug": true
+    }
+})
+print("title = \"cool\"" in rendered)
+print("ports = [8000, 8001]" in rendered or "ports = [8000,8001]" in rendered)
+print("[server]" in rendered)
+print("host = \"127.0.0.1\"" in rendered)
+print("debug = true" in rendered)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "cool",
+            "8001",
+            "1.5",
+            "127.0.0.1",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
 fn test_import_test_module() {
     let result = run_cool(
         r#"import test
@@ -851,6 +943,64 @@ fn test_vm_import_logging_module() {
 
     assert!(result.trim().is_empty());
     assert_logging_file_output(&contents);
+}
+
+#[test]
+fn test_cool_build_reads_project_table_manifest() {
+    let project_dir = unique_temp_dir("cool_project_manifest");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"project table\")\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let binary_path = project_dir.join("demo-bin");
+    assert!(
+        binary_path.exists(),
+        "expected built binary at {}",
+        binary_path.display()
+    );
+
+    let output = Command::new(&binary_path).output().unwrap();
+    let binary_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let binary_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "binary failed\nstdout:\n{binary_stdout}\nstderr:\n{binary_stderr}"
+    );
+    assert!(binary_stdout.contains("project table"));
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_new_writes_project_table_manifest() {
+    let workspace_dir = unique_temp_dir("cool_new_project_table");
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&workspace_dir, &["new", "demo"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let manifest = std::fs::read_to_string(workspace_dir.join("demo").join("cool.toml")).unwrap();
+    assert!(manifest.contains("[project]"));
+    assert!(manifest.contains("name = \"demo\""));
+    assert!(manifest.contains("main = \"src/main.cool\""));
+
+    let _ = std::fs::remove_dir_all(&workspace_dir);
 }
 
 #[test]

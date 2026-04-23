@@ -11,6 +11,7 @@ mod logging_runtime;
 mod opcode;
 mod parser;
 mod subprocess_runtime;
+mod toml_runtime;
 mod vm;
 
 use interpreter::Interpreter;
@@ -81,7 +82,6 @@ fn repl() {
 
 // ── cool.toml project file ────────────────────────────────────────────────────
 
-/// Minimal cool.toml parser (no external TOML dep — hand-rolled for the basic keys we need).
 #[derive(Debug)]
 struct CoolProject {
     name: String,
@@ -92,37 +92,33 @@ struct CoolProject {
 
 impl CoolProject {
     fn from_str(src: &str) -> Result<Self, String> {
-        let mut name: Option<String> = None;
-        let mut version: Option<String> = None;
-        let mut main: Option<String> = None;
-        let mut output: Option<String> = None;
+        let parsed: toml::Value = src
+            .parse()
+            .map_err(|e: toml::de::Error| format!("cool.toml parse error: {}", e.message()))?;
+        let root = parsed
+            .as_table()
+            .ok_or_else(|| "cool.toml: root must be a table".to_string())?;
+        let project = root.get("project").and_then(toml::Value::as_table);
 
-        for (lineno, raw) in src.lines().enumerate() {
-            let line = raw.trim();
-            // Skip blank lines and comments
-            if line.is_empty() || line.starts_with('#') {
-                continue;
+        let field =
+            |key: &str| -> Option<&toml::Value> { project.and_then(|table| table.get(key)).or_else(|| root.get(key)) };
+        let req_str = |key: &str| -> Result<Option<String>, String> {
+            match field(key) {
+                None => Ok(None),
+                Some(toml::Value::String(s)) => Ok(Some(s.clone())),
+                Some(other) => Err(format!(
+                    "cool.toml: field '{}' must be a string, got {}",
+                    key,
+                    other.type_str()
+                )),
             }
-            // Expect `key = "value"` or `key = value`
-            let Some((k, v)) = line.split_once('=') else {
-                return Err(format!("cool.toml line {}: expected `key = value`", lineno + 1));
-            };
-            let key = k.trim();
-            let val = v.trim().trim_matches('"').to_string();
-            match key {
-                "name" => name = Some(val),
-                "version" => version = Some(val),
-                "main" => main = Some(val),
-                "output" => output = Some(val),
-                other => eprintln!("cool.toml: unknown key '{}' (ignored)", other),
-            }
-        }
+        };
 
         Ok(CoolProject {
-            name: name.unwrap_or_else(|| "project".to_string()),
-            version: version.unwrap_or_else(|| "0.1.0".to_string()),
-            main: main.ok_or("cool.toml: missing required key 'main'")?,
-            output,
+            name: req_str("name")?.unwrap_or_else(|| "project".to_string()),
+            version: req_str("version")?.unwrap_or_else(|| "0.1.0".to_string()),
+            main: req_str("main")?.ok_or("cool.toml: missing required key 'main'")?,
+            output: req_str("output")?,
         })
     }
 
@@ -488,7 +484,7 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     fs::create_dir_all(project_dir.join("tests")).map_err(|e| format!("cool new: {e}"))?;
 
     // cool.toml
-    let manifest = format!("name = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n");
+    let manifest = format!("[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n");
     fs::write(project_dir.join("cool.toml"), manifest).map_err(|e| format!("cool new: {e}"))?;
 
     // src/main.cool
@@ -557,14 +553,14 @@ NOTES:
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
     source-relative file imports and project/package imports,
     native import ffi (ffi.open/ffi.func),
-    built-in import math/os/sys/path/csv/datetime/hashlib/subprocess/argparse/logging/test/time and import random
+    built-in import math/os/sys/path/csv/datetime/hashlib/toml/subprocess/argparse/logging/test/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
-    (Queue/Stack), csv(rows/dicts/write), datetime(now/format/parse/parts/add_seconds/diff_seconds), hashlib(md5/sha1/sha256/digest), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
+    (Queue/Stack), csv(rows/dicts/write), datetime(now/format/parse/parts/add_seconds/diff_seconds), hashlib(md5/sha1/sha256/digest), toml(loads/dumps), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
     test(equal/not_equal/truthy/falsey/is_nil/not_nil/fail/raises), open()/file methods, with/context managers on
     normal exit, return/break/continue, caught exceptions, and unhandled native raises,
     inline asm, and raw memory.

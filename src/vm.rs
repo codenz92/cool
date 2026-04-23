@@ -4,6 +4,7 @@ use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::toml_runtime::{self, TomlData};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -1536,6 +1537,9 @@ impl VM {
         if let Some(rest) = name.strip_prefix("hashlib.") {
             return self.call_hashlib_module(rest, args);
         }
+        if let Some(rest) = name.strip_prefix("toml.") {
+            return self.call_toml_module(rest, args);
+        }
         if let Some(rest) = name.strip_prefix("test.") {
             return self.call_test_module(rest, args);
         }
@@ -2365,6 +2369,31 @@ impl VM {
                         Ok(VmValue::Str(self.json_dumps(&v)))
                     }
                     _ => Err(self.err(&format!("unknown json function '{}'", fname))),
+                }
+            }
+            // ── toml module ──────────────────────────────────────────────────
+            _ if name.starts_with("toml.") => {
+                let fname = &name[5..];
+                match fname {
+                    "loads" => {
+                        let s = match args.first() {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => return Err(self.err("toml.loads requires a string")),
+                        };
+                        Ok(Self::toml_data_to_vm_value(
+                            &toml_runtime::loads(&s).map_err(|e| self.err(&e))?,
+                        ))
+                    }
+                    "dumps" => {
+                        let v = match args.first() {
+                            Some(v) => v.clone(),
+                            _ => return Err(self.err("toml.dumps requires a value")),
+                        };
+                        Ok(VmValue::Str(
+                            toml_runtime::dumps(&self.vm_value_to_toml_data(&v)?).map_err(|e| self.err(&e))?,
+                        ))
+                    }
+                    _ => Err(self.err(&format!("unknown toml function '{}'", fname))),
                 }
             }
             // ── re module ────────────────────────────────────────────────────
@@ -4056,6 +4085,94 @@ impl VM {
         }
     }
 
+    fn vm_value_to_toml_data(&self, value: &VmValue) -> Result<TomlData, String> {
+        match value {
+            VmValue::Int(n) => Ok(TomlData::Int(*n)),
+            VmValue::Float(f) if f.is_finite() => Ok(TomlData::Float(*f)),
+            VmValue::Float(_) => Err(self.err("toml.dumps() does not support NaN or infinite floats")),
+            VmValue::Str(s) => Ok(TomlData::Str(s.clone())),
+            VmValue::Bool(b) => Ok(TomlData::Bool(*b)),
+            VmValue::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.vm_value_to_toml_data(item)?);
+                }
+                Ok(TomlData::List(out))
+            }
+            VmValue::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.vm_value_to_toml_data(item)?);
+                }
+                Ok(TomlData::List(out))
+            }
+            VmValue::Dict(map) => {
+                let map = map.borrow();
+                let mut out = Vec::with_capacity(map.keys.len());
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    let key = match key {
+                        VmValue::Str(s) => s.clone(),
+                        other => {
+                            return Err(self.err(&format!(
+                                "toml.dumps() dict keys must be strings, got {}",
+                                other.type_name()
+                            )))
+                        }
+                    };
+                    out.push((key, self.vm_value_to_toml_data(value)?));
+                }
+                Ok(TomlData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "toml.dumps() only supports ints/floats/strings/bools/lists/tuples/dicts, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn toml_data_to_vm_value(data: &TomlData) -> VmValue {
+        match data {
+            TomlData::Int(n) => VmValue::Int(*n),
+            TomlData::Float(f) => VmValue::Float(*f),
+            TomlData::Str(s) => VmValue::Str(s.clone()),
+            TomlData::Bool(b) => VmValue::Bool(*b),
+            TomlData::List(items) => VmValue::List(Rc::new(RefCell::new(
+                items.iter().map(Self::toml_data_to_vm_value).collect(),
+            ))),
+            TomlData::Dict(items) => {
+                let mut out = VmDict::new();
+                for (key, value) in items {
+                    out.set(VmValue::Str(key.clone()), Self::toml_data_to_vm_value(value));
+                }
+                VmValue::Dict(Rc::new(RefCell::new(out)))
+            }
+        }
+    }
+
+    fn call_toml_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "loads" => {
+                let s = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("toml.loads requires a string")),
+                };
+                Ok(Self::toml_data_to_vm_value(
+                    &toml_runtime::loads(&s).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "dumps" => {
+                let value = match args.first() {
+                    Some(v) => v,
+                    None => return Err(self.err("toml.dumps requires a value")),
+                };
+                Ok(VmValue::Str(
+                    toml_runtime::dumps(&self.vm_value_to_toml_data(value)?).map_err(|e| self.err(&e))?,
+                ))
+            }
+            _ => Err(self.err(&format!("unknown toml function '{}'", name))),
+        }
+    }
+
     fn eval_source(&mut self, src: &str) -> Result<VmValue, String> {
         let mut lexer = crate::lexer::Lexer::new(src);
         let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
@@ -4281,6 +4398,10 @@ impl VM {
             "json" => {
                 set(&mut d, "loads", bf("json.loads"));
                 set(&mut d, "dumps", bf("json.dumps"));
+            }
+            "toml" => {
+                set(&mut d, "loads", bf("toml.loads"));
+                set(&mut d, "dumps", bf("toml.dumps"));
             }
             "re" => {
                 for fname in &["match", "search", "fullmatch", "findall", "sub", "split"] {

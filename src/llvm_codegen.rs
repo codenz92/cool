@@ -3204,6 +3204,475 @@ static void json_dump_value(CoolStrBuf* sb, CoolVal v) {
     }
 }
 
+static void toml_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static char* toml_trim_inplace(char* s) {
+    while (*s && isspace((unsigned char)*s)) s++;
+    char* end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) {
+        *--end = '\0';
+    }
+    return s;
+}
+
+static void toml_strip_comment_inplace(char* s) {
+    int in_double = 0;
+    int in_single = 0;
+    int escaped = 0;
+    for (char* p = s; *p; p++) {
+        if (in_double) {
+            if (escaped) escaped = 0;
+            else if (*p == '\\') escaped = 1;
+            else if (*p == '"') in_double = 0;
+            continue;
+        }
+        if (in_single) {
+            if (*p == '\'') in_single = 0;
+            continue;
+        }
+        if (*p == '"') in_double = 1;
+        else if (*p == '\'') in_single = 1;
+        else if (*p == '#') {
+            *p = '\0';
+            break;
+        }
+    }
+}
+
+static char* toml_slice_trimmed(const char* start, size_t len) {
+    char* out = (char*)malloc(len + 1);
+    if (!out) toml_raisef("toml: out of memory");
+    memcpy(out, start, len);
+    out[len] = '\0';
+    char* trimmed = toml_trim_inplace(out);
+    if (trimmed != out) memmove(out, trimmed, strlen(trimmed) + 1);
+    return out;
+}
+
+static char* toml_parse_quoted_string_raw(const char** p) {
+    char quote = **p;
+    (*p)++;
+    CoolStrBuf sb;
+    sb_init(&sb);
+    while (**p && **p != quote) {
+        char ch = **p;
+        if (quote == '"' && ch == '\\') {
+            (*p)++;
+            if (!**p) toml_raisef("toml string has unterminated escape");
+            switch (**p) {
+                case 'n': sb_push_char(&sb, '\n'); break;
+                case 'r': sb_push_char(&sb, '\r'); break;
+                case 't': sb_push_char(&sb, '\t'); break;
+                case '"': sb_push_char(&sb, '"'); break;
+                case '\\': sb_push_char(&sb, '\\'); break;
+                default: sb_push_char(&sb, **p); break;
+            }
+        } else {
+            sb_push_char(&sb, ch);
+        }
+        (*p)++;
+    }
+    if (**p != quote) toml_raisef("toml string is unterminated");
+    (*p)++;
+    return sb.data;
+}
+
+static const char* toml_find_top_level_char(const char* s, char target) {
+    int in_double = 0, in_single = 0, escaped = 0;
+    int depth_bracket = 0, depth_brace = 0;
+    for (const char* p = s; *p; p++) {
+        char ch = *p;
+        if (in_double) {
+            if (escaped) escaped = 0;
+            else if (ch == '\\') escaped = 1;
+            else if (ch == '"') in_double = 0;
+            continue;
+        }
+        if (in_single) {
+            if (ch == '\'') in_single = 0;
+            continue;
+        }
+        if (ch == '"') {
+            in_double = 1;
+            continue;
+        }
+        if (ch == '\'') {
+            in_single = 1;
+            continue;
+        }
+        if (ch == '[') depth_bracket++;
+        else if (ch == ']') depth_bracket--;
+        else if (ch == '{') depth_brace++;
+        else if (ch == '}') depth_brace--;
+        else if (ch == target && depth_bracket == 0 && depth_brace == 0) return p;
+    }
+    return NULL;
+}
+
+static int toml_try_parse_number(const char* s, CoolVal* out) {
+    char* end = NULL;
+    long long int_val = strtoll(s, &end, 10);
+    if (end && *end == '\0' && end != s) {
+        *out = cv_int((int64_t)int_val);
+        return 1;
+    }
+    end = NULL;
+    double float_val = strtod(s, &end);
+    if (end && *end == '\0' && end != s) {
+        *out = cv_float(float_val);
+        return 1;
+    }
+    return 0;
+}
+
+static char* toml_next_key_segment(const char** p) {
+    while (**p && isspace((unsigned char)**p)) (*p)++;
+    if (!**p) return NULL;
+    char* segment = NULL;
+    if (**p == '"' || **p == '\'') {
+        segment = toml_parse_quoted_string_raw(p);
+    } else {
+        const char* start = *p;
+        while (**p && **p != '.') (*p)++;
+        segment = toml_slice_trimmed(start, (size_t)(*p - start));
+    }
+    while (**p && isspace((unsigned char)**p)) (*p)++;
+    if (**p == '.') (*p)++;
+    return segment;
+}
+
+static CoolVal toml_get_or_create_table(CoolVal dict, const char* key) {
+    CoolVal key_val = cv_str(strdup(key));
+    CoolVal child = cool_dict_get_opt(dict, key_val);
+    if (child.tag == TAG_NIL) {
+        child = cool_dict_new();
+        cool_dict_set(dict, key_val, child);
+        return child;
+    }
+    if (child.tag != TAG_DICT) {
+        toml_raisef("toml table path '%s' conflicts with non-table value", key);
+    }
+    return child;
+}
+
+static CoolVal toml_ensure_table_path(CoolVal root, const char* path) {
+    const char* p = path;
+    CoolVal current = root;
+    char* segment = NULL;
+    while ((segment = toml_next_key_segment(&p)) != NULL) {
+        current = toml_get_or_create_table(current, segment);
+    }
+    return current;
+}
+
+static void toml_set_path_value(CoolVal root, const char* path, CoolVal value) {
+    const char* p = path;
+    CoolVal current = root;
+    char* segment = NULL;
+    while ((segment = toml_next_key_segment(&p)) != NULL) {
+        const char* after = p;
+        while (*after && isspace((unsigned char)*after)) after++;
+        if (*after == '\0') {
+            cool_dict_set(current, cv_str(strdup(segment)), value);
+            return;
+        }
+        current = toml_get_or_create_table(current, segment);
+    }
+    toml_raisef("toml assignment missing key before '='");
+}
+
+static CoolVal toml_parse_value_text(const char* text);
+
+static CoolVal toml_parse_array_text(const char* text) {
+    size_t len = strlen(text);
+    if (len < 2 || text[0] != '[' || text[len - 1] != ']') {
+        toml_raisef("toml array must be enclosed in []");
+    }
+    CoolVal out = cool_list_make(cv_int(4));
+    char* inner = toml_slice_trimmed(text + 1, len - 2);
+    if (!*inner) return out;
+    char* start = inner;
+    int in_double = 0, in_single = 0, escaped = 0;
+    int depth_bracket = 0, depth_brace = 0;
+    for (char* p = inner;; p++) {
+        char ch = *p;
+        int at_end = (ch == '\0');
+        if (!at_end) {
+            if (in_double) {
+                if (escaped) escaped = 0;
+                else if (ch == '\\') escaped = 1;
+                else if (ch == '"') in_double = 0;
+            } else if (in_single) {
+                if (ch == '\'') in_single = 0;
+            } else if (ch == '"') {
+                in_double = 1;
+            } else if (ch == '\'') {
+                in_single = 1;
+            } else if (ch == '[') {
+                depth_bracket++;
+            } else if (ch == ']') {
+                depth_bracket--;
+            } else if (ch == '{') {
+                depth_brace++;
+            } else if (ch == '}') {
+                depth_brace--;
+            }
+        }
+        if (at_end || (ch == ',' && !in_double && !in_single && depth_bracket == 0 && depth_brace == 0)) {
+            char saved = *p;
+            *p = '\0';
+            char* segment = toml_trim_inplace(start);
+            if (*segment) {
+                cool_list_push(out, toml_parse_value_text(segment));
+            }
+            if (saved == '\0') break;
+            start = p + 1;
+        }
+    }
+    return out;
+}
+
+static CoolVal toml_parse_inline_table_text(const char* text) {
+    size_t len = strlen(text);
+    if (len < 2 || text[0] != '{' || text[len - 1] != '}') {
+        toml_raisef("toml inline table must be enclosed in {}");
+    }
+    CoolVal out = cool_dict_new();
+    char* inner = toml_slice_trimmed(text + 1, len - 2);
+    if (!*inner) return out;
+    char* start = inner;
+    int in_double = 0, in_single = 0, escaped = 0;
+    int depth_bracket = 0, depth_brace = 0;
+    for (char* p = inner;; p++) {
+        char ch = *p;
+        int at_end = (ch == '\0');
+        if (!at_end) {
+            if (in_double) {
+                if (escaped) escaped = 0;
+                else if (ch == '\\') escaped = 1;
+                else if (ch == '"') in_double = 0;
+            } else if (in_single) {
+                if (ch == '\'') in_single = 0;
+            } else if (ch == '"') {
+                in_double = 1;
+            } else if (ch == '\'') {
+                in_single = 1;
+            } else if (ch == '[') {
+                depth_bracket++;
+            } else if (ch == ']') {
+                depth_bracket--;
+            } else if (ch == '{') {
+                depth_brace++;
+            } else if (ch == '}') {
+                depth_brace--;
+            }
+        }
+        if (at_end || (ch == ',' && !in_double && !in_single && depth_bracket == 0 && depth_brace == 0)) {
+            char saved = *p;
+            *p = '\0';
+            char* pair = toml_trim_inplace(start);
+            if (*pair) {
+                const char* eq = toml_find_top_level_char(pair, '=');
+                if (!eq) toml_raisef("toml inline table entry must be key = value");
+                char* key = toml_slice_trimmed(pair, (size_t)(eq - pair));
+                char* value = toml_slice_trimmed(eq + 1, strlen(eq + 1));
+                toml_set_path_value(out, key, toml_parse_value_text(value));
+            }
+            if (saved == '\0') break;
+            start = p + 1;
+        }
+    }
+    return out;
+}
+
+static CoolVal toml_parse_value_text(const char* text) {
+    char* copy = strdup(text);
+    if (!copy) toml_raisef("toml: out of memory");
+    char* t = toml_trim_inplace(copy);
+    size_t len = strlen(t);
+    if (len == 0) toml_raisef("toml value cannot be empty");
+    if (t[0] == '"' || t[0] == '\'') {
+        const char* p = t;
+        char* s = toml_parse_quoted_string_raw(&p);
+        while (*p && isspace((unsigned char)*p)) p++;
+        if (*p != '\0') toml_raisef("toml string has trailing characters");
+        return cv_str(s);
+    }
+    if (t[0] == '[') return toml_parse_array_text(t);
+    if (t[0] == '{') return toml_parse_inline_table_text(t);
+    if (strcmp(t, "true") == 0) return cv_bool(1);
+    if (strcmp(t, "false") == 0) return cv_bool(0);
+    CoolVal number;
+    if (toml_try_parse_number(t, &number)) return number;
+    return cv_str(strdup(t));
+}
+
+static CoolVal cool_toml_loads(CoolVal text_v) {
+    if (text_v.tag != TAG_STR) {
+        toml_raisef("toml.loads() requires a string, got %s", cool_to_str(text_v));
+    }
+    char* src = strdup((const char*)(intptr_t)text_v.payload);
+    if (!src) toml_raisef("toml.loads(): out of memory");
+    CoolVal root = cool_dict_new();
+    CoolVal current = root;
+    char* save = NULL;
+    for (char* line = strtok_r(src, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        size_t line_len = strlen(line);
+        if (line_len > 0 && line[line_len - 1] == '\r') line[line_len - 1] = '\0';
+        toml_strip_comment_inplace(line);
+        char* trimmed = toml_trim_inplace(line);
+        if (!*trimmed) continue;
+        size_t trimmed_len = strlen(trimmed);
+        if (trimmed[0] == '[') {
+            if (trimmed_len >= 4 && trimmed[1] == '[' && trimmed[trimmed_len - 2] == ']' && trimmed[trimmed_len - 1] == ']') {
+                toml_raisef("toml.loads() does not support array-of-table headers");
+            }
+            if (trimmed[trimmed_len - 1] != ']') toml_raisef("toml table header is unterminated");
+            char* path = toml_slice_trimmed(trimmed + 1, trimmed_len - 2);
+            current = toml_ensure_table_path(root, path);
+            continue;
+        }
+        const char* eq = toml_find_top_level_char(trimmed, '=');
+        if (!eq) toml_raisef("toml line must be key = value");
+        char* key = toml_slice_trimmed(trimmed, (size_t)(eq - trimmed));
+        char* value = toml_slice_trimmed(eq + 1, strlen(eq + 1));
+        toml_set_path_value(current, key, toml_parse_value_text(value));
+    }
+    free(src);
+    return root;
+}
+
+static void toml_dump_string(CoolStrBuf* sb, const char* s) {
+    sb_push_char(sb, '"');
+    for (const char* p = s; *p; p++) {
+        switch (*p) {
+            case '"': sb_push_str(sb, "\\\""); break;
+            case '\\': sb_push_str(sb, "\\\\"); break;
+            case '\n': sb_push_str(sb, "\\n"); break;
+            case '\r': sb_push_str(sb, "\\r"); break;
+            case '\t': sb_push_str(sb, "\\t"); break;
+            default: sb_push_char(sb, *p); break;
+        }
+    }
+    sb_push_char(sb, '"');
+}
+
+static char* toml_render_key(const char* key) {
+    int bare = (*key != '\0');
+    for (const char* p = key; *p; p++) {
+        if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '-')) {
+            bare = 0;
+            break;
+        }
+    }
+    CoolStrBuf sb;
+    sb_init(&sb);
+    if (bare) sb_push_str(&sb, key);
+    else toml_dump_string(&sb, key);
+    return sb.data;
+}
+
+static void toml_dump_inline_value(CoolStrBuf* sb, CoolVal value) {
+    switch (value.tag) {
+        case TAG_BOOL:
+            sb_push_str(sb, value.payload ? "true" : "false");
+            break;
+        case TAG_INT: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%lld", (long long)value.payload);
+            sb_push_str(sb, buf);
+            break;
+        }
+        case TAG_FLOAT: {
+            double f = cv_as_float(value);
+            if (!isfinite(f)) toml_raisef("toml.dumps() does not support NaN or infinite floats");
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", f);
+            sb_push_str(sb, buf);
+            break;
+        }
+        case TAG_STR:
+            toml_dump_string(sb, (const char*)(intptr_t)value.payload);
+            break;
+        case TAG_LIST:
+        case TAG_TUPLE: {
+            CoolList* list = (CoolList*)(intptr_t)value.payload;
+            sb_push_char(sb, '[');
+            for (int64_t i = 0; i < list->length; i++) {
+                if (i > 0) sb_push_str(sb, ", ");
+                toml_dump_inline_value(sb, ((CoolVal*)list->data)[i]);
+            }
+            sb_push_char(sb, ']');
+            break;
+        }
+        case TAG_DICT: {
+            CoolDict* dict = (CoolDict*)(intptr_t)value.payload;
+            sb_push_str(sb, "{ ");
+            for (int64_t i = 0; i < dict->len; i++) {
+                if (dict->keys[i].tag != TAG_STR) toml_raisef("toml.dumps() dict keys must be strings");
+                if (i > 0) sb_push_str(sb, ", ");
+                char* key = toml_render_key((const char*)(intptr_t)dict->keys[i].payload);
+                sb_push_str(sb, key);
+                sb_push_str(sb, " = ");
+                toml_dump_inline_value(sb, dict->vals[i]);
+            }
+            sb_push_str(sb, " }");
+            break;
+        }
+        default:
+            toml_raisef("toml.dumps() cannot serialize %s", cool_type_name(value.tag));
+    }
+}
+
+static void toml_dump_table(CoolStrBuf* sb, CoolVal table, const char* prefix, int is_root) {
+    CoolDict* dict = (CoolDict*)(intptr_t)table.payload;
+    if (!is_root) {
+        if (sb->len > 0) sb_push_char(sb, '\n');
+        sb_push_char(sb, '[');
+        sb_push_str(sb, prefix);
+        sb_push_str(sb, "]\n");
+    }
+    for (int64_t i = 0; i < dict->len; i++) {
+        if (dict->keys[i].tag != TAG_STR) toml_raisef("toml.dumps() dict keys must be strings");
+        if (dict->vals[i].tag == TAG_DICT) continue;
+        char* key = toml_render_key((const char*)(intptr_t)dict->keys[i].payload);
+        sb_push_str(sb, key);
+        sb_push_str(sb, " = ");
+        toml_dump_inline_value(sb, dict->vals[i]);
+        sb_push_char(sb, '\n');
+    }
+    for (int64_t i = 0; i < dict->len; i++) {
+        if (dict->keys[i].tag != TAG_STR) toml_raisef("toml.dumps() dict keys must be strings");
+        if (dict->vals[i].tag != TAG_DICT) continue;
+        char* key = toml_render_key((const char*)(intptr_t)dict->keys[i].payload);
+        CoolStrBuf child;
+        sb_init(&child);
+        if (prefix && *prefix) {
+            sb_push_str(&child, prefix);
+            sb_push_char(&child, '.');
+        }
+        sb_push_str(&child, key);
+        toml_dump_table(sb, dict->vals[i], child.data, 0);
+    }
+}
+
+static CoolVal cool_toml_dumps(CoolVal value) {
+    if (value.tag != TAG_DICT) {
+        toml_raisef("toml.dumps() requires a dict/table at the root, got %s", cool_type_name(value.tag));
+    }
+    CoolStrBuf sb;
+    sb_init(&sb);
+    toml_dump_table(&sb, value, "", 1);
+    return cv_str(sb.data);
+}
+
 static char* re_translate_pattern(const char* pattern) {
     CoolStrBuf sb;
     sb_init(&sb);
@@ -4993,6 +5462,11 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             json_dump_value(&sb, args[0]);
             return cv_str(sb.data);
         }
+    }
+
+    if (strcmp(module, "toml") == 0) {
+        if (strcmp(name, "loads") == 0 && nargs == 1) return cool_toml_loads(args[0]);
+        if (strcmp(name, "dumps") == 0 && nargs == 1) return cool_toml_dumps(args[0]);
     }
 
     if (strcmp(module, "string") == 0) {
@@ -7757,7 +8231,7 @@ impl<'ctx> Compiler<'ctx> {
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
-            | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
+            | "time" | "random" | "json" | "toml" | "string" | "list" | "re" | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

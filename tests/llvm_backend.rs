@@ -1127,6 +1127,53 @@ print(hashlib.digest("sha256", "abc"))
 }
 
 #[test]
+fn test_llvm_import_toml_module() {
+    let result = compile_and_run_native(
+        r#"
+import toml
+text = "title = \"cool\"\nports = [8000, 8001]\nrelease = 1.5\n[server]\nhost = \"127.0.0.1\"\ndebug = true\n"
+data = toml.loads(text)
+print(data["title"])
+print(data["ports"][1])
+print(data["release"])
+print(data["server"]["host"])
+print(data["server"]["debug"])
+rendered = toml.dumps({
+    "title": "cool",
+    "ports": [8000, 8001],
+    "server": {
+        "host": "127.0.0.1",
+        "debug": true
+    }
+})
+print("title = \"cool\"" in rendered)
+print("ports = [8000, 8001]" in rendered or "ports = [8000,8001]" in rendered)
+print("[server]" in rendered)
+print("host = \"127.0.0.1\"" in rendered)
+print("debug = true" in rendered)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "cool",
+            "8001",
+            "1.5",
+            "127.0.0.1",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+        ]
+    );
+}
+
+#[test]
 fn test_llvm_import_test_module() {
     let result = compile_and_run_native(
         r#"

@@ -5,6 +5,7 @@ use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
+use crate::toml_runtime::{self, TomlData};
 /// Tree-walk interpreter for Cool.
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -1130,6 +1131,18 @@ impl Interpreter {
                     Value::BuiltinFn("json.dumps".to_string()),
                 );
                 env.set_local("json".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "toml" => {
+                let mut map = IndexedMap::new();
+                map.set(
+                    Value::Str("loads".to_string()),
+                    Value::BuiltinFn("toml.loads".to_string()),
+                );
+                map.set(
+                    Value::Str("dumps".to_string()),
+                    Value::BuiltinFn("toml.dumps".to_string()),
+                );
+                env.set_local("toml".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "re" => {
                 let mut map = IndexedMap::new();
@@ -2327,6 +2340,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("json.") {
             return self.call_json_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("toml.") {
+            return self.call_toml_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("re.") {
             return self.call_re_fn(f, args);
@@ -4310,6 +4326,91 @@ class Stack:
                 Ok(Value::Str(json_dumps(&v)))
             }
             _ => Err(self.err(&format!("json has no function '{}'", name))),
+        }
+    }
+
+    fn value_to_toml_data(&self, value: &Value) -> Result<TomlData, String> {
+        match value {
+            Value::Int(n) => Ok(TomlData::Int(*n)),
+            Value::Float(f) if f.is_finite() => Ok(TomlData::Float(*f)),
+            Value::Float(_) => Err(self.err("toml.dumps() does not support NaN or infinite floats")),
+            Value::Str(s) => Ok(TomlData::Str(s.clone())),
+            Value::Bool(b) => Ok(TomlData::Bool(*b)),
+            Value::List(items) => {
+                let mut out = Vec::with_capacity(items.borrow().len());
+                for item in items.borrow().iter() {
+                    out.push(self.value_to_toml_data(item)?);
+                }
+                Ok(TomlData::List(out))
+            }
+            Value::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    out.push(self.value_to_toml_data(item)?);
+                }
+                Ok(TomlData::List(out))
+            }
+            Value::Dict(map) => {
+                let map = map.borrow();
+                let mut out = Vec::with_capacity(map.keys.len());
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    let key = match key {
+                        Value::Str(s) => s.clone(),
+                        other => {
+                            return Err(self.err(&format!(
+                                "toml.dumps() dict keys must be strings, got {}",
+                                other.type_name()
+                            )))
+                        }
+                    };
+                    out.push((key, self.value_to_toml_data(value)?));
+                }
+                Ok(TomlData::Dict(out))
+            }
+            other => Err(self.err(&format!(
+                "toml.dumps() only supports ints/floats/strings/bools/lists/tuples/dicts, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn toml_data_to_value(data: &TomlData) -> Value {
+        match data {
+            TomlData::Int(n) => Value::Int(*n),
+            TomlData::Float(f) => Value::Float(*f),
+            TomlData::Str(s) => Value::Str(s.clone()),
+            TomlData::Bool(b) => Value::Bool(*b),
+            TomlData::List(items) => Value::List(Rc::new(RefCell::new(
+                items.iter().map(Self::toml_data_to_value).collect(),
+            ))),
+            TomlData::Dict(items) => {
+                let mut out = IndexedMap::new();
+                for (key, value) in items {
+                    out.set(Value::Str(key.clone()), Self::toml_data_to_value(value));
+                }
+                Value::Dict(Rc::new(RefCell::new(out)))
+            }
+        }
+    }
+
+    fn call_toml_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "loads" => {
+                let s = req_str_arg(&args, 0, "toml.loads")?;
+                Ok(Self::toml_data_to_value(
+                    &toml_runtime::loads(&s).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "dumps" => {
+                let value = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("toml.dumps() requires 1 argument"))?;
+                Ok(Value::Str(
+                    toml_runtime::dumps(&self.value_to_toml_data(&value)?).map_err(|e| self.err(&e))?,
+                ))
+            }
+            _ => Err(self.err(&format!("toml has no function '{}'", name))),
         }
     }
 
