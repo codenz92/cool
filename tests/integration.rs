@@ -556,6 +556,40 @@ fn test_shell_notes_app_launch() {
 }
 
 #[test]
+fn test_notes_app_crud_flow() {
+    let temp_dir = std::env::temp_dir().join("cool_notes_app_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    let input = "new demo\nfirst line\nsecond line\n\nshow demo\nappend demo\nextra\nshow demo\nsearch second\ndelete demo\nlist\nexit\n";
+    let mut cmd = Command::new(cool_bin());
+    cmd.arg("coolapps/notes.cool");
+    cmd.env("HOME", &temp_dir);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().unwrap();
+    {
+        let mut child_stdin = child.stdin.take().unwrap();
+        child_stdin.write_all(input.as_bytes()).unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Saved 'demo'."));
+    assert!(stdout.contains("=== demo ==="));
+    assert!(stdout.contains("first line"));
+    assert!(stdout.contains("second line"));
+    assert!(stdout.contains("extra"));
+    assert!(stdout.contains("Deleted 'demo'."));
+    assert!(stdout.contains("No notes yet. Use 'new <name>' to create one."));
+}
+
+#[test]
 fn test_break_continue() {
     let result =
         run_cool("result = []\nfor i in range(10):\n\tif i == 5:\n\t\tbreak\n\tresult.append(i)\nprint(len(result))")
