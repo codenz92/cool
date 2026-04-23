@@ -2006,7 +2006,10 @@ impl VM {
                             Ok(VmValue::Float((n * factor).round() / factor))
                         }
                     }
-                    "abs" => Ok(VmValue::Float(n.abs())),
+                    "abs" => match args.first() {
+                        Some(VmValue::Int(v)) => Ok(VmValue::Int(v.abs())),
+                        _ => Ok(VmValue::Float(n.abs())),
+                    },
                     "exp" => Ok(VmValue::Float(n.exp())),
                     "exp2" => Ok(VmValue::Float(n.exp2())),
                     "sin" => Ok(VmValue::Float(n.sin())),

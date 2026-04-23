@@ -2929,7 +2929,12 @@ class Stack:
                 let factor = 10f64.powi(ndigits as i32);
                 return Ok(Value::Float((n * factor).round() / factor));
             }
-            "abs" => n.abs(),
+            "abs" => {
+                return match args.first() {
+                    Some(Value::Int(v)) => Ok(Value::Int(v.abs())),
+                    _ => Ok(Value::Float(n.abs())),
+                };
+            }
             "log" => n.ln(),
             "log2" => n.log2(),
             "log10" => n.log10(),
