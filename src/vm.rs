@@ -3266,8 +3266,70 @@ impl VM {
                 }
             }
             "collections" => {
-                // These are Cool stdlib modules; they'll be loaded as .cool files.
-                // If not found, return empty namespace.
+                let src = r#"
+class Queue:
+    def __init__(self):
+        self.items = []
+
+    def push(self, item):
+        self.items.append(item)
+
+    def enqueue(self, item):
+        self.push(item)
+
+    def pop(self):
+        if len(self.items) == 0:
+            raise "Queue is empty"
+        item = self.items[0]
+        self.items = self.items[1:]
+        return item
+
+    def dequeue(self):
+        return self.pop()
+
+    def peek(self):
+        if len(self.items) == 0:
+            raise "Queue is empty"
+        return self.items[0]
+
+    def is_empty(self):
+        return len(self.items) == 0
+
+    def size(self):
+        return len(self.items)
+
+class Stack:
+    def __init__(self):
+        self.items = []
+
+    def push(self, item):
+        self.items.append(item)
+
+    def pop(self):
+        if len(self.items) == 0:
+            raise "Stack is empty"
+        return self.items.pop()
+
+    def peek(self):
+        if len(self.items) == 0:
+            raise "Stack is empty"
+        return self.items[len(self.items) - 1]
+
+    def is_empty(self):
+        return len(self.items) == 0
+
+    def size(self):
+        return len(self.items)
+"#;
+                let before = self.globals.clone();
+                self.eval_source(src)?;
+                if let Some(queue) = self.globals.get("Queue").cloned() {
+                    set(&mut d, "Queue", queue);
+                }
+                if let Some(stack) = self.globals.get("Stack").cloned() {
+                    set(&mut d, "Stack", stack);
+                }
+                self.globals = before;
             }
             "ffi" => {
                 set(&mut d, "open", bf("ffi.open"));

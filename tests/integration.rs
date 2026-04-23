@@ -7,6 +7,10 @@ use std::sync::Mutex;
 
 static TEMP_FILE: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
+fn cool_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_cool")
+}
+
 fn run_cool(source: &str) -> Result<String, String> {
     run_cool_with_args(source, &[])
 }
@@ -25,7 +29,7 @@ fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, Strin
     drop(file);
     *path_guard = Some(temp.clone());
 
-    let mut cmd = Command::new("./target/debug/cool");
+    let mut cmd = Command::new(cool_bin());
     for arg in extra_args {
         cmd.arg(arg);
     }
@@ -221,7 +225,7 @@ fn test_vm_self_import_reports_error() {
     let source_path = temp_dir.join("string.cool");
     std::fs::write(&source_path, "import string\nprint(\"unreachable\")\n").unwrap();
 
-    let output = Command::new("./target/debug/cool")
+    let output = Command::new(cool_bin())
         .args(["--vm", source_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -232,6 +236,26 @@ fn test_vm_self_import_reports_error() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("circular import detected"));
+}
+
+#[test]
+fn test_import_collections_module() {
+    let result = run_cool(
+        "import collections\nq = collections.Queue()\nq.enqueue(\"first\")\nq.enqueue(\"second\")\nprint(q.dequeue())\ns = collections.Stack()\ns.push(\"a\")\ns.push(\"b\")\nprint(s.pop())",
+    )
+    .unwrap();
+    assert!(result.contains("first"));
+    assert!(result.contains("b"));
+}
+
+#[test]
+fn test_vm_import_collections_module() {
+    let result = run_cool_vm(
+        "import collections\nq = collections.Queue()\nq.enqueue(\"first\")\nq.enqueue(\"second\")\nprint(q.dequeue())\ns = collections.Stack()\ns.push(\"a\")\ns.push(\"b\")\nprint(s.pop())",
+    )
+    .unwrap();
+    assert!(result.contains("first"));
+    assert!(result.contains("b"));
 }
 
 #[test]

@@ -6,6 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static LLVM_BUILD_LOCK: Mutex<()> = Mutex::new(());
 
+fn cool_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_cool")
+}
+
 fn unique_test_path(stem: &str, ext: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -26,7 +30,7 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
 
     fs::write(&source_path, source).map_err(|e| e.to_string())?;
 
-    let build_output = Command::new("./target/debug/cool")
+    let build_output = Command::new(cool_bin())
         .args(["build", source_path.to_str().unwrap()])
         .output()
         .map_err(|e| e.to_string())?;
@@ -63,7 +67,7 @@ fn compile_native_expect_error(source: &str) -> String {
 
     fs::write(&source_path, source).unwrap();
 
-    let build_output = Command::new("./target/debug/cool")
+    let build_output = Command::new(cool_bin())
         .args(["build", source_path.to_str().unwrap()])
         .output()
         .unwrap();

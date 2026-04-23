@@ -2450,8 +2450,11 @@ struct RuntimeFns<'ctx> {
     #[allow(dead_code)]
     cool_get_closure_capture: FunctionValue<'ctx>,
     // exception handling
+    #[allow(dead_code)]
     cool_enter_try: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_exit_try: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_raise: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_get_exception: FunctionValue<'ctx>,
@@ -3634,6 +3637,7 @@ impl<'ctx> Compiler<'ctx> {
     // normal entry, 1 on longjmp (exception caught). cool_exit_try() cleans up.
     // cool_raise() transfers control to the nearest try frame.
     //
+    #[allow(dead_code)]
     fn compile_try(
         &mut self,
         body: &[Stmt],
@@ -3773,6 +3777,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     // ── raise ────────────────────────────────────────────────────────────────
+    #[allow(dead_code)]
     fn compile_raise(&mut self, opt_expr: Option<&Expr>) -> Result<(), String> {
         let exc_val = if let Some(e) = opt_expr {
             self.compile_expr(e)?

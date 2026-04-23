@@ -1160,12 +1160,18 @@ class Queue:
     def push(self, item):
         self.items.append(item)
 
+    def enqueue(self, item):
+        self.push(item)
+
     def pop(self):
         if len(self.items) == 0:
             raise "Queue is empty"
         item = self.items[0]
         self.items = self.items[1:]
         return item
+
+    def dequeue(self):
+        return self.pop()
 
     def peek(self):
         if len(self.items) == 0:
@@ -1206,6 +1212,14 @@ class Stack:
                 let mut parser = crate::parser::Parser::new(tokens);
                 let program = parser.parse_program().map_err(|e| self.err(&e))?;
                 self.exec_block(&program, env)?;
+                let mut map = IndexedMap::new();
+                if let Some(queue) = env.get("Queue") {
+                    map.set(Value::Str("Queue".to_string()), queue);
+                }
+                if let Some(stack) = env.get("Stack") {
+                    map.set(Value::Str("Stack".to_string()), stack);
+                }
+                env.set_local("collections".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "ffi" => {
                 let mut map = IndexedMap::new();
@@ -1411,6 +1425,11 @@ class Stack:
                     let arg_vals: Result<Vec<_>, _> = args.iter().map(|a| self.eval(a, env)).collect();
                     let arg_vals = arg_vals?;
                     let kwarg_vals = self.eval_kwargs(kwargs, env)?;
+                    if let Value::Dict(map) = &obj {
+                        if let Some(func) = map.borrow().get(&Value::Str(name.clone())) {
+                            return self.call_value(func, arg_vals, kwarg_vals, env);
+                        }
+                    }
                     return self.call_method(obj, name, arg_vals, kwarg_vals, env);
                 }
                 unreachable!()
