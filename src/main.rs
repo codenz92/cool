@@ -283,7 +283,11 @@ NOTES:
     ternary expressions, in/not in, print()/str(), range(), len(),
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
     built-in import math/os/sys/time and import random
-    (seed/random/randint/uniform/choice/shuffle), inline asm, and raw memory.
+    (seed/random/randint/uniform/choice/shuffle), plus json
+    (loads/dumps), plus string
+    (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
+    startswith/endswith/title/capitalize/format), plus list
+    (sort/reverse/flatten/unique), inline asm, and raw memory.
     Closures/lambdas, broader import support beyond those built-ins, and try/except still require the interpreter or bytecode VM.
 "
     );

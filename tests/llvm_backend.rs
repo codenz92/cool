@@ -270,3 +270,83 @@ print(sum(items))
     assert!(result.contains("\n4\n"));
     assert!(result.contains("\n10\n"));
 }
+
+#[test]
+fn test_llvm_import_json_module() {
+    let result = compile_and_run_native(
+        r#"
+import json
+print(json)
+data = json.loads('{"name":"Alice","scores":[95,87],"ok":true,"meta":null}')
+print(data["name"])
+print(data["scores"][1])
+print(data["ok"])
+print(data["meta"])
+print(json.dumps({"user": data["name"], "count": len(data["scores"]), "vals": [1, 2, 3]}))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module json>"));
+    assert!(result.contains("Alice"));
+    assert!(result.contains("\n87\n"));
+    assert!(result.contains("true"));
+    assert!(result.contains("nil"));
+    assert!(result.contains("\"user\": \"Alice\""));
+    assert!(result.contains("\"count\": 2"));
+    assert!(result.contains("\"vals\": [1, 2, 3]"));
+}
+
+#[test]
+fn test_llvm_import_string_module() {
+    let result = compile_and_run_native(
+        r#"
+import string
+print(string)
+print(string.split("a,b,c", ","))
+print(string.join(" | ", ["a", "b", "c"]))
+print(string.upper("hello"))
+print(string.replace("abcabc", "a", "X"))
+print(string.startswith("hello", "he"))
+print(string.endswith("hello", "lo"))
+print(string.find("hello", "ll"))
+print(string.count("hello", "l"))
+print(string.title("hello world"))
+print(string.capitalize("hello world"))
+print(string.format("hi {}, {}", "cool", 7))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module string>"));
+    assert!(result.contains("[a, b, c]") || result.contains("[a,b,c]"));
+    assert!(result.contains("a | b | c"));
+    assert!(result.contains("HELLO"));
+    assert!(result.contains("XbcXbc"));
+    assert!(result.matches("true").count() >= 2);
+    assert!(result.contains("\n2\n"));
+    assert!(result.contains("Hello World"));
+    assert!(result.contains("Hello world"));
+    assert!(result.contains("hi cool, 7"));
+}
+
+#[test]
+fn test_llvm_import_list_module() {
+    let result = compile_and_run_native(
+        r#"
+import list
+print(list)
+nums = [3, 1, 2]
+print(list.sort(nums))
+print(list.reverse(nums))
+print(list.flatten([[1, 2], [3], 4]))
+print(list.unique([1, 1, 2, 2, 3]))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("<module list>"));
+    assert!(result.contains("[1, 2, 3]") || result.contains("[1,2,3]"));
+    assert!(result.contains("[2, 1, 3]") || result.contains("[2,1,3]"));
+    assert!(result.contains("[1, 2, 3, 4]") || result.contains("[1,2,3,4]"));
+}

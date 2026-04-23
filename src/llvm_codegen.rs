@@ -788,6 +788,16 @@ int64_t cool_get_method_ptr(CoolVal class_val, const char* name) {
 static CoolVal g_method_args[32];
 static int g_method_arg_count = 0;
 
+typedef struct CoolStrBuf {
+    char* data;
+    size_t len;
+    size_t cap;
+} CoolStrBuf;
+static CoolVal cool_list_contains_local(CoolVal list, CoolVal item);
+static void sb_init(CoolStrBuf* sb);
+static void sb_push_char(CoolStrBuf* sb, char c);
+static void sb_push_str(CoolStrBuf* sb, const char* s);
+
 static CoolVal cool_string_upper(CoolVal obj) {
     const char* s = (const char*)(intptr_t)obj.payload;
     size_t len = strlen(s);
@@ -819,6 +829,22 @@ static CoolVal cool_string_strip(CoolVal obj) {
     return cv_str(out);
 }
 
+static CoolVal cool_string_lstrip(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    while (*s && isspace((unsigned char)*s)) s++;
+    return cv_str(strdup(s));
+}
+
+static CoolVal cool_string_rstrip(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    size_t len = strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1])) len--;
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return cv_str(out);
+}
+
 static CoolVal cool_string_join(CoolVal sep, CoolVal seq) {
     if (seq.tag != TAG_LIST && seq.tag != TAG_TUPLE) return cv_nil();
     const char* delim = (const char*)(intptr_t)sep.payload;
@@ -845,6 +871,206 @@ static CoolVal cool_string_join(CoolVal sep, CoolVal seq) {
     return cv_str(out);
 }
 
+static CoolVal cool_string_split(CoolVal obj, CoolVal sep_val) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    CoolVal out = cool_list_make(cv_int(4));
+    if (sep_val.tag == TAG_NIL) {
+        while (*s) {
+            while (*s && isspace((unsigned char)*s)) s++;
+            if (!*s) break;
+            const char* start = s;
+            while (*s && !isspace((unsigned char)*s)) s++;
+            size_t len = (size_t)(s - start);
+            char* part = (char*)malloc(len + 1);
+            memcpy(part, start, len);
+            part[len] = '\0';
+            cool_list_push(out, cv_str(part));
+        }
+        return out;
+    }
+    const char* sep = (const char*)(intptr_t)sep_val.payload;
+    size_t sep_len = strlen(sep);
+    if (sep_len == 0) {
+        while (*s) {
+            char* part = (char*)malloc(2);
+            part[0] = *s++;
+            part[1] = '\0';
+            cool_list_push(out, cv_str(part));
+        }
+        return out;
+    }
+    const char* start = s;
+    const char* pos;
+    while ((pos = strstr(start, sep)) != NULL) {
+        size_t len = (size_t)(pos - start);
+        char* part = (char*)malloc(len + 1);
+        memcpy(part, start, len);
+        part[len] = '\0';
+        cool_list_push(out, cv_str(part));
+        start = pos + sep_len;
+    }
+    cool_list_push(out, cv_str(strdup(start)));
+    return out;
+}
+
+static CoolVal cool_string_replace(CoolVal obj, CoolVal old_v, CoolVal new_v) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    const char* old = (const char*)(intptr_t)old_v.payload;
+    const char* repl = (const char*)(intptr_t)new_v.payload;
+    size_t old_len = strlen(old), repl_len = strlen(repl);
+    if (old_len == 0) return cv_str(strdup(s));
+    size_t count = 0;
+    const char* p = s;
+    while ((p = strstr(p, old)) != NULL) {
+        count++;
+        p += old_len;
+    }
+    size_t total = strlen(s) + count * (repl_len - old_len) + 1;
+    char* out = (char*)malloc(total);
+    char* dst = out;
+    const char* cur = s;
+    while ((p = strstr(cur, old)) != NULL) {
+        size_t chunk = (size_t)(p - cur);
+        memcpy(dst, cur, chunk);
+        dst += chunk;
+        memcpy(dst, repl, repl_len);
+        dst += repl_len;
+        cur = p + old_len;
+    }
+    strcpy(dst, cur);
+    return cv_str(out);
+}
+
+static CoolVal cool_string_startswith(CoolVal obj, CoolVal prefix_v) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    const char* prefix = (const char*)(intptr_t)prefix_v.payload;
+    size_t n = strlen(prefix);
+    return cv_bool(strncmp(s, prefix, n) == 0);
+}
+
+static CoolVal cool_string_endswith(CoolVal obj, CoolVal suffix_v) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    const char* suffix = (const char*)(intptr_t)suffix_v.payload;
+    size_t ls = strlen(s), lx = strlen(suffix);
+    return cv_bool(ls >= lx && strcmp(s + ls - lx, suffix) == 0);
+}
+
+static CoolVal cool_string_find(CoolVal obj, CoolVal sub_v) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    const char* sub = (const char*)(intptr_t)sub_v.payload;
+    const char* pos = strstr(s, sub);
+    return cv_int(pos ? (int64_t)(pos - s) : -1);
+}
+
+static CoolVal cool_string_count(CoolVal obj, CoolVal sub_v) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    const char* sub = (const char*)(intptr_t)sub_v.payload;
+    size_t sub_len = strlen(sub);
+    if (sub_len == 0) return cv_int((int64_t)strlen(s) + 1);
+    int64_t count = 0;
+    const char* p = s;
+    while ((p = strstr(p, sub)) != NULL) {
+        count++;
+        p += sub_len;
+    }
+    return cv_int(count);
+}
+
+static CoolVal cool_string_title(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    size_t len = strlen(s);
+    char* out = (char*)malloc(len + 1);
+    int new_word = 1;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)s[i];
+        out[i] = (char)(new_word ? toupper(ch) : tolower(ch));
+        new_word = isspace(ch) ? 1 : 0;
+    }
+    out[len] = '\0';
+    return cv_str(out);
+}
+
+static CoolVal cool_string_capitalize(CoolVal obj) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    size_t len = strlen(s);
+    char* out = (char*)malloc(len + 1);
+    if (len == 0) {
+        out[0] = '\0';
+        return cv_str(out);
+    }
+    out[0] = (char)toupper((unsigned char)s[0]);
+    for (size_t i = 1; i < len; i++) out[i] = (char)tolower((unsigned char)s[i]);
+    out[len] = '\0';
+    return cv_str(out);
+}
+
+static CoolVal cool_string_format(CoolVal obj, int32_t nargs, CoolVal* args) {
+    const char* s = (const char*)(intptr_t)obj.payload;
+    CoolStrBuf sb;
+    sb_init(&sb);
+    int32_t argi = 0;
+    while (*s) {
+        if (s[0] == '{' && s[1] == '}' && argi < nargs) {
+            char* part = cool_to_str(args[argi++]);
+            sb_push_str(&sb, part);
+            s += 2;
+        } else {
+            sb_push_char(&sb, *s++);
+        }
+    }
+    return cv_str(sb.data);
+}
+
+static CoolVal cool_list_reverse_copy(CoolVal seq) {
+    if (seq.tag != TAG_LIST) {
+        fprintf(stderr, "TypeError: list.reverse() requires a list\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)seq.payload;
+    CoolVal out = cool_list_make(cv_int(src->length));
+    for (int64_t i = src->length - 1; i >= 0; i--) {
+        cool_list_push(out, ((CoolVal*)src->data)[i]);
+    }
+    return out;
+}
+
+static CoolVal cool_list_flatten_copy(CoolVal seq) {
+    if (seq.tag != TAG_LIST) {
+        fprintf(stderr, "TypeError: list.flatten() requires a list\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)seq.payload;
+    CoolVal out = cool_list_make(cv_int(src->length));
+    for (int64_t i = 0; i < src->length; i++) {
+        CoolVal item = ((CoolVal*)src->data)[i];
+        if (item.tag == TAG_LIST) {
+            CoolList* inner = (CoolList*)(intptr_t)item.payload;
+            for (int64_t j = 0; j < inner->length; j++) {
+                cool_list_push(out, ((CoolVal*)inner->data)[j]);
+            }
+        } else {
+            cool_list_push(out, item);
+        }
+    }
+    return out;
+}
+
+static CoolVal cool_list_unique_copy(CoolVal seq) {
+    if (seq.tag != TAG_LIST) {
+        fprintf(stderr, "TypeError: list.unique() requires a list\n");
+        exit(1);
+    }
+    CoolList* src = (CoolList*)(intptr_t)seq.payload;
+    CoolVal out = cool_list_make(cv_int(src->length));
+    for (int64_t i = 0; i < src->length; i++) {
+        CoolVal item = ((CoolVal*)src->data)[i];
+        if (!cool_truthy(cool_list_contains_local(out, item))) {
+            cool_list_push(out, item);
+        }
+    }
+    return out;
+}
+
 CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
@@ -861,6 +1087,8 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
         if (strcmp(builtin_name, "upper") == 0 && nargs == 0) return cool_string_upper(obj);
         if (strcmp(builtin_name, "lower") == 0 && nargs == 0) return cool_string_lower(obj);
         if (strcmp(builtin_name, "strip") == 0 && nargs == 0) return cool_string_strip(obj);
+        if (strcmp(builtin_name, "lstrip") == 0 && nargs == 0) return cool_string_lstrip(obj);
+        if (strcmp(builtin_name, "rstrip") == 0 && nargs == 0) return cool_string_rstrip(obj);
         if (strcmp(builtin_name, "join") == 0 && nargs == 1) return cool_string_join(obj, g_method_args[1]);
     }
 
@@ -1183,6 +1411,246 @@ static double cool_rng_next_f64(void) {
     return (double)(bits >> 11) / (double)(1ull << 53);
 }
 
+static void sb_init(CoolStrBuf* sb) {
+    sb->cap = 64;
+    sb->len = 0;
+    sb->data = (char*)malloc(sb->cap);
+    sb->data[0] = '\0';
+}
+
+static void sb_reserve(CoolStrBuf* sb, size_t extra) {
+    size_t need = sb->len + extra + 1;
+    if (need <= sb->cap) return;
+    while (sb->cap < need) sb->cap *= 2;
+    sb->data = (char*)realloc(sb->data, sb->cap);
+}
+
+static void sb_push_char(CoolStrBuf* sb, char c) {
+    sb_reserve(sb, 1);
+    sb->data[sb->len++] = c;
+    sb->data[sb->len] = '\0';
+}
+
+static void sb_push_str(CoolStrBuf* sb, const char* s) {
+    size_t n = strlen(s);
+    sb_reserve(sb, n);
+    memcpy(sb->data + sb->len, s, n);
+    sb->len += n;
+    sb->data[sb->len] = '\0';
+}
+
+static void sb_push_json_escaped(CoolStrBuf* sb, const char* s) {
+    sb_push_char(sb, '"');
+    for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
+        switch (*p) {
+            case '\\': sb_push_str(sb, "\\\\"); break;
+            case '"': sb_push_str(sb, "\\\""); break;
+            case '\n': sb_push_str(sb, "\\n"); break;
+            case '\r': sb_push_str(sb, "\\r"); break;
+            case '\t': sb_push_str(sb, "\\t"); break;
+            default: sb_push_char(sb, (char)*p); break;
+        }
+    }
+    sb_push_char(sb, '"');
+}
+
+static void json_skip_ws(const char** p) {
+    while (**p && isspace((unsigned char)**p)) (*p)++;
+}
+
+static char* json_parse_string_raw(const char** p) {
+    if (**p != '"') {
+        fprintf(stderr, "ValueError: json.loads() expected string\n");
+        exit(1);
+    }
+    (*p)++;
+    CoolStrBuf sb;
+    sb_init(&sb);
+    while (**p && **p != '"') {
+        unsigned char ch = (unsigned char)**p;
+        if (ch == '\\') {
+            (*p)++;
+            switch (**p) {
+                case '"': sb_push_char(&sb, '"'); break;
+                case '\\': sb_push_char(&sb, '\\'); break;
+                case '/': sb_push_char(&sb, '/'); break;
+                case 'b': sb_push_char(&sb, '\b'); break;
+                case 'f': sb_push_char(&sb, '\f'); break;
+                case 'n': sb_push_char(&sb, '\n'); break;
+                case 'r': sb_push_char(&sb, '\r'); break;
+                case 't': sb_push_char(&sb, '\t'); break;
+                default:
+                    fprintf(stderr, "ValueError: json.loads() unsupported escape\n");
+                    exit(1);
+            }
+        } else {
+            sb_push_char(&sb, (char)ch);
+        }
+        (*p)++;
+    }
+    if (**p != '"') {
+        fprintf(stderr, "ValueError: json.loads() unterminated string\n");
+        exit(1);
+    }
+    (*p)++;
+    return sb.data;
+}
+
+static CoolVal json_parse_value(const char** p);
+
+static CoolVal json_parse_array(const char** p) {
+    (*p)++;
+    json_skip_ws(p);
+    CoolVal out = cool_list_make(cv_int(4));
+    if (**p == ']') {
+        (*p)++;
+        return out;
+    }
+    while (1) {
+        cool_list_push(out, json_parse_value(p));
+        json_skip_ws(p);
+        if (**p == ']') {
+            (*p)++;
+            return out;
+        }
+        if (**p != ',') {
+            fprintf(stderr, "ValueError: json.loads() expected ',' or ']'\n");
+            exit(1);
+        }
+        (*p)++;
+        json_skip_ws(p);
+    }
+}
+
+static CoolVal json_parse_object(const char** p) {
+    (*p)++;
+    json_skip_ws(p);
+    CoolVal out = cool_dict_new();
+    if (**p == '}') {
+        (*p)++;
+        return out;
+    }
+    while (1) {
+        json_skip_ws(p);
+        char* key = json_parse_string_raw(p);
+        json_skip_ws(p);
+        if (**p != ':') {
+            fprintf(stderr, "ValueError: json.loads() expected ':'\n");
+            exit(1);
+        }
+        (*p)++;
+        json_skip_ws(p);
+        out = cool_dict_set(out, cv_str(key), json_parse_value(p));
+        json_skip_ws(p);
+        if (**p == '}') {
+            (*p)++;
+            return out;
+        }
+        if (**p != ',') {
+            fprintf(stderr, "ValueError: json.loads() expected ',' or '}'\n");
+            exit(1);
+        }
+        (*p)++;
+        json_skip_ws(p);
+    }
+}
+
+static CoolVal json_parse_number(const char** p) {
+    char* end = NULL;
+    double f = strtod(*p, &end);
+    if (end == *p) {
+        fprintf(stderr, "ValueError: json.loads() expected number\n");
+        exit(1);
+    }
+    int is_float = 0;
+    for (const char* q = *p; q < end; q++) {
+        if (*q == '.' || *q == 'e' || *q == 'E') {
+            is_float = 1;
+            break;
+        }
+    }
+    *p = end;
+    return is_float ? cv_float(f) : cv_int((int64_t)f);
+}
+
+static CoolVal json_parse_value(const char** p) {
+    json_skip_ws(p);
+    switch (**p) {
+        case '"': return cv_str(json_parse_string_raw(p));
+        case '[': return json_parse_array(p);
+        case '{': return json_parse_object(p);
+        case 't':
+            if (strncmp(*p, "true", 4) == 0) { *p += 4; return cv_bool(1); }
+            break;
+        case 'f':
+            if (strncmp(*p, "false", 5) == 0) { *p += 5; return cv_bool(0); }
+            break;
+        case 'n':
+            if (strncmp(*p, "null", 4) == 0) { *p += 4; return cv_nil(); }
+            break;
+        default:
+            if (**p == '-' || isdigit((unsigned char)**p)) return json_parse_number(p);
+            break;
+    }
+    fprintf(stderr, "ValueError: json.loads() invalid JSON\n");
+    exit(1);
+}
+
+static void json_dump_value(CoolStrBuf* sb, CoolVal v) {
+    switch (v.tag) {
+        case TAG_NIL: sb_push_str(sb, "null"); break;
+        case TAG_BOOL: sb_push_str(sb, v.payload ? "true" : "false"); break;
+        case TAG_INT: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%lld", (long long)v.payload);
+            sb_push_str(sb, buf);
+            break;
+        }
+        case TAG_FLOAT: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", cv_as_float(v));
+            sb_push_str(sb, buf);
+            break;
+        }
+        case TAG_STR:
+            sb_push_json_escaped(sb, (const char*)(intptr_t)v.payload);
+            break;
+        case TAG_LIST:
+        case TAG_TUPLE: {
+            CoolList* lst = (CoolList*)(intptr_t)v.payload;
+            sb_push_char(sb, '[');
+            for (int64_t i = 0; i < lst->length; i++) {
+                if (i > 0) sb_push_str(sb, ", ");
+                json_dump_value(sb, ((CoolVal*)lst->data)[i]);
+            }
+            sb_push_char(sb, ']');
+            break;
+        }
+        case TAG_DICT: {
+            CoolDict* d = (CoolDict*)(intptr_t)v.payload;
+            sb_push_char(sb, '{');
+            for (int64_t i = 0; i < d->len; i++) {
+                if (i > 0) sb_push_str(sb, ", ");
+                if (d->keys[i].tag == TAG_STR) {
+                    sb_push_json_escaped(sb, (const char*)(intptr_t)d->keys[i].payload);
+                } else {
+                    char* key = cool_to_str(d->keys[i]);
+                    sb_push_json_escaped(sb, key);
+                }
+                sb_push_str(sb, ": ");
+                json_dump_value(sb, d->vals[i]);
+            }
+            sb_push_char(sb, '}');
+            break;
+        }
+        default: {
+            char* s = cool_to_str(v);
+            sb_push_json_escaped(sb, s);
+            break;
+        }
+    }
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -1427,6 +1895,53 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             }
             return cv_nil();
         }
+    }
+
+    if (strcmp(module, "json") == 0) {
+        if (strcmp(name, "loads") == 0 && nargs == 1) {
+            const char* src = cool_to_str(args[0]);
+            const char* p = src;
+            CoolVal out = json_parse_value(&p);
+            json_skip_ws(&p);
+            if (*p != '\0') {
+                fprintf(stderr, "ValueError: json.loads() trailing characters\n");
+                exit(1);
+            }
+            return out;
+        }
+        if (strcmp(name, "dumps") == 0 && nargs == 1) {
+            CoolStrBuf sb;
+            sb_init(&sb);
+            json_dump_value(&sb, args[0]);
+            return cv_str(sb.data);
+        }
+    }
+
+    if (strcmp(module, "string") == 0) {
+        if (strcmp(name, "split") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_string_split(args[0], nargs == 2 ? args[1] : cv_nil());
+        }
+        if (strcmp(name, "join") == 0 && nargs == 2) return cool_string_join(args[0], args[1]);
+        if (strcmp(name, "strip") == 0 && nargs == 1) return cool_string_strip(args[0]);
+        if (strcmp(name, "lstrip") == 0 && nargs == 1) return cool_string_lstrip(args[0]);
+        if (strcmp(name, "rstrip") == 0 && nargs == 1) return cool_string_rstrip(args[0]);
+        if (strcmp(name, "upper") == 0 && nargs == 1) return cool_string_upper(args[0]);
+        if (strcmp(name, "lower") == 0 && nargs == 1) return cool_string_lower(args[0]);
+        if (strcmp(name, "replace") == 0 && nargs == 3) return cool_string_replace(args[0], args[1], args[2]);
+        if (strcmp(name, "startswith") == 0 && nargs == 2) return cool_string_startswith(args[0], args[1]);
+        if (strcmp(name, "endswith") == 0 && nargs == 2) return cool_string_endswith(args[0], args[1]);
+        if (strcmp(name, "find") == 0 && nargs == 2) return cool_string_find(args[0], args[1]);
+        if (strcmp(name, "count") == 0 && nargs == 2) return cool_string_count(args[0], args[1]);
+        if (strcmp(name, "title") == 0 && nargs == 1) return cool_string_title(args[0]);
+        if (strcmp(name, "capitalize") == 0 && nargs == 1) return cool_string_capitalize(args[0]);
+        if (strcmp(name, "format") == 0 && nargs >= 1) return cool_string_format(args[0], nargs - 1, &args[1]);
+    }
+
+    if (strcmp(module, "list") == 0) {
+        if (strcmp(name, "sort") == 0 && nargs == 1) return cool_sorted(args[0]);
+        if (strcmp(name, "reverse") == 0 && nargs == 1) return cool_list_reverse_copy(args[0]);
+        if (strcmp(name, "flatten") == 0 && nargs == 1) return cool_list_flatten_copy(args[0]);
+        if (strcmp(name, "unique") == 0 && nargs == 1) return cool_list_unique_copy(args[0]);
     }
 
     fprintf(stderr, "AttributeError: unknown module call %s.%s\n", module, name);
@@ -3106,7 +3621,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "time" | "random" => {
+            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -3115,7 +3630,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, and random)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, and list)",
                 name
             )),
         }
