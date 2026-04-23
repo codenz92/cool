@@ -284,6 +284,7 @@ NOTES:
     classes with inheritance/super(), list comprehensions,
     ternary expressions, in/not in, print()/str(), range(), len(),
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
+    source-relative file imports and project/package imports,
     built-in import math/os/sys/path/subprocess/argparse/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
@@ -294,8 +295,7 @@ NOTES:
     (Queue/Stack), subprocess(run/call/check_output), argparse(parse/help), open()/file methods, with/context managers on
     normal exit, return/break/continue, caught exceptions, and unhandled native raises,
     inline asm, and raw memory.
-    Closures/lambdas, broader import support beyond those built-ins,
-    and import ffi still require the interpreter or bytecode VM.
+    Closures/lambdas and import ffi still require the interpreter or bytecode VM.
 "
     );
 }

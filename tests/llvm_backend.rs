@@ -18,6 +18,16 @@ fn unique_test_path(stem: &str, ext: &str) -> PathBuf {
     PathBuf::from(format!("{stem}_{nonce}.{ext}"))
 }
 
+fn unique_temp_dir(stem: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::current_dir()
+        .unwrap()
+        .join(format!("{stem}_{nonce}"))
+}
+
 fn cleanup_native_artifacts(source_path: &PathBuf, binary_path: &PathBuf) {
     let _ = fs::remove_file(source_path);
     let _ = fs::remove_file(binary_path);
@@ -60,6 +70,34 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
     };
 
     cleanup_native_artifacts(&source_path, &binary_path);
+
+    if run_output.status.success() {
+        Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&run_output.stderr).to_string())
+    }
+}
+
+fn compile_and_run_native_path(source_path: &PathBuf) -> Result<String, String> {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let binary_path = source_path.with_extension("");
+
+    let build_output = Command::new(cool_bin())
+        .args(["build", source_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
+        let _ = fs::remove_file(&binary_path);
+        return Err(format!("{stdout}{stderr}"));
+    }
+
+    let run_output = Command::new(&binary_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(&binary_path);
 
     if run_output.status.success() {
         Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
@@ -948,4 +986,52 @@ print(path.isabs("{file}"))
     assert!(result.contains("[a/b, c.txt]") || result.contains("[a/b,c.txt]"));
     assert!(result.contains("a/c/d.txt"));
     assert!(result.matches("true").count() >= 2);
+}
+
+#[test]
+fn test_llvm_import_dotted_module_package_path() {
+    let temp_dir = unique_temp_dir("cool_llvm_import_package_test");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(temp_dir.join("foo")).unwrap();
+    let source_path = temp_dir.join("main.cool");
+    fs::write(
+        temp_dir.join("foo").join("bar.cool"),
+        "value = 42\n\ndef add(x, y=1):\n    return x + y\n\nclass Box:\n    def __init__(self, value=0):\n        self.value = value\n",
+    )
+    .unwrap();
+    fs::write(
+        &source_path,
+        "import foo.bar\nprint(bar.value)\nprint(bar.add(4))\nprint(bar.add(y=3, x=4))\nprint(bar.Box(9).value)\n",
+    )
+    .unwrap();
+
+    let result = compile_and_run_native_path(&source_path).unwrap();
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["42", "5", "7", "9"]);
+}
+
+#[test]
+fn test_llvm_import_file_flattens_exports() {
+    let temp_dir = unique_temp_dir("cool_llvm_import_file_test");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let source_path = temp_dir.join("main.cool");
+    fs::write(
+        temp_dir.join("helper.cool"),
+        "value = 10\n\ndef add(x, y=1):\n    return x + y\n\nclass Box:\n    def __init__(self, value=0):\n        self.value = value\n",
+    )
+    .unwrap();
+    fs::write(
+        &source_path,
+        "import \"helper.cool\"\nprint(value)\nprint(add(4))\nprint(add(y=3, x=4))\nprint(Box(8).value)\n",
+    )
+    .unwrap();
+
+    let result = compile_and_run_native_path(&source_path).unwrap();
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["10", "5", "7", "8"]);
 }

@@ -18,7 +18,7 @@ use inkwell::types::StructType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // ── Embedded C runtime ────────────────────────────────────────────────────────
 
@@ -238,6 +238,7 @@ CoolVal cool_dict_get(CoolVal, CoolVal);
 CoolVal cool_dict_set(CoolVal, CoolVal, CoolVal);
 CoolVal cool_dict_len(CoolVal);
 CoolVal cool_dict_contains(CoolVal, CoolVal);
+CoolVal cool_dict_get_opt(CoolVal, CoolVal);
 CoolVal cool_index(CoolVal, CoolVal);
 CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
@@ -840,6 +841,7 @@ CoolVal cool_object_new(CoolVal class_val) {
 }
 
 CoolVal cool_get_attr(CoolVal obj, const char* name) {
+    if (obj.tag == TAG_DICT) return cool_dict_get_opt(obj, cv_str(name));
     if (obj.tag != TAG_OBJECT) return cv_nil();
     CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
     if (!o->attrs) return cv_nil();
@@ -847,6 +849,7 @@ CoolVal cool_get_attr(CoolVal obj, const char* name) {
 }
 
 CoolVal cool_set_attr(CoolVal obj, const char* name, CoolVal value) {
+    if (obj.tag == TAG_DICT) return cool_dict_set(obj, cv_str(name), value);
     if (obj.tag != TAG_OBJECT) return cv_nil();
     CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
     if (!o->attrs) return cv_nil();
@@ -1497,6 +1500,14 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
         if (strcmp(builtin_name, "join") == 0 && nargs == 1) return cool_string_join(obj, g_method_args[1]);
     }
 
+    if (obj.tag == TAG_DICT) {
+        CoolVal callable = cool_dict_get_opt(obj, cv_str(builtin_name));
+        if (callable.tag == TAG_CLOSURE) {
+            int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
+            return call_cool_fn_ptr(fn_ptr, nargs, nargs > 0 ? &g_method_args[1] : NULL);
+        }
+    }
+
     if (obj.tag == TAG_LIST && strcmp(builtin_name, "append") == 0 && nargs == 1) {
         cool_list_push(obj, g_method_args[1]);
         return cv_nil();
@@ -1601,6 +1612,15 @@ CoolVal cool_dict_get(CoolVal dict_v, CoolVal key) {
         if (cv_eq_raw(d->keys[i], key)) return d->vals[i];
     }
     fprintf(stderr, "KeyError\n"); exit(1);
+}
+
+CoolVal cool_dict_get_opt(CoolVal dict_v, CoolVal key) {
+    if (dict_v.tag != TAG_DICT) return cv_nil();
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    for (int64_t i = 0; i < d->len; i++) {
+        if (cv_eq_raw(d->keys[i], key)) return d->vals[i];
+    }
+    return cv_nil();
 }
 
 CoolVal cool_dict_len(CoolVal dict_v) {
@@ -4069,6 +4089,18 @@ struct Compiler<'ctx> {
     current_class: Option<String>,
     /// Names of imported built-in modules visible to the native backend.
     imported_modules: HashSet<String>,
+    /// Imported user modules visible in the current scope (binding name → canonical path).
+    imported_user_modules: HashMap<String, PathBuf>,
+    /// Canonical path → compiled module helper metadata.
+    compiled_modules: HashMap<PathBuf, ModuleInfo<'ctx>>,
+    /// Module files currently being compiled (for circular import detection).
+    compiling_modules: Vec<PathBuf>,
+    /// Source directory used to resolve relative imports for the current compilation unit.
+    current_source_dir: PathBuf,
+    /// Prefix applied to generated LLVM symbols for the current compilation unit.
+    symbol_prefix: String,
+    /// Whether the current compilation unit accepts top-level `def` and `class` statements.
+    allow_toplevel_defs: bool,
     /// Active cleanup scopes in the current function.
     cleanup_stack: Vec<CleanupEntry<'ctx>>,
     /// Active try contexts in the current function.
@@ -4076,6 +4108,7 @@ struct Compiler<'ctx> {
 }
 
 /// Information about a compiled class
+#[derive(Clone)]
 struct ClassInfo<'ctx> {
     /// The class constructor function (returns CoolVal)
     constructor: FunctionValue<'ctx>,
@@ -4091,6 +4124,15 @@ struct ClassInfo<'ctx> {
     parent: Option<String>,
     /// Constructor parameter list, excluding the implicit `self`.
     constructor_params: Vec<crate::ast::Param>,
+}
+
+#[derive(Clone)]
+struct ModuleInfo<'ctx> {
+    init_fn: FunctionValue<'ctx>,
+    exports: Vec<String>,
+    functions: HashMap<String, FunctionValue<'ctx>>,
+    function_params: HashMap<String, Vec<crate::ast::Param>>,
+    classes: HashMap<String, ClassInfo<'ctx>>,
 }
 
 #[derive(Clone, Copy)]
@@ -4142,6 +4184,12 @@ impl<'ctx> Compiler<'ctx> {
             nested_functions: Vec::new(),
             current_class: None,
             imported_modules: HashSet::new(),
+            imported_user_modules: HashMap::new(),
+            compiled_modules: HashMap::new(),
+            compiling_modules: Vec::new(),
+            current_source_dir: PathBuf::from("."),
+            symbol_prefix: String::new(),
+            allow_toplevel_defs: false,
             cleanup_stack: Vec::new(),
             try_stack: Vec::new(),
         }
@@ -4283,10 +4331,67 @@ impl<'ctx> Compiler<'ctx> {
             .is_some()
     }
 
-    fn is_main(&self) -> bool {
+    fn is_entry_main(&self) -> bool {
         self.current_fn
             .map(|f| f.get_name().to_str().unwrap_or("") == "main")
             .unwrap_or(false)
+    }
+
+    fn mangle_global_name(&self, name: &str) -> String {
+        if self.symbol_prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}{}", self.symbol_prefix, name)
+        }
+    }
+
+    fn declare_top_level_functions(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in program {
+            if let Stmt::FnDef { name, params, .. } = stmt {
+                if self.functions.contains_key(name) {
+                    continue;
+                }
+                if params.iter().any(|p| p.is_vararg || p.is_kwarg) {
+                    return Err(format!(
+                        "function '{name}': *args / **kwargs are not supported in LLVM backend"
+                    ));
+                }
+                let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                    params.iter().map(|_| self.cv_type.into()).collect();
+                let fn_type = self.cv_type.fn_type(&param_types, false);
+                let fn_name = self.mangle_global_name(name);
+                let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                self.functions.insert(name.clone(), fn_val);
+                self.function_params.insert(name.clone(), params.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_import_file_path(&self, path: &str) -> Result<PathBuf, String> {
+        let full_path = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            self.current_source_dir.join(path)
+        };
+        if full_path.exists() {
+            Ok(full_path.canonicalize().unwrap_or(full_path))
+        } else {
+            Err(format!("import error: file not found: {}", full_path.display()))
+        }
+    }
+
+    fn resolve_import_module_path(&self, name: &str) -> Option<PathBuf> {
+        let file_path = name.replace('.', "/");
+        let candidates = [
+            self.current_source_dir.join(format!("{}.cool", file_path)),
+            self.current_source_dir.join(&file_path).join("__init__.cool"),
+            PathBuf::from(format!("lib/{}.cool", file_path)),
+        ];
+        candidates
+            .into_iter()
+            .find(|path| path.exists())
+            .map(|path| path.canonicalize().unwrap_or(path))
     }
 
     fn fresh_name(&mut self) -> String {
@@ -4654,7 +4759,7 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── return ────────────────────────────────────────────────────────
             Stmt::Return(opt_expr) => {
-                if self.is_main() {
+                if self.is_entry_main() {
                     // top-level return → exit normally
                     if let Some(e) = opt_expr {
                         self.compile_expr(e)?; // side-effects only
@@ -4946,7 +5051,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── function definition ───────────────────────────────────────────────────
 
     fn compile_fndef(&mut self, name: &str, params: &[crate::ast::Param], body: &[Stmt]) -> Result<(), String> {
-        if !self.is_main() {
+        if !self.allow_toplevel_defs {
             return Err("nested function definitions are not supported in the LLVM backend".into());
         }
 
@@ -4958,10 +5063,17 @@ impl<'ctx> Compiler<'ctx> {
         // Save caller state
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_functions = self.functions.clone();
+        let saved_function_params = self.function_params.clone();
+        let saved_classes = self.classes.clone();
         let saved_fn = self.current_fn.replace(fn_val);
         let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
         let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
 
         // Build entry block
         let entry = self.context.append_basic_block(fn_val, "entry");
@@ -4990,10 +5102,16 @@ impl<'ctx> Compiler<'ctx> {
 
         // Restore caller state
         self.locals = saved_locals;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.classes = saved_classes;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
         self.cleanup_stack = saved_cleanups;
         self.try_stack = saved_tries;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -5033,7 +5151,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── class definition ─────────────────────────────────────────────────────
 
     fn compile_class(&mut self, name: &str, parent: Option<&str>, body: &[Stmt]) -> Result<(), String> {
-        if !self.is_main() {
+        if !self.allow_toplevel_defs {
             return Err("class definitions are only allowed at the top level".into());
         }
 
@@ -5090,7 +5208,7 @@ impl<'ctx> Compiler<'ctx> {
                 name: mname, params, ..
             } = stmt
             {
-                let fn_name = format!("{}#{}.{}", name, mname, name);
+                let fn_name = self.mangle_global_name(&format!("{}#{}.{}", name, mname, name));
                 let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
                     params.iter().map(|_| self.cv_type.into()).collect();
                 let fn_type = self.cv_type.fn_type(&param_types, false);
@@ -5111,11 +5229,18 @@ impl<'ctx> Compiler<'ctx> {
                     // Save state
                     let saved_bb = self.builder.get_insert_block();
                     let saved_locals = std::mem::take(&mut self.locals);
+                    let saved_functions = self.functions.clone();
+                    let saved_function_params = self.function_params.clone();
+                    let saved_classes = self.classes.clone();
                     let saved_fn = self.current_fn.replace(fn_val);
                     let saved_loops = std::mem::take(&mut self.loop_stack);
+                    let saved_imports = std::mem::take(&mut self.imported_modules);
+                    let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
                     let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
                     let saved_tries = std::mem::take(&mut self.try_stack);
                     let saved_class = self.current_class.replace(name.to_string());
+                    let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+                    self.allow_toplevel_defs = false;
 
                     // Build entry
                     let entry = self.context.append_basic_block(fn_val, "entry");
@@ -5144,11 +5269,17 @@ impl<'ctx> Compiler<'ctx> {
 
                     // Restore state
                     self.locals = saved_locals;
+                    self.functions = saved_functions;
+                    self.function_params = saved_function_params;
+                    self.classes = saved_classes;
                     self.current_fn = saved_fn;
                     self.loop_stack = saved_loops;
+                    self.imported_modules = saved_imports;
+                    self.imported_user_modules = saved_user_modules;
                     self.cleanup_stack = saved_cleanups;
                     self.try_stack = saved_tries;
                     self.current_class = saved_class;
+                    self.allow_toplevel_defs = saved_allow_toplevel_defs;
                     if let Some(bb) = saved_bb {
                         self.builder.position_at_end(bb);
                     }
@@ -5157,7 +5288,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         // Build the constructor function
-        let ctor_name = format!("{}#constructor.{}", name, name);
+        let ctor_name = self.mangle_global_name(&format!("{}#constructor.{}", name, name));
         let ctor_type = self.cv_type.fn_type(&[], false);
         let constructor = self.module.add_function(&ctor_name, ctor_type, None);
 
@@ -5168,6 +5299,8 @@ impl<'ctx> Compiler<'ctx> {
         let saved_loops = std::mem::take(&mut self.loop_stack);
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
         let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
 
         let entry = self.context.append_basic_block(constructor, "entry");
         self.builder.position_at_end(entry);
@@ -5359,6 +5492,7 @@ impl<'ctx> Compiler<'ctx> {
         self.loop_stack = saved_loops;
         self.cleanup_stack = saved_cleanups;
         self.try_stack = saved_tries;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
@@ -5385,7 +5519,7 @@ impl<'ctx> Compiler<'ctx> {
         );
 
         // Create a global variable to hold the class reference
-        let global_name = format!("__class_{}", name);
+        let global_name = self.mangle_global_name(&format!("__class_{}", name));
         let _global = self.module.add_global(self.cv_type, None, &global_name);
 
         // At runtime, we need to initialize this - for now, just store constructor ref
@@ -5393,6 +5527,34 @@ impl<'ctx> Compiler<'ctx> {
             .builder
             .build_alloca(self.cv_type, &format!("{}_holder", name))
             .unwrap();
+
+        let ctor_ptr = constructor.as_global_value().as_pointer_value();
+        let ctor_ptr_int = self
+            .builder
+            .build_ptr_to_int(ctor_ptr, self.context.i64_type(), &format!("{}_ctor_ptr", name))
+            .unwrap();
+        let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
+        let zero_captures = self.context.i64_type().const_zero();
+        let class_ctor = self
+            .builder
+            .build_call(
+                self.rt.cool_closure_new,
+                &[ctor_ptr_int.into(), zero_captures.into(), null_ptr.into()],
+                &format!("{}_ctor_closure", name),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+        let class_ptr = if let Some(&p) = self.locals.get(name) {
+            p
+        } else {
+            let p = self.build_entry_alloca(name);
+            self.locals.insert(name.to_string(), p);
+            p
+        };
+        self.builder.build_store(class_ptr, class_ctor).unwrap();
 
         // Store class info for later instantiation
         Ok(())
@@ -5725,10 +5887,208 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    fn call_constructor(
+        &mut self,
+        constructor: FunctionValue<'ctx>,
+        ctor_params: &[crate::ast::Param],
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<StructValue<'ctx>, String> {
+        let compiled = self.bind_call_args(ctor_params, args, kwargs, 0)?;
+        let i32t = self.context.i32_type();
+        for (i, cv) in compiled.iter().enumerate() {
+            let idx_val = i32t.const_int(i as u64, false);
+            self.builder
+                .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), (*cv).into()], "set_global_arg")
+                .unwrap();
+        }
+        Ok(self
+            .builder
+            .build_call(constructor, &[], "instantiate")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value())
+    }
+
+    fn compile_module_function(&mut self, module_path: &Path) -> Result<ModuleInfo<'ctx>, String> {
+        let canonical_path = module_path
+            .canonicalize()
+            .unwrap_or_else(|_| module_path.to_path_buf());
+        if let Some(info) = self.compiled_modules.get(&canonical_path) {
+            return Ok(info.clone());
+        }
+        if self.compiling_modules.contains(&canonical_path) {
+            return Err(format!(
+                "circular import detected for '{}'",
+                canonical_path.display()
+            ));
+        }
+
+        let source = std::fs::read_to_string(&canonical_path)
+            .map_err(|e| format!("import {}: {}", canonical_path.display(), e))?;
+        let mut lexer = crate::lexer::Lexer::new(&source);
+        let tokens = lexer
+            .tokenize()
+            .map_err(|e| format!("import parse error: {}", e))?;
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = parser
+            .parse_program()
+            .map_err(|e| format!("import parse error: {}", e))?;
+
+        self.compiling_modules.push(canonical_path.clone());
+
+        let init_base = format!("__module_init_{}", self.fresh_name());
+        let init_name = self.mangle_global_name(&init_base);
+        let init_fn = self.module.add_function(&init_name, self.cv_type.fn_type(&[], false), None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_functions = std::mem::take(&mut self.functions);
+        let saved_function_params = std::mem::take(&mut self.function_params);
+        let saved_classes = std::mem::take(&mut self.classes);
+        let saved_fn = self.current_fn.replace(init_fn);
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_class = self.current_class.take();
+        let saved_source_dir = self.current_source_dir.clone();
+        let module_prefix = format!("__mod_{}__", self.fresh_name());
+        let saved_symbol_prefix = std::mem::replace(&mut self.symbol_prefix, module_prefix);
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+
+        let entry = self.context.append_basic_block(init_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.current_source_dir = canonical_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        self.allow_toplevel_defs = true;
+
+        let compile_result = (|| -> Result<ModuleInfo<'ctx>, String> {
+            self.declare_top_level_functions(&program)?;
+            self.compile_stmts(&program)?;
+
+            let mut exports: Vec<String> = self.locals.keys().cloned().collect();
+            exports.sort();
+
+            if !self.current_block_terminated() {
+                let namespace = self
+                    .builder
+                    .build_call(self.rt.cool_dict_new, &[], "module_namespace")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+                for export in &exports {
+                    let value = self
+                        .builder
+                        .build_load(self.cv_type, *self.locals.get(export).expect("module export local missing"), export)
+                        .unwrap()
+                        .into_struct_value();
+                    let name_ptr = self
+                        .builder
+                        .build_global_string_ptr(export, &format!("{}_export_{}", init_name, export))
+                        .unwrap();
+                    self.builder
+                        .build_call(
+                            self.rt.cool_set_attr,
+                            &[namespace.into(), name_ptr.as_pointer_value().into(), value.into()],
+                            "module_export",
+                        )
+                        .unwrap();
+                }
+                self.builder.build_return(Some(&namespace)).unwrap();
+            }
+
+            Ok(ModuleInfo {
+                init_fn,
+                exports,
+                functions: self.functions.clone(),
+                function_params: self.function_params.clone(),
+                classes: self.classes.clone(),
+            })
+        })();
+
+        self.locals = saved_locals;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.classes = saved_classes;
+        self.current_fn = saved_fn;
+        self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
+        self.current_class = saved_class;
+        self.current_source_dir = saved_source_dir;
+        self.symbol_prefix = saved_symbol_prefix;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        self.compiling_modules.pop();
+
+        let info = compile_result?;
+        self.compiled_modules
+            .insert(canonical_path, info.clone());
+        Ok(info)
+    }
+
     // ── import "path.cool" ────────────────────────────────────────────────────
-    fn compile_import(&mut self, _path: &str) -> Result<(), String> {
-        // LLVM backend doesn't support dynamic compilation
-        Err("import is not yet supported in LLVM backend (requires dynamic compilation)".into())
+    fn compile_import(&mut self, path: &str) -> Result<(), String> {
+        let module_path = self.resolve_import_file_path(path)?;
+        let module_info = self.compile_module_function(&module_path)?;
+        let namespace = self
+            .builder
+            .build_call(module_info.init_fn, &[], "import_file")
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+
+        for export in &module_info.exports {
+            let export_name_ptr = self
+                .builder
+                .build_global_string_ptr(export, &format!("import_file_export_{}", export))
+                .unwrap();
+            let value = self
+                .builder
+                .build_call(
+                    self.rt.cool_get_attr,
+                    &[namespace.into(), export_name_ptr.as_pointer_value().into()],
+                    "import_file_attr",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value();
+            let ptr = if let Some(&p) = self.locals.get(export) {
+                p
+            } else {
+                let p = self.build_entry_alloca(export);
+                self.locals.insert(export.clone(), p);
+                p
+            };
+            self.builder.build_store(ptr, value).unwrap();
+        }
+        for (name, &fn_val) in &module_info.functions {
+            self.functions.insert(name.clone(), fn_val);
+        }
+        for (name, params) in &module_info.function_params {
+            self.function_params.insert(name.clone(), params.clone());
+        }
+        for (name, class_info) in &module_info.classes {
+            self.classes.insert(name.clone(), class_info.clone());
+        }
+        Ok(())
     }
 
     // ── import module_name ────────────────────────────────────────────────────
@@ -5742,10 +6102,32 @@ impl<'ctx> Compiler<'ctx> {
                 self.locals.insert(name.to_string(), ptr);
                 Ok(())
             }
-            _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, subprocess, argparse, time, random, json, string, list, re, collections, and path)",
-                name
-            )),
+            _ => {
+                let module_path = self
+                    .resolve_import_module_path(name)
+                    .ok_or_else(|| format!("import: unknown module '{}'", name))?;
+                let module_info = self.compile_module_function(&module_path)?;
+                let namespace = self
+                    .builder
+                    .build_call(module_info.init_fn, &[], "import_module")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+                let binding_name = name.rsplit('.').next().unwrap_or(name);
+                let ptr = if let Some(&p) = self.locals.get(binding_name) {
+                    p
+                } else {
+                    let p = self.build_entry_alloca(binding_name);
+                    self.locals.insert(binding_name.to_string(), p);
+                    p
+                };
+                self.builder.build_store(ptr, namespace).unwrap();
+                self.imported_user_modules
+                    .insert(binding_name.to_string(), module_path);
+                Ok(())
+            }
         }
     }
 
@@ -6337,6 +6719,27 @@ impl<'ctx> Compiler<'ctx> {
                         .unwrap()
                         .into_struct_value());
                 }
+                if let Some(module_path) = self.imported_user_modules.get(module_name).cloned() {
+                    if let Some(module_info) = self.compiled_modules.get(&module_path).cloned() {
+                        if let Some(&fn_val) = module_info.functions.get(member) {
+                            let params = module_info
+                                .function_params
+                                .get(member)
+                                .cloned()
+                                .unwrap_or_default();
+                            let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
+                            return Ok(self.call_fn_with_struct_args(fn_val, &compiled, "module_fn_call"));
+                        }
+                        if let Some(class_info) = module_info.classes.get(member) {
+                            return self.call_constructor(
+                                class_info.constructor,
+                                &class_info.constructor_params,
+                                args,
+                                kwargs,
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -6394,6 +6797,16 @@ impl<'ctx> Compiler<'ctx> {
                 .left()
                 .unwrap()
                 .into_struct_value());
+        }
+
+        if let Expr::Ident(name) = callee {
+            if self.classes.contains_key(name) {
+                let (constructor, ctor_params) = {
+                    let class_info = self.classes.get(name).unwrap();
+                    (class_info.constructor, class_info.constructor_params.clone())
+                };
+                return self.call_constructor(constructor, &ctor_params, args, kwargs);
+            }
         }
 
         // Handle closure calls: closure_val(args)
@@ -6517,26 +6930,7 @@ impl<'ctx> Compiler<'ctx> {
                 let class_info = self.classes.get(&name).unwrap();
                 (class_info.constructor, class_info.constructor_params.clone())
             };
-            let compiled = self.bind_call_args(&ctor_params, args, kwargs, 0)?;
-
-            // Compile arguments and store to global buffer for constructor
-            let i32t = self.context.i32_type();
-            for (i, cv) in compiled.iter().enumerate() {
-                let idx_val = i32t.const_int(i as u64, false);
-                self.builder
-                    .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), (*cv).into()], "set_global_arg")
-                    .unwrap();
-            }
-
-            // Call the constructor (which reads args from global buffer)
-            return Ok(self
-                .builder
-                .build_call(constructor, &[], "instantiate")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_struct_value());
+            return self.call_constructor(constructor, &ctor_params, args, kwargs);
         }
 
         // ── asm("template" [, "constraints" [, args...]]) ──
@@ -6890,27 +7284,13 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
 
     let context = Context::create();
     let mut compiler = Compiler::new(&context);
+    compiler.current_source_dir = script_path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
 
     // ── Pass 1: forward-declare all top-level functions ──────────────────────
-    for stmt in program {
-        if let Stmt::FnDef { name, params, .. } = stmt {
-            if compiler.functions.contains_key(name) {
-                continue; // already declared (duplicate def — let later pass error)
-            }
-            // Check for unsupported params early so we can give a clean error
-            if params.iter().any(|p| p.is_vararg || p.is_kwarg) {
-                return Err(format!(
-                    "function '{name}': *args / **kwargs are not supported in LLVM backend"
-                ));
-            }
-            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
-                params.iter().map(|_| compiler.cv_type.into()).collect();
-            let fn_type = compiler.cv_type.fn_type(&param_types, false);
-            let fn_val = compiler.module.add_function(name, fn_type, None);
-            compiler.functions.insert(name.clone(), fn_val);
-            compiler.function_params.insert(name.clone(), params.clone());
-        }
-    }
+    compiler.declare_top_level_functions(program)?;
 
     // ── Pass 2: build main() and compile all top-level statements ────────────
     let i32_type = context.i32_type();
@@ -6918,6 +7298,7 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
     let entry = context.append_basic_block(main_fn, "entry");
     compiler.builder.position_at_end(entry);
     compiler.current_fn = Some(main_fn);
+    compiler.allow_toplevel_defs = true;
 
     compiler.compile_stmts(program)?;
 
