@@ -1055,6 +1055,16 @@ impl Interpreter {
                 map.set(Value::Str("exit".to_string()), Value::BuiltinFn("exit".to_string()));
                 env.set_local("sys".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "path" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["join", "basename", "dirname", "ext", "stem", "split", "normalize", "exists", "isabs"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("path.{}", fn_name)),
+                    );
+                }
+                env.set_local("path".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "string" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2209,6 +2219,9 @@ class Stack:
         if let Some(os_fn) = name.strip_prefix("os.") {
             return self.call_os_fn(os_fn, args);
         }
+        if let Some(path_fn) = name.strip_prefix("path.") {
+            return self.call_path_fn(path_fn, args);
+        }
         if let Some(f) = name.strip_prefix("string.") {
             return self.call_string_fn(f, args, env);
         }
@@ -3095,6 +3108,136 @@ class Stack:
                 Ok(Value::Str(String::from_utf8_lossy(&output.stdout).to_string()))
             }
             _ => Err(self.err(&format!("os has no function '{}'", name))),
+        }
+    }
+
+    fn normalize_path_string(path: &str) -> String {
+        use std::path::{Component, Path, PathBuf};
+
+        let p = Path::new(path);
+        let is_abs = p.is_absolute();
+        let mut parts: Vec<String> = Vec::new();
+        for component in p.components() {
+            match component {
+                Component::RootDir => {}
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if let Some(last) = parts.last() {
+                        if last != ".." {
+                            parts.pop();
+                        } else if !is_abs {
+                            parts.push("..".to_string());
+                        }
+                    } else if !is_abs {
+                        parts.push("..".to_string());
+                    }
+                }
+                Component::Normal(seg) => parts.push(seg.to_string_lossy().to_string()),
+                Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_string_lossy().to_string()),
+            }
+        }
+
+        let mut out = if is_abs { PathBuf::from("/") } else { PathBuf::new() };
+        for part in parts {
+            out.push(part);
+        }
+        let rendered = out.to_string_lossy().to_string();
+        if rendered.is_empty() {
+            if is_abs { "/".to_string() } else { ".".to_string() }
+        } else {
+            rendered
+        }
+    }
+
+    fn call_path_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        fn req_path_arg<F>(args: &[Value], idx: usize, err: F) -> Result<String, String>
+        where
+            F: Fn() -> String,
+        {
+            match args.get(idx) {
+                Some(Value::Str(s)) => Ok(s.clone()),
+                _ => Err(err()),
+            }
+        }
+
+        match name {
+            "join" => {
+                let parts: Result<Vec<String>, String> = args
+                    .iter()
+                    .map(|a| match a {
+                        Value::Str(s) => Ok(s.clone()),
+                        _ => Err(self.err("path.join() requires string arguments")),
+                    })
+                    .collect();
+                let mut path = std::path::PathBuf::new();
+                for part in parts? {
+                    path.push(part);
+                }
+                Ok(Value::Str(path.to_string_lossy().to_string()))
+            }
+            "basename" => {
+                let path = req_path_arg(&args, 0, || self.err("path.basename() requires a path string"))?;
+                let out = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                Ok(Value::Str(out))
+            }
+            "dirname" => {
+                let path = req_path_arg(&args, 0, || self.err("path.dirname() requires a path string"))?;
+                let p = std::path::Path::new(&path);
+                let out = if path == "/" {
+                    "/".to_string()
+                } else {
+                    p.parent().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+                };
+                Ok(Value::Str(out))
+            }
+            "ext" => {
+                let path = req_path_arg(&args, 0, || self.err("path.ext() requires a path string"))?;
+                let out = std::path::Path::new(&path)
+                    .extension()
+                    .map(|s| format!(".{}", s.to_string_lossy()))
+                    .unwrap_or_default();
+                Ok(Value::Str(out))
+            }
+            "stem" => {
+                let path = req_path_arg(&args, 0, || self.err("path.stem() requires a path string"))?;
+                let out = std::path::Path::new(&path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                Ok(Value::Str(out))
+            }
+            "split" => {
+                let path = req_path_arg(&args, 0, || self.err("path.split() requires a path string"))?;
+                let dir = if path == "/" {
+                    "/".to_string()
+                } else {
+                    std::path::Path::new(&path)
+                        .parent()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                };
+                let base = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                Ok(Value::List(Rc::new(RefCell::new(vec![Value::Str(dir), Value::Str(base)]))))
+            }
+            "normalize" => {
+                let path = req_path_arg(&args, 0, || self.err("path.normalize() requires a path string"))?;
+                Ok(Value::Str(Self::normalize_path_string(&path)))
+            }
+            "exists" => {
+                let path = req_path_arg(&args, 0, || self.err("path.exists() requires a path string"))?;
+                Ok(Value::Bool(std::path::Path::new(&path).exists()))
+            }
+            "isabs" => {
+                let path = req_path_arg(&args, 0, || self.err("path.isabs() requires a path string"))?;
+                Ok(Value::Bool(std::path::Path::new(&path).is_absolute()))
+            }
+            _ => Err(self.err(&format!("path has no function '{}'", name))),
         }
     }
 

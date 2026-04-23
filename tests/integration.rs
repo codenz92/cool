@@ -384,6 +384,50 @@ fn test_vm_import_os_module() {
 }
 
 #[test]
+fn test_import_path_module() {
+    let file_path = unique_temp_path("cool_path_module_test", "txt");
+    std::fs::write(&file_path, "ok").unwrap();
+
+    let source = format!(
+        "import path\nprint(path.join(\"a\", \"b\", \"c.txt\"))\nprint(path.basename(\"a/b/c.txt\"))\nprint(path.dirname(\"a/b/c.txt\"))\nprint(path.ext(\"a/b/c.txt\"))\nprint(path.stem(\"a/b/c.txt\"))\nprint(path.split(\"a/b/c.txt\"))\nprint(path.normalize(\"a/./b/../c//d.txt\"))\nprint(path.exists(\"{file}\"))\nprint(path.isabs(\"{file}\"))\n",
+        file = file_path.display()
+    );
+
+    let result = run_cool(&source).unwrap();
+    let _ = std::fs::remove_file(&file_path);
+
+    assert!(result.contains("a/b/c.txt"));
+    assert!(result.contains("c.txt"));
+    assert!(result.contains(".txt"));
+    assert!(result.contains("\nc\n") || result.contains("\nc\r\n"));
+    assert!(result.contains("[\"a/b\", \"c.txt\"]") || result.contains("[\"a/b\",\"c.txt\"]"));
+    assert!(result.contains("a/c/d.txt"));
+    assert!(result.matches("true").count() >= 2);
+}
+
+#[test]
+fn test_vm_import_path_module() {
+    let file_path = unique_temp_path("cool_vm_path_module_test", "txt");
+    std::fs::write(&file_path, "ok").unwrap();
+
+    let source = format!(
+        "import path\nprint(path.join(\"a\", \"b\", \"c.txt\"))\nprint(path.basename(\"a/b/c.txt\"))\nprint(path.dirname(\"a/b/c.txt\"))\nprint(path.ext(\"a/b/c.txt\"))\nprint(path.stem(\"a/b/c.txt\"))\nprint(path.split(\"a/b/c.txt\"))\nprint(path.normalize(\"a/./b/../c//d.txt\"))\nprint(path.exists(\"{file}\"))\nprint(path.isabs(\"{file}\"))\n",
+        file = file_path.display()
+    );
+
+    let result = run_cool_vm(&source).unwrap();
+    let _ = std::fs::remove_file(&file_path);
+
+    assert!(result.contains("a/b/c.txt"));
+    assert!(result.contains("c.txt"));
+    assert!(result.contains(".txt"));
+    assert!(result.contains("\nc\n") || result.contains("\nc\r\n"));
+    assert!(result.contains("[\"a/b\", \"c.txt\"]") || result.contains("[\"a/b\",\"c.txt\"]"));
+    assert!(result.contains("a/c/d.txt"));
+    assert!(result.matches("true").count() >= 2);
+}
+
+#[test]
 fn test_vm_import_list_module() {
     let result = run_cool_vm(
         "import list\nnums = [3, 1, 2]\nprint(list.sort(nums))\nprint(list.unique([1, 1, 2, 2, 3]))",

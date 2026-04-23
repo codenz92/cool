@@ -1509,6 +1509,9 @@ impl VM {
         if let Some(_f) = name.strip_prefix("ffi.") {
             return Err(self.err("FFI is only supported in the tree-walk interpreter (run without --vm)"));
         }
+        if let Some(rest) = name.strip_prefix("path.") {
+            return self.call_path_module(rest, args);
+        }
         if let Some(rest) = name.strip_prefix("listmod.") {
             return self.call_list_module(rest, args, kwargs);
         }
@@ -2930,6 +2933,135 @@ impl VM {
         }
     }
 
+    fn normalize_path_string(path: &str) -> String {
+        use std::path::{Component, Path, PathBuf};
+
+        let p = Path::new(path);
+        let is_abs = p.is_absolute();
+        let mut parts: Vec<String> = Vec::new();
+        for component in p.components() {
+            match component {
+                Component::RootDir => {}
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    if let Some(last) = parts.last() {
+                        if last != ".." {
+                            parts.pop();
+                        } else if !is_abs {
+                            parts.push("..".to_string());
+                        }
+                    } else if !is_abs {
+                        parts.push("..".to_string());
+                    }
+                }
+                Component::Normal(seg) => parts.push(seg.to_string_lossy().to_string()),
+                Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_string_lossy().to_string()),
+            }
+        }
+
+        let mut out = if is_abs { PathBuf::from("/") } else { PathBuf::new() };
+        for part in parts {
+            out.push(part);
+        }
+        let rendered = out.to_string_lossy().to_string();
+        if rendered.is_empty() {
+            if is_abs { "/".to_string() } else { ".".to_string() }
+        } else {
+            rendered
+        }
+    }
+
+    fn call_path_module(&self, fname: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        let req_path_arg = |idx: usize, label: &str| -> Result<String, String> {
+            match args.get(idx) {
+                Some(VmValue::Str(s)) => Ok(s.clone()),
+                _ => Err(self.err(label)),
+            }
+        };
+
+        match fname {
+            "join" => {
+                let mut path = std::path::PathBuf::new();
+                for arg in args {
+                    let part = match arg {
+                        VmValue::Str(s) => s.clone(),
+                        _ => return Err(self.err("path.join requires string arguments")),
+                    };
+                    path.push(part);
+                }
+                Ok(VmValue::Str(path.to_string_lossy().to_string()))
+            }
+            "basename" => {
+                let path = req_path_arg(0, "path.basename requires a path string")?;
+                Ok(VmValue::Str(
+                    std::path::Path::new(&path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                ))
+            }
+            "dirname" => {
+                let path = req_path_arg(0, "path.dirname requires a path string")?;
+                let out = if path == "/" {
+                    "/".to_string()
+                } else {
+                    std::path::Path::new(&path)
+                        .parent()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                };
+                Ok(VmValue::Str(out))
+            }
+            "ext" => {
+                let path = req_path_arg(0, "path.ext requires a path string")?;
+                Ok(VmValue::Str(
+                    std::path::Path::new(&path)
+                        .extension()
+                        .map(|s| format!(".{}", s.to_string_lossy()))
+                        .unwrap_or_default(),
+                ))
+            }
+            "stem" => {
+                let path = req_path_arg(0, "path.stem requires a path string")?;
+                Ok(VmValue::Str(
+                    std::path::Path::new(&path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                ))
+            }
+            "split" => {
+                let path = req_path_arg(0, "path.split requires a path string")?;
+                let dir = if path == "/" {
+                    "/".to_string()
+                } else {
+                    std::path::Path::new(&path)
+                        .parent()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                };
+                let base = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                Ok(VmValue::List(Rc::new(RefCell::new(vec![VmValue::Str(dir), VmValue::Str(base)]))))
+            }
+            "normalize" => {
+                let path = req_path_arg(0, "path.normalize requires a path string")?;
+                Ok(VmValue::Str(Self::normalize_path_string(&path)))
+            }
+            "exists" => {
+                let path = req_path_arg(0, "path.exists requires a path string")?;
+                Ok(VmValue::Bool(std::path::Path::new(&path).exists()))
+            }
+            "isabs" => {
+                let path = req_path_arg(0, "path.isabs requires a path string")?;
+                Ok(VmValue::Bool(std::path::Path::new(&path).is_absolute()))
+            }
+            _ => Err(self.err(&format!("unknown path function '{}'", fname))),
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn vm_len(&self, v: &VmValue) -> Result<usize, String> {
@@ -3305,6 +3437,11 @@ impl VM {
                 }
                 set(&mut d, "argv", VmValue::List(Rc::new(RefCell::new(argv))));
                 set(&mut d, "exit", bf("exit"));
+            }
+            "path" => {
+                for fname in &["join", "basename", "dirname", "ext", "stem", "split", "normalize", "exists", "isabs"] {
+                    set(&mut d, fname, bf(&format!("path.{}", fname)));
+                }
             }
             "time" => {
                 for fname in &["time", "sleep", "monotonic"] {

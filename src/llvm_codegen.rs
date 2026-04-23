@@ -2067,6 +2067,119 @@ static regex_t re_compile_regex(const char* pattern) {
     return re;
 }
 
+static char* cool_strdup_range(const char* start, size_t len) {
+    char* out = (char*)malloc(len + 1);
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return out;
+}
+
+static char* cool_path_join(int32_t nargs, CoolVal* args) {
+    if (nargs == 0) return strdup("");
+    char* out = strdup("");
+    size_t out_len = 0;
+    for (int32_t i = 0; i < nargs; i++) {
+        const char* part = cool_to_str(args[i]);
+        if (part[0] == '/') {
+            free(out);
+            out = strdup(part);
+            out_len = strlen(out);
+            continue;
+        }
+        size_t part_len = strlen(part);
+        size_t need_sep = (out_len > 0 && out[out_len - 1] != '/') ? 1 : 0;
+        out = (char*)realloc(out, out_len + need_sep + part_len + 1);
+        if (need_sep) out[out_len++] = '/';
+        memcpy(out + out_len, part, part_len);
+        out_len += part_len;
+        out[out_len] = '\0';
+    }
+    return out;
+}
+
+static char* cool_path_basename_str(const char* path) {
+    const char* end = path + strlen(path);
+    while (end > path && end[-1] == '/') end--;
+    if (end == path) return strdup("");
+    const char* base = end;
+    while (base > path && base[-1] != '/') base--;
+    return cool_strdup_range(base, (size_t)(end - base));
+}
+
+static char* cool_path_dirname_str(const char* path) {
+    const char* end = path + strlen(path);
+    while (end > path + 1 && end[-1] == '/') end--;
+    const char* base = end;
+    while (base > path && base[-1] != '/') base--;
+    if (base == path) {
+        if (path[0] == '/') return strdup("/");
+        return strdup("");
+    }
+    return cool_strdup_range(path, (size_t)(base - path - 1));
+}
+
+static char* cool_path_ext_str(const char* path) {
+    char* base = cool_path_basename_str(path);
+    char* dot = strrchr(base, '.');
+    if (!dot || dot == base) {
+        free(base);
+        return strdup("");
+    }
+    char* out = strdup(dot);
+    free(base);
+    return out;
+}
+
+static char* cool_path_stem_str(const char* path) {
+    char* base = cool_path_basename_str(path);
+    char* dot = strrchr(base, '.');
+    if (!dot || dot == base) return base;
+    *dot = '\0';
+    return base;
+}
+
+static char* cool_path_normalize_str(const char* path) {
+    int is_abs = path[0] == '/';
+    char* copy = strdup(path);
+    char* save = NULL;
+    char* parts[256];
+    int count = 0;
+    for (char* tok = strtok_r(copy, "/", &save); tok; tok = strtok_r(NULL, "/", &save)) {
+        if (strcmp(tok, ".") == 0 || tok[0] == '\0') continue;
+        if (strcmp(tok, "..") == 0) {
+            if (count > 0 && strcmp(parts[count - 1], "..") != 0) count--;
+            else if (!is_abs) parts[count++] = tok;
+            continue;
+        }
+        parts[count++] = tok;
+    }
+    if (count == 0) {
+        free(copy);
+        return strdup(is_abs ? "/" : ".");
+    }
+    size_t len = is_abs ? 1 : 0;
+    for (int i = 0; i < count; i++) len += strlen(parts[i]) + (i + 1 < count ? 1 : 0);
+    char* out = (char*)malloc(len + 1);
+    char* p = out;
+    if (is_abs) *p++ = '/';
+    for (int i = 0; i < count; i++) {
+        size_t n = strlen(parts[i]);
+        memcpy(p, parts[i], n);
+        p += n;
+        if (i + 1 < count) *p++ = '/';
+    }
+    *p = '\0';
+    free(copy);
+    return out;
+}
+
+static CoolVal cool_path_split_val(const char* path) {
+    CoolVal out = cool_list_make(cv_int(2));
+    cool_list_push(out, cv_str(cool_path_dirname_str(path)));
+    cool_list_push(out, cv_str(cool_path_basename_str(path)));
+    return out;
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -2156,6 +2269,24 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
                 while (t != 0) { int64_t n = t; t = g % t; g = n; }
                 return cv_int((a == 0 || b == 0) ? 0 : llabs(a / g * b));
             }
+        }
+    }
+
+    if (strcmp(module, "path") == 0) {
+        if (strcmp(name, "join") == 0) return cv_str(cool_path_join(nargs, args));
+        if (strcmp(name, "basename") == 0 && nargs == 1) return cv_str(cool_path_basename_str(cool_to_str(args[0])));
+        if (strcmp(name, "dirname") == 0 && nargs == 1) return cv_str(cool_path_dirname_str(cool_to_str(args[0])));
+        if (strcmp(name, "ext") == 0 && nargs == 1) return cv_str(cool_path_ext_str(cool_to_str(args[0])));
+        if (strcmp(name, "stem") == 0 && nargs == 1) return cv_str(cool_path_stem_str(cool_to_str(args[0])));
+        if (strcmp(name, "split") == 0 && nargs == 1) return cool_path_split_val(cool_to_str(args[0]));
+        if (strcmp(name, "normalize") == 0 && nargs == 1) return cv_str(cool_path_normalize_str(cool_to_str(args[0])));
+        if (strcmp(name, "exists") == 0 && nargs == 1) {
+            struct stat st;
+            return cv_bool(stat(cool_to_str(args[0]), &st) == 0);
+        }
+        if (strcmp(name, "isabs") == 0 && nargs == 1) {
+            const char* path = cool_to_str(args[0]);
+            return cv_bool(path[0] == '/');
         }
     }
 
@@ -4383,7 +4514,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" => {
+            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -4392,7 +4523,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, list, re, and collections)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, list, re, collections, and path)",
                 name
             )),
         }

@@ -674,3 +674,39 @@ reader.close()
     assert!(result.contains("gamma"));
     assert!(result.contains("delta"));
 }
+
+#[test]
+fn test_llvm_import_path_module() {
+    let cwd = std::env::current_dir().unwrap();
+    let file_path = cwd.join(unique_test_path("temp_llvm_path_module", "txt"));
+    fs::write(&file_path, "ok").unwrap();
+
+    let source = format!(
+        r#"
+import path
+print(path)
+print(path.join("a", "b", "c.txt"))
+print(path.basename("a/b/c.txt"))
+print(path.dirname("a/b/c.txt"))
+print(path.ext("a/b/c.txt"))
+print(path.stem("a/b/c.txt"))
+print(path.split("a/b/c.txt"))
+print(path.normalize("a/./b/../c//d.txt"))
+print(path.exists("{file}"))
+print(path.isabs("{file}"))
+"#,
+        file = file_path.display()
+    );
+
+    let result = compile_and_run_native(&source).unwrap();
+    let _ = fs::remove_file(&file_path);
+
+    assert!(result.contains("<module path>"));
+    assert!(result.contains("a/b/c.txt"));
+    assert!(result.contains("c.txt"));
+    assert!(result.contains(".txt"));
+    assert!(result.contains("\nc\n") || result.contains("\nc\r\n"));
+    assert!(result.contains("[a/b, c.txt]") || result.contains("[a/b,c.txt]"));
+    assert!(result.contains("a/c/d.txt"));
+    assert!(result.matches("true").count() >= 2);
+}

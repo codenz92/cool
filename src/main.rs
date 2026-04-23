@@ -282,7 +282,7 @@ NOTES:
     classes with inheritance/super(), list comprehensions,
     ternary expressions, in/not in, print()/str(), range(), len(),
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
-    built-in import math/os/sys/time and import random
+    built-in import math/os/sys/path/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
