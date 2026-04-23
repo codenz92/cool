@@ -3125,12 +3125,13 @@ impl VM {
     }
 
     fn import_module(&mut self, name: &str) -> Result<VmValue, String> {
-        // Try to load from source dir first (e.g., math.cool, os.cool).
+        // Try to load from source dir first (e.g., math.cool, foo/bar.cool).
+        let file_path = name.replace('.', "/");
         let candidates = [
-            self.source_dir.join(format!("{}.cool", name)),
-            self.source_dir.join(name).join("__init__.cool"),
+            self.source_dir.join(format!("{}.cool", file_path)),
+            self.source_dir.join(&file_path).join("__init__.cool"),
             // stdlib lives next to the interpreter binary or in a known path.
-            std::path::PathBuf::from(format!("lib/{}.cool", name)),
+            std::path::PathBuf::from(format!("lib/{}.cool", file_path)),
         ];
         for path in &candidates {
             if path.exists() {
@@ -3143,14 +3144,17 @@ impl VM {
                 }
                 self.importing_modules.push(module_path);
                 let source = std::fs::read_to_string(path).map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
-                // Compile and run in a sub-scope; collect exported names into a dict.
-                let old_source_dir = self.source_dir.clone();
-                self.source_dir = path.parent().unwrap_or(&old_source_dir).to_path_buf();
+                // Run the module in an isolated VM so imports expose a namespace
+                // instead of leaking module locals into the caller's globals.
+                let module_dir = path.parent().unwrap_or(&self.source_dir).to_path_buf();
+                let mut module_vm = VM::new(module_dir);
+                module_vm.importing_modules = self.importing_modules.clone();
+                let builtin_keys: std::collections::HashSet<String> =
+                    module_vm.globals.keys().cloned().collect();
                 let mut lexer = crate::lexer::Lexer::new(&source);
                 let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
                     Ok(tokens) => tokens,
                     Err(err) => {
-                        self.source_dir = old_source_dir;
                         self.importing_modules.pop();
                         return Err(err);
                     }
@@ -3159,7 +3163,6 @@ impl VM {
                 let program = match parser.parse_program().map_err(|e| self.err(&e)) {
                     Ok(program) => program,
                     Err(err) => {
-                        self.source_dir = old_source_dir;
                         self.importing_modules.pop();
                         return Err(err);
                     }
@@ -3167,23 +3170,21 @@ impl VM {
                 let chunk = match crate::compiler::compile(&program).map_err(|e| self.err(&e)) {
                     Ok(chunk) => chunk,
                     Err(err) => {
-                        self.source_dir = old_source_dir;
                         self.importing_modules.pop();
                         return Err(err);
                     }
                 };
-                // Run the module — it populates globals directly (simple approach).
-                if let Err(err) = self.run(&chunk) {
-                    self.source_dir = old_source_dir;
+                if let Err(err) = module_vm.run(&chunk) {
                     self.importing_modules.pop();
                     return Err(err);
                 }
-                self.source_dir = old_source_dir;
                 self.importing_modules.pop();
-                // Return the module's global dict as a namespace object.
+                // Return the module's exported namespace.
                 let mut d = VmDict::new();
-                for (k, v) in &self.globals {
-                    d.set(VmValue::Str(k.clone()), v.clone());
+                for (k, v) in &module_vm.globals {
+                    if !builtin_keys.contains(k) {
+                        d.set(VmValue::Str(k.clone()), v.clone());
+                    }
                 }
                 return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));
             }

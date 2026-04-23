@@ -700,7 +700,8 @@ impl Compiler {
             Stmt::ImportModule(module_name) => {
                 // import math / os / sys / etc.
                 let ci = self.add_constant(VmValue::Str(module_name.clone()));
-                let name_idx = self.add_name(module_name);
+                let binding_name = module_name.rsplit('.').next().unwrap_or(module_name);
+                let name_idx = self.add_name(binding_name);
                 // Set the module into a global with the module name
                 // VM handles this specially via __import_module__ builtin.
                 let bi = self.add_name("__import_module__");

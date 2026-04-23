@@ -58,6 +58,22 @@ fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, Strin
     run_cool_with_args_and_env(source, extra_args, &[])
 }
 
+fn run_cool_path_with_args(path: &std::path::Path, extra_args: &[&str]) -> Result<String, String> {
+    let mut cmd = Command::new(cool_bin());
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    let output = cmd.arg(path).output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(stderr)
+    }
+}
+
 #[test]
 fn test_hello_world() {
     let result = run_cool("print(\"Hello, World!\")").unwrap();
@@ -357,6 +373,50 @@ fn test_vm_import_collections_module() {
     .unwrap();
     assert!(result.contains("first"));
     assert!(result.contains("b"));
+}
+
+#[test]
+fn test_import_dotted_module_package_path() {
+    let temp_dir = std::env::temp_dir().join("cool_import_package_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("foo")).unwrap();
+    let source_path = temp_dir.join("main.cool");
+    std::fs::write(temp_dir.join("foo").join("bar.cool"), "value = 42\n").unwrap();
+    std::fs::write(&source_path, "import foo.bar\nprint(bar.value)\n").unwrap();
+
+    let result = run_cool_path_with_args(&source_path, &[]).unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert!(result.contains("42"));
+}
+
+#[test]
+fn test_vm_import_dotted_module_package_path() {
+    let temp_dir = std::env::temp_dir().join("cool_vm_import_package_test");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("foo")).unwrap();
+    let source_path = temp_dir.join("main.cool");
+    std::fs::write(temp_dir.join("foo").join("bar.cool"), "value = 42\n").unwrap();
+    std::fs::write(&source_path, "import foo.bar\nprint(bar.value)\n").unwrap();
+
+    let result = run_cool_path_with_args(&source_path, &["--vm"]).unwrap();
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    assert!(result.contains("42"));
+}
+
+#[test]
+fn test_self_hosted_compiler_suite_runs() {
+    let output = Command::new(cool_bin())
+        .arg("coolc/compiler_vm.cool")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("=== Self-Hosted Compiler v2.0 ==="));
+    assert!(stdout.contains("=== All tests complete ==="));
+    assert!(stdout.contains("-- Inheritance --"));
 }
 
 #[test]

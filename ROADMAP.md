@@ -133,7 +133,7 @@
 
 ## Phase 6 — Standard Library ✅
 
-> Goal: a built-in library written in Cool itself
+> Goal: a practical built-in library shipped with the language across runtimes
 
 - [x] `string` module — `split`, `join`, `strip`, `upper`, `lower`, `replace`, etc.
 - [x] `list` module — `sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`
@@ -142,8 +142,138 @@
 - [x] `re` module — `re.match()`, `re.search()`, `re.fullmatch()`, `re.findall()`, `re.sub()`, `re.split()`
 - [x] `time` module — `time.time()`, `time.sleep()`, `time.monotonic()`
 - [x] `random` module — `random.random()`, `random.randint()`, `random.choice()`, `random.shuffle()`, `random.uniform()`, `random.seed()`
-- [x] `collections` module — `Queue` and `Stack` classes (written in Cool itself)
+- [x] `collections` module — `Queue` and `Stack` classes
 - [x] Package system — `import foo.bar` loads `foo/bar.cool` from source directory
+
+### Next Library Targets
+
+#### Data And Serialization
+
+- [ ] `csv` module — CSV reader/writer helpers for rows, headers, and basic dialect options
+- [ ] `json` extensions — schema-aware JSON transforms and streaming helpers
+- [ ] `toml` module — parse and write TOML for project/config tooling
+- [ ] `yaml` module — YAML parsing/serialization for config and automation
+- [ ] `xml` module — lightweight XML parsing and serialization helpers
+- [ ] `html` module — escaping/unescaping plus small DOM/text extraction helpers
+- [ ] `base64` module — base64 encode/decode for strings and bytes-like data
+- [ ] `codec` module — pluggable encoders/decoders for text and binary formats
+- [ ] `bytes` module — byte strings, hex helpers, slicing, and binary encoding utilities
+- [ ] `unicode` module — code point categories, normalization, width, and grapheme helpers
+- [ ] `locale` module — locale-aware formatting, parsing, and language/region helpers
+- [ ] `config` module — `.json`, `.ini`, and `.env` style configuration loading helpers
+- [ ] `schema` module — typed validation rules for dicts, lists, configs, and API payloads
+
+#### Filesystem And OS
+
+- [ ] `path` module — path normalization, basename/dirname, extension helpers, and path splitting
+- [ ] `glob` module — wildcard path matching and recursive file discovery
+- [ ] `tempfile` module — temporary files/directories with cleanup helpers
+- [ ] `fswatch` module — file watching for rebuild loops, editors, and automation
+- [ ] `process` module — PID info, signals, environment inspection, and runtime metadata
+- [ ] `platform` module — OS/arch/runtime detection and host capability helpers
+- [ ] `subprocess` module — structured process spawning, exit codes, stdout/stderr capture
+- [ ] `daemon` module — service lifecycle helpers, PID files, logs, and restart policies
+- [ ] `sandbox` module — constrained command/file execution helpers for safer automation
+- [ ] `sync` module — file/state synchronization, conflict detection, and reconciliation helpers
+- [ ] `store` module — key-value persistence, namespaces, and transactional update helpers
+
+#### Networking And Services
+
+- [ ] `http` module — request helpers built into the language runtime instead of only the shell app
+- [ ] `socket` module — TCP/UDP clients and servers for networking work
+- [ ] `websocket` module — client/server websocket support for realtime tools and apps
+- [ ] `rpc` module — lightweight RPC protocol helpers, stubs, and request routing
+- [ ] `graphql` module — query building, schema helpers, and response extraction
+- [ ] `url` module — URL parsing, joining, query-string encode/decode, and percent escaping
+- [ ] `mail` module — SMTP/IMAP-style helpers for notifications and inbox workflows
+- [ ] `feed` module — RSS/Atom parsing, polling, deduplication, and feed generation
+- [ ] `calendar` module — recurring schedules, reminders, and date-range planning helpers
+- [ ] `cluster` module — multi-node coordination primitives for distributed experiments
+
+#### Databases And Storage
+
+- [ ] `sqlite` module — embedded database access with queries, params, and row iteration
+- [ ] `cache` module — in-memory and disk-backed caching with TTL and invalidation helpers
+- [ ] `memo` module — function memoization and deterministic result caching
+- [ ] `package` module — package metadata, manifests, semver helpers, and dependency resolution
+- [ ] `bundle` module — single-file app bundling, asset embedding, and deploy packaging
+- [ ] `archive` module — higher-level project/archive packaging on top of compress primitives
+- [ ] `compress` module — gzip/zip/tar helpers for archives and packaged assets
+
+#### Parsing, Language, And Tooling
+
+- [ ] `argparse` module — command-line flag parsing, positional args, and help generation
+- [ ] `logging` module — leveled logs, timestamps, formatters, and file/stdout handlers
+- [ ] `doc` module — markdown, manpage, and HTML document generation helpers
+- [ ] `template` module — string/file templating with variables, loops, and partials
+- [ ] `parser` module — parser combinators and token-stream helpers for DSLs
+- [ ] `lexer` module — token definitions, scanners, and syntax-highlighting support
+- [ ] `ast` module — parse Cool source into inspectable AST nodes for tooling and linters
+- [ ] `inspect` module — runtime inspection for modules, classes, functions, and objects
+- [ ] `diff` module — text/line diffing, patches, and merge-assist primitives
+- [ ] `patch` module — unified diff creation/application and file patch tooling
+- [ ] `project` module — project scaffolding, manifests, templates, and workspace metadata
+- [ ] `release` module — changelog generation, tagging, artifact assembly, and publish workflows
+- [ ] `repo` module — git-aware repository inspection, diff/status helpers, and branch metadata
+- [ ] `modulegraph` module — import graph inspection, cycle detection, and dependency visualization
+- [ ] `plugin` module — plugin discovery, registration, lifecycle hooks, and capability loading
+- [ ] `lsp` module — language-server protocol messages, diagnostics, completions, and tooling support
+- [ ] `ffiutil` module — FFI signatures, type marshaling helpers, and safe wrapper generation
+- [ ] `shell` module — shell parsing, quoting, completion, aliases, and script execution helpers
+
+#### Runtime, Automation, And Observability
+
+- [ ] `jobs` module — background jobs, worker pools, queues, and task orchestration helpers
+- [ ] `event` module — pub/sub events, listeners, timers, and message buses
+- [ ] `workflow` module — step graphs, checkpoints, resumability, and automation composition
+- [ ] `agent` module — task/plan/executor primitives for autonomous tool workflows in Cool
+- [ ] `retry` module — retry policies, backoff, jitter, and failure classification
+- [ ] `metrics` module — counters, timers, histograms, and lightweight instrumentation
+- [ ] `trace` module — spans, trace IDs, and execution tracing helpers
+- [ ] `profile` module — runtime profiling hooks, flame summaries, and hotspot reporting
+- [ ] `test` module — assertions, fixtures, discovery helpers, and a standard unit-test API
+- [ ] `bench` module — lightweight benchmarking helpers for timing and comparison
+- [ ] `notebook` module — executable notes, cells, saved outputs, and literate-programming helpers
+- [ ] `secrets` module — secret lookup, redaction, encrypted storage, and runtime injection
+
+#### Math, Data Science, And Finance
+
+- [ ] `datetime` module — timestamps, date formatting/parsing, and duration helpers
+- [ ] `decimal` module — exact decimal arithmetic for finance and configuration math
+- [ ] `money` module — decimal-safe currency values, formatting, and exchange abstractions
+- [ ] `stats` module — descriptive statistics, sampling, percentiles, and distributions
+- [ ] `vector` module — geometric vectors, transforms, and numeric helper operations
+- [ ] `matrix` module — small matrix math for graphics, tools, and simulation work
+- [ ] `geom` module — rectangles, points, intersections, bounds, and spatial utilities
+- [ ] `graph` module — graph nodes/edges, traversal, shortest path, DAG utilities
+- [ ] `tree` module — generic tree traversal, mutation, and query helpers
+- [ ] `pipeline` module — composable data pipelines and stream-style transformations
+- [ ] `stream` module — lazy iterators, generators, adapters, and chunked processing helpers
+- [ ] `table` module — tabular display, sorting, formatting, and CSV/console rendering helpers
+- [ ] `search` module — indexing, query parsing, scoring, and local search helpers
+- [ ] `embed` module — vector embeddings, similarity search hooks, and semantic indexing helpers
+- [ ] `ml` module — lightweight inference wrappers and data preprocessing primitives
+
+#### Security And Crypto
+
+- [ ] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
+- [ ] `crypto` module — symmetric encryption, signatures, random bytes, and key helpers
+
+#### Terminal, UI, And Presentation
+
+- [ ] `ansi` module — terminal colors, cursor movement, box drawing, and styling helpers
+- [ ] `term` module — raw terminal mode, key events, mouse events, and screen buffers
+- [ ] `tui` module — higher-level terminal UI widgets, layout, focus, and event loops
+- [ ] `theme` module — reusable palettes, spacing scales, and text-style presets for TUIs
+- [ ] `color` module — RGB/HSL/HSV conversion, palettes, gradients, and contrast helpers
+- [ ] `scene` module — lightweight scene graphs for TUI/ASCII/game applications
+
+#### Media And Game Development
+
+- [ ] `image` module — image metadata, resize/crop helpers, and simple format conversion
+- [ ] `audio` module — WAV/PCM helpers, metadata, and lightweight processing primitives
+- [ ] `sprite` module — tiny 2D sprite sheets, tiles, and ASCII/pixel animation helpers
+- [ ] `game` module — timers, entities, input state, collision helpers, and main-loop support
 
 ---
 
@@ -204,9 +334,9 @@ The LLVM backend now covers most day-to-day language features, including default
 
 ---
 
-## Phase 9 — Self-Hosted Compiler ✅ Complete
+## Phase 9 — Self-Hosted Compiler [~]
 
-> Goal: write the Cool compiler in Cool itself, capable of compiling real Cool programs
+> Goal: write the Cool compiler in Cool itself, capable of compiling a substantial Cool subset
 
 The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full lexer, recursive descent parser, code generator, and bytecode VM — all written in Cool. It can compile and execute a substantial subset of the Cool language.
 
@@ -233,9 +363,9 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] Classes and method dispatch
 - [x] Full test suite: arithmetic, variables, if/elif/else, while, for, break/continue, functions, closures, lists, classes, inheritance, FizzBuzz
 
-### Self-hosting achievement
+### Self-hosting status
 
-- [x] Bootstrap: compiles `compiler_vm.cool` with itself (full self-hosting)
+- [~] Bootstrap mode exists and begins self-compilation, but full `compiler_vm.cool` bootstrap still needs work before it can be treated as complete self-hosting
 
 ---
 
@@ -251,4 +381,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 6 — Standard Library | ✅ Complete |
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
-| 9 — Self-Hosted Compiler | ✅ Complete |
+| 9 — Self-Hosted Compiler | [~] In progress |

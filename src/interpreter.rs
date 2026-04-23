@@ -965,6 +965,7 @@ impl Interpreter {
     }
 
     fn import_module(&mut self, name: &str, env: &Env) -> Result<(), String> {
+        let binding_name = name.rsplit('.').next().unwrap_or(name);
         match name {
             "math" => {
                 let mut map = IndexedMap::new();
@@ -1244,8 +1245,8 @@ class Stack:
                 env.set_local("ffi".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             _ => {
-                // Try to load as a .cool file from source_dir
-                // Support dotted names: "foo.bar" → "foo/bar.cool"
+                // Try to load as a .cool file from source_dir.
+                // Support dotted names: "foo.bar" → "foo/bar.cool".
                 let file_path = name.replace('.', "/");
                 let path = self.source_dir.join(format!("{}.cool", file_path));
                 if path.exists() {
@@ -1258,9 +1259,11 @@ class Stack:
                     let child = Env::new_child(env.clone());
                     self.exec_block(&program, &child)?;
                     let child_vars = child.0.borrow();
+                    let mut exports = IndexedMap::new();
                     for (k, v) in &child_vars.vars {
-                        env.set_local(k.clone(), v.clone());
+                        exports.set(Value::Str(k.clone()), v.clone());
                     }
+                    env.set_local(binding_name.to_string(), Value::Dict(Rc::new(RefCell::new(exports))));
                 } else {
                     return Err(self.err(&format!("unknown module '{}'", name)));
                 }

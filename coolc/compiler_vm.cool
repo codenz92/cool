@@ -4,7 +4,7 @@
 
 # Bootstrap check - must be first
 import sys
-_BOOTSTRAP_MODE = len(sys.argv) > 2 and sys.argv[2] == "--bootstrap"
+_BOOTSTRAP_MODE = len(sys.argv) > 1 and sys.argv[1] == "--bootstrap"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -12,7 +12,7 @@ def do_bootstrap():
     print("=== BOOTSTRAP: Self-hosted compiler compiling itself ===")
     print("")
     import os
-    src_file = sys.argv[1]
+    src_file = sys.argv[0]
     if src_file[0] != "/":
         src_file = os.getcwd() + "/" + src_file
     print("Compiling " + src_file + " with itself...")
@@ -51,6 +51,11 @@ def is_int(v):
 
 def is_bool(v):
     return type(v) == "bool"
+
+def dict_get(d, key):
+    if d != nil and key in d:
+        return d[key]
+    return nil
 
 def op_type(op):
     if is_list(op) and len(op) > 0:
@@ -992,15 +997,15 @@ class VM:
 
     def load_var(self, name):
         # check locals first (deepest frame)
-        if self.locals.get(name) != nil:
+        if dict_get(self.locals, name) != nil:
             return self.locals[name]
         # check captured env in current frame
         if len(self.call_frames) > 0:
             frame = self.call_frames[-1]
-            captured = frame.get('captured')
-            if captured != nil and captured.get(name) != nil:
+            captured = dict_get(frame, 'captured')
+            if captured != nil and dict_get(captured, name) != nil:
                 return captured[name]
-        if self.globals.get(name) != nil:
+        if dict_get(self.globals, name) != nil:
             return self.globals[name]
         return nil
 
@@ -1011,9 +1016,9 @@ class VM:
             self.globals[name] = val
 
     def do_user_call(self, func, args, is_init):
-        params = func.get('params')
-        addr = func.get('addr')
-        captured = func.get('captured')
+        params = dict_get(func, 'params')
+        addr = dict_get(func, 'addr')
+        captured = dict_get(func, 'captured')
         new_locals = {}
         if captured != nil:
             for k in captured:
@@ -1099,13 +1104,13 @@ class VM:
             elif is_str(obj):
                 self.push(self.call_str_method(obj, attr, args))
             elif is_dict(obj):
-                cls = obj.get('__class__')
+                cls = dict_get(obj, '__class__')
                 m = nil
                 if cls != nil:
                     m = self.lookup_method(cls, attr)
                 if m == nil:
-                    m = obj.get(attr)
-                if m != nil and is_dict(m) and m.get('__type__') == 'func':
+                    m = dict_get(obj, attr)
+                if m != nil and is_dict(m) and dict_get(m, '__type__') == 'func':
                     self.do_user_call(m, [obj] + args, false)
                     # RET will push result
                 else:
@@ -1120,7 +1125,7 @@ class VM:
                 args.insert(0, self.pop())
             func = self.pop()
             if func != nil and is_dict(func):
-                ft = func.get('__type__')
+                ft = dict_get(func, '__type__')
                 if ft == 'func':
                     self.do_user_call(func, args, false)
                 elif ft == 'class':
@@ -1132,8 +1137,8 @@ class VM:
                     else:
                         self.push(inst)
                 elif ft == 'bound':
-                    f = func.get('func')
-                    s = func.get('self')
+                    f = dict_get(func, 'func')
+                    s = dict_get(func, 'self')
                     self.do_user_call(f, [s] + args, false)
                 else:
                     self.push(nil)
@@ -1148,9 +1153,9 @@ class VM:
                 args.insert(0, self.pop())
             func = self.load_var(name)
             if func == nil:
-                func = self.globals.get(name)
+                func = dict_get(self.globals, name)
             if func != nil and is_dict(func):
-                ft = func.get('__type__')
+                ft = dict_get(func, '__type__')
                 if ft == 'func':
                     self.do_user_call(func, args, false)
                 elif ft == 'class':
@@ -1162,8 +1167,8 @@ class VM:
                     else:
                         self.push(inst)
                 elif ft == 'bound':
-                    f = func.get('func')
-                    s = func.get('self')
+                    f = dict_get(func, 'func')
+                    s = dict_get(func, 'self')
                     self.do_user_call(f, [s] + args, false)
                 else:
                     self.push(self.call_builtin(name, args))
@@ -1187,7 +1192,7 @@ class VM:
                 base = frame['stack_base']
                 while len(self.stack) > base:
                     self.stack.pop()
-                if not frame.get('is_init'):
+                if not dict_get(frame, 'is_init'):
                     self.push(val)
                 # is_init: instance already sits below stack_base
             else:
@@ -1212,14 +1217,14 @@ class VM:
             methods = {}
             # methods were already stored as globals by MAKE_FUNC+STORE
             for mn in method_names:
-                f = self.globals.get(mn)
+                f = dict_get(self.globals, mn)
                 if f == nil:
-                    f = self.locals.get(mn)
+                    f = dict_get(self.locals, mn)
                 if f != nil:
                     methods[mn] = f
             parent = nil
             if parent_name != nil:
-                parent = self.globals.get(parent_name)
+                parent = dict_get(self.globals, parent_name)
             cls = {'__type__': 'class', '__name__': name, '__methods__': methods, '__parent__': parent}
             self.push(cls)
 
@@ -1345,11 +1350,11 @@ class VM:
             return nil
         if is_dict(obj):
             # check instance field
-            v = obj.get(attr)
+            v = dict_get(obj, attr)
             if v != nil:
                 return v
             # check class methods
-            cls = obj.get('__class__')
+            cls = dict_get(obj, '__class__')
             if cls != nil:
                 m = self.lookup_method(cls, attr)
                 if m != nil:
@@ -1373,7 +1378,7 @@ class VM:
                 if idx >= 0 and idx < len(obj):
                     return obj[idx]
         if is_dict(obj):
-            return obj.get(idx)
+            return dict_get(obj, idx)
         return nil
 
     def set_item(self, obj, idx, val):
@@ -1391,18 +1396,18 @@ class VM:
                     return true
             return false
         if is_dict(container):
-            return container.get(item) != nil
+            return dict_get(container, item) != nil
         return false
 
     def lookup_method(self, cls, name):
         if cls == nil:
             return nil
-        methods = cls.get('__methods__')
+        methods = dict_get(cls, '__methods__')
         if methods != nil:
-            m = methods.get(name)
+            m = dict_get(methods, name)
             if m != nil:
                 return m
-        parent = cls.get('__parent__')
+        parent = dict_get(cls, '__parent__')
         if parent != nil:
             return self.lookup_method(parent, name)
         return nil
@@ -1421,11 +1426,11 @@ class VM:
 
         # Instance method dispatch
         if is_dict(obj):
-            v = obj.get(attr)
-            if v != nil and is_dict(v) and v.get('__type__') == 'func':
+            v = dict_get(obj, attr)
+            if v != nil and is_dict(v) and dict_get(v, '__type__') == 'func':
                 return self.call_func_obj(v, [obj] + args)
             # check class
-            cls = obj.get('__class__')
+            cls = dict_get(obj, '__class__')
             if cls != nil:
                 m = self.lookup_method(cls, attr)
                 if m != nil:
@@ -1538,7 +1543,7 @@ class VM:
         # user-defined function
         func = self.load_var(name)
         if func == nil:
-            func = self.globals.get(name)
+            func = dict_get(self.globals, name)
         if func != nil:
             return self.call_func_obj(func, args)
         return nil
@@ -1548,13 +1553,13 @@ class VM:
             return nil
 
         # Bound method
-        if is_dict(func) and func.get('__type__') == 'bound':
-            actual_func = func.get('func')
-            self_obj = func.get('self')
+        if is_dict(func) and dict_get(func, '__type__') == 'bound':
+            actual_func = dict_get(func, 'func')
+            self_obj = dict_get(func, 'self')
             return self.call_func_obj(actual_func, [self_obj] + args)
 
         # Class instantiation
-        if is_dict(func) and func.get('__type__') == 'class':
+        if is_dict(func) and dict_get(func, '__type__') == 'class':
             inst = {'__type__': 'inst', '__class__': func}
             # inherit parent fields? not needed
             init_m = self.lookup_method(func, '__init__')
@@ -1563,10 +1568,10 @@ class VM:
             return inst
 
         # User function
-        if is_dict(func) and func.get('__type__') == 'func':
-            params = func.get('params')
-            addr = func.get('addr')
-            captured = func.get('captured')
+        if is_dict(func) and dict_get(func, '__type__') == 'func':
+            params = dict_get(func, 'params')
+            addr = dict_get(func, 'addr')
+            captured = dict_get(func, 'captured')
 
             new_locals = {}
             # bind captured env
@@ -1751,9 +1756,9 @@ class VM:
                 cls_name = args[1]
                 if is_str(cls_name):
                     return type(obj) == cls_name
-                if is_dict(obj) and obj.get('__class__') != nil:
-                    c = obj.get('__class__')
-                    if is_dict(cls_name) and c.get('__name__') == cls_name.get('__name__'):
+                if is_dict(obj) and dict_get(obj, '__class__') != nil:
+                    c = dict_get(obj, '__class__')
+                    if is_dict(cls_name) and dict_get(c, '__name__') == dict_get(cls_name, '__name__'):
                         return true
             return false
 
@@ -1762,7 +1767,7 @@ class VM:
                 obj = args[0]
                 attr = args[1]
                 if is_dict(obj):
-                    return obj.get(attr) != nil
+                    return dict_get(obj, attr) != nil
             return false
 
         if name == 'getattr':
@@ -1797,14 +1802,14 @@ class VM:
                 parts.append(self.to_repr(x))
             return "[" + ", ".join(parts) + "]"
         if is_dict(v):
-            if v.get('__type__') == 'inst':
-                cls = v.get('__class__')
+            if dict_get(v, '__type__') == 'inst':
+                cls = dict_get(v, '__class__')
                 if cls != nil:
-                    return "<" + cls.get('__name__') + " instance>"
-            if v.get('__type__') == 'func':
-                return "<func " + str(v.get('name')) + ">"
-            if v.get('__type__') == 'class':
-                return "<class " + str(v.get('__name__')) + ">"
+                    return "<" + dict_get(cls, '__name__') + " instance>"
+            if dict_get(v, '__type__') == 'func':
+                return "<func " + str(dict_get(v, 'name')) + ">"
+            if dict_get(v, '__type__') == 'class':
+                return "<class " + str(dict_get(v, '__name__')) + ">"
             return str(v)
         return str(v)
 
@@ -1854,11 +1859,6 @@ def deserialize_code(data):
 
 import sys
 
-if _BOOTSTRAP_MODE:
-    do_bootstrap()
-    exit(0)
-
-# Bootstrap check
 if _BOOTSTRAP_MODE:
     do_bootstrap()
     exit(0)
@@ -1927,32 +1927,3 @@ compile_and_run(fizzbuzz)
 
 print("")
 print("=== All tests complete ===")
-
-# ─── Bootstrap: compile and run self ──────────────────────────────────────────
-
-import sys
-
-def bootstrap():
-    print("")
-    print("=== BOOTSTRAP: Self-hosted compiler compiling itself ===")
-    print("")
-
-    with open("coolc/compiler_vm.cool", "r") as f:
-        src = f.read()
-
-    print("Compiling compiler_vm.cool with itself...")
-    code = compile(src)
-    print("Compiled to " + str(len(code)) + " bytecode instructions")
-    print("")
-    print("=== Bootstrap successful! ===")
-    print("")
-    print("The self-hosted compiler can compile itself.")
-    print("Full test suite run would demonstrate full self-hosting.")
-    print("")
-    print("To verify: compiling 'print(1+2)'...")
-    compile_and_run("print(1 + 2)")
-    print("OK!")
-    print("")
-    print("=== Bootstrap complete ===")
-
-
