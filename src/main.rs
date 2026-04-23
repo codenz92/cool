@@ -5,6 +5,7 @@ mod lexer;
 mod llvm_codegen;
 mod opcode;
 mod parser;
+mod subprocess_runtime;
 mod vm;
 
 use interpreter::Interpreter;
@@ -289,7 +290,7 @@ NOTES:
     startswith/endswith/title/capitalize/format), plus list
     (sort/reverse/map/filter/reduce/flatten/unique), plus re
     (match/search/fullmatch/findall/sub/split), plus collections
-    (Queue/Stack), open()/file methods, with/context managers on
+    (Queue/Stack), subprocess(run/call/check_output), open()/file methods, with/context managers on
     normal exit, return/break/continue, and unhandled native raises,
     inline asm, and raw memory.
     Closures/lambdas, broader import support beyond those built-ins,

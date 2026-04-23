@@ -301,6 +301,41 @@ fn test_vm_import_math_module() {
 }
 
 #[test]
+fn test_import_subprocess_module() {
+    let result = run_cool(
+        "import subprocess\nres = subprocess.run(\"printf 'out'; printf 'err' 1>&2; exit 7\")\nprint(res[\"code\"])\nprint(res[\"stdout\"])\nprint(res[\"stderr\"])\nprint(res[\"timed_out\"])\nprint(res[\"ok\"])\nprint(subprocess.call(\"exit 3\"))\nprint(subprocess.check_output(\"printf 'hi'\"))",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["7", "out", "err", "false", "false", "3", "hi"]);
+}
+
+#[test]
+fn test_import_subprocess_timeout() {
+    let result = run_cool("import subprocess\nres = subprocess.run(\"sleep 1\", 0.05)\nprint(res[\"timed_out\"])\nprint(res[\"code\"] == nil)\nprint(res[\"ok\"])").unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["true", "true", "false"]);
+}
+
+#[test]
+fn test_vm_import_subprocess_module() {
+    let result = run_cool_vm(
+        "import subprocess\nres = subprocess.run(\"printf 'out'; printf 'err' 1>&2; exit 7\")\nprint(res[\"code\"])\nprint(res[\"stdout\"])\nprint(res[\"stderr\"])\nprint(res[\"timed_out\"])\nprint(res[\"ok\"])\nprint(subprocess.call(\"exit 3\"))\nprint(subprocess.check_output(\"printf 'hi'\"))",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["7", "out", "err", "false", "false", "3", "hi"]);
+}
+
+#[test]
+fn test_vm_import_subprocess_timeout() {
+    let result =
+        run_cool_vm("import subprocess\nres = subprocess.run(\"sleep 1\", 0.05)\nprint(res[\"timed_out\"])\nprint(res[\"code\"] == nil)\nprint(res[\"ok\"])").unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["true", "true", "false"]);
+}
+
+#[test]
 fn test_import_random_choice_tuple() {
     let result = run_cool("import random\nrandom.seed(1)\nprint(random.choice((\"x\", \"y\")) in (\"x\", \"y\"))").unwrap();
     assert!(result.contains("true"));

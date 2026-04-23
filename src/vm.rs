@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::opcode::*;
+use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 
 // ── Call frame ────────────────────────────────────────────────────────────────
 
@@ -1509,6 +1510,9 @@ impl VM {
         if let Some(_f) = name.strip_prefix("ffi.") {
             return Err(self.err("FFI is only supported in the tree-walk interpreter (run without --vm)"));
         }
+        if let Some(rest) = name.strip_prefix("subprocess.") {
+            return self.call_subprocess_module(rest, args);
+        }
         if let Some(rest) = name.strip_prefix("path.") {
             return self.call_path_module(rest, args);
         }
@@ -2933,6 +2937,69 @@ impl VM {
         }
     }
 
+    fn subprocess_result_value(&self, result: SubprocessResult) -> VmValue {
+        let mut d = VmDict::new();
+        d.set(
+            VmValue::Str("code".to_string()),
+            result.code.map(VmValue::Int).unwrap_or(VmValue::Nil),
+        );
+        d.set(VmValue::Str("stdout".to_string()), VmValue::Str(result.stdout));
+        d.set(VmValue::Str("stderr".to_string()), VmValue::Str(result.stderr));
+        d.set(VmValue::Str("timed_out".to_string()), VmValue::Bool(result.timed_out));
+        d.set(
+            VmValue::Str("ok".to_string()),
+            VmValue::Bool(!result.timed_out && result.code == Some(0)),
+        );
+        VmValue::Dict(Rc::new(RefCell::new(d)))
+    }
+
+    fn subprocess_timeout_arg(&self, args: &[VmValue], idx: usize, name: &str) -> Result<Option<f64>, String> {
+        match args.get(idx) {
+            None | Some(VmValue::Nil) => Ok(None),
+            Some(VmValue::Int(i)) => Ok(Some(*i as f64)),
+            Some(VmValue::Float(f)) => Ok(Some(*f)),
+            _ => Err(self.err(&format!("subprocess.{} timeout must be a number", name))),
+        }
+    }
+
+    fn call_subprocess_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(self.err(&format!("subprocess.{} takes 1 or 2 arguments", name)));
+        }
+
+        let command = match args.first() {
+            Some(VmValue::Str(s)) => s.clone(),
+            _ => return Err(self.err(&format!("subprocess.{} requires a command string", name))),
+        };
+        let timeout = self.subprocess_timeout_arg(args, 1, name)?;
+        let result =
+            run_shell_command(&command, timeout).map_err(|e| self.err(&format!("subprocess.{} error: {}", name, e)))?;
+
+        match name {
+            "run" => Ok(self.subprocess_result_value(result)),
+            "call" => Ok(result.code.map(VmValue::Int).unwrap_or(VmValue::Nil)),
+            "check_output" => {
+                if result.timed_out {
+                    return Err(self.err("subprocess.check_output timed out"));
+                }
+                if result.code != Some(0) {
+                    let code = result.code.map(|n| n.to_string()).unwrap_or_else(|| "nil".to_string());
+                    let detail = if result.stderr.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", result.stderr.trim_end())
+                    };
+                    return Err(self.err(&format!(
+                        "subprocess.check_output exited with code {}{}",
+                        code, detail
+                    )));
+                }
+                Ok(VmValue::Str(result.stdout))
+            }
+            _ => Err(self.err(&format!("unknown subprocess function '{}'", name))),
+        }
+    }
+
     fn normalize_path_string(path: &str) -> String {
         use std::path::{Component, Path, PathBuf};
 
@@ -3441,6 +3508,11 @@ impl VM {
             "path" => {
                 for fname in &["join", "basename", "dirname", "ext", "stem", "split", "normalize", "exists", "isabs"] {
                     set(&mut d, fname, bf(&format!("path.{}", fname)));
+                }
+            }
+            "subprocess" => {
+                for fname in &["run", "call", "check_output"] {
+                    set(&mut d, fname, bf(&format!("subprocess.{}", fname)));
                 }
             }
             "time" => {

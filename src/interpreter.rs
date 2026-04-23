@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 /// Tree-walk interpreter for Cool.
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -1143,6 +1144,16 @@ impl Interpreter {
                 }
                 env.set_local("random".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "subprocess" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["run", "call", "check_output"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("subprocess.{}", fn_name)),
+                    );
+                }
+                env.set_local("subprocess".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "term" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2240,6 +2251,9 @@ class Stack:
         if let Some(f) = name.strip_prefix("random.") {
             return self.call_random_fn(f, args);
         }
+        if let Some(f) = name.strip_prefix("subprocess.") {
+            return self.call_subprocess_fn(f, args);
+        }
         if let Some(f) = name.strip_prefix("term.") {
             return self.call_term_fn(f, args);
         }
@@ -3108,6 +3122,72 @@ class Stack:
                 Ok(Value::Str(String::from_utf8_lossy(&output.stdout).to_string()))
             }
             _ => Err(self.err(&format!("os has no function '{}'", name))),
+        }
+    }
+
+    fn subprocess_result_value(&self, result: SubprocessResult) -> Value {
+        let mut map = IndexedMap::new();
+        map.set(
+            Value::Str("code".to_string()),
+            result.code.map(Value::Int).unwrap_or(Value::Nil),
+        );
+        map.set(Value::Str("stdout".to_string()), Value::Str(result.stdout));
+        map.set(Value::Str("stderr".to_string()), Value::Str(result.stderr));
+        map.set(Value::Str("timed_out".to_string()), Value::Bool(result.timed_out));
+        map.set(
+            Value::Str("ok".to_string()),
+            Value::Bool(!result.timed_out && result.code == Some(0)),
+        );
+        Value::Dict(Rc::new(RefCell::new(map)))
+    }
+
+    fn subprocess_timeout_arg(&self, args: &[Value], idx: usize, name: &str) -> Result<Option<f64>, String> {
+        match args.get(idx) {
+            None | Some(Value::Nil) => Ok(None),
+            Some(Value::Int(i)) => Ok(Some(*i as f64)),
+            Some(Value::Float(f)) => Ok(Some(*f)),
+            _ => Err(self.err(&format!("subprocess.{}() timeout must be a number", name))),
+        }
+    }
+
+    fn subprocess_command_arg(&self, args: &[Value], name: &str) -> Result<String, String> {
+        match args.first() {
+            Some(Value::Str(s)) => Ok(s.clone()),
+            _ => Err(self.err(&format!("subprocess.{}() requires a command string", name))),
+        }
+    }
+
+    fn call_subprocess_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        if args.is_empty() || args.len() > 2 {
+            return Err(self.err(&format!("subprocess.{}() takes 1 or 2 arguments", name)));
+        }
+        let command = self.subprocess_command_arg(&args, name)?;
+        let timeout = self.subprocess_timeout_arg(&args, 1, name)?;
+        let result = run_shell_command(&command, timeout)
+            .map_err(|e| self.err(&format!("subprocess.{}() error: {}", name, e)))?;
+
+        match name {
+            "run" => Ok(self.subprocess_result_value(result)),
+            "call" => Ok(result.code.map(Value::Int).unwrap_or(Value::Nil)),
+            "check_output" => {
+                if result.timed_out {
+                    return Err(self.err("subprocess.check_output() timed out"));
+                }
+                if result.code != Some(0) {
+                    let code = result.code.map(|n| n.to_string()).unwrap_or_else(|| "nil".to_string());
+                    let detail = if result.stderr.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {}", result.stderr.trim_end())
+                    };
+                    return Err(self.err(&format!(
+                        "subprocess.check_output() exited with code {}{}",
+                        code, detail
+                    )));
+                }
+                Ok(Value::Str(result.stdout))
+            }
+            _ => Err(self.err(&format!("subprocess has no function '{}'", name))),
         }
     }
 

@@ -520,6 +520,44 @@ print(re.split(",\s*", "a, b,  c"))
 }
 
 #[test]
+fn test_llvm_import_subprocess_module() {
+    let result = compile_and_run_native(
+        r#"
+import subprocess
+res = subprocess.run("printf 'out'; printf 'err' 1>&2; exit 7")
+print(res["code"])
+print(res["stdout"])
+print(res["stderr"])
+print(res["timed_out"])
+print(res["ok"])
+print(subprocess.call("exit 3"))
+print(subprocess.check_output("printf 'hi'"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["7", "out", "err", "false", "false", "3", "hi"]);
+}
+
+#[test]
+fn test_llvm_import_subprocess_timeout() {
+    let result = compile_and_run_native(
+        r#"
+import subprocess
+res = subprocess.run("sleep 1", 0.05)
+print(res["timed_out"])
+print(res["code"] == nil)
+print(res["ok"])
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["true", "true", "false"]);
+}
+
+#[test]
 fn test_llvm_rejects_try_except() {
     let output = compile_native_expect_error(
         r#"

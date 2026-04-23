@@ -36,6 +36,10 @@ const RUNTIME_C: &str = r#"
 #include <errno.h>
 #include <time.h>
 #include <regex.h>
+#include <signal.h>
+#include <sys/select.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
 #endif
@@ -184,6 +188,14 @@ typedef struct {
     int closed;
 } CoolFile;
 
+typedef struct {
+    int has_code;
+    int code;
+    int timed_out;
+    char* stdout_data;
+    char* stderr_data;
+} CoolSubprocessResult;
+
 /* Forward declarations for runtime functions */
 CoolVal cv_nil(void);
 CoolVal cv_int(int64_t);
@@ -246,6 +258,8 @@ CoolVal cool_get_exception(void);
 void cool_raise(CoolVal);
 void cool_push_with(CoolVal);
 void cool_pop_with(void);
+static CoolSubprocessResult cool_subprocess_run_shell(const char*, int, double);
+static CoolVal cool_subprocess_result_dict(CoolSubprocessResult);
 void cool_print(int32_t, ...);
 
 /* ── class / object support ─────────────────────────────────────────── */
@@ -2400,6 +2414,48 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
     }
 
+    if (strcmp(module, "subprocess") == 0) {
+        if ((strcmp(name, "run") == 0 || strcmp(name, "call") == 0 || strcmp(name, "check_output") == 0)
+            && (nargs == 1 || nargs == 2)) {
+            const char* cmd = cool_to_str(args[0]);
+            int has_timeout = 0;
+            double timeout_secs = 0.0;
+            if (nargs == 2 && args[1].tag != TAG_NIL) {
+                has_timeout = 1;
+                timeout_secs = cv_to_float(args[1]);
+                if (timeout_secs < 0.0) timeout_secs = 0.0;
+            }
+            CoolSubprocessResult result = cool_subprocess_run_shell(cmd, has_timeout, timeout_secs);
+            if (strcmp(name, "run") == 0) {
+                return cool_subprocess_result_dict(result);
+            }
+            if (strcmp(name, "call") == 0) {
+                return result.has_code ? cv_int(result.code) : cv_nil();
+            }
+            if (result.timed_out) {
+                cool_raise(cv_str("subprocess.check_output() timed out"));
+            }
+            if (!result.has_code || result.code != 0) {
+                CoolStrBuf sb;
+                sb_init(&sb);
+                sb_push_str(&sb, "subprocess.check_output() exited with code ");
+                if (result.has_code) {
+                    char code_buf[32];
+                    snprintf(code_buf, sizeof(code_buf), "%d", result.code);
+                    sb_push_str(&sb, code_buf);
+                } else {
+                    sb_push_str(&sb, "nil");
+                }
+                if (result.stderr_data && result.stderr_data[0] != '\0') {
+                    sb_push_str(&sb, ": ");
+                    sb_push_str(&sb, result.stderr_data);
+                }
+                cool_raise(cv_str(sb.data));
+            }
+            return cv_str(result.stdout_data);
+        }
+    }
+
     if (strcmp(module, "time") == 0) {
         if (strcmp(name, "time") == 0 && nargs == 0) {
             struct timespec ts;
@@ -2861,6 +2917,160 @@ void cool_raise(CoolVal exc) {
 /* Get the current exception value */
 CoolVal cool_get_exception(void) {
     return g_current_exception;
+}
+
+static double cool_now_monotonic_secs(void) {
+#if defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1000000000.0;
+#else
+    return (double)time(NULL);
+#endif
+}
+
+static void cool_read_pipe_into_sb(int fd, CoolStrBuf* sb, int* open_flag) {
+    char buf[4096];
+    while (1) {
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            sb_push_str(sb, buf);
+            continue;
+        }
+        if (n == 0) {
+            close(fd);
+            *open_flag = 0;
+            return;
+        }
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+        close(fd);
+        *open_flag = 0;
+        return;
+    }
+}
+
+static CoolSubprocessResult cool_subprocess_run_shell(const char* cmd, int has_timeout, double timeout_secs) {
+    CoolSubprocessResult result;
+    result.has_code = 0;
+    result.code = 0;
+    result.timed_out = 0;
+    result.stdout_data = strdup("");
+    result.stderr_data = strdup("");
+
+    int stdout_pipe[2];
+    int stderr_pipe[2];
+    if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+        fprintf(stderr, "RuntimeError: subprocess pipe failed\n");
+        exit(1);
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "RuntimeError: subprocess fork failed\n");
+        exit(1);
+    }
+
+    if (pid == 0) {
+        dup2(stdout_pipe[1], STDOUT_FILENO);
+        dup2(stderr_pipe[1], STDERR_FILENO);
+        close(stdout_pipe[0]);
+        close(stdout_pipe[1]);
+        close(stderr_pipe[0]);
+        close(stderr_pipe[1]);
+        execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
+        _exit(127);
+    }
+
+    close(stdout_pipe[1]);
+    close(stderr_pipe[1]);
+    fcntl(stdout_pipe[0], F_SETFL, fcntl(stdout_pipe[0], F_GETFL, 0) | O_NONBLOCK);
+    fcntl(stderr_pipe[0], F_SETFL, fcntl(stderr_pipe[0], F_GETFL, 0) | O_NONBLOCK);
+
+    CoolStrBuf out_sb;
+    CoolStrBuf err_sb;
+    sb_init(&out_sb);
+    sb_init(&err_sb);
+    int stdout_open = 1;
+    int stderr_open = 1;
+    int child_done = 0;
+    int status = 0;
+    double start = cool_now_monotonic_secs();
+
+    while (!child_done || stdout_open || stderr_open) {
+        if (!child_done) {
+            pid_t waited = waitpid(pid, &status, WNOHANG);
+            if (waited == pid) {
+                child_done = 1;
+            } else if (waited < 0 && errno != EINTR) {
+                break;
+            }
+        }
+
+        if (!child_done && has_timeout && (cool_now_monotonic_secs() - start) >= timeout_secs) {
+            result.timed_out = 1;
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            child_done = 1;
+        }
+
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        int maxfd = -1;
+        if (stdout_open) {
+            FD_SET(stdout_pipe[0], &readfds);
+            if (stdout_pipe[0] > maxfd) maxfd = stdout_pipe[0];
+        }
+        if (stderr_open) {
+            FD_SET(stderr_pipe[0], &readfds);
+            if (stderr_pipe[0] > maxfd) maxfd = stderr_pipe[0];
+        }
+
+        if (maxfd >= 0) {
+            struct timeval tv;
+            tv.tv_sec = 0;
+            tv.tv_usec = child_done ? 0 : 50000;
+            int ready = select(maxfd + 1, &readfds, NULL, NULL, &tv);
+            if (ready > 0) {
+                if (stdout_open && FD_ISSET(stdout_pipe[0], &readfds)) {
+                    cool_read_pipe_into_sb(stdout_pipe[0], &out_sb, &stdout_open);
+                }
+                if (stderr_open && FD_ISSET(stderr_pipe[0], &readfds)) {
+                    cool_read_pipe_into_sb(stderr_pipe[0], &err_sb, &stderr_open);
+                }
+            } else if (ready < 0 && errno != EINTR) {
+                break;
+            }
+        }
+
+        if (child_done) {
+            if (stdout_open) cool_read_pipe_into_sb(stdout_pipe[0], &out_sb, &stdout_open);
+            if (stderr_open) cool_read_pipe_into_sb(stderr_pipe[0], &err_sb, &stderr_open);
+        }
+    }
+
+    result.stdout_data = out_sb.data;
+    result.stderr_data = err_sb.data;
+    if (WIFEXITED(status)) {
+        result.has_code = 1;
+        result.code = WEXITSTATUS(status);
+    }
+    return result;
+}
+
+static CoolVal cool_subprocess_result_dict(CoolSubprocessResult result) {
+    CoolVal dict = cool_dict_new();
+    cool_setindex(dict, cv_str("code"), result.has_code ? cv_int(result.code) : cv_nil());
+    cool_setindex(dict, cv_str("stdout"), cv_str(result.stdout_data));
+    cool_setindex(dict, cv_str("stderr"), cv_str(result.stderr_data));
+    cool_setindex(dict, cv_str("timed_out"), cv_bool(result.timed_out));
+    cool_setindex(
+        dict,
+        cv_str("ok"),
+        cv_bool(!result.timed_out && result.has_code && result.code == 0)
+    );
+    return dict;
 }
 
 /* ── Module registry for import support ────────────────────────────────── */
@@ -4552,7 +4762,7 @@ impl<'ctx> Compiler<'ctx> {
     // ── import module_name ────────────────────────────────────────────────────
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
-            "math" | "os" | "sys" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" => {
+            "math" | "os" | "sys" | "subprocess" | "time" | "random" | "json" | "string" | "list" | "re" | "collections" | "path" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -4561,7 +4771,7 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(())
             }
             _ => Err(format!(
-                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, time, random, json, string, list, re, collections, and path)",
+                "import: module '{}' is not yet supported in LLVM backend (currently only math, os, sys, subprocess, time, random, json, string, list, re, collections, and path)",
                 name
             )),
         }

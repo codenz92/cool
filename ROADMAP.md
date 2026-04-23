@@ -316,7 +316,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import path` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), and unhandled native raises. The following features still have notable gaps in LLVM:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, built-in `import math` / `import os` / `import sys` / `import path` / `import subprocess` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), and unhandled native raises. The following features still have notable gaps in LLVM:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -388,7 +388,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### First-Wave Library Modules
 
 - [x] `path` module — path normalization, basename/dirname, extension helpers, splitting, and joins
-- [ ] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
+- [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [ ] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [ ] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
 - [ ] `csv` / `toml` / `yaml` / `datetime` / `hashlib` / `sqlite` / `socket` / `http` as the first practical application stack
