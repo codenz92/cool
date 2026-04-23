@@ -1905,6 +1905,12 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             struct stat st;
             return cv_bool(stat(path, &st) == 0);
         }
+        if (strcmp(name, "getenv") == 0 && nargs == 1) {
+            const char* name_arg = cool_to_str(args[0]);
+            const char* value = getenv(name_arg);
+            if (!value) return cv_nil();
+            return cv_str(strdup(value));
+        }
         if (strcmp(name, "join") == 0 && nargs >= 1) {
             size_t total = 1;
             for (int32_t i = 0; i < nargs; i++) total += strlen(cool_to_str(args[i])) + 1;

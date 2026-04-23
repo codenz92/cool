@@ -2155,6 +2155,16 @@ impl VM {
                         };
                         Ok(VmValue::Bool(std::path::Path::new(&path).exists()))
                     }
+                    "getenv" => {
+                        let name = match args.first() {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => return Err(self.err("os.getenv requires a string")),
+                        };
+                        Ok(match std::env::var(&name) {
+                            Ok(value) => VmValue::Str(value),
+                            Err(_) => VmValue::Nil,
+                        })
+                    }
                     "join" | "path" => {
                         let parts: Vec<String> = args.iter().map(|v| v.to_string()).collect();
                         Ok(VmValue::Str(parts.join("/")))
@@ -3201,7 +3211,7 @@ impl VM {
             }
             "os" => {
                 for fname in &[
-                    "listdir", "mkdir", "remove", "rename", "exists", "getcwd", "join", "path",
+                    "listdir", "mkdir", "remove", "rename", "exists", "getenv", "getcwd", "join", "path",
                 ] {
                     set(&mut d, fname, bf(&format!("os.{}", fname)));
                 }

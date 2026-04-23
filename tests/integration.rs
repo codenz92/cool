@@ -19,7 +19,11 @@ fn run_cool_vm(source: &str) -> Result<String, String> {
     run_cool_with_args(source, &["--vm"])
 }
 
-fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, String> {
+fn run_cool_with_args_and_env(
+    source: &str,
+    extra_args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String, String> {
     let mut path_guard = TEMP_FILE.lock().unwrap();
 
     // Create temp file in current directory to avoid permission issues
@@ -33,9 +37,11 @@ fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, Strin
     for arg in extra_args {
         cmd.arg(arg);
     }
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
     let output = cmd.arg(&temp).output().map_err(|e| e.to_string())?;
 
-    // Clean up
     let _ = std::fs::remove_file(&temp);
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -46,6 +52,10 @@ fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, Strin
     } else {
         Err(stderr)
     }
+}
+
+fn run_cool_with_args(source: &str, extra_args: &[&str]) -> Result<String, String> {
+    run_cool_with_args_and_env(source, extra_args, &[])
 }
 
 #[test]
@@ -205,6 +215,18 @@ fn test_vm_import_string_module() {
     .unwrap();
     assert!(result.contains("HELLO"));
     assert!(result.contains("a | b | c"));
+}
+
+#[test]
+fn test_vm_import_os_module() {
+    let result = run_cool_with_args_and_env(
+        "import os\nprint(os.getenv(\"COOL_VM_OS_ENV\"))\nprint(os.getenv(\"COOL_VM_MISSING_ENV\"))",
+        &["--vm"],
+        &[("COOL_VM_OS_ENV", "present")],
+    )
+    .unwrap();
+    assert!(result.contains("present"));
+    assert!(result.contains("nil"));
 }
 
 #[test]

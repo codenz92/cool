@@ -214,18 +214,20 @@ print(os)
 print(os.getcwd())
 joined = os.join("{dir}", "sample.txt")
 print(os.exists(joined))
+print(os.getenv("COOL_LLVM_OS_ENV"))
 print(os.listdir("{dir}"))
 "#,
         dir = temp_dir.display()
     );
 
-    let result = compile_and_run_native(&source).unwrap();
+    let result = compile_and_run_native_with_env(&source, &[("COOL_LLVM_OS_ENV", "present")]).unwrap();
 
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(result.contains("<module os>"));
     assert!(result.contains(&cwd.display().to_string()));
     assert!(result.contains("true"));
+    assert!(result.contains("present"));
     assert!(result.contains("sample.txt"));
 }
 
