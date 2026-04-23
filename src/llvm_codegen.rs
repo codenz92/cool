@@ -1837,6 +1837,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             if (strcmp(name, "sqrt") == 0) return cv_float(sqrt(x));
             if (strcmp(name, "floor") == 0) return cv_float(floor(x));
             if (strcmp(name, "ceil") == 0) return cv_float(ceil(x));
+            if (strcmp(name, "round") == 0) return cool_round(args[0], cv_nil());
             if (strcmp(name, "sin") == 0) return cv_float(sin(x));
             if (strcmp(name, "cos") == 0) return cv_float(cos(x));
             if (strcmp(name, "tan") == 0) return cv_float(tan(x));
@@ -1873,6 +1874,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (nargs == 2) {
             double x = cv_to_float(args[0]);
             double y = cv_to_float(args[1]);
+            if (strcmp(name, "round") == 0) return cool_round(args[0], cool_to_int(args[1]));
             if (strcmp(name, "log") == 0) return cv_float(log(x) / log(y));
             if (strcmp(name, "pow") == 0) return cv_float(pow(x, y));
             if (strcmp(name, "atan2") == 0) return cv_float(atan2(x, y));

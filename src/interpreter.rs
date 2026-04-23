@@ -979,6 +979,7 @@ impl Interpreter {
                 math_fn!("sqrt");
                 math_fn!("floor");
                 math_fn!("ceil");
+                math_fn!("round");
                 math_fn!("abs");
                 math_fn!("pow");
                 math_fn!("log");
@@ -2916,6 +2917,17 @@ class Stack:
             }
             "trunc" => {
                 return Ok(Value::Int(n.trunc() as i64));
+            }
+            "round" => {
+                let ndigits = args
+                    .get(1)
+                    .and_then(|v| if let Value::Int(n) = v { Some(*n) } else { None })
+                    .unwrap_or(0);
+                if ndigits == 0 {
+                    return Ok(Value::Int(n.round() as i64));
+                }
+                let factor = 10f64.powi(ndigits as i32);
+                return Ok(Value::Float((n * factor).round() / factor));
             }
             "abs" => n.abs(),
             "log" => n.ln(),

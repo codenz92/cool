@@ -1994,6 +1994,18 @@ impl VM {
                     "floor" => Ok(VmValue::Int(n.floor() as i64)),
                     "ceil" => Ok(VmValue::Int(n.ceil() as i64)),
                     "trunc" => Ok(VmValue::Int(n.trunc() as i64)),
+                    "round" => {
+                        let ndigits = args
+                            .get(1)
+                            .and_then(|v| if let VmValue::Int(i) = v { Some(*i) } else { None })
+                            .unwrap_or(0);
+                        if ndigits == 0 {
+                            Ok(VmValue::Int(n.round() as i64))
+                        } else {
+                            let factor = 10f64.powi(ndigits as i32);
+                            Ok(VmValue::Float((n * factor).round() / factor))
+                        }
+                    }
                     "abs" => Ok(VmValue::Float(n.abs())),
                     "exp" => Ok(VmValue::Float(n.exp())),
                     "exp2" => Ok(VmValue::Float(n.exp2())),
@@ -3182,6 +3194,7 @@ impl VM {
                     "sqrt",
                     "floor",
                     "ceil",
+                    "round",
                     "log",
                     "log2",
                     "log10",

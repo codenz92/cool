@@ -203,8 +203,16 @@ fn test_super() {
 
 #[test]
 fn test_import() {
-    let result = run_cool("import math\nprint(math.sqrt(4))").unwrap();
+    let result = run_cool("import math\nprint(math.sqrt(4))\nprint(math.round(3.5))").unwrap();
     assert!(result.contains("2"));
+    assert!(result.contains("4"));
+}
+
+#[test]
+fn test_vm_import_math_module() {
+    let result = run_cool_vm("import math\nprint(math.round(3.5))\nprint(math.round(3.14159, 2))").unwrap();
+    assert!(result.contains("4"));
+    assert!(result.contains("3.14"));
 }
 
 #[test]

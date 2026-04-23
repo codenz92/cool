@@ -187,6 +187,8 @@ print(math.pi)
 print(math.sqrt(4))
 print(math.pow(2, 5))
 print(math.floor(3.9))
+print(math.round(3.5))
+print(math.round(3.14159, 2))
 print(math.trunc(3.9))
 print(math.log(100, 10))
 print(math.log2(8))
@@ -200,6 +202,8 @@ print(math.isfinite(1.0))
     assert!(result.contains("3.14159"));
     assert!(result.contains("\n2\n") || result.contains("\n2.0\n"));
     assert!(result.contains("32"));
+    assert!(result.contains("\n4\n") || result.contains("\n4.0\n"));
+    assert!(result.contains("3.14"));
     assert!(result.contains("\n3\n") || result.contains("\n3.0\n"));
     assert!(result.matches("\n2\n").count() >= 1 || result.contains("\n2.0\n"));
     assert!(result.matches("\n3\n").count() >= 2 || result.matches("\n3.0\n").count() >= 2);
