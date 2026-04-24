@@ -42,6 +42,61 @@ pub struct AstDump {
 }
 
 #[derive(Serialize)]
+pub struct InspectReport {
+    pub path: String,
+    pub imports: Vec<ModuleGraphImport>,
+    pub functions: Vec<InspectFunction>,
+    pub classes: Vec<InspectClass>,
+    pub structs: Vec<InspectStruct>,
+    pub assignments: Vec<InspectAssignment>,
+}
+
+#[derive(Serialize)]
+pub struct InspectFunction {
+    pub line: Option<usize>,
+    pub name: String,
+    pub params: Vec<InspectParam>,
+}
+
+#[derive(Serialize)]
+pub struct InspectClass {
+    pub line: Option<usize>,
+    pub name: String,
+    pub parent: Option<String>,
+    pub methods: Vec<InspectFunction>,
+    pub class_assignments: Vec<InspectAssignment>,
+}
+
+#[derive(Serialize)]
+pub struct InspectStruct {
+    pub line: Option<usize>,
+    pub name: String,
+    pub is_packed: bool,
+    pub fields: Vec<InspectStructField>,
+}
+
+#[derive(Serialize)]
+pub struct InspectStructField {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Serialize)]
+pub struct InspectAssignment {
+    pub line: Option<usize>,
+    pub kind: &'static str,
+    pub names: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct InspectParam {
+    pub name: String,
+    pub has_default: bool,
+    pub is_vararg: bool,
+    pub is_kwarg: bool,
+}
+
+#[derive(Serialize)]
 pub struct ModuleGraph {
     pub entry: String,
     pub modules: Vec<ModuleGraphModule>,
@@ -101,6 +156,73 @@ pub fn build_ast_dump(path: &Path, include_line_markers: bool) -> Result<AstDump
     })
 }
 
+pub fn build_inspect_report(path: &Path) -> Result<InspectReport, String> {
+    let canonical = canonical_existing(path)?;
+    let source_dir = canonical
+        .parent()
+        .ok_or_else(|| format!("inspect: '{}' has no parent directory", canonical.display()))?;
+    let resolver = ModuleResolver::discover_for_script(source_dir)?;
+    let program = parse_file(&canonical)?;
+    let imports = collect_imports(&program, source_dir, &resolver, "inspect")?;
+
+    let mut functions = Vec::new();
+    let mut classes = Vec::new();
+    let mut structs = Vec::new();
+    let mut assignments = Vec::new();
+    let mut current_line = None;
+
+    for stmt in &program {
+        match stmt {
+            Stmt::SetLine(line) => current_line = Some(*line),
+            Stmt::FnDef { name, params, .. } => functions.push(InspectFunction {
+                line: current_line,
+                name: name.clone(),
+                params: inspect_params(params),
+            }),
+            Stmt::Class { name, parent, body } => {
+                let (methods, class_assignments) = inspect_class_body(body);
+                classes.push(InspectClass {
+                    line: current_line,
+                    name: name.clone(),
+                    parent: parent.clone(),
+                    methods,
+                    class_assignments,
+                });
+            }
+            Stmt::Struct {
+                name,
+                fields,
+                is_packed,
+            } => structs.push(InspectStruct {
+                line: current_line,
+                name: name.clone(),
+                is_packed: *is_packed,
+                fields: fields
+                    .iter()
+                    .map(|(field_name, type_name)| InspectStructField {
+                        name: field_name.clone(),
+                        type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
+            _ => {
+                if let Some(assignment) = inspect_assignment(stmt, current_line) {
+                    assignments.push(assignment);
+                }
+            }
+        }
+    }
+
+    Ok(InspectReport {
+        path: path_string(&canonical),
+        imports: imports.iter().map(ResolvedImport::export).collect(),
+        functions,
+        classes,
+        structs,
+        assignments,
+    })
+}
+
 pub fn build_module_graph(path: &Path) -> Result<ModuleGraph, String> {
     let canonical = canonical_existing(path)?;
     let source_dir = canonical
@@ -131,7 +253,7 @@ fn walk_module(
     let current_source_dir = canonical
         .parent()
         .ok_or_else(|| format!("modulegraph: '{}' has no parent directory", canonical.display()))?;
-    let imports = collect_imports(&program, current_source_dir, resolver)?;
+    let imports = collect_imports(&program, current_source_dir, resolver, "modulegraph")?;
 
     let mut child_paths: Vec<PathBuf> = imports.iter().filter_map(|import| import.resolved.clone()).collect();
     child_paths.sort();
@@ -153,9 +275,10 @@ fn collect_imports(
     stmts: &[Stmt],
     current_source_dir: &Path,
     resolver: &ModuleResolver,
+    context: &str,
 ) -> Result<Vec<ResolvedImport>, String> {
     let mut imports = Vec::new();
-    collect_imports_from_block(stmts, current_source_dir, resolver, &mut imports)?;
+    collect_imports_from_block(stmts, current_source_dir, resolver, &mut imports, context)?;
     Ok(imports)
 }
 
@@ -164,13 +287,14 @@ fn collect_imports_from_block(
     current_source_dir: &Path,
     resolver: &ModuleResolver,
     imports: &mut Vec<ResolvedImport>,
+    context: &str,
 ) -> Result<(), String> {
     let mut current_line = None;
     for stmt in stmts {
         match stmt {
             Stmt::SetLine(line) => current_line = Some(*line),
             Stmt::Import(specifier) => {
-                let resolved = resolve_file_import(current_source_dir, specifier)?;
+                let resolved = resolve_file_import(current_source_dir, specifier, context)?;
                 imports.push(ResolvedImport {
                     line: current_line,
                     kind: ModuleImportKind::File,
@@ -195,7 +319,7 @@ fn collect_imports_from_block(
                     }
                 } else {
                     return Err(format!(
-                        "modulegraph: unresolved module import '{}' from '{}'",
+                        "{context}: unresolved module import '{}' from '{}'",
                         name,
                         current_source_dir.display()
                     ));
@@ -208,12 +332,12 @@ fn collect_imports_from_block(
                 else_body,
                 ..
             } => {
-                collect_imports_from_block(then_body, current_source_dir, resolver, imports)?;
+                collect_imports_from_block(then_body, current_source_dir, resolver, imports, context)?;
                 for (_, body) in elif_clauses {
-                    collect_imports_from_block(body, current_source_dir, resolver, imports)?;
+                    collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
                 }
                 if let Some(body) = else_body {
-                    collect_imports_from_block(body, current_source_dir, resolver, imports)?;
+                    collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
                 }
             }
             Stmt::While { body, .. }
@@ -221,7 +345,7 @@ fn collect_imports_from_block(
             | Stmt::FnDef { body, .. }
             | Stmt::Class { body, .. }
             | Stmt::With { body, .. } => {
-                collect_imports_from_block(body, current_source_dir, resolver, imports)?;
+                collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
             }
             Stmt::Try {
                 body,
@@ -229,15 +353,15 @@ fn collect_imports_from_block(
                 else_body,
                 finally_body,
             } => {
-                collect_imports_from_block(body, current_source_dir, resolver, imports)?;
+                collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
                 for handler in handlers {
-                    collect_imports_from_block(&handler.body, current_source_dir, resolver, imports)?;
+                    collect_imports_from_block(&handler.body, current_source_dir, resolver, imports, context)?;
                 }
                 if let Some(body) = else_body {
-                    collect_imports_from_block(body, current_source_dir, resolver, imports)?;
+                    collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
                 }
                 if let Some(body) = finally_body {
-                    collect_imports_from_block(body, current_source_dir, resolver, imports)?;
+                    collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
                 }
             }
             _ => {}
@@ -246,7 +370,7 @@ fn collect_imports_from_block(
     Ok(())
 }
 
-fn resolve_file_import(current_source_dir: &Path, specifier: &str) -> Result<PathBuf, String> {
+fn resolve_file_import(current_source_dir: &Path, specifier: &str, context: &str) -> Result<PathBuf, String> {
     let full_path = if Path::new(specifier).is_absolute() {
         PathBuf::from(specifier)
     } else {
@@ -256,11 +380,60 @@ fn resolve_file_import(current_source_dir: &Path, specifier: &str) -> Result<Pat
         Ok(full_path.canonicalize().unwrap_or(full_path))
     } else {
         Err(format!(
-            "modulegraph: unresolved file import '{}' from '{}'",
+            "{context}: unresolved file import '{}' from '{}'",
             specifier,
             current_source_dir.display()
         ))
     }
+}
+
+fn inspect_params(params: &[crate::ast::Param]) -> Vec<InspectParam> {
+    params
+        .iter()
+        .map(|param| InspectParam {
+            name: param.name.clone(),
+            has_default: param.default.is_some(),
+            is_vararg: param.is_vararg,
+            is_kwarg: param.is_kwarg,
+        })
+        .collect()
+}
+
+fn inspect_class_body(body: &[Stmt]) -> (Vec<InspectFunction>, Vec<InspectAssignment>) {
+    let mut methods = Vec::new();
+    let mut assignments = Vec::new();
+    let mut current_line = None;
+
+    for stmt in body {
+        match stmt {
+            Stmt::SetLine(line) => current_line = Some(*line),
+            Stmt::FnDef { name, params, .. } => methods.push(InspectFunction {
+                line: current_line,
+                name: name.clone(),
+                params: inspect_params(params),
+            }),
+            _ => {
+                if let Some(assignment) = inspect_assignment(stmt, current_line) {
+                    assignments.push(assignment);
+                }
+            }
+        }
+    }
+
+    (methods, assignments)
+}
+
+fn inspect_assignment(stmt: &Stmt, line: Option<usize>) -> Option<InspectAssignment> {
+    let (kind, names) = match stmt {
+        Stmt::Assign { name, .. } => ("assign", vec![name.clone()]),
+        Stmt::AugAssign { name, .. } => ("aug_assign", vec![name.clone()]),
+        Stmt::Unpack { names, .. } => ("unpack", names.clone()),
+        Stmt::Global(names) => ("global", names.clone()),
+        Stmt::Nonlocal(names) => ("nonlocal", names.clone()),
+        _ => return None,
+    };
+
+    Some(InspectAssignment { line, kind, names })
 }
 
 fn parse_file(path: &Path) -> Result<Program, String> {

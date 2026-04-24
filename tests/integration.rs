@@ -1861,6 +1861,169 @@ fn test_cool_ast_subcommand_outputs_json_ast() {
 }
 
 #[test]
+fn test_cool_inspect_subcommand_summarizes_top_level_symbols() {
+    let temp_dir = unique_temp_dir("cool_inspect_command");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("lib").join("util")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("deps").join("toolkit").join("src")).unwrap();
+
+    std::fs::write(
+        temp_dir.join("cool.toml"),
+        r#"[project]
+name = "inspectdemo"
+version = "0.1.0"
+main = "app/main.cool"
+sources = ["app", "lib"]
+
+[dependencies]
+toolkit = { path = "deps/toolkit" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("deps").join("toolkit").join("cool.toml"),
+        r#"[project]
+name = "toolkit"
+version = "0.1.0"
+main = "src/main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(temp_dir.join("app").join("helper.cool"), "value = 1\n").unwrap();
+    std::fs::write(temp_dir.join("app").join("shared.cool"), "value = 2\n").unwrap();
+    std::fs::write(temp_dir.join("lib").join("util").join("math.cool"), "value = 3\n").unwrap();
+    std::fs::write(
+        temp_dir.join("deps").join("toolkit").join("src").join("util.cool"),
+        "value = 4\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        r#"import json
+import helper
+import util.math
+import toolkit.util
+import "shared.cool"
+
+answer = 42
+counter += 1
+left, right = pair
+
+def greet(name, title="Hi", *rest, **options):
+    return name
+
+class Person(Human):
+    species = "human"
+
+    def __init__(self, name):
+        self.name = name
+
+    def greet(self, other="world"):
+        print(other)
+
+packed struct Header:
+    version: u8
+    flags: u16
+"#,
+    )
+    .unwrap();
+
+    let entry_path = temp_dir.join("app").join("main.cool").canonicalize().unwrap();
+    let helper_path = temp_dir.join("app").join("helper.cool").canonicalize().unwrap();
+    let shared_path = temp_dir.join("app").join("shared.cool").canonicalize().unwrap();
+    let lib_path = temp_dir
+        .join("lib")
+        .join("util")
+        .join("math.cool")
+        .canonicalize()
+        .unwrap();
+    let dep_path = temp_dir
+        .join("deps")
+        .join("toolkit")
+        .join("src")
+        .join("util.cool")
+        .canonicalize()
+        .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["inspect", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["path"].as_str().unwrap(), entry_path.display().to_string());
+
+    let imports = parsed["imports"].as_array().unwrap();
+    assert!(imports
+        .iter()
+        .any(|import| { import["kind"].as_str() == Some("builtin") && import["specifier"].as_str() == Some("json") }));
+    assert!(imports.iter().any(|import| {
+        import["specifier"].as_str() == Some("helper")
+            && import["resolved"].as_str() == Some(helper_path.to_str().unwrap())
+    }));
+    assert!(imports.iter().any(|import| {
+        import["specifier"].as_str() == Some("util.math")
+            && import["resolved"].as_str() == Some(lib_path.to_str().unwrap())
+    }));
+    assert!(imports.iter().any(|import| {
+        import["specifier"].as_str() == Some("toolkit.util")
+            && import["resolved"].as_str() == Some(dep_path.to_str().unwrap())
+    }));
+    assert!(imports.iter().any(|import| {
+        import["kind"].as_str() == Some("file")
+            && import["specifier"].as_str() == Some("shared.cool")
+            && import["resolved"].as_str() == Some(shared_path.to_str().unwrap())
+    }));
+
+    let functions = parsed["functions"].as_array().unwrap();
+    assert_eq!(functions.len(), 1);
+    assert_eq!(functions[0]["name"].as_str().unwrap(), "greet");
+    let params = functions[0]["params"].as_array().unwrap();
+    assert_eq!(params.len(), 4);
+    assert_eq!(params[0]["name"].as_str().unwrap(), "name");
+    assert_eq!(params[1]["name"].as_str().unwrap(), "title");
+    assert_eq!(params[1]["has_default"].as_bool().unwrap(), true);
+    assert_eq!(params[2]["is_vararg"].as_bool().unwrap(), true);
+    assert_eq!(params[3]["is_kwarg"].as_bool().unwrap(), true);
+
+    let classes = parsed["classes"].as_array().unwrap();
+    assert_eq!(classes.len(), 1);
+    assert_eq!(classes[0]["name"].as_str().unwrap(), "Person");
+    assert_eq!(classes[0]["parent"].as_str().unwrap(), "Human");
+    let methods = classes[0]["methods"].as_array().unwrap();
+    assert_eq!(methods.len(), 2);
+    assert!(methods.iter().any(|method| method["name"].as_str() == Some("__init__")));
+    assert!(methods.iter().any(|method| method["name"].as_str() == Some("greet")));
+    let class_assignments = classes[0]["class_assignments"].as_array().unwrap();
+    assert_eq!(class_assignments.len(), 1);
+    assert_eq!(class_assignments[0]["kind"].as_str().unwrap(), "assign");
+    assert_eq!(class_assignments[0]["names"][0].as_str().unwrap(), "species");
+
+    let structs = parsed["structs"].as_array().unwrap();
+    assert_eq!(structs.len(), 1);
+    assert_eq!(structs[0]["name"].as_str().unwrap(), "Header");
+    assert_eq!(structs[0]["is_packed"].as_bool().unwrap(), true);
+    assert_eq!(structs[0]["fields"][0]["name"].as_str().unwrap(), "version");
+    assert_eq!(structs[0]["fields"][0]["type_name"].as_str().unwrap(), "u8");
+
+    let assignments = parsed["assignments"].as_array().unwrap();
+    assert!(assignments.iter().any(|assignment| {
+        assignment["kind"].as_str() == Some("assign") && assignment["names"][0].as_str() == Some("answer")
+    }));
+    assert!(assignments.iter().any(|assignment| {
+        assignment["kind"].as_str() == Some("aug_assign") && assignment["names"][0].as_str() == Some("counter")
+    }));
+    assert!(assignments.iter().any(|assignment| {
+        assignment["kind"].as_str() == Some("unpack")
+            && assignment["names"][0].as_str() == Some("left")
+            && assignment["names"][1].as_str() == Some("right")
+    }));
+}
+
+#[test]
 fn test_cool_modulegraph_subcommand_resolves_project_imports() {
     let temp_dir = unique_temp_dir("cool_modulegraph_command");
     let _ = std::fs::remove_dir_all(&temp_dir);

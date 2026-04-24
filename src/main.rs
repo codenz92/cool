@@ -483,6 +483,31 @@ Options:
     Ok(())
 }
 
+// ── `cool inspect` ────────────────────────────────────────────────────────────
+
+fn cmd_inspect(args: &[&String]) -> Result<(), String> {
+    let file = match args {
+        [arg] if arg.as_str() != "--help" && arg.as_str() != "-h" => arg.as_str(),
+        [arg] if arg.as_str() == "--help" || arg.as_str() == "-h" => {
+            println!(
+                "\
+Usage: cool inspect <file.cool>
+
+Parse a Cool source file and print a JSON summary of its top-level imports, functions,
+classes, structs, and assigned symbols."
+            );
+            return Ok(());
+        }
+        _ => return Err("Usage: cool inspect <file.cool>".to_string()),
+    };
+
+    let report = tooling::build_inspect_report(Path::new(file))?;
+    let json =
+        serde_json::to_string_pretty(&report).map_err(|e| format!("cool inspect: failed to encode JSON: {e}"))?;
+    println!("{json}");
+    Ok(())
+}
+
 // ── `cool modulegraph` ────────────────────────────────────────────────────────
 
 fn cmd_modulegraph(args: &[&String]) -> Result<(), String> {
@@ -1097,6 +1122,7 @@ USAGE:
     cool --vm <file.cool>         Run a file with the bytecode VM
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool ast <file.cool>          Print the parsed AST as JSON
+    cool inspect <file.cool>      Print a JSON summary of top-level symbols
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
@@ -1117,6 +1143,7 @@ EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool ast hello.cool           # dump the parsed AST as JSON
+    cool inspect hello.cool       # summarize top-level symbols as JSON
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
@@ -1166,6 +1193,14 @@ fn main() {
             "ast" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_ast(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "inspect" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_inspect(&rest) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
