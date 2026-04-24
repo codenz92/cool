@@ -2143,6 +2143,82 @@ packed struct Header:
 }
 
 #[test]
+fn test_cool_check_subcommand_uses_project_main_by_default() {
+    let temp_dir = unique_temp_dir("cool_check_command_ok");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+
+    std::fs::write(
+        temp_dir.join("cool.toml"),
+        r#"[project]
+name = "checkdemo"
+version = "0.1.0"
+main = "app/main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        "import \"helper.cool\"\nprint(\"ok\")\n",
+    )
+    .unwrap();
+    std::fs::write(temp_dir.join("app").join("helper.cool"), "value = 1\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok: 2 module(s) checked, 0 issue(s)"));
+    assert!(stderr.trim().is_empty());
+}
+
+#[test]
+fn test_cool_check_subcommand_reports_unresolved_imports() {
+    let temp_dir = unique_temp_dir("cool_check_command_missing");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        "import missing.module\nimport \"missing.cool\"\n",
+    )
+    .unwrap();
+
+    let main_path = temp_dir.join("app").join("main.cool").canonicalize().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_ne!(code, 0);
+    assert!(stdout.trim().is_empty());
+    assert!(stderr.contains("error[unresolved_import]"));
+    assert!(stderr.contains(main_path.to_str().unwrap()));
+    assert!(stderr.contains("unresolved module import 'missing.module'"));
+    assert!(stderr.contains("unresolved file import 'missing.cool'"));
+    assert!(stderr.contains("cool check: 2 issue(s) found"));
+}
+
+#[test]
+fn test_cool_check_subcommand_reports_import_cycles() {
+    let temp_dir = unique_temp_dir("cool_check_command_cycle");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::write(temp_dir.join("app").join("a.cool"), "import \"b.cool\"\n").unwrap();
+    std::fs::write(temp_dir.join("app").join("b.cool"), "import \"a.cool\"\n").unwrap();
+
+    let a_path = temp_dir.join("app").join("a.cool").canonicalize().unwrap();
+    let b_path = temp_dir.join("app").join("b.cool").canonicalize().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check", "app/a.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_ne!(code, 0);
+    assert!(stdout.trim().is_empty());
+    assert!(stderr.contains("error[import_cycle]"));
+    assert!(stderr.contains(a_path.to_str().unwrap()));
+    assert!(stderr.contains(b_path.to_str().unwrap()));
+    assert!(stderr.contains("import cycle detected"));
+    assert!(stderr.contains("cool check: 1 issue(s) found"));
+}
+
+#[test]
 fn test_cool_modulegraph_subcommand_resolves_project_imports() {
     let temp_dir = unique_temp_dir("cool_modulegraph_command");
     let _ = std::fs::remove_dir_all(&temp_dir);

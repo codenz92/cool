@@ -41,6 +41,30 @@ pub struct AstDump {
     pub ast: Program,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ToolingDiagnostic {
+    pub severity: DiagnosticSeverity,
+    pub code: &'static str,
+    pub path: String,
+    pub line: Option<usize>,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct CheckReport {
+    pub entry: String,
+    pub modules_checked: usize,
+    pub diagnostics: Vec<ToolingDiagnostic>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct InspectReport {
     pub path: String,
@@ -130,6 +154,7 @@ pub struct DiffChange<T> {
 pub struct ModuleGraph {
     pub entry: String,
     pub modules: Vec<ModuleGraphModule>,
+    pub diagnostics: Vec<ToolingDiagnostic>,
 }
 
 #[derive(Serialize)]
@@ -159,6 +184,14 @@ struct ResolvedImport {
     kind: ModuleImportKind,
     specifier: String,
     resolved: Option<PathBuf>,
+}
+
+struct ModuleGraphState {
+    visited: HashSet<PathBuf>,
+    active: Vec<PathBuf>,
+    modules: Vec<ModuleGraphModule>,
+    diagnostics: Vec<ToolingDiagnostic>,
+    cycle_keys: HashSet<String>,
 }
 
 impl ResolvedImport {
@@ -280,51 +313,95 @@ pub fn build_inspect_diff(before_path: &Path, after_path: &Path) -> Result<Inspe
     })
 }
 
+pub fn build_check_report(path: &Path) -> Result<CheckReport, String> {
+    let graph = build_module_graph(path)?;
+    Ok(CheckReport {
+        entry: graph.entry.clone(),
+        modules_checked: graph.modules.len(),
+        diagnostics: graph.diagnostics,
+    })
+}
+
 pub fn build_module_graph(path: &Path) -> Result<ModuleGraph, String> {
     let canonical = canonical_existing(path)?;
     let source_dir = canonical
         .parent()
         .ok_or_else(|| format!("modulegraph: '{}' has no parent directory", canonical.display()))?;
     let resolver = ModuleResolver::discover_for_script(source_dir)?;
-    let mut visited = HashSet::new();
-    let mut modules = Vec::new();
-    walk_module(&canonical, &resolver, &mut visited, &mut modules)?;
+    let mut state = ModuleGraphState {
+        visited: HashSet::new(),
+        active: Vec::new(),
+        modules: Vec::new(),
+        diagnostics: Vec::new(),
+        cycle_keys: HashSet::new(),
+    };
+    walk_module(&canonical, &resolver, &mut state)?;
     Ok(ModuleGraph {
         entry: path_string(&canonical),
-        modules,
+        modules: state.modules,
+        diagnostics: state.diagnostics,
     })
 }
 
-fn walk_module(
-    path: &Path,
-    resolver: &ModuleResolver,
-    visited: &mut HashSet<PathBuf>,
-    modules: &mut Vec<ModuleGraphModule>,
-) -> Result<(), String> {
+fn walk_module(path: &Path, resolver: &ModuleResolver, state: &mut ModuleGraphState) -> Result<(), String> {
     let canonical = canonical_existing(path)?;
-    if !visited.insert(canonical.clone()) {
+    if state.visited.contains(&canonical) {
         return Ok(());
     }
+    state.visited.insert(canonical.clone());
+    state.active.push(canonical.clone());
 
-    let program = parse_file(&canonical)?;
+    let program = match parse_file(&canonical) {
+        Ok(program) => program,
+        Err(message) => {
+            state.diagnostics.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "parse_error",
+                path: path_string(&canonical),
+                line: None,
+                message,
+            });
+            state.active.pop();
+            return Ok(());
+        }
+    };
     let current_source_dir = canonical
         .parent()
         .ok_or_else(|| format!("modulegraph: '{}' has no parent directory", canonical.display()))?;
-    let imports = collect_imports(&program, current_source_dir, resolver, "modulegraph")?;
+    let imports = collect_graph_imports(&program, current_source_dir, resolver, &canonical, state, "modulegraph");
 
     let mut child_paths: Vec<PathBuf> = imports.iter().filter_map(|import| import.resolved.clone()).collect();
     child_paths.sort();
     child_paths.dedup();
 
-    modules.push(ModuleGraphModule {
+    state.modules.push(ModuleGraphModule {
         path: path_string(&canonical),
         imports: imports.iter().map(ResolvedImport::export).collect(),
     });
 
     for child in child_paths {
-        walk_module(&child, resolver, visited, modules)?;
+        if let Some(cycle_start) = state.active.iter().position(|path| path == &child) {
+            let cycle_paths: Vec<String> = state.active[cycle_start..]
+                .iter()
+                .chain(std::iter::once(&child))
+                .map(|path| path_string(path))
+                .collect();
+            let cycle_key = cycle_paths.join(" -> ");
+            if state.cycle_keys.insert(cycle_key.clone()) {
+                state.diagnostics.push(ToolingDiagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "import_cycle",
+                    path: path_string(&canonical),
+                    line: import_line_for_child(&imports, &child),
+                    message: format!("import cycle detected: {}", cycle_key),
+                });
+            }
+            continue;
+        }
+        walk_module(&child, resolver, state)?;
     }
 
+    state.active.pop();
     Ok(())
 }
 
@@ -337,6 +414,27 @@ fn collect_imports(
     let mut imports = Vec::new();
     collect_imports_from_block(stmts, current_source_dir, resolver, &mut imports, context)?;
     Ok(imports)
+}
+
+fn collect_graph_imports(
+    stmts: &[Stmt],
+    current_source_dir: &Path,
+    resolver: &ModuleResolver,
+    current_module_path: &Path,
+    state: &mut ModuleGraphState,
+    context: &str,
+) -> Vec<ResolvedImport> {
+    let mut imports = Vec::new();
+    collect_graph_imports_from_block(
+        stmts,
+        current_source_dir,
+        resolver,
+        current_module_path,
+        state,
+        &mut imports,
+        context,
+    );
+    imports
 }
 
 fn collect_imports_from_block(
@@ -427,6 +525,180 @@ fn collect_imports_from_block(
     Ok(())
 }
 
+fn collect_graph_imports_from_block(
+    stmts: &[Stmt],
+    current_source_dir: &Path,
+    resolver: &ModuleResolver,
+    current_module_path: &Path,
+    state: &mut ModuleGraphState,
+    imports: &mut Vec<ResolvedImport>,
+    context: &str,
+) {
+    let mut current_line = None;
+    for stmt in stmts {
+        match stmt {
+            Stmt::SetLine(line) => current_line = Some(*line),
+            Stmt::Import(specifier) => match resolve_file_import(current_source_dir, specifier, context) {
+                Ok(resolved) => imports.push(ResolvedImport {
+                    line: current_line,
+                    kind: ModuleImportKind::File,
+                    specifier: specifier.clone(),
+                    resolved: Some(resolved),
+                }),
+                Err(_) => {
+                    imports.push(ResolvedImport {
+                        line: current_line,
+                        kind: ModuleImportKind::File,
+                        specifier: specifier.clone(),
+                        resolved: None,
+                    });
+                    state.diagnostics.push(ToolingDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: "unresolved_import",
+                        path: path_string(current_module_path),
+                        line: current_line,
+                        message: format!("unresolved file import '{}'", specifier),
+                    });
+                }
+            },
+            Stmt::ImportModule(name) => {
+                if is_builtin_module(name) {
+                    imports.push(ResolvedImport {
+                        line: current_line,
+                        kind: ModuleImportKind::Builtin,
+                        specifier: name.clone(),
+                        resolved: None,
+                    });
+                } else if let Some(resolved) = resolver.resolve_module(current_source_dir, name) {
+                    imports.push(ResolvedImport {
+                        line: current_line,
+                        kind: ModuleImportKind::Module,
+                        specifier: name.clone(),
+                        resolved: Some(resolved),
+                    });
+                } else {
+                    imports.push(ResolvedImport {
+                        line: current_line,
+                        kind: ModuleImportKind::Module,
+                        specifier: name.clone(),
+                        resolved: None,
+                    });
+                    state.diagnostics.push(ToolingDiagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: "unresolved_import",
+                        path: path_string(current_module_path),
+                        line: current_line,
+                        message: format!("unresolved module import '{}'", name),
+                    });
+                }
+            }
+            Stmt::If {
+                then_body,
+                elif_clauses,
+                else_body,
+                ..
+            } => {
+                collect_graph_imports_from_block(
+                    then_body,
+                    current_source_dir,
+                    resolver,
+                    current_module_path,
+                    state,
+                    imports,
+                    context,
+                );
+                for (_, body) in elif_clauses {
+                    collect_graph_imports_from_block(
+                        body,
+                        current_source_dir,
+                        resolver,
+                        current_module_path,
+                        state,
+                        imports,
+                        context,
+                    );
+                }
+                if let Some(body) = else_body {
+                    collect_graph_imports_from_block(
+                        body,
+                        current_source_dir,
+                        resolver,
+                        current_module_path,
+                        state,
+                        imports,
+                        context,
+                    );
+                }
+            }
+            Stmt::While { body, .. }
+            | Stmt::For { body, .. }
+            | Stmt::FnDef { body, .. }
+            | Stmt::Class { body, .. }
+            | Stmt::With { body, .. } => {
+                collect_graph_imports_from_block(
+                    body,
+                    current_source_dir,
+                    resolver,
+                    current_module_path,
+                    state,
+                    imports,
+                    context,
+                );
+            }
+            Stmt::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
+                collect_graph_imports_from_block(
+                    body,
+                    current_source_dir,
+                    resolver,
+                    current_module_path,
+                    state,
+                    imports,
+                    context,
+                );
+                for handler in handlers {
+                    collect_graph_imports_from_block(
+                        &handler.body,
+                        current_source_dir,
+                        resolver,
+                        current_module_path,
+                        state,
+                        imports,
+                        context,
+                    );
+                }
+                if let Some(body) = else_body {
+                    collect_graph_imports_from_block(
+                        body,
+                        current_source_dir,
+                        resolver,
+                        current_module_path,
+                        state,
+                        imports,
+                        context,
+                    );
+                }
+                if let Some(body) = finally_body {
+                    collect_graph_imports_from_block(
+                        body,
+                        current_source_dir,
+                        resolver,
+                        current_module_path,
+                        state,
+                        imports,
+                        context,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn resolve_file_import(current_source_dir: &Path, specifier: &str, context: &str) -> Result<PathBuf, String> {
     let full_path = if Path::new(specifier).is_absolute() {
         PathBuf::from(specifier)
@@ -442,6 +714,13 @@ fn resolve_file_import(current_source_dir: &Path, specifier: &str, context: &str
             current_source_dir.display()
         ))
     }
+}
+
+fn import_line_for_child(imports: &[ResolvedImport], child: &Path) -> Option<usize> {
+    imports.iter().find_map(|import| match &import.resolved {
+        Some(resolved) if resolved == child => import.line,
+        _ => None,
+    })
 }
 
 fn diff_keyed<T, F>(before: &[T], after: &[T], key_fn: F) -> DiffSetWithChanges<T>

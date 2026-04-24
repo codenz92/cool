@@ -532,6 +532,77 @@ top-level imports and symbols."
     Ok(())
 }
 
+// ── `cool check` ──────────────────────────────────────────────────────────────
+
+fn cmd_check(args: &[&String]) -> Result<(), String> {
+    let mut json = false;
+    let mut file = None::<&str>;
+
+    for arg in args {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool check [--json] [file.cool]
+
+Statically parse a Cool entry file, resolve reachable imports, and report unresolved imports
+or import cycles. With no file argument inside a project, `cool check` uses the manifest main file."
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool check: unexpected flag '{other}'")),
+            other => {
+                if file.is_some() {
+                    return Err("Usage: cool check [--json] [file.cool]".to_string());
+                }
+                file = Some(other);
+            }
+        }
+    }
+
+    let target = match file {
+        Some(path) => PathBuf::from(path),
+        None => current_project("cool check")?.main_path(),
+    };
+
+    let report = tooling::build_check_report(&target)?;
+    if json {
+        let encoded =
+            serde_json::to_string_pretty(&report).map_err(|e| format!("cool check: failed to encode JSON: {e}"))?;
+        println!("{encoded}");
+    } else if report.diagnostics.is_empty() {
+        println!("check ok: {} module(s) checked, 0 issue(s)", report.modules_checked);
+    } else {
+        for diagnostic in &report.diagnostics {
+            eprintln!("{}", format_tooling_diagnostic(diagnostic));
+        }
+    }
+
+    if report.diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("cool check: {} issue(s) found", report.diagnostics.len()))
+    }
+}
+
+fn format_tooling_diagnostic(diagnostic: &tooling::ToolingDiagnostic) -> String {
+    let severity = match diagnostic.severity {
+        tooling::DiagnosticSeverity::Error => "error",
+        tooling::DiagnosticSeverity::Warning => "warning",
+    };
+    match diagnostic.line {
+        Some(line) => format!(
+            "{severity}[{}] {}:{}: {}",
+            diagnostic.code, diagnostic.path, line, diagnostic.message
+        ),
+        None => format!(
+            "{severity}[{}] {}: {}",
+            diagnostic.code, diagnostic.path, diagnostic.message
+        ),
+    }
+}
+
 // ── `cool modulegraph` ────────────────────────────────────────────────────────
 
 fn cmd_modulegraph(args: &[&String]) -> Result<(), String> {
@@ -1148,6 +1219,7 @@ USAGE:
     cool ast <file.cool>          Print the parsed AST as JSON
     cool inspect <file.cool>      Print a JSON summary of top-level symbols
     cool diff <before> <after>    Print a JSON summary of top-level changes
+    cool check [file.cool]        Statically check imports and cycles
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
@@ -1170,6 +1242,7 @@ EXAMPLES:
     cool ast hello.cool           # dump the parsed AST as JSON
     cool inspect hello.cool       # summarize top-level symbols as JSON
     cool diff old.cool new.cool   # compare top-level imports and symbols
+    cool check hello.cool         # statically check imports and cycles
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
@@ -1236,6 +1309,14 @@ fn main() {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_diff(&rest) {
                     eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "check" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_check(&rest) {
+                    eprintln!("{e}");
                     std::process::exit(1);
                 }
                 return;
