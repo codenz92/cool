@@ -809,7 +809,7 @@ impl Interpreter {
                 Ok(Signal::None)
             }
 
-            Stmt::Struct { name, fields } => {
+            Stmt::Struct { name, fields, .. } => {
                 // Lower struct to a class with a typed-field __init__.
                 let mut init_body = Vec::new();
                 let mut params = vec![crate::ast::Param {

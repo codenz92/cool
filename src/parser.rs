@@ -103,7 +103,12 @@ impl Parser {
         match self.peek().clone() {
             Token::Def => self.parse_fn_def(),
             Token::Class => self.parse_class(),
-            Token::Struct => self.parse_struct(),
+            Token::Struct => self.parse_struct(false),
+            Token::Packed => {
+                self.advance();
+                self.eat(&Token::Struct)?;
+                self.parse_struct_body(true)
+            }
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::For => self.parse_for(),
@@ -228,8 +233,12 @@ impl Parser {
         Ok(Stmt::Class { name, parent, body })
     }
 
-    fn parse_struct(&mut self) -> Result<Stmt, String> {
+    fn parse_struct(&mut self, is_packed: bool) -> Result<Stmt, String> {
         self.eat(&Token::Struct)?;
+        self.parse_struct_body(is_packed)
+    }
+
+    fn parse_struct_body(&mut self, is_packed: bool) -> Result<Stmt, String> {
         let name = self.expect_ident()?;
         self.eat(&Token::Colon)?;
         self.eat_newline();
@@ -252,7 +261,7 @@ impl Parser {
             fields.push((field_name, type_name));
         }
         self.eat(&Token::Dedent)?;
-        Ok(Stmt::Struct { name, fields })
+        Ok(Stmt::Struct { name, fields, is_packed })
     }
 
     fn parse_if(&mut self) -> Result<Stmt, String> {

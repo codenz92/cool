@@ -7646,12 +7646,15 @@ struct RuntimeFns<'ctx> {
 struct StructInfo<'ctx> {
     /// The actual LLVM struct type (fields only, no header).
     llvm_type: inkwell::types::StructType<'ctx>,
+    /// True if declared `packed struct` — no padding between fields.
+    #[allow(dead_code)]
+    is_packed: bool,
     /// Field names in declaration order.
     field_names: Vec<String>,
-    /// SFIELD_* type codes matching the C defines (reserved for packed/union work).
+    /// SFIELD_* type codes matching the C defines (reserved for union/extern work).
     #[allow(dead_code)]
     field_type_codes: Vec<u32>,
-    /// Byte offsets (computed from LLVM natural alignment rules).
+    /// Byte offsets (consecutive for packed, naturally aligned otherwise).
     #[allow(dead_code)]
     field_byte_offsets: Vec<u32>,
     /// Byte sizes for each field.
@@ -8511,8 +8514,8 @@ impl<'ctx> Compiler<'ctx> {
                 self.compile_class(name, parent.as_deref(), body)?;
             }
 
-            Stmt::Struct { name, fields } => {
-                self.compile_struct_def(name, fields)?;
+            Stmt::Struct { name, fields, is_packed } => {
+                self.compile_struct_def(name, fields, *is_packed)?;
             }
 
             // ── with expr as name ───────────────────────────────────────────
@@ -9266,7 +9269,7 @@ impl<'ctx> Compiler<'ctx> {
 
     // ── struct definition ─────────────────────────────────────────────────────
 
-    fn compile_struct_def(&mut self, name: &str, fields: &[(String, String)]) -> Result<(), String> {
+    fn compile_struct_def(&mut self, name: &str, fields: &[(String, String)], is_packed: bool) -> Result<(), String> {
         // Map type string → (LLVM basic type, SFIELD_* code, byte size, is_float, is_signed)
         let field_meta: Vec<_> = fields.iter().map(|(fname, tname)| {
             let (llvm_ty, type_code, byte_size, is_float, is_signed): (inkwell::types::BasicTypeEnum<'ctx>, u32, u32, bool, bool) = match tname.as_str() {
@@ -9288,24 +9291,34 @@ impl<'ctx> Compiler<'ctx> {
             Ok((fname.clone(), llvm_ty, type_code, byte_size, is_float, is_signed))
         }).collect::<Result<_, String>>()?;
 
-        // Compute field offsets using LLVM natural alignment (align = min(size, 8))
+        // Compute field offsets.
+        // Normal structs: natural alignment (align = min(size, 8), fields padded to alignment).
+        // Packed structs: consecutive byte layout with no padding between fields.
         let mut offsets: Vec<u32> = Vec::with_capacity(field_meta.len());
         let mut cursor: u32 = 0;
-        let mut max_align: u32 = 1;
-        for (_, _, _, byte_size, _, _) in &field_meta {
-            let align = (*byte_size).min(8);
-            max_align = max_align.max(align);
-            cursor = cursor.next_multiple_of(align);
-            offsets.push(cursor);
-            cursor += byte_size;
+        if is_packed {
+            for (_, _, _, byte_size, _, _) in &field_meta {
+                offsets.push(cursor);
+                cursor += byte_size;
+            }
+        } else {
+            let mut max_align: u32 = 1;
+            for (_, _, _, byte_size, _, _) in &field_meta {
+                let align = (*byte_size).min(8);
+                max_align = max_align.max(align);
+                cursor = cursor.next_multiple_of(align);
+                offsets.push(cursor);
+                cursor += byte_size;
+            }
+            let _ = cursor.next_multiple_of(max_align);
         }
-        let _ = cursor.next_multiple_of(max_align); // total size used only for documentation
 
-        // Create named LLVM struct type for this struct's fields
+        // Create named LLVM struct type for this struct's fields.
+        // Packed structs use LLVM's packed attribute so the backend emits no padding.
         let llvm_field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
             field_meta.iter().map(|(_, ty, _, _, _, _)| *ty).collect();
         let struct_llvm_type = self.context.opaque_struct_type(&format!("{name}_body"));
-        struct_llvm_type.set_body(&llvm_field_types, false);
+        struct_llvm_type.set_body(&llvm_field_types, is_packed);
 
         // Build global CoolStructField array constant
         let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
@@ -9454,6 +9467,7 @@ impl<'ctx> Compiler<'ctx> {
         // Register struct info for GEP fast path
         self.structs.insert(name.to_string(), StructInfo {
             llvm_type: struct_llvm_type,
+            is_packed,
             field_names: field_meta.iter().map(|(n, _, _, _, _, _)| n.clone()).collect(),
             field_type_codes: field_meta.iter().map(|(_, _, tc, _, _, _)| *tc).collect(),
             field_byte_offsets: offsets,

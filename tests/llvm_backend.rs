@@ -1638,6 +1638,46 @@ print(read_fields(v))
 }
 
 #[test]
+fn test_llvm_packed_struct() {
+    // packed struct has no padding between fields — an i8 followed by an i32 occupies 5 bytes,
+    // not 8 as a naturally-aligned struct would.  The LLVM backend uses set_body(is_packed=true)
+    // so GEP field accesses use the consecutive layout.
+    let result = compile_and_run_native(
+        r#"
+packed struct Header:
+    flags: i8
+    length: i32
+    count: i16
+
+h = Header(7, 1000, 3)
+print(h.flags)
+print(h.length)
+print(h.count)
+h.flags = 1
+h.length = 42
+h.count = 9
+print(h.flags)
+print(h.length)
+print(h.count)
+
+def sum_header(hdr):
+    return hdr.flags + hdr.length + hdr.count
+
+print(sum_header(h))
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.trim().lines().collect();
+    assert_eq!(lines[0], "7");
+    assert_eq!(lines[1], "1000");
+    assert_eq!(lines[2], "3");
+    assert_eq!(lines[3], "1");
+    assert_eq!(lines[4], "42");
+    assert_eq!(lines[5], "9");
+    assert_eq!(lines[6], "52");  // 1 + 42 + 9
+}
+
+#[test]
 fn test_llvm_import_ffi_module() {
     let result = compile_and_run_native(
         r#"

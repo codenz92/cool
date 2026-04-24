@@ -187,9 +187,11 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     /// struct Name:\n    field: type\n    ...
+    /// packed struct Name:\n    field: type\n    ...
     Struct {
         name: String,
         fields: Vec<(String, String)>, // (field_name, type_name)
+        is_packed: bool,
     },
     /// try / except / else / finally
     Try {

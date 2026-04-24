@@ -657,7 +657,7 @@ impl Compiler {
                 self.emit(op);
             }
 
-            Stmt::Struct { name, fields } => {
+            Stmt::Struct { name, fields, .. } => {
                 // Lower struct to a class with a typed-field __init__.
                 let mut init_body: Vec<Stmt> = Vec::new();
                 let mut params = vec![Param {
