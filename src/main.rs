@@ -21,7 +21,10 @@ mod yaml_runtime;
 use interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
-use project::{CoolProject, ModuleResolver};
+use project::{
+    add_dependency_to_manifest, install_dependencies, normalize_dependency_source_arg, CoolProject,
+    DependencySource, DependencySpec, ModuleResolver,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -67,6 +70,20 @@ fn task_app_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("coolapps")
         .join("task.cool")
+}
+
+fn current_project(command_name: &str) -> Result<CoolProject, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("{command_name}: cannot read current directory: {e}"))?;
+    match CoolProject::discover(&cwd)? {
+        Some(project) => Ok(project),
+        None => Err(format!(
+            "{command_name}: no cool.toml found in this directory or any parent"
+        )),
+    }
+}
+
+fn looks_like_git_source(source: &str) -> bool {
+    !(Path::new(source).exists() || source.starts_with('.') || source.starts_with('/'))
 }
 
 // ── REPL ──────────────────────────────────────────────────────────────────────
@@ -462,7 +479,7 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     fs::write(project_dir.join("tests").join("test_main.cool"), test_src).map_err(|e| format!("cool new: {e}"))?;
 
     // .gitignore
-    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n")).map_err(|e| format!("cool new: {e}"))?;
+    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n.cool/\n")).map_err(|e| format!("cool new: {e}"))?;
 
     println!("  Created project '{name}'");
     println!("  ├── cool.toml");
@@ -476,12 +493,169 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     println!("    cd {name}");
     println!("    cool src/main.cool          # interpret");
     println!("    cool build                  # compile to native");
+    println!("    cool install                # fetch git dependencies");
     println!("    cool test                   # run tests/");
     println!("    cool task list              # show project tasks");
     Ok(())
 }
 
 // ── `cool task` ───────────────────────────────────────────────────────────────
+
+fn cmd_install(args: &[&String]) -> Result<(), String> {
+    if !args.is_empty() {
+        return Err("Usage: cool install".to_string());
+    }
+
+    let project = current_project("cool install")?;
+    let lockfile = install_dependencies(&project)?;
+    println!(
+        "  Installed {} dependenc{}",
+        lockfile.dependencies.len(),
+        if lockfile.dependencies.len() == 1 { "y" } else { "ies" }
+    );
+    println!("  Wrote {}", project.lockfile_path().display());
+    Ok(())
+}
+
+fn cmd_add(args: &[&String]) -> Result<(), String> {
+    if args.is_empty() {
+        return Err(
+            "Usage: cool add <name> (--path <path> | --git <url>) [--branch <name> | --tag <name> | --rev <sha>] [--version <semver>]"
+                .to_string(),
+        );
+    }
+
+    let project = current_project("cool add")?;
+    let cwd = std::env::current_dir().map_err(|e| format!("cool add: cannot read current directory: {e}"))?;
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum SourceKind {
+        Auto,
+        Path,
+        Git,
+    }
+
+    let name = args[0].as_str().to_string();
+    let mut source_kind = SourceKind::Auto;
+    let mut source = None::<String>;
+    let mut branch = None::<String>;
+    let mut tag = None::<String>;
+    let mut rev = None::<String>;
+    let mut version = None::<String>;
+    let mut i = 1usize;
+
+    while i < args.len() {
+        match args[i].as_str() {
+            "--path" => {
+                source_kind = SourceKind::Path;
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "cool add: missing value after --path".to_string())?;
+                source = Some(value.as_str().to_string());
+            }
+            "--git" => {
+                source_kind = SourceKind::Git;
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "cool add: missing value after --git".to_string())?;
+                source = Some(value.as_str().to_string());
+            }
+            "--branch" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "cool add: missing value after --branch".to_string())?;
+                branch = Some(value.as_str().to_string());
+            }
+            "--tag" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "cool add: missing value after --tag".to_string())?;
+                tag = Some(value.as_str().to_string());
+            }
+            "--rev" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "cool add: missing value after --rev".to_string())?;
+                rev = Some(value.as_str().to_string());
+            }
+            "--version" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "cool add: missing value after --version".to_string())?;
+                version = Some(value.as_str().to_string());
+            }
+            other => {
+                if source.is_some() {
+                    return Err(format!("cool add: unexpected argument '{}'", other));
+                }
+                source = Some(other.to_string());
+            }
+        }
+        i += 1;
+    }
+
+    let source = source.ok_or_else(|| {
+        "Usage: cool add <name> (--path <path> | --git <url>) [--branch <name> | --tag <name> | --rev <sha>] [--version <semver>]"
+            .to_string()
+    })?;
+
+    if usize::from(branch.is_some()) + usize::from(tag.is_some()) + usize::from(rev.is_some()) > 1 {
+        return Err("cool add: specify at most one of --branch, --tag, or --rev".to_string());
+    }
+
+    let kind = match source_kind {
+        SourceKind::Path => SourceKind::Path,
+        SourceKind::Git => SourceKind::Git,
+        SourceKind::Auto => {
+            if looks_like_git_source(&source) {
+                SourceKind::Git
+            } else {
+                SourceKind::Path
+            }
+        }
+    };
+
+    let normalized_source = normalize_dependency_source_arg(&project.root, &cwd, &source);
+    let mut dependency = match kind {
+        SourceKind::Path => {
+            if branch.is_some() || tag.is_some() || rev.is_some() {
+                return Err("cool add: --branch/--tag/--rev are only valid for git dependencies".to_string());
+            }
+            DependencySpec::path(name.clone(), normalized_source)
+        }
+        SourceKind::Git => {
+            let mut dep = DependencySpec::git(name.clone(), normalized_source);
+            if let DependencySource::Git {
+                branch: dep_branch,
+                tag: dep_tag,
+                rev: dep_rev,
+                ..
+            } = &mut dep.source
+            {
+                *dep_branch = branch;
+                *dep_tag = tag;
+                *dep_rev = rev;
+            }
+            dep
+        }
+        SourceKind::Auto => unreachable!(),
+    };
+    dependency.version = version;
+
+    add_dependency_to_manifest(&project.manifest_path, &dependency)?;
+    let updated_project = CoolProject::from_manifest_path(&project.manifest_path)?;
+    install_dependencies(&updated_project)?;
+
+    println!("  Added dependency '{}' to {}", dependency.name, project.manifest_path.display());
+    println!("  Installed dependencies and wrote {}", updated_project.lockfile_path().display());
+    Ok(())
+}
 
 fn cmd_task(args: &[&String]) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("cool task: cannot resolve current executable: {e}"))?;
@@ -520,6 +694,8 @@ USAGE:
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
+    cool install                  Fetch and lock project dependencies
+    cool add <name> ...           Add a path or git dependency to cool.toml
     cool test [path ...]          Run discovered or explicit Cool tests
     cool task [name|list ...]     Run or list manifest-defined project tasks
     cool new <name>               Scaffold a new Cool project
@@ -532,6 +708,9 @@ FLAGS:
 EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
+    cool add toolkit --path ../toolkit
+    cool add theme --git https://github.com/acme/theme.git
+    cool install                  # fetch git deps into .cool/deps and write cool.lock
     cool test                     # run test_*.cool / *_test.cool under tests/
     cool task list                # list tasks from cool.toml
     cool new myapp                # create myapp/ project
@@ -585,6 +764,22 @@ fn main() {
             "new" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_new(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "install" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_install(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "add" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_add(&rest) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

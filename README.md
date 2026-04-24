@@ -227,6 +227,11 @@ cool src/main.cool
 # Run tests
 cool test
 
+# Add dependencies
+cool add toolkit --path ../toolkit
+cool add theme --git https://github.com/acme/theme.git
+cool install
+
 # List project tasks
 cool task list
 
@@ -249,7 +254,8 @@ output = "myapp"    # optional, defaults to name
 sources = ["src", "lib"]   # optional additional module roots
 
 [dependencies]
-toolkit = { path = "deps/toolkit" }   # imported as `toolkit.*`
+toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
+theme = { git = "https://github.com/acme/theme.git" }   # fetched into .cool/deps/theme
 
 [tasks.build]
 description = "Build a native binary"
@@ -260,7 +266,7 @@ description = "Run Cool tests"
 run = "cool test"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` adds path-based dependencies that are imported by dependency name. `cool new` also scaffolds `tests/test_main.cool`, so `cool test` works immediately in new projects, and includes starter tasks for `cool task`. By default the runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, so `cool test` works immediately in new projects, and includes starter tasks for `cool task`. By default the runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
@@ -278,6 +284,8 @@ Inside test files, `import test` gives you assertion helpers like `test.equal(..
 | `cool --compile <file.cool>` | Compile to a native binary (LLVM) |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
+| `cool install` | Fetch git dependencies and write `cool.lock` |
+| `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
 | `cool test [path ...]` | Discover and run Cool tests |
 | `cool task [name|list ...]` | List or run manifest-defined project tasks |
 | `cool new <name>` | Scaffold a new Cool project |

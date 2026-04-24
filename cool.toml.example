@@ -12,10 +12,14 @@ main = "src/main.cool"
 # Optional: additional source directories
 # sources = ["src", "lib"]
 
-# Optional: path dependencies, imported by dependency name
+# Optional: dependencies, imported by dependency name
 #
 # [dependencies]
-# toolkit = { path = "deps/toolkit" }
+# toolkit = { path = "../toolkit" }
+# theme = { git = "https://github.com/acme/theme.git" }
+#
+# Use `cool add ...` to edit this table and `cool install` to fetch git deps
+# into .cool/deps and write cool.lock.
 
 # Optional: manifest tasks for `cool task`
 #

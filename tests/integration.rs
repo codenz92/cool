@@ -190,6 +190,47 @@ fn run_cool_subcommand_in_dir(cwd: &std::path::Path, args: &[&str]) -> Result<(S
     ))
 }
 
+fn run_git_in_dir(cwd: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .env("GIT_AUTHOR_NAME", "Cool Test")
+        .env("GIT_AUTHOR_EMAIL", "cool-test@example.com")
+        .env("GIT_COMMITTER_NAME", "Cool Test")
+        .env("GIT_COMMITTER_EMAIL", "cool-test@example.com")
+        .args(args)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        args
+    );
+    stdout
+}
+
+fn write_git_dependency_repo(root: &std::path::Path, value: i64) -> String {
+    let _ = std::fs::remove_dir_all(root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("cool.toml"),
+        r#"[project]
+name = "toolkit"
+version = "0.3.0"
+main = "src/main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src").join("main.cool"), "print(\"toolkit\")\n").unwrap();
+    std::fs::write(root.join("src").join("util.cool"), format!("value = {value}\n")).unwrap();
+
+    run_git_in_dir(root, &["init"]);
+    run_git_in_dir(root, &["add", "."]);
+    run_git_in_dir(root, &["commit", "-m", "init"]);
+    run_git_in_dir(root, &["rev-parse", "HEAD"]).trim().to_string()
+}
+
 fn write_project_with_sources_and_dependencies(root: &std::path::Path) {
     let _ = std::fs::remove_dir_all(root);
     std::fs::create_dir_all(root.join("app")).unwrap();
@@ -292,6 +333,19 @@ run = "pwd"
     )
     .unwrap();
     std::fs::write(root.join("src").join("main.cool"), "print(\"demo\")\n").unwrap();
+}
+
+fn write_basic_project(root: &std::path::Path, name: &str, source: &str) {
+    let _ = std::fs::remove_dir_all(root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("cool.toml"),
+        format!(
+            "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(root.join("src").join("main.cool"), source).unwrap();
 }
 
 fn assert_logging_file_output(contents: &str) {
@@ -1497,6 +1551,8 @@ fn test_cool_new_writes_project_table_manifest() {
     assert!(manifest.contains("[project]"));
     assert!(manifest.contains("name = \"demo\""));
     assert!(manifest.contains("main = \"src/main.cool\""));
+    let gitignore = std::fs::read_to_string(workspace_dir.join("demo").join(".gitignore")).unwrap();
+    assert!(gitignore.contains(".cool/"));
 
     let _ = std::fs::remove_dir_all(&workspace_dir);
 }
@@ -1838,6 +1894,164 @@ fn test_cool_build_uses_sources_and_dependencies() {
     let binary_stdout = String::from_utf8_lossy(&output.stdout);
     let lines: Vec<_> = binary_stdout.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["7", "9"]);
+}
+
+#[test]
+fn test_cool_install_fetches_git_dependency_and_build_uses_it() {
+    let workspace_dir = unique_temp_dir("cool_install_git_dependency");
+    let project_dir = workspace_dir.join("app");
+    let dep_dir = workspace_dir.join("toolkit_repo");
+    let dep_rev = write_git_dependency_repo(&dep_dir, 42);
+    write_basic_project(
+        &project_dir,
+        "demo",
+        "import toolkit.util\nprint(util.value)\n",
+    );
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "src/main.cool"
+
+[dependencies]
+toolkit = { git = "../toolkit_repo" }
+"#,
+    )
+    .unwrap();
+
+    let (install_stdout, install_stderr, install_code) =
+        run_cool_subcommand_in_dir(&project_dir, &["install"]).unwrap();
+    assert_eq!(install_code, 0, "stdout:\n{install_stdout}\nstderr:\n{install_stderr}");
+    assert!(install_stdout.contains("Installed 1 dependency"));
+    assert!(install_stderr.trim().is_empty());
+
+    let lockfile = std::fs::read_to_string(project_dir.join("cool.lock")).unwrap();
+    assert!(lockfile.contains("kind = \"git\""));
+    assert!(lockfile.contains("git = \"../toolkit_repo\""));
+    assert!(lockfile.contains(&format!("rev = \"{dep_rev}\"")));
+    assert!(project_dir.join(".cool").join("deps").join("toolkit").join(".git").exists());
+
+    let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
+    let binary_output = Command::new(project_dir.join("demo")).output().unwrap();
+
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+
+    assert!(binary_output.status.success());
+    assert_eq!(String::from_utf8_lossy(&binary_output.stdout).trim(), "42");
+}
+
+#[test]
+fn test_cool_build_reports_install_hint_for_missing_git_dependency() {
+    let workspace_dir = unique_temp_dir("cool_missing_git_dependency");
+    let project_dir = workspace_dir.join("app");
+    let dep_dir = workspace_dir.join("toolkit_repo");
+    write_git_dependency_repo(&dep_dir, 12);
+    write_basic_project(
+        &project_dir,
+        "demo",
+        "import toolkit.util\nprint(util.value)\n",
+    );
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "src/main.cool"
+
+[dependencies]
+toolkit = { git = "../toolkit_repo" }
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("Run `cool install`"));
+}
+
+#[test]
+fn test_cool_add_path_dependency_updates_manifest_and_lockfile() {
+    let workspace_dir = unique_temp_dir("cool_add_path_dependency");
+    let project_dir = workspace_dir.join("app");
+    let dep_dir = workspace_dir.join("toolkit");
+    write_basic_project(
+        &project_dir,
+        "demo",
+        "import toolkit.util\nprint(util.value)\n",
+    );
+    let _ = std::fs::remove_dir_all(&dep_dir);
+    std::fs::create_dir_all(dep_dir.join("src")).unwrap();
+    std::fs::write(
+        dep_dir.join("cool.toml"),
+        r#"[project]
+name = "toolkit"
+version = "0.2.1"
+main = "src/main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(dep_dir.join("src").join("main.cool"), "print(\"toolkit\")\n").unwrap();
+    std::fs::write(dep_dir.join("src").join("util.cool"), "value = 77\n").unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&project_dir, &["add", "toolkit", "--path", "../toolkit"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
+    let parsed: toml::Value = manifest.parse().unwrap();
+    assert_eq!(
+        parsed["dependencies"]["toolkit"]["path"].as_str(),
+        Some("../toolkit")
+    );
+
+    let lockfile = std::fs::read_to_string(project_dir.join("cool.lock")).unwrap();
+    assert!(lockfile.contains("kind = \"path\""));
+    assert!(lockfile.contains("path = \"../toolkit\""));
+    assert!(lockfile.contains("version = \"0.2.1\""));
+
+    let run_output = run_cool_path_with_args(&project_dir.join("src").join("main.cool"), &[]).unwrap();
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    assert_eq!(run_output.trim(), "77");
+}
+
+#[test]
+fn test_cool_add_git_dependency_installs_and_runs() {
+    let workspace_dir = unique_temp_dir("cool_add_git_dependency");
+    let project_dir = workspace_dir.join("app");
+    let dep_dir = workspace_dir.join("toolkit_repo");
+    let dep_rev = write_git_dependency_repo(&dep_dir, 91);
+    write_basic_project(
+        &project_dir,
+        "demo",
+        "import toolkit.util\nprint(util.value)\n",
+    );
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&project_dir, &["add", "toolkit", "--git", "../toolkit_repo"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("Added dependency 'toolkit'"));
+    assert!(stderr.trim().is_empty());
+
+    let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
+    let parsed: toml::Value = manifest.parse().unwrap();
+    assert_eq!(
+        parsed["dependencies"]["toolkit"]["git"].as_str(),
+        Some("../toolkit_repo")
+    );
+    assert!(project_dir.join(".cool").join("deps").join("toolkit").join(".git").exists());
+
+    let lockfile = std::fs::read_to_string(project_dir.join("cool.lock")).unwrap();
+    assert!(lockfile.contains("kind = \"git\""));
+    assert!(lockfile.contains(&format!("rev = \"{dep_rev}\"")));
+
+    let run_output = run_cool_path_with_args(&project_dir.join("src").join("main.cool"), &[]).unwrap();
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    assert_eq!(run_output.trim(), "91");
 }
 
 #[test]
