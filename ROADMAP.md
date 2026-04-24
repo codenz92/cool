@@ -372,7 +372,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 10 — Production Readiness And Ecosystem 🚧 In Progress
+## Phase 10 — Production Readiness And Ecosystem ✅ Complete
 
 > Goal: make Cool feel default for real applications, not just impressive for demos, scripts, and experiments
 
@@ -408,7 +408,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] Package/dependency metadata beyond `cool.toml`, including manifests, lockfiles, path/git installs, and semver constraint checking (`^`, `~`, `>=`, `>=,<`, `=`, `*`)
 - [x] App bundling / release tooling — `cool bundle` (build + distributable tarball with `[bundle].include` in cool.toml) and `cool release` (version bump + bundle + git tag)
 - [x] AST / inspect / symbols / modulegraph / diff / check CLI helpers for tooling and static analysis
-- [ ] Language-server and editor tooling (`lsp`)
+- [x] Language-server and editor tooling (`lsp`) — `cool lsp` stdio server: diagnostics, completions, hover, go-to-definition, document symbols, workspace symbols
 
 ### Flagship Cool Software
 
@@ -467,5 +467,5 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 7 — Cool Applications | ✅ Complete |
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
 | 9 — Self-Hosted Compiler | ✅ Complete |
-| 10 — Production Readiness And Ecosystem | 🚧 In Progress |
+| 10 — Production Readiness And Ecosystem | ✅ Complete |
 | 11 — Freestanding Systems Foundation | 🚧 In Progress |

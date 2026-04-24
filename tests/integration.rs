@@ -3176,3 +3176,154 @@ fn test_break_continue() {
             .unwrap();
     assert!(result.contains("5"));
 }
+
+// ── LSP tests ─────────────────────────────────────────────────────────────────
+
+fn lsp_message(body: &str) -> Vec<u8> {
+    format!("Content-Length: {}\r\n\r\n{}", body.len(), body).into_bytes()
+}
+
+fn read_lsp_response(reader: &mut impl std::io::BufRead) -> serde_json::Value {
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let trimmed = line.trim_end_matches(|c: char| c == '\r' || c == '\n');
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some(rest) = trimmed.strip_prefix("Content-Length: ") {
+            content_length = rest.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut buf = vec![0u8; content_length];
+    reader.read_exact(&mut buf).unwrap();
+    serde_json::from_slice(&buf).unwrap()
+}
+
+#[test]
+fn test_lsp_initialize() {
+    use std::io::{BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cool_bin())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn cool lsp");
+
+    let stdin = child.stdin.as_mut().unwrap();
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+    stdin.write_all(&lsp_message(init)).unwrap();
+
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let response = read_lsp_response(&mut reader);
+
+    assert_eq!(response["id"], 1);
+    let caps = &response["result"]["capabilities"];
+    assert!(caps["hoverProvider"].as_bool().unwrap_or(false));
+    assert!(caps["definitionProvider"].as_bool().unwrap_or(false));
+    assert!(caps["documentSymbolProvider"].as_bool().unwrap_or(false));
+    assert_eq!(caps["textDocumentSync"]["change"], 1);
+
+    let shutdown = r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(shutdown)).unwrap();
+    let shutdown_resp = read_lsp_response(&mut reader);
+    assert_eq!(shutdown_resp["id"], 2);
+    assert!(shutdown_resp["result"].is_null());
+
+    let exit = r#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(exit)).unwrap();
+    let _ = child.wait();
+}
+
+#[test]
+fn test_lsp_diagnostics_on_parse_error() {
+    use std::io::{BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cool_bin())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn cool lsp");
+
+    let stdin = child.stdin.as_mut().unwrap();
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+    stdin.write_all(&lsp_message(init)).unwrap();
+
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let _init_resp = read_lsp_response(&mut reader);
+
+    let did_open = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/test.cool","languageId":"cool","version":1,"text":"def foo(\n  x = \n"}}}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(did_open)).unwrap();
+
+    let notification = read_lsp_response(&mut reader);
+    assert_eq!(notification["method"], "textDocument/publishDiagnostics");
+    let diags = &notification["params"]["diagnostics"];
+    assert!(diags.as_array().map(|a| !a.is_empty()).unwrap_or(false));
+
+    let exit = r#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(exit)).unwrap();
+    let _ = child.wait();
+}
+
+#[test]
+fn test_lsp_document_symbols() {
+    use std::io::{BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cool_bin())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn cool lsp");
+
+    let stdin = child.stdin.as_mut().unwrap();
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+    stdin.write_all(&lsp_message(init)).unwrap();
+
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let _init_resp = read_lsp_response(&mut reader);
+
+    let source = "def greet(name):\n    print(name)\n\nclass Dog:\n    def bark(self):\n        print(\"woof\")\n";
+    let did_open_val = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": "file:///tmp/sym_test.cool",
+                "languageId": "cool",
+                "version": 1,
+                "text": source
+            }
+        }
+    });
+    let did_open = serde_json::to_string(&did_open_val).unwrap();
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(&did_open)).unwrap();
+    let _diag_notif = read_lsp_response(&mut reader); // publishDiagnostics
+
+    let sym_req = r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///tmp/sym_test.cool"}}}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(sym_req)).unwrap();
+    let sym_resp = read_lsp_response(&mut reader);
+
+    assert_eq!(sym_resp["id"], 2);
+    let symbols = sym_resp["result"].as_array().unwrap();
+    let names: Vec<&str> = symbols.iter().filter_map(|s| s["name"].as_str()).collect();
+    assert!(names.contains(&"greet"), "expected greet in symbols: {names:?}");
+    assert!(names.contains(&"Dog"), "expected Dog in symbols: {names:?}");
+    assert!(names.contains(&"bark"), "expected bark in symbols: {names:?}");
+
+    let exit = r#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(exit)).unwrap();
+    let _ = child.wait();
+}

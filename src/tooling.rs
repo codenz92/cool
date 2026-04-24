@@ -7,6 +7,80 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub fn diagnose_source(source: &str, path: &str) -> Vec<ToolingDiagnostic> {
+    let mut diags = Vec::new();
+    let mut lexer = Lexer::new(source);
+    let tokens = match lexer.tokenize() {
+        Err(msg) => {
+            diags.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "lex_error",
+                path: path.to_string(),
+                line: extract_error_line(&msg),
+                message: msg,
+            });
+            return diags;
+        }
+        Ok(t) => t,
+    };
+    let mut parser = Parser::new(tokens);
+    let program = match parser.parse_program() {
+        Err(msg) => {
+            diags.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "parse_error",
+                path: path.to_string(),
+                line: extract_error_line(&msg),
+                message: msg,
+            });
+            return diags;
+        }
+        Ok(p) => p,
+    };
+    let report = inspect_program(path.to_string(), &program, vec![]);
+    diags.extend(check_report_warnings(&report));
+    diags
+}
+
+pub fn inspect_source(source: &str, path: &str) -> InspectReport {
+    let source_dir = Path::new(path).parent().unwrap_or(Path::new("."));
+    let resolver = ModuleResolver::local_only(source_dir.to_path_buf());
+    let program = match parse_source_str(source) {
+        Ok(p) => p,
+        Err(_) => {
+            return InspectReport {
+                path: path.to_string(),
+                imports: vec![],
+                functions: vec![],
+                classes: vec![],
+                structs: vec![],
+                assignments: vec![],
+            }
+        }
+    };
+    let imports = collect_imports(&program, source_dir, &resolver, "lsp")
+        .unwrap_or_default()
+        .iter()
+        .map(ResolvedImport::export)
+        .collect();
+    inspect_program(path.to_string(), &program, imports)
+}
+
+fn parse_source_str(source: &str) -> Result<Program, String> {
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize()?;
+    let mut parser = Parser::new(tokens);
+    parser.parse_program()
+}
+
+fn extract_error_line(msg: &str) -> Option<usize> {
+    let prefix = "line ";
+    let start = msg.find(prefix)?;
+    let rest = &msg[start + prefix.len()..];
+    let end = rest.find(':')?;
+    rest[..end].trim().parse().ok()
+}
+
 const BUILTIN_MODULES: &[&str] = &[
     "argparse",
     "collections",

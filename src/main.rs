@@ -9,6 +9,7 @@ mod interpreter;
 mod lexer;
 mod llvm_codegen;
 mod logging_runtime;
+mod lsp;
 mod opcode;
 mod parser;
 mod project;
@@ -1285,6 +1286,7 @@ USAGE:
     cool test [path ...]          Run discovered or explicit Cool tests
     cool task [name|list ...]     Run or list manifest-defined project tasks
     cool new <name>               Scaffold a new Cool project
+    cool lsp                      Start the language server (LSP) on stdin/stdout
     cool help                     Show this help message
 
 FLAGS:
@@ -1452,6 +1454,34 @@ fn main() {
             "release" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_release(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "lsp" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if rest.iter().any(|a| a.as_str() == "--help" || a.as_str() == "-h") {
+                    println!(
+                        "\
+Usage: cool lsp
+
+Start the Cool language server (LSP) on stdin/stdout.
+
+Capabilities:
+  textDocumentSync    full sync (open, change, close)
+  diagnostics         parse errors and duplicate-symbol warnings
+  completion          keywords, builtins, modules, file-level symbols
+  hover               function/class/struct signatures
+  definition          go to definition within open files
+  documentSymbol      list symbols in a file
+  workspaceSymbol     search symbols across open files
+
+Connect using any LSP client (VS Code, Neovim, Helix, etc.)."
+                    );
+                    return;
+                }
+                if let Err(e) = lsp::run_server() {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
