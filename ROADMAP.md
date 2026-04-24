@@ -405,7 +405,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [x] `cool test` command for discovered and explicit Cool test files, with interpreter / VM / native runner modes
 - [x] Standard `test` module for in-language unit/integration helpers and assertions (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`)
-- [~] Package/dependency metadata beyond `cool.toml`, including manifests, lockfiles, path/git installs, semver, and deeper dependency resolution
+- [x] Package/dependency metadata beyond `cool.toml`, including manifests, lockfiles, path/git installs, and semver constraint checking (`^`, `~`, `>=`, `>=,<`, `=`, `*`)
 - [ ] App bundling / release tooling (`package`, `bundle`, `release`)
 - [ ] AST / inspect / modulegraph / diff helpers for tooling and static analysis
 - [ ] Language-server and editor tooling (`lsp`)
@@ -432,7 +432,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### Data Layout And ABI
 
 - [x] `struct` definitions with typed fields (`i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`), positional + keyword construction, and coercion on init across all runtimes
-- [ ] Stable binary layout for structs (actual LLVM struct types, GEP-based field access — currently stored via class-instance machinery)
+- [x] Stable binary layout for structs (LLVM struct types, GEP-based field access, side-table dynamic dispatch for function-parameter path)
 - [ ] `packed` / alignment control
 - [ ] `union` support
 - [ ] `extern` declarations with calling-convention and symbol control

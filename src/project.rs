@@ -53,7 +53,10 @@ pub struct LockfileDependency {
     pub kind: String,
     pub path: String,
     pub resolved_path: String,
+    /// The installed package's own version (from its cool.toml).
     pub version: Option<String>,
+    /// The version constraint required by the parent manifest.
+    pub required_version: Option<String>,
     pub git: Option<String>,
     pub branch: Option<String>,
     pub tag: Option<String>,
@@ -567,6 +570,7 @@ impl CoolLockfile {
                     .unwrap_or("")
                     .to_string();
                 let version = table.get("version").and_then(toml::Value::as_str).map(ToOwned::to_owned);
+                let required_version = table.get("required_version").and_then(toml::Value::as_str).map(ToOwned::to_owned);
                 let git = table.get("git").and_then(toml::Value::as_str).map(ToOwned::to_owned);
                 let branch = table.get("branch").and_then(toml::Value::as_str).map(ToOwned::to_owned);
                 let tag = table.get("tag").and_then(toml::Value::as_str).map(ToOwned::to_owned);
@@ -577,6 +581,7 @@ impl CoolLockfile {
                     path,
                     resolved_path,
                     version,
+                    required_version,
                     git,
                     branch,
                     tag,
@@ -622,6 +627,9 @@ impl CoolLockfile {
             ));
             if let Some(version) = &dep.version {
                 out.push_str(&format!("version = {}\n", escape_toml_string(version)));
+            }
+            if let Some(required_version) = &dep.required_version {
+                out.push_str(&format!("required_version = {}\n", escape_toml_string(required_version)));
             }
             if let Some(git) = &dep.git {
                 out.push_str(&format!("git = {}\n", escape_toml_string(git)));
@@ -862,12 +870,17 @@ fn materialize_dependency(
             if !dep_root.exists() {
                 return Err(format!("cool install: {}", dep.install_hint(&project.root)));
             }
+            let installed_version = maybe_project_version(&dep_root)?;
+            if let (Some(required), Some(installed)) = (&dep.version, &installed_version) {
+                check_version_constraint(&dep.name, required, installed)?;
+            }
             out.push(LockfileDependency {
                 name: dep.name.clone(),
                 kind: "path".to_string(),
                 path: manifest_dependency_path(path),
                 resolved_path: dep_root.to_string_lossy().to_string(),
-                version: maybe_project_version(&dep_root)?,
+                version: installed_version,
+                required_version: dep.version.clone(),
                 git: None,
                 branch: None,
                 tag: None,
@@ -926,12 +939,17 @@ fn materialize_dependency(
                 Some(&dep_root),
                 &["rev-parse".to_string(), "HEAD".to_string()],
             )?;
+            let installed_version = maybe_project_version(&dep_root)?;
+            if let (Some(required), Some(installed)) = (&dep.version, &installed_version) {
+                check_version_constraint(&dep.name, required, installed)?;
+            }
             out.push(LockfileDependency {
                 name: dep.name.clone(),
                 kind: "git".to_string(),
                 path: format!(".cool/deps/{}", dep.name),
                 resolved_path: dep_root.to_string_lossy().to_string(),
-                version: maybe_project_version(&dep_root)?,
+                version: installed_version,
+                required_version: dep.version.clone(),
                 git: Some(git.clone()),
                 branch: branch.clone(),
                 tag: tag.clone(),
@@ -940,6 +958,93 @@ fn materialize_dependency(
             Ok(dep_root)
         }
     }
+}
+
+// ── Semver ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SemVer {
+    major: u64,
+    minor: u64,
+    patch: u64,
+}
+
+impl SemVer {
+    fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().strip_prefix('v').unwrap_or(s.trim());
+        let s = s.split(['-', '+']).next().unwrap_or(s);
+        let mut parts = s.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        Some(SemVer { major, minor, patch })
+    }
+}
+
+#[derive(Debug)]
+enum VersionReq {
+    Any,
+    Exact(SemVer),
+    Caret(SemVer),
+    Tilde(SemVer),
+    Gte(SemVer),
+    Range(SemVer, SemVer),
+}
+
+impl VersionReq {
+    fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.is_empty() || s == "*" {
+            return Some(VersionReq::Any);
+        }
+        if let Some(rest) = s.strip_prefix('^') {
+            return SemVer::parse(rest).map(VersionReq::Caret);
+        }
+        if let Some(rest) = s.strip_prefix('~') {
+            return SemVer::parse(rest).map(VersionReq::Tilde);
+        }
+        if s.contains(',') {
+            let mut parts = s.splitn(2, ',');
+            let a = parts.next()?.trim();
+            let b = parts.next()?.trim();
+            let lo = a.strip_prefix(">=").and_then(|r| SemVer::parse(r))?;
+            let hi = b.strip_prefix('<').and_then(|r| SemVer::parse(r))?;
+            return Some(VersionReq::Range(lo, hi));
+        }
+        if let Some(rest) = s.strip_prefix(">=") {
+            return SemVer::parse(rest).map(VersionReq::Gte);
+        }
+        if let Some(rest) = s.strip_prefix('=') {
+            return SemVer::parse(rest).map(VersionReq::Exact);
+        }
+        SemVer::parse(s).map(VersionReq::Exact)
+    }
+
+    fn matches(&self, v: &SemVer) -> bool {
+        match self {
+            VersionReq::Any => true,
+            VersionReq::Exact(req) => v == req,
+            VersionReq::Caret(req) => v.major == req.major && *v >= *req,
+            VersionReq::Tilde(req) => v.major == req.major && v.minor == req.minor && *v >= *req,
+            VersionReq::Gte(req) => *v >= *req,
+            VersionReq::Range(lo, hi) => *v >= *lo && *v < *hi,
+        }
+    }
+}
+
+fn check_version_constraint(name: &str, required: &str, installed: &str) -> Result<(), String> {
+    let req = VersionReq::parse(required).ok_or_else(|| {
+        format!("cool install: dependency '{name}' has invalid version constraint '{required}'")
+    })?;
+    let ver = SemVer::parse(installed).ok_or_else(|| {
+        format!("cool install: dependency '{name}' has invalid installed version '{installed}'")
+    })?;
+    if !req.matches(&ver) {
+        return Err(format!(
+            "cool install: dependency '{name}' requires version '{required}' but found '{installed}'"
+        ));
+    }
+    Ok(())
 }
 
 fn desired_git_ref(
@@ -958,4 +1063,89 @@ fn desired_git_ref(
         return Some(format!("origin/{branch}"));
     }
     locked_rev.map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod semver_tests {
+    use super::*;
+
+    fn ver(s: &str) -> SemVer {
+        SemVer::parse(s).unwrap_or_else(|| panic!("bad semver: {s}"))
+    }
+
+    fn ok(req: &str, installed: &str) {
+        check_version_constraint("pkg", req, installed).unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    fn err(req: &str, installed: &str) {
+        assert!(
+            check_version_constraint("pkg", req, installed).is_err(),
+            "expected constraint '{req}' to reject '{installed}'"
+        );
+    }
+
+    #[test]
+    fn test_semver_parse() {
+        assert_eq!(ver("1.2.3"), SemVer { major: 1, minor: 2, patch: 3 });
+        assert_eq!(ver("v2.0.0"), SemVer { major: 2, minor: 0, patch: 0 });
+        assert_eq!(ver("1.0"), SemVer { major: 1, minor: 0, patch: 0 });
+        assert_eq!(ver("1.2.3-alpha+build"), SemVer { major: 1, minor: 2, patch: 3 });
+    }
+
+    #[test]
+    fn test_semver_ordering() {
+        assert!(ver("1.2.3") < ver("1.2.4"));
+        assert!(ver("1.2.3") < ver("1.3.0"));
+        assert!(ver("1.2.3") < ver("2.0.0"));
+        assert!(ver("1.2.3") == ver("1.2.3"));
+    }
+
+    #[test]
+    fn test_caret() {
+        ok("^1.0.0", "1.0.0");
+        ok("^1.0.0", "1.2.3");
+        ok("^1.0.0", "1.99.99");
+        err("^1.0.0", "0.9.9");
+        err("^1.0.0", "2.0.0");
+        err("^2.0.0", "1.9.9");
+    }
+
+    #[test]
+    fn test_tilde() {
+        ok("~1.2.0", "1.2.0");
+        ok("~1.2.0", "1.2.9");
+        err("~1.2.0", "1.3.0");
+        err("~1.2.0", "1.1.9");
+        err("~1.2.0", "2.2.0");
+    }
+
+    #[test]
+    fn test_exact() {
+        ok("1.2.3", "1.2.3");
+        ok("=1.2.3", "1.2.3");
+        err("1.2.3", "1.2.4");
+        err("=1.2.3", "1.2.2");
+    }
+
+    #[test]
+    fn test_gte() {
+        ok(">=1.0.0", "1.0.0");
+        ok(">=1.0.0", "2.5.0");
+        err(">=1.0.0", "0.9.9");
+    }
+
+    #[test]
+    fn test_range() {
+        ok(">=1.0.0,<2.0.0", "1.0.0");
+        ok(">=1.0.0,<2.0.0", "1.9.9");
+        err(">=1.0.0,<2.0.0", "0.9.9");
+        err(">=1.0.0,<2.0.0", "2.0.0");
+    }
+
+    #[test]
+    fn test_wildcard() {
+        ok("*", "0.0.1");
+        ok("*", "99.99.99");
+        ok("", "1.0.0");
+    }
 }
