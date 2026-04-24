@@ -41,7 +41,7 @@ pub struct AstDump {
     pub ast: Program,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct InspectReport {
     pub path: String,
     pub imports: Vec<ModuleGraphImport>,
@@ -51,14 +51,14 @@ pub struct InspectReport {
     pub assignments: Vec<InspectAssignment>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct InspectFunction {
     pub line: Option<usize>,
     pub name: String,
     pub params: Vec<InspectParam>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct InspectClass {
     pub line: Option<usize>,
     pub name: String,
@@ -67,7 +67,7 @@ pub struct InspectClass {
     pub class_assignments: Vec<InspectAssignment>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct InspectStruct {
     pub line: Option<usize>,
     pub name: String,
@@ -75,25 +75,55 @@ pub struct InspectStruct {
     pub fields: Vec<InspectStructField>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct InspectStructField {
     pub name: String,
     pub type_name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct InspectAssignment {
     pub line: Option<usize>,
     pub kind: &'static str,
     pub names: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct InspectParam {
     pub name: String,
     pub has_default: bool,
     pub is_vararg: bool,
     pub is_kwarg: bool,
+}
+
+#[derive(Serialize)]
+pub struct InspectDiffReport {
+    pub before: String,
+    pub after: String,
+    pub imports: DiffSetWithChanges<ModuleGraphImport>,
+    pub functions: DiffSetWithChanges<InspectFunction>,
+    pub classes: DiffSetWithChanges<InspectClass>,
+    pub structs: DiffSetWithChanges<InspectStruct>,
+    pub assignments: DiffSet<InspectAssignment>,
+}
+
+#[derive(Serialize)]
+pub struct DiffSet<T> {
+    pub added: Vec<T>,
+    pub removed: Vec<T>,
+}
+
+#[derive(Serialize)]
+pub struct DiffSetWithChanges<T> {
+    pub added: Vec<T>,
+    pub removed: Vec<T>,
+    pub changed: Vec<DiffChange<T>>,
+}
+
+#[derive(Serialize)]
+pub struct DiffChange<T> {
+    pub before: T,
+    pub after: T,
 }
 
 #[derive(Serialize)]
@@ -108,7 +138,7 @@ pub struct ModuleGraphModule {
     pub imports: Vec<ModuleGraphImport>,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModuleImportKind {
     File,
@@ -116,7 +146,7 @@ pub enum ModuleImportKind {
     Builtin,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct ModuleGraphImport {
     pub line: Option<usize>,
     pub kind: ModuleImportKind,
@@ -138,6 +168,16 @@ impl ResolvedImport {
             kind: self.kind,
             specifier: self.specifier.clone(),
             resolved: self.resolved.as_ref().map(|path| path_string(path)),
+        }
+    }
+}
+
+impl ModuleImportKind {
+    fn as_key(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Module => "module",
+            Self::Builtin => "builtin",
         }
     }
 }
@@ -220,6 +260,23 @@ pub fn build_inspect_report(path: &Path) -> Result<InspectReport, String> {
         classes,
         structs,
         assignments,
+    })
+}
+
+pub fn build_inspect_diff(before_path: &Path, after_path: &Path) -> Result<InspectDiffReport, String> {
+    let before = build_inspect_report(before_path)?;
+    let after = build_inspect_report(after_path)?;
+
+    Ok(InspectDiffReport {
+        before: before.path.clone(),
+        after: after.path.clone(),
+        imports: diff_keyed(&before.imports, &after.imports, |item| {
+            format!("{}:{}", item.kind.as_key(), item.specifier)
+        }),
+        functions: diff_keyed(&before.functions, &after.functions, |item| item.name.clone()),
+        classes: diff_keyed(&before.classes, &after.classes, |item| item.name.clone()),
+        structs: diff_keyed(&before.structs, &after.structs, |item| item.name.clone()),
+        assignments: diff_by_identity(&before.assignments, &after.assignments, assignment_identity_key),
     })
 }
 
@@ -385,6 +442,72 @@ fn resolve_file_import(current_source_dir: &Path, specifier: &str, context: &str
             current_source_dir.display()
         ))
     }
+}
+
+fn diff_keyed<T, F>(before: &[T], after: &[T], key_fn: F) -> DiffSetWithChanges<T>
+where
+    T: Clone + PartialEq,
+    F: Fn(&T) -> String,
+{
+    let before_map: std::collections::BTreeMap<String, T> =
+        before.iter().cloned().map(|item| (key_fn(&item), item)).collect();
+    let after_map: std::collections::BTreeMap<String, T> =
+        after.iter().cloned().map(|item| (key_fn(&item), item)).collect();
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut changed = Vec::new();
+
+    for (key, before_item) in &before_map {
+        match after_map.get(key) {
+            Some(after_item) if after_item != before_item => changed.push(DiffChange {
+                before: before_item.clone(),
+                after: after_item.clone(),
+            }),
+            Some(_) => {}
+            None => removed.push(before_item.clone()),
+        }
+    }
+
+    for (key, after_item) in &after_map {
+        if !before_map.contains_key(key) {
+            added.push(after_item.clone());
+        }
+    }
+
+    DiffSetWithChanges {
+        added,
+        removed,
+        changed,
+    }
+}
+
+fn diff_by_identity<T, F>(before: &[T], after: &[T], key_fn: F) -> DiffSet<T>
+where
+    T: Clone,
+    F: Fn(&T) -> String,
+{
+    let before_map: std::collections::BTreeMap<String, T> =
+        before.iter().cloned().map(|item| (key_fn(&item), item)).collect();
+    let after_map: std::collections::BTreeMap<String, T> =
+        after.iter().cloned().map(|item| (key_fn(&item), item)).collect();
+
+    let removed = before_map
+        .iter()
+        .filter(|(key, _)| !after_map.contains_key(*key))
+        .map(|(_, item)| item.clone())
+        .collect();
+    let added = after_map
+        .iter()
+        .filter(|(key, _)| !before_map.contains_key(*key))
+        .map(|(_, item)| item.clone())
+        .collect();
+
+    DiffSet { added, removed }
+}
+
+fn assignment_identity_key(item: &InspectAssignment) -> String {
+    format!("{}:{}:{}", item.line.unwrap_or(0), item.kind, item.names.join(","))
 }
 
 fn inspect_params(params: &[crate::ast::Param]) -> Vec<InspectParam> {

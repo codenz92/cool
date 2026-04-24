@@ -508,6 +508,30 @@ classes, structs, and assigned symbols."
     Ok(())
 }
 
+// ── `cool diff` ───────────────────────────────────────────────────────────────
+
+fn cmd_diff(args: &[&String]) -> Result<(), String> {
+    let (before, after) = match args {
+        [before, after] => (before.as_str(), after.as_str()),
+        [arg] if arg.as_str() == "--help" || arg.as_str() == "-h" => {
+            println!(
+                "\
+Usage: cool diff <before.cool> <after.cool>
+
+Compare two Cool source files and print a JSON summary of added, removed, and changed
+top-level imports and symbols."
+            );
+            return Ok(());
+        }
+        _ => return Err("Usage: cool diff <before.cool> <after.cool>".to_string()),
+    };
+
+    let report = tooling::build_inspect_diff(Path::new(before), Path::new(after))?;
+    let json = serde_json::to_string_pretty(&report).map_err(|e| format!("cool diff: failed to encode JSON: {e}"))?;
+    println!("{json}");
+    Ok(())
+}
+
 // ── `cool modulegraph` ────────────────────────────────────────────────────────
 
 fn cmd_modulegraph(args: &[&String]) -> Result<(), String> {
@@ -1123,6 +1147,7 @@ USAGE:
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool ast <file.cool>          Print the parsed AST as JSON
     cool inspect <file.cool>      Print a JSON summary of top-level symbols
+    cool diff <before> <after>    Print a JSON summary of top-level changes
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
@@ -1144,6 +1169,7 @@ EXAMPLES:
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool ast hello.cool           # dump the parsed AST as JSON
     cool inspect hello.cool       # summarize top-level symbols as JSON
+    cool diff old.cool new.cool   # compare top-level imports and symbols
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
@@ -1201,6 +1227,14 @@ fn main() {
             "inspect" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_inspect(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "diff" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_diff(&rest) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

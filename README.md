@@ -272,7 +272,7 @@ run = "cool test"
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, and `cool modulegraph <file.cool>` resolves reachable imports from that entry file and prints the resulting graph as JSON.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, and `cool modulegraph <file.cool>` resolves reachable imports from that entry file and prints the resulting graph as JSON.
 
 ---
 
@@ -286,6 +286,7 @@ For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect
 | `cool --compile <file.cool>` | Compile to a native binary (LLVM) |
 | `cool ast <file.cool>` | Print the parsed AST as JSON |
 | `cool inspect <file.cool>` | Print a JSON summary of top-level symbols |
+| `cool diff <before.cool> <after.cool>` | Print a JSON summary of top-level changes |
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
