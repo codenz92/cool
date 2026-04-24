@@ -182,7 +182,7 @@
 
 #### Networking And Services
 
-- [ ] `http` module — request helpers built into the language runtime instead of only the shell app
+- [x] `http` module — `get`, `post`, `head`, and `getjson` request helpers across runtimes (requires host `curl`)
 - [ ] `socket` module — TCP/UDP clients and servers for networking work
 - [ ] `websocket` module — client/server websocket support for realtime tools and apps
 - [ ] `rpc` module — lightweight RPC protocol helpers, stubs, and request routing
@@ -319,7 +319,7 @@
 
 ### Known LLVM Limitations
 
-The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import sqlite` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
+The LLVM backend now covers most day-to-day language features, including default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import sqlite` / `import http` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. The following features still have notable gaps in LLVM:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | :-----------: | :-----------: | :----: |
@@ -395,10 +395,11 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `toml` module — `loads` / `dumps` helpers for tables, arrays, strings, numbers, and booleans
 - [x] `yaml` module — `loads` / `dumps` for a config-oriented YAML subset
 - [x] `sqlite` module — path-based embedded database access with `execute`, `query`, and `scalar`
+- [x] `http` module — `get`, `post`, `head`, and `getjson` request helpers (requires host `curl`)
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
-- [ ] `socket` / `http` as the first practical application stack
+- [ ] `socket` as the remaining practical application-stack primitive
 
 ### Packaging And Developer Tooling
 

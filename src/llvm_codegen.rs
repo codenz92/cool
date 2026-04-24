@@ -4321,6 +4321,119 @@ static CoolVal cool_sqlite_scalar(CoolVal path_v, CoolVal sql_v, CoolVal params_
     return out;
 }
 
+static void cool_http_raisef(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    cool_raise(cv_str(strdup(buf)));
+}
+
+static void cool_http_push_shell_quoted(CoolStrBuf* sb, const char* s) {
+    sb_push_char(sb, '\'');
+    while (*s) {
+        if (*s == '\'') {
+            sb_push_str(sb, "'\\''");
+        } else {
+            sb_push_char(sb, *s);
+        }
+        s++;
+    }
+    sb_push_char(sb, '\'');
+}
+
+static int cool_http_header_len(CoolVal headers, const char* context) {
+    if (headers.tag == TAG_NIL) return 0;
+    if (headers.tag != TAG_LIST && headers.tag != TAG_TUPLE) {
+        cool_http_raisef("%s headers must be a list, tuple, or nil, got %s", context, cool_type_name(headers.tag));
+    }
+    return (int)((CoolList*)(intptr_t)headers.payload)->length;
+}
+
+static CoolVal cool_http_header_at(CoolVal headers, int index) {
+    return ((CoolVal*)((CoolList*)(intptr_t)headers.payload)->data)[index];
+}
+
+static void cool_http_append_headers(CoolStrBuf* cmd, CoolVal headers, int want_json_accept, const char* context) {
+    int len = cool_http_header_len(headers, context);
+    int has_accept = 0;
+    for (int i = 0; i < len; i++) {
+        CoolVal item = cool_http_header_at(headers, i);
+        if (item.tag != TAG_STR) {
+            cool_http_raisef("%s headers must contain only strings, got %s", context, cool_type_name(item.tag));
+        }
+        const char* header = (const char*)(intptr_t)item.payload;
+        if (strncmp(header, "Accept:", 7) == 0) has_accept = 1;
+        sb_push_str(cmd, " -H ");
+        cool_http_push_shell_quoted(cmd, header);
+    }
+    if (want_json_accept && !has_accept) {
+        sb_push_str(cmd, " -H ");
+        cool_http_push_shell_quoted(cmd, "Accept: application/json");
+    }
+}
+
+static char* cool_http_fetch(const char* context, const char* method, int head_only, CoolVal url_v, CoolVal body_v, CoolVal headers_v, int want_json_accept) {
+    if (url_v.tag != TAG_STR) {
+        cool_http_raisef("%s requires a URL string, got %s", context, cool_type_name(url_v.tag));
+    }
+    if (body_v.tag != TAG_NIL && body_v.tag != TAG_STR) {
+        cool_http_raisef("%s requires a body string, got %s", context, cool_type_name(body_v.tag));
+    }
+
+    CoolStrBuf cmd;
+    sb_init(&cmd);
+    sb_push_str(&cmd, "curl -sS -L");
+    if (head_only) {
+        sb_push_str(&cmd, " -I");
+    } else if (method && strcmp(method, "GET") != 0) {
+        sb_push_str(&cmd, " -X ");
+        sb_push_str(&cmd, method);
+    }
+    cool_http_append_headers(&cmd, headers_v, want_json_accept, context);
+    if (body_v.tag == TAG_STR) {
+        sb_push_str(&cmd, " --data ");
+        cool_http_push_shell_quoted(&cmd, (const char*)(intptr_t)body_v.payload);
+    }
+    sb_push_char(&cmd, ' ');
+    cool_http_push_shell_quoted(&cmd, (const char*)(intptr_t)url_v.payload);
+
+    CoolSubprocessResult result = cool_subprocess_run_shell(cmd.data, 0, 0.0);
+    if (result.timed_out) {
+        cool_http_raisef("%s timed out", context);
+    }
+    if (!result.has_code || result.code != 0) {
+        const char* detail = result.stderr_data && result.stderr_data[0] ? result.stderr_data :
+            (result.stdout_data && result.stdout_data[0] ? result.stdout_data : "curl failed");
+        cool_http_raisef("%s failed with exit code %d: %s", context, result.has_code ? result.code : -1, detail);
+    }
+    return result.stdout_data ? result.stdout_data : strdup("");
+}
+
+static CoolVal cool_http_get(CoolVal url_v, CoolVal headers_v) {
+    return cv_str(cool_http_fetch("http.get()", "GET", 0, url_v, cv_nil(), headers_v, 0));
+}
+
+static CoolVal cool_http_post(CoolVal url_v, CoolVal body_v, CoolVal headers_v) {
+    return cv_str(cool_http_fetch("http.post()", "POST", 0, url_v, body_v, headers_v, 0));
+}
+
+static CoolVal cool_http_head(CoolVal url_v, CoolVal headers_v) {
+    return cv_str(cool_http_fetch("http.head()", "HEAD", 1, url_v, cv_nil(), headers_v, 0));
+}
+
+static CoolVal cool_http_getjson(CoolVal url_v, CoolVal headers_v) {
+    const char* src = cool_http_fetch("http.getjson()", "GET", 0, url_v, cv_nil(), headers_v, 1);
+    const char* p = src;
+    CoolVal out = json_parse_value(&p);
+    json_skip_ws(&p);
+    if (*p != '\0') {
+        cool_http_raisef("http.getjson() invalid JSON: trailing characters");
+    }
+    return out;
+}
+
 static char* re_translate_pattern(const char* pattern) {
     CoolStrBuf sb;
     sb_init(&sb);
@@ -5970,6 +6083,21 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
         if (strcmp(name, "scalar") == 0 && (nargs == 2 || nargs == 3)) {
             return cool_sqlite_scalar(args[0], args[1], nargs == 3 ? args[2] : cv_nil());
+        }
+    }
+
+    if (strcmp(module, "http") == 0) {
+        if (strcmp(name, "get") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_http_get(args[0], nargs == 2 ? args[1] : cv_nil());
+        }
+        if (strcmp(name, "post") == 0 && (nargs == 2 || nargs == 3)) {
+            return cool_http_post(args[0], args[1], nargs == 3 ? args[2] : cv_nil());
+        }
+        if (strcmp(name, "head") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_http_head(args[0], nargs == 2 ? args[1] : cv_nil());
+        }
+        if (strcmp(name, "getjson") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_http_getjson(args[0], nargs == 2 ? args[1] : cv_nil());
         }
     }
 
@@ -8896,8 +9024,8 @@ impl<'ctx> Compiler<'ctx> {
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
-            | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "string" | "list" | "re" | "collections"
-            | "path" | "ffi" => {
+            | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "http" | "string" | "list" | "re"
+            | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

@@ -3,6 +3,7 @@ use crate::argparse_runtime::{self, ArgData};
 use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
+use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::sqlite_runtime::{self, SqlData};
 use crate::toml_runtime::{self, TomlData};
@@ -1547,6 +1548,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("sqlite.") {
             return self.call_sqlite_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("http.") {
+            return self.call_http_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("test.") {
             return self.call_test_module(rest, args);
@@ -4370,6 +4374,112 @@ impl VM {
         }
     }
 
+    fn http_headers_arg(&self, value: Option<&VmValue>, context: &str) -> Result<Vec<String>, String> {
+        match value {
+            None | Some(VmValue::Nil) => Ok(Vec::new()),
+            Some(VmValue::List(items)) => items
+                .borrow()
+                .iter()
+                .map(|item| match item {
+                    VmValue::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "{context} headers must contain only strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(VmValue::Tuple(items)) => items
+                .iter()
+                .map(|item| match item {
+                    VmValue::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "{context} headers must contain only strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(other) => Err(self.err(&format!(
+                "{context} headers must be a list, tuple, or nil, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_http_module(&mut self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "get" => {
+                let url = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    other => {
+                        return Err(self.err(&format!(
+                            "http.get requires a URL string, got {}",
+                            other.map_or("nil", VmValue::type_name)
+                        )))
+                    }
+                };
+                let headers = self.http_headers_arg(args.get(1), "http.get()")?;
+                Ok(VmValue::Str(
+                    http_runtime::get(&url, &headers).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "post" => {
+                let url = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    other => {
+                        return Err(self.err(&format!(
+                            "http.post requires a URL string, got {}",
+                            other.map_or("nil", VmValue::type_name)
+                        )))
+                    }
+                };
+                let data = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    other => {
+                        return Err(self.err(&format!(
+                            "http.post requires a body string, got {}",
+                            other.map_or("nil", VmValue::type_name)
+                        )))
+                    }
+                };
+                let headers = self.http_headers_arg(args.get(2), "http.post()")?;
+                Ok(VmValue::Str(
+                    http_runtime::post(&url, &data, &headers).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "head" => {
+                let url = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    other => {
+                        return Err(self.err(&format!(
+                            "http.head requires a URL string, got {}",
+                            other.map_or("nil", VmValue::type_name)
+                        )))
+                    }
+                };
+                let headers = self.http_headers_arg(args.get(1), "http.head()")?;
+                Ok(VmValue::Str(
+                    http_runtime::head(&url, &headers).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "getjson" => {
+                let url = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    other => {
+                        return Err(self.err(&format!(
+                            "http.getjson requires a URL string, got {}",
+                            other.map_or("nil", VmValue::type_name)
+                        )))
+                    }
+                };
+                let headers = self.http_headers_arg(args.get(1), "http.getjson()")?;
+                let body = http_runtime::getjson(&url, &headers).map_err(|e| self.err(&e))?;
+                self.json_loads(&body)
+                    .map_err(|e| self.err(&format!("http.getjson invalid JSON: {}", e)))
+            }
+            _ => Err(self.err(&format!("unknown http function '{}'", name))),
+        }
+    }
+
     fn eval_source(&mut self, src: &str) -> Result<VmValue, String> {
         let mut lexer = crate::lexer::Lexer::new(src);
         let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
@@ -4607,6 +4717,11 @@ impl VM {
             "sqlite" => {
                 for fname in &["execute", "query", "scalar"] {
                     set(&mut d, fname, bf(&format!("sqlite.{}", fname)));
+                }
+            }
+            "http" => {
+                for fname in &["get", "post", "head", "getjson"] {
+                    set(&mut d, fname, bf(&format!("http.{}", fname)));
                 }
             }
             "re" => {

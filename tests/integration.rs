@@ -1,10 +1,12 @@
 // Integration tests for Cool language interpreter
 // Run with: cargo test --test integration
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -169,6 +171,124 @@ fn assert_logging_file_output(contents: &str) {
     assert!(lines[1].contains("|WARNING|demo|warned"));
     assert!(lines[2].contains("|ERROR|demo|boom"));
     assert!(!contents.contains("hidden"));
+}
+
+fn parse_content_length(request: &str) -> usize {
+    request
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("Content-Length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
+fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn read_http_request(stream: &mut TcpStream) -> String {
+    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(header_end) = find_header_end(&buf) {
+                    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let content_length = parse_content_length(&head);
+                    if buf.len() >= header_end + 4 + content_length {
+                        break;
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock || err.kind() == std::io::ErrorKind::TimedOut => {
+                break
+            }
+            Err(err) => panic!("failed to read test HTTP request: {err}"),
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+fn spawn_http_test_server(expected_requests: usize) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut handled = 0usize;
+        while handled < expected_requests && Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_http_request(&mut stream);
+                    let mut lines = request.lines();
+                    let request_line = lines.next().unwrap_or("");
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().unwrap_or("");
+                    let path = parts.next().unwrap_or("");
+                    let lower = request.to_ascii_lowercase();
+                    let body = request
+                        .split_once("\r\n\r\n")
+                        .map(|(_, body)| body.to_string())
+                        .unwrap_or_default();
+                    let has_test_header = lower.contains("x-test: yes");
+                    let has_accept_json = lower.contains("accept: application/json");
+
+                    let (status, content_type, extra_headers, body_text) = match method {
+                        "GET" if path.ends_with("/plain") => (
+                            "200 OK",
+                            "text/plain",
+                            "X-Reply: plain\r\n",
+                            format!("hello header={}\n", if has_test_header { "yes" } else { "no" }),
+                        ),
+                        "HEAD" if path.ends_with("/plain") => {
+                            ("200 OK", "text/plain", "X-Reply: plain\r\n", String::new())
+                        }
+                        "GET" if path.ends_with("/json") => (
+                            "200 OK",
+                            "application/json",
+                            "",
+                            format!(
+                                "{{\"ok\":true,\"n\":2,\"accept\":{}}}\n",
+                                if has_accept_json { "true" } else { "false" }
+                            ),
+                        ),
+                        "POST" if path.ends_with("/echo") => (
+                            "200 OK",
+                            "text/plain",
+                            "",
+                            format!("{}|header={}", body, if has_test_header { "yes" } else { "no" }),
+                        ),
+                        _ => ("404 Not Found", "text/plain", "", "not found".to_string()),
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n{}",
+                        body_text.len(),
+                        body_text
+                    );
+                    stream.write_all(response.as_bytes()).unwrap();
+                    handled += 1;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("HTTP test server accept failed: {err}"),
+            }
+        }
+        assert_eq!(
+            handled, expected_requests,
+            "HTTP test server handled only {handled}/{expected_requests} requests"
+        );
+    });
+    (base_url, handle)
 }
 
 #[test]
@@ -928,6 +1048,52 @@ print(sqlite.scalar(db, "select name from items where active = ? order by id lim
     let _ = std::fs::remove_file(&db_path);
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["true", "1", "1", "2", "alpha", "2.25", "1", "alpha"]);
+}
+
+#[test]
+fn test_import_http_module() {
+    let (base_url, handle) = spawn_http_test_server(4);
+    let source = format!(
+        r#"import http
+import string
+
+base = "{base_url}"
+print(http.get(base + "/plain", ["X-Test: yes"]).strip())
+print(string.find(http.head(base + "/plain"), "X-Reply: plain") >= 0)
+data = http.getjson(base + "/json")
+print(data["accept"])
+print(data["n"])
+print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
+"#
+    );
+
+    let result = run_cool(&source).unwrap();
+    handle.join().unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["hello header=yes", "true", "true", "2", "payload|header=yes"]);
+}
+
+#[test]
+fn test_vm_import_http_module() {
+    let (base_url, handle) = spawn_http_test_server(4);
+    let source = format!(
+        r#"import http
+import string
+
+base = "{base_url}"
+print(http.get(base + "/plain", ["X-Test: yes"]).strip())
+print(string.find(http.head(base + "/plain"), "X-Reply: plain") >= 0)
+data = http.getjson(base + "/json")
+print(data["accept"])
+print(data["n"])
+print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
+"#
+    );
+
+    let result = run_cool_vm(&source).unwrap();
+    handle.join().unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["hello header=yes", "true", "true", "2", "payload|header=yes"]);
 }
 
 #[test]

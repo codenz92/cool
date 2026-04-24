@@ -3,6 +3,7 @@ use crate::ast::*;
 use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
+use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::sqlite_runtime::{self, SqlData};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
@@ -1167,6 +1168,16 @@ impl Interpreter {
                     );
                 }
                 env.set_local("sqlite".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "http" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["get", "post", "head", "getjson"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("http.{}", fn_name)),
+                    );
+                }
+                env.set_local("http".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "re" => {
                 let mut map = IndexedMap::new();
@@ -2373,6 +2384,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("sqlite.") {
             return self.call_sqlite_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("http.") {
+            return self.call_http_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("re.") {
             return self.call_re_fn(f, args);
@@ -4609,6 +4623,69 @@ class Stack:
                 &sqlite_runtime::scalar(&path, &sql, &params).map_err(|e| self.err(&e))?,
             )),
             _ => Err(self.err(&format!("sqlite has no function '{}'", name))),
+        }
+    }
+
+    fn http_headers_arg(&self, value: Option<&Value>, context: &str) -> Result<Vec<String>, String> {
+        match value {
+            None | Some(Value::Nil) => Ok(Vec::new()),
+            Some(Value::List(items)) => items
+                .borrow()
+                .iter()
+                .map(|item| match item {
+                    Value::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "{context} headers must contain only strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(Value::Tuple(items)) => items
+                .iter()
+                .map(|item| match item {
+                    Value::Str(s) => Ok(s.clone()),
+                    other => Err(self.err(&format!(
+                        "{context} headers must contain only strings, got {}",
+                        other.type_name()
+                    ))),
+                })
+                .collect(),
+            Some(other) => Err(self.err(&format!(
+                "{context} headers must be a list, tuple, or nil, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn call_http_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "get" => {
+                let url = req_str_arg(&args, 0, "http.get")?;
+                let headers = self.http_headers_arg(args.get(1), "http.get()")?;
+                Ok(Value::Str(http_runtime::get(&url, &headers).map_err(|e| self.err(&e))?))
+            }
+            "post" => {
+                let url = req_str_arg(&args, 0, "http.post")?;
+                let data = req_str_arg(&args, 1, "http.post")?;
+                let headers = self.http_headers_arg(args.get(2), "http.post()")?;
+                Ok(Value::Str(
+                    http_runtime::post(&url, &data, &headers).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "head" => {
+                let url = req_str_arg(&args, 0, "http.head")?;
+                let headers = self.http_headers_arg(args.get(1), "http.head()")?;
+                Ok(Value::Str(
+                    http_runtime::head(&url, &headers).map_err(|e| self.err(&e))?,
+                ))
+            }
+            "getjson" => {
+                let url = req_str_arg(&args, 0, "http.getjson")?;
+                let headers = self.http_headers_arg(args.get(1), "http.getjson()")?;
+                let body = http_runtime::getjson(&url, &headers).map_err(|e| self.err(&e))?;
+                json_parse(&body).map_err(|e| self.err(&format!("http.getjson() invalid JSON: {}", e)))
+            }
+            _ => Err(self.err(&format!("http has no function '{}'", name))),
         }
     }
 
