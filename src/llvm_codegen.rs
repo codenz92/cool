@@ -8,7 +8,7 @@
 //   3. compile_program() writes the runtime to /tmp, compiles it with `cc`,
 //      emits the LLVM module to a .o file, then links both together.
 
-use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Param, Program, Stmt, UnaryOp};
+use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
 use crate::project::ModuleResolver;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -70,6 +70,32 @@ const RUNTIME_C: &str = r#"
 #define TAG_FFI_LIB 13
 #define TAG_FFI_FUNC 14
 #define TAG_SOCKET  15
+#define TAG_STRUCT  16
+
+#define SFIELD_I8   0
+#define SFIELD_U8   1
+#define SFIELD_I16  2
+#define SFIELD_U16  3
+#define SFIELD_I32  4
+#define SFIELD_U32  5
+#define SFIELD_I64  6
+#define SFIELD_U64  7
+#define SFIELD_F32  8
+#define SFIELD_F64  9
+#define SFIELD_BOOL 10
+
+typedef struct {
+    const char* name;
+    int type_code;
+    int byte_offset;
+    int byte_size;
+} CoolStructField;
+
+typedef struct {
+    const char* struct_name;
+    int num_fields;
+    const CoolStructField* fields;
+} CoolStructLayout;
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -980,6 +1006,11 @@ CoolVal cool_object_new(CoolVal class_val) {
 
 CoolVal cool_get_attr(CoolVal obj, const char* name) {
     if (obj.tag == TAG_DICT) return cool_dict_get_opt(obj, cv_str(name));
+    if (obj.tag == TAG_STRUCT) {
+        /* forward to cool_struct_get_field declared below */
+        extern CoolVal cool_struct_get_field(CoolVal, const char*);
+        return cool_struct_get_field(obj, name);
+    }
     if (obj.tag != TAG_OBJECT) return cv_nil();
     CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
     if (!o->attrs) return cv_nil();
@@ -988,11 +1019,98 @@ CoolVal cool_get_attr(CoolVal obj, const char* name) {
 
 CoolVal cool_set_attr(CoolVal obj, const char* name, CoolVal value) {
     if (obj.tag == TAG_DICT) return cool_dict_set(obj, cv_str(name), value);
+    if (obj.tag == TAG_STRUCT) {
+        extern CoolVal cool_struct_set_field(CoolVal, const char*, CoolVal);
+        return cool_struct_set_field(obj, name, value);
+    }
     if (obj.tag != TAG_OBJECT) return cv_nil();
     CoolObject* o = (CoolObject*)(intptr_t)obj.payload;
     if (!o->attrs) return cv_nil();
     attrmap_set(o->attrs, name, value);
     return value;
+}
+
+/* ── Struct side table & field access ───────────────────────────────────── */
+
+typedef struct { void* ptr; const CoolStructLayout* layout; } CoolStructEntry;
+static CoolStructEntry* g_struct_table = NULL;
+static int g_struct_table_size = 0;
+static int g_struct_table_cap = 0;
+
+static int64_t cool_to_i64(CoolVal v) {
+    if (v.tag == TAG_INT || v.tag == TAG_BOOL) return v.payload;
+    if (v.tag == TAG_FLOAT) return (int64_t)cv_as_float(v);
+    return 0;
+}
+
+CoolVal cool_struct_new(int64_t byte_size, const CoolStructLayout* layout) {
+    void* mem = calloc(1, (size_t)byte_size);
+    if (g_struct_table_size >= g_struct_table_cap) {
+        int new_cap = g_struct_table_cap == 0 ? 64 : g_struct_table_cap * 2;
+        g_struct_table = (CoolStructEntry*)realloc(g_struct_table, (size_t)new_cap * sizeof(CoolStructEntry));
+        g_struct_table_cap = new_cap;
+    }
+    g_struct_table[g_struct_table_size++] = (CoolStructEntry){mem, layout};
+    CoolVal v; v.tag = TAG_STRUCT; v.payload = (int64_t)(intptr_t)mem;
+    return v;
+}
+
+static const CoolStructLayout* cool_struct_lookup(void* ptr) {
+    for (int i = g_struct_table_size - 1; i >= 0; i--)
+        if (g_struct_table[i].ptr == ptr) return g_struct_table[i].layout;
+    return NULL;
+}
+
+CoolVal cool_struct_get_field(CoolVal v, const char* name) {
+    if (v.tag != TAG_STRUCT) return cv_nil();
+    char* mem = (char*)(intptr_t)v.payload;
+    const CoolStructLayout* layout = cool_struct_lookup(mem);
+    if (!layout) return cv_nil();
+    for (int i = 0; i < layout->num_fields; i++) {
+        if (strcmp(layout->fields[i].name, name) != 0) continue;
+        char* p = mem + layout->fields[i].byte_offset;
+        switch (layout->fields[i].type_code) {
+            case SFIELD_I8:   return cv_int((int64_t)*(int8_t*)p);
+            case SFIELD_U8:   return cv_int((int64_t)*(uint8_t*)p);
+            case SFIELD_I16:  return cv_int((int64_t)*(int16_t*)p);
+            case SFIELD_U16:  return cv_int((int64_t)*(uint16_t*)p);
+            case SFIELD_I32:  return cv_int((int64_t)*(int32_t*)p);
+            case SFIELD_U32:  return cv_int((int64_t)*(uint32_t*)p);
+            case SFIELD_I64:  return cv_int(*(int64_t*)p);
+            case SFIELD_U64:  return cv_int((int64_t)*(uint64_t*)p);
+            case SFIELD_F32:  { float f; memcpy(&f, p, 4); return cv_float((double)f); }
+            case SFIELD_F64:  { double d; memcpy(&d, p, 8); return cv_float(d); }
+            case SFIELD_BOOL: return cv_bool((int)*(uint8_t*)p);
+            default: return cv_nil();
+        }
+    }
+    return cv_nil();
+}
+
+CoolVal cool_struct_set_field(CoolVal v, const char* name, CoolVal value) {
+    if (v.tag != TAG_STRUCT) return cv_nil();
+    char* mem = (char*)(intptr_t)v.payload;
+    const CoolStructLayout* layout = cool_struct_lookup(mem);
+    if (!layout) return cv_nil();
+    for (int i = 0; i < layout->num_fields; i++) {
+        if (strcmp(layout->fields[i].name, name) != 0) continue;
+        char* p = mem + layout->fields[i].byte_offset;
+        switch (layout->fields[i].type_code) {
+            case SFIELD_I8:  { int8_t   x = (int8_t)  cool_to_i64(value); memcpy(p, &x, 1); break; }
+            case SFIELD_U8:  { uint8_t  x = (uint8_t) cool_to_i64(value); memcpy(p, &x, 1); break; }
+            case SFIELD_I16: { int16_t  x = (int16_t) cool_to_i64(value); memcpy(p, &x, 2); break; }
+            case SFIELD_U16: { uint16_t x = (uint16_t)cool_to_i64(value); memcpy(p, &x, 2); break; }
+            case SFIELD_I32: { int32_t  x = (int32_t) cool_to_i64(value); memcpy(p, &x, 4); break; }
+            case SFIELD_U32: { uint32_t x = (uint32_t)cool_to_i64(value); memcpy(p, &x, 4); break; }
+            case SFIELD_I64: { int64_t  x = cool_to_i64(value); memcpy(p, &x, 8); break; }
+            case SFIELD_U64: { uint64_t x = (uint64_t)cool_to_i64(value); memcpy(p, &x, 8); break; }
+            case SFIELD_F32: { float  x = (float) cv_to_float(value); memcpy(p, &x, 4); break; }
+            case SFIELD_F64: { double x = cv_to_float(value); memcpy(p, &x, 8); break; }
+            case SFIELD_BOOL:{ uint8_t x = cool_truthy(value) ? 1 : 0; memcpy(p, &x, 1); break; }
+        }
+        return value;
+    }
+    return cv_nil();
 }
 
 int64_t cool_get_method_ptr(CoolVal class_val, const char* name) {
@@ -7515,6 +7633,38 @@ struct RuntimeFns<'ctx> {
     cool_module_call: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_call_fn_ptr: FunctionValue<'ctx>,
+    // struct support
+    cool_struct_new: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_struct_get_field: FunctionValue<'ctx>,
+    #[allow(dead_code)]
+    cool_struct_set_field: FunctionValue<'ctx>,
+}
+
+/// Per-struct-type metadata used for GEP-based field access.
+#[derive(Clone)]
+struct StructInfo<'ctx> {
+    /// The actual LLVM struct type (fields only, no header).
+    llvm_type: inkwell::types::StructType<'ctx>,
+    /// Field names in declaration order.
+    field_names: Vec<String>,
+    /// SFIELD_* type codes matching the C defines (reserved for packed/union work).
+    #[allow(dead_code)]
+    field_type_codes: Vec<u32>,
+    /// Byte offsets (computed from LLVM natural alignment rules).
+    #[allow(dead_code)]
+    field_byte_offsets: Vec<u32>,
+    /// Byte sizes for each field.
+    field_byte_sizes: Vec<u32>,
+    /// Whether each field is a float type (needs fpext/fptrunc).
+    field_is_float: Vec<bool>,
+    /// Whether each integer field is signed (for sext on GEP load).
+    field_is_signed: Vec<bool>,
+    /// LLVM basic type for each field (for GEP loads/stores).
+    field_llvm_types: Vec<inkwell::types::BasicTypeEnum<'ctx>>,
+    /// Pointer to the global CoolStructLayout constant for this type (reserved for extern/FFI passing).
+    #[allow(dead_code)]
+    layout_global: inkwell::values::GlobalValue<'ctx>,
 }
 
 // ── Compiler struct ───────────────────────────────────────────────────────────
@@ -7565,6 +7715,10 @@ struct Compiler<'ctx> {
     cleanup_stack: Vec<CleanupEntry<'ctx>>,
     /// Active try contexts in the current function.
     try_stack: Vec<TryContext>,
+    /// Compiled struct type definitions (name → StructInfo).
+    structs: HashMap<String, StructInfo<'ctx>>,
+    /// Local variable → struct type name, for GEP fast-path field access.
+    var_struct_types: HashMap<String, String>,
 }
 
 /// Information about a compiled class
@@ -7653,6 +7807,8 @@ impl<'ctx> Compiler<'ctx> {
             allow_toplevel_defs: false,
             cleanup_stack: Vec::new(),
             try_stack: Vec::new(),
+            structs: HashMap::new(),
+            var_struct_types: HashMap::new(),
         }
     }
 
@@ -7802,6 +7958,9 @@ impl<'ctx> Compiler<'ctx> {
             cool_module_get_attr: decl!("cool_module_get_attr", cv_type.fn_type(&[ptrm, ptrm], false)),
             cool_module_call: decl!("cool_module_call", cv_type.fn_type(&[ptrm, ptrm, i32m], true)),
             cool_call_fn_ptr: decl!("cool_call_fn_ptr", cv_type.fn_type(&[i64m, i32m], true)),
+            cool_struct_new: decl!("cool_struct_new", cv_type.fn_type(&[i64m, ptrm], false)),
+            cool_struct_get_field: decl!("cool_struct_get_field", cv_type.fn_type(&[cv, ptrm], false)),
+            cool_struct_set_field: decl!("cool_struct_set_field", cv_type.fn_type(&[cv, ptrm, cv], false)),
         }
     }
 
@@ -8186,6 +8345,13 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── variable assignment ───────────────────────────────────────────
             Stmt::Assign { name, value } => {
+                // Detect struct construction for GEP fast path tracking
+                let struct_type_name = if let Expr::Call { callee, .. } = value {
+                    if let Expr::Ident(n) = callee.as_ref() {
+                        if self.structs.contains_key(n.as_str()) { Some(n.clone()) } else { None }
+                    } else { None }
+                } else { None };
+
                 let val = self.compile_expr(value)?;
                 let ptr = if let Some(&p) = self.locals.get(name) {
                     p
@@ -8195,6 +8361,12 @@ impl<'ctx> Compiler<'ctx> {
                     p
                 };
                 self.builder.build_store(ptr, val).unwrap();
+
+                if let Some(sname) = struct_type_name {
+                    self.var_struct_types.insert(name.clone(), sname);
+                } else {
+                    self.var_struct_types.remove(name);
+                }
             }
 
             // ── augmented assignment  (x += expr, etc.) ───────────────────────
@@ -8216,6 +8388,48 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── attribute assignment: obj.attr = value ────────────────────────
             Stmt::SetAttr { object, name, value } => {
+                // GEP fast path: statically-known struct variable
+                if let Expr::Ident(var_name) = object {
+                    if let Some(struct_type_name) = self.var_struct_types.get(var_name).cloned() {
+                        if let Some(sinfo) = self.structs.get(&struct_type_name).cloned() {
+                            if let Some(field_idx) = sinfo.field_names.iter().position(|n| n == name) {
+                                let val = self.compile_expr(value)?;
+                                let ptr = self.locals[var_name];
+                                let cv_val = self.builder.build_load(self.cv_type, ptr, "sv_load").unwrap().into_struct_value();
+                                let payload = self.builder.build_extract_value(cv_val, 1, "sv_payload").unwrap().into_int_value();
+                                let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+                                let struct_ptr = self.builder.build_int_to_ptr(payload, ptr_type, "sv_ptr").unwrap();
+                                let i32t = self.context.i32_type();
+                                let field_ptr = unsafe {
+                                    self.builder.build_gep(sinfo.llvm_type, struct_ptr,
+                                        &[i32t.const_int(0, false), i32t.const_int(field_idx as u64, false)],
+                                        &format!("{name}_wptr"))
+                                }.unwrap();
+                                let val_payload = self.builder.build_extract_value(val, 1, "wval_payload").unwrap().into_int_value();
+                                let store_val: inkwell::values::BasicValueEnum<'ctx> = if sinfo.field_is_float[field_idx] {
+                                    let f64val = self.builder.build_bitcast(val_payload, self.context.f64_type(), "wf64").unwrap();
+                                    if sinfo.field_byte_sizes[field_idx] == 4 {
+                                        self.builder.build_float_trunc(f64val.into_float_value(), self.context.f32_type(), "wf32").unwrap().into()
+                                    } else {
+                                        f64val.into()
+                                    }
+                                } else {
+                                    let target_type = match sinfo.field_llvm_types[field_idx] {
+                                        inkwell::types::BasicTypeEnum::IntType(t) => t,
+                                        _ => unreachable!(),
+                                    };
+                                    if target_type.get_bit_width() == 64 {
+                                        val_payload.into()
+                                    } else {
+                                        self.builder.build_int_truncate(val_payload, target_type, "wtrunc").unwrap().into()
+                                    }
+                                };
+                                self.builder.build_store(field_ptr, store_val).unwrap();
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
                 let obj_val = self.compile_expr(object)?;
                 let val = self.compile_expr(value)?;
                 let attr_name_ptr = self
@@ -8298,42 +8512,7 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             Stmt::Struct { name, fields } => {
-                // Lower struct to a class with a typed-field __init__.
-                let mut init_body: Vec<Stmt> = Vec::new();
-                let mut params = vec![Param {
-                    name: "self".to_string(),
-                    default: None,
-                    is_vararg: false,
-                    is_kwarg: false,
-                }];
-                for (field_name, type_name) in fields {
-                    params.push(Param {
-                        name: field_name.clone(),
-                        default: None,
-                        is_vararg: false,
-                        is_kwarg: false,
-                    });
-                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
-                        Expr::Call {
-                            callee: Box::new(Expr::Ident(type_name.clone())),
-                            args: vec![Expr::Ident(field_name.clone())],
-                            kwargs: vec![],
-                        }
-                    } else {
-                        Expr::Ident(field_name.clone())
-                    };
-                    init_body.push(Stmt::SetAttr {
-                        object: Expr::Ident("self".to_string()),
-                        name: field_name.clone(),
-                        value: coerce_expr,
-                    });
-                }
-                let class_body = vec![Stmt::FnDef {
-                    name: "__init__".to_string(),
-                    params,
-                    body: init_body,
-                }];
-                self.compile_class(name, None, &class_body)?;
+                self.compile_struct_def(name, fields)?;
             }
 
             // ── with expr as name ───────────────────────────────────────────
@@ -8594,6 +8773,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
         let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
         self.allow_toplevel_defs = false;
         self.imported_modules = saved_imports.clone();
@@ -8635,6 +8815,7 @@ impl<'ctx> Compiler<'ctx> {
         self.imported_user_modules = saved_user_modules;
         self.cleanup_stack = saved_cleanups;
         self.try_stack = saved_tries;
+        self.var_struct_types = saved_var_struct_types;
         self.allow_toplevel_defs = saved_allow_toplevel_defs;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
@@ -9080,6 +9261,209 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_store(class_ptr, class_ctor).unwrap();
 
         // Store class info for later instantiation
+        Ok(())
+    }
+
+    // ── struct definition ─────────────────────────────────────────────────────
+
+    fn compile_struct_def(&mut self, name: &str, fields: &[(String, String)]) -> Result<(), String> {
+        // Map type string → (LLVM basic type, SFIELD_* code, byte size, is_float, is_signed)
+        let field_meta: Vec<_> = fields.iter().map(|(fname, tname)| {
+            let (llvm_ty, type_code, byte_size, is_float, is_signed): (inkwell::types::BasicTypeEnum<'ctx>, u32, u32, bool, bool) = match tname.as_str() {
+                "i8"          => (self.context.i8_type().into(),  0,  1, false, true),
+                "u8"          => (self.context.i8_type().into(),  1,  1, false, false),
+                "i16"         => (self.context.i16_type().into(), 2,  2, false, true),
+                "u16"         => (self.context.i16_type().into(), 3,  2, false, false),
+                "i32"         => (self.context.i32_type().into(), 4,  4, false, true),
+                "u32"         => (self.context.i32_type().into(), 5,  4, false, false),
+                "i64"         => (self.context.i64_type().into(), 6,  8, false, true),
+                "u64"         => (self.context.i64_type().into(), 7,  8, false, false),
+                "f32"         => (self.context.f32_type().into(), 8,  4, true,  false),
+                "f64" | "float" => (self.context.f64_type().into(), 9, 8, true, false),
+                "bool"        => (self.context.i8_type().into(),  10, 1, false, false),
+                other => return Err(format!(
+                    "struct '{name}': field '{fname}' has unsupported type '{other}' (structs support only i8-i64, u8-u64, f32, f64, bool)"
+                )),
+            };
+            Ok((fname.clone(), llvm_ty, type_code, byte_size, is_float, is_signed))
+        }).collect::<Result<_, String>>()?;
+
+        // Compute field offsets using LLVM natural alignment (align = min(size, 8))
+        let mut offsets: Vec<u32> = Vec::with_capacity(field_meta.len());
+        let mut cursor: u32 = 0;
+        let mut max_align: u32 = 1;
+        for (_, _, _, byte_size, _, _) in &field_meta {
+            let align = (*byte_size).min(8);
+            max_align = max_align.max(align);
+            cursor = cursor.next_multiple_of(align);
+            offsets.push(cursor);
+            cursor += byte_size;
+        }
+        let _ = cursor.next_multiple_of(max_align); // total size used only for documentation
+
+        // Create named LLVM struct type for this struct's fields
+        let llvm_field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
+            field_meta.iter().map(|(_, ty, _, _, _, _)| *ty).collect();
+        let struct_llvm_type = self.context.opaque_struct_type(&format!("{name}_body"));
+        struct_llvm_type.set_body(&llvm_field_types, false);
+
+        // Build global CoolStructField array constant
+        let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+        let i32_type = self.context.i32_type();
+        let cool_struct_field_llvm = self.context.struct_type(&[
+            ptr_type.into(), i32_type.into(), i32_type.into(), i32_type.into(),
+        ], false);
+
+        let field_consts: Vec<_> = field_meta.iter().zip(offsets.iter())
+            .map(|((fname, _, type_code, byte_size, _, _), offset)| {
+                let name_gptr = self.builder
+                    .build_global_string_ptr(fname, &format!("sf_{name}_{fname}_name"))
+                    .unwrap();
+                cool_struct_field_llvm.const_named_struct(&[
+                    name_gptr.as_pointer_value().as_basic_value_enum(),
+                    i32_type.const_int(*type_code as u64, false).into(),
+                    i32_type.const_int(*offset as u64, false).into(),
+                    i32_type.const_int(*byte_size as u64, false).into(),
+                ])
+            })
+            .collect();
+
+        let num_fields = field_meta.len() as u32;
+        let fields_array_type = cool_struct_field_llvm.array_type(num_fields);
+        let fields_array_val = cool_struct_field_llvm.const_array(&field_consts);
+        let fields_global = self.module.add_global(fields_array_type, None, &format!("{name}_struct_fields"));
+        fields_global.set_constant(true);
+        fields_global.set_linkage(inkwell::module::Linkage::Private);
+        fields_global.set_initializer(&fields_array_val);
+
+        // Build CoolStructLayout global: { ptr struct_name, i32 num_fields, ptr fields }
+        let cool_struct_layout_llvm = self.context.struct_type(&[
+            ptr_type.into(), i32_type.into(), ptr_type.into(),
+        ], false);
+        let struct_name_gptr = self.builder
+            .build_global_string_ptr(name, &format!("sf_{name}_struct_name"))
+            .unwrap();
+        let layout_const = cool_struct_layout_llvm.const_named_struct(&[
+            struct_name_gptr.as_pointer_value().as_basic_value_enum(),
+            i32_type.const_int(num_fields as u64, false).into(),
+            fields_global.as_pointer_value().as_basic_value_enum(),
+        ]);
+        let layout_global = self.module.add_global(cool_struct_layout_llvm, None, &format!("{name}_struct_layout"));
+        layout_global.set_constant(true);
+        layout_global.set_linkage(inkwell::module::Linkage::Private);
+        layout_global.set_initializer(&layout_const);
+
+        // Build constructor function: StructName_ctor(field0: CoolVal, ...) -> CoolVal
+        let ctor_name = format!("{}{}_ctor", self.symbol_prefix, name);
+        let cv = self.cv_type.into();
+        let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
+            (0..num_fields).map(|_| cv).collect();
+        let ctor_fn_type = self.cv_type.fn_type(&param_types, false);
+        let ctor_fn = self.module.add_function(&ctor_name, ctor_fn_type, None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(ctor_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // sizeof(struct_body) via GEP-from-null trick
+        let null_ptr = ptr_type.const_null();
+        let size_gep = unsafe {
+            self.builder.build_gep(struct_llvm_type, null_ptr,
+                &[self.context.i32_type().const_int(1, false)], "struct_sizeof")
+        }.unwrap();
+        let byte_size_val = self.builder.build_ptr_to_int(size_gep, self.context.i64_type(), "byte_size").unwrap();
+
+        // Call cool_struct_new(byte_size, &layout)
+        let cv_val = self.builder.build_call(
+            self.rt.cool_struct_new,
+            &[byte_size_val.into(), layout_global.as_pointer_value().into()],
+            "new_struct",
+        ).unwrap().try_as_basic_value().left().unwrap().into_struct_value();
+
+        // Extract raw pointer from CoolVal payload (field 1 = i64)
+        let payload_i64 = self.builder.build_extract_value(cv_val, 1, "struct_payload").unwrap();
+        let struct_ptr = self.builder.build_int_to_ptr(
+            payload_i64.into_int_value(), ptr_type, "struct_ptr"
+        ).unwrap();
+
+        // Store each field via GEP
+        for (i, ((fname, _, _type_code, byte_size, is_float, _is_signed), _offset)) in
+            field_meta.iter().zip(offsets.iter()).enumerate()
+        {
+            let param_val = ctor_fn.get_nth_param(i as u32).unwrap().into_struct_value();
+            let field_ptr = unsafe {
+                self.builder.build_gep(struct_llvm_type, struct_ptr,
+                    &[i32_type.const_int(0, false), i32_type.const_int(i as u64, false)],
+                    &format!("{fname}_ptr"))
+            }.unwrap();
+
+            let store_val: inkwell::values::BasicValueEnum<'ctx> = if *is_float {
+                // Extract float from CoolVal: payload holds bit-pattern; call cv_as_float equivalent
+                // Simplest: call cool_struct_get_field to not duplicate float logic, but we already
+                // have the CoolVal. Instead, use the float bit-pattern in payload.
+                let payload = self.builder.build_extract_value(param_val, 1, "fpayload").unwrap();
+                let payload_i64 = payload.into_int_value();
+                if *byte_size == 4 {
+                    // f32: double→f32 conversion; extract double from CoolVal then truncate
+                    let bits_f64 = self.builder.build_bitcast(payload_i64, self.context.f64_type(), "f64bits").unwrap();
+                    let f32_val = self.builder.build_float_trunc(bits_f64.into_float_value(), self.context.f32_type(), "f32val").unwrap();
+                    f32_val.into()
+                } else {
+                    let f64_val = self.builder.build_bitcast(payload_i64, self.context.f64_type(), "f64val").unwrap();
+                    f64_val.into()
+                }
+            } else {
+                // Integer / bool: get payload (i64), truncate to field size
+                let payload = self.builder.build_extract_value(param_val, 1, "ipayload").unwrap();
+                let payload_i64 = payload.into_int_value();
+                let field_int_type = field_meta[i].1; // BasicTypeEnum
+                let target_int_type = match field_int_type {
+                    inkwell::types::BasicTypeEnum::IntType(t) => t,
+                    _ => unreachable!(),
+                };
+                if target_int_type.get_bit_width() == 64 {
+                    payload_i64.into()
+                } else {
+                    self.builder.build_int_truncate(payload_i64, target_int_type, &format!("{fname}_trunc")).unwrap().into()
+                }
+            };
+            self.builder.build_store(field_ptr, store_val).unwrap();
+        }
+
+        self.builder.build_return(Some(&cv_val)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        // Register constructor as a class (reuses existing call dispatch)
+        self.classes.insert(name.to_string(), ClassInfo {
+            constructor: ctor_fn,
+            methods: HashMap::new(),
+            method_params: HashMap::new(),
+            attributes: Vec::new(),
+            parent: None,
+            constructor_params: fields.iter().map(|(fname, _)| crate::ast::Param {
+                name: fname.clone(),
+                default: None,
+                is_vararg: false,
+                is_kwarg: false,
+            }).collect(),
+        });
+
+        // Register struct info for GEP fast path
+        self.structs.insert(name.to_string(), StructInfo {
+            llvm_type: struct_llvm_type,
+            field_names: field_meta.iter().map(|(n, _, _, _, _, _)| n.clone()).collect(),
+            field_type_codes: field_meta.iter().map(|(_, _, tc, _, _, _)| *tc).collect(),
+            field_byte_offsets: offsets,
+            field_byte_sizes: field_meta.iter().map(|(_, _, _, bs, _, _)| *bs).collect(),
+            field_is_float: field_meta.iter().map(|(_, _, _, _, f, _)| *f).collect(),
+            field_is_signed: field_meta.iter().map(|(_, _, _, _, _, s)| *s).collect(),
+            field_llvm_types: field_meta.iter().map(|(_, ty, _, _, _, _)| *ty).collect(),
+            layout_global,
+        });
+
         Ok(())
     }
 
@@ -9784,6 +10168,50 @@ impl<'ctx> Compiler<'ctx> {
 
             // attribute access: obj.attr
             Expr::Attr { object, name } => {
+                // GEP fast path: statically-known struct variable
+                if let Expr::Ident(var_name) = object.as_ref() {
+                    if let Some(struct_type_name) = self.var_struct_types.get(var_name).cloned() {
+                        if let Some(sinfo) = self.structs.get(&struct_type_name).cloned() {
+                            if let Some(field_idx) = sinfo.field_names.iter().position(|n| n == name) {
+                                let ptr = self.locals[var_name];
+                                let cv_val = self.builder.build_load(self.cv_type, ptr, "sv_load").unwrap().into_struct_value();
+                                let payload = self.builder.build_extract_value(cv_val, 1, "sv_payload").unwrap().into_int_value();
+                                let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+                                let struct_ptr = self.builder.build_int_to_ptr(payload, ptr_type, "sv_ptr").unwrap();
+                                let i32t = self.context.i32_type();
+                                let field_ptr = unsafe {
+                                    self.builder.build_gep(sinfo.llvm_type, struct_ptr,
+                                        &[i32t.const_int(0, false), i32t.const_int(field_idx as u64, false)],
+                                        &format!("{name}_fptr"))
+                                }.unwrap();
+                                let field_llvm_type = sinfo.field_llvm_types[field_idx];
+                                let raw = self.builder.build_load(field_llvm_type, field_ptr, &format!("{name}_raw")).unwrap();
+                                let result = if sinfo.field_is_float[field_idx] {
+                                    let fval = if sinfo.field_byte_sizes[field_idx] == 4 {
+                                        self.builder.build_float_ext(raw.into_float_value(), self.context.f64_type(), "f32ext").unwrap()
+                                    } else {
+                                        raw.into_float_value()
+                                    };
+                                    let cv_float_fn = self.rt.cv_float;
+                                    self.builder.build_call(cv_float_fn, &[fval.into()], "cv_f")
+                                        .unwrap().try_as_basic_value().left().unwrap().into_struct_value()
+                                } else {
+                                    let ival = raw.into_int_value();
+                                    let i64val = if sinfo.field_is_signed[field_idx] {
+                                        self.builder.build_int_s_extend(ival, self.context.i64_type(), "sext").unwrap()
+                                    } else {
+                                        self.builder.build_int_z_extend(ival, self.context.i64_type(), "zext").unwrap()
+                                    };
+                                    let cv_int_fn = self.rt.cv_int;
+                                    self.builder.build_call(cv_int_fn, &[i64val.into()], "cv_i")
+                                        .unwrap().try_as_basic_value().left().unwrap().into_struct_value()
+                                };
+                                return Ok(result);
+                            }
+                        }
+                    }
+                }
+
                 if let Expr::Ident(module_name) = object.as_ref() {
                     if self.imported_modules.contains(module_name) {
                         let module_ptr = self
@@ -10410,6 +10838,24 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if let Expr::Ident(name) = callee {
+            // Struct instantiation — direct LLVM args, not global-arg passing
+            if self.structs.contains_key(name) {
+                let (ctor_fn, ctor_params) = {
+                    let sinfo = self.structs.get(name).unwrap();
+                    let ctor_name = format!("{}{}_ctor", self.symbol_prefix, name);
+                    let ctor_fn = self.module.get_function(&ctor_name)
+                        .ok_or_else(|| format!("struct '{name}' constructor not found"))?;
+                    let params: Vec<crate::ast::Param> = sinfo.field_names.iter().map(|n| crate::ast::Param {
+                        name: n.clone(), default: None, is_vararg: false, is_kwarg: false,
+                    }).collect();
+                    (ctor_fn, params)
+                };
+                let compiled = self.bind_call_args(&ctor_params, args, kwargs, 0)?;
+                let call_args: Vec<BasicMetadataValueEnum<'ctx>> = compiled.iter().map(|v| (*v).into()).collect();
+                return Ok(self.builder.build_call(ctor_fn, &call_args, "struct_new")
+                    .unwrap().try_as_basic_value().left().unwrap().into_struct_value());
+            }
+
             if self.classes.contains_key(name) {
                 let (constructor, ctor_params) = {
                     let class_info = self.classes.get(name).unwrap();
@@ -10579,6 +11025,24 @@ impl<'ctx> Compiler<'ctx> {
             Expr::Ident(n) => n.clone(),
             other => return Err(format!("only named function calls are supported; got {other:?}")),
         };
+
+        // ── Check for struct instantiation (direct LLVM args, no global-arg passing) ──
+        if self.structs.contains_key(&name) {
+            let (ctor_fn, ctor_params) = {
+                let sinfo = self.structs.get(&name).unwrap();
+                let ctor_name = format!("{}{}_ctor", self.symbol_prefix, name);
+                let ctor_fn = self.module.get_function(&ctor_name)
+                    .ok_or_else(|| format!("struct '{name}' constructor not found"))?;
+                let params: Vec<crate::ast::Param> = sinfo.field_names.iter().map(|n| crate::ast::Param {
+                    name: n.clone(), default: None, is_vararg: false, is_kwarg: false,
+                }).collect();
+                (ctor_fn, params)
+            };
+            let compiled = self.bind_call_args(&ctor_params, args, kwargs, 0)?;
+            let call_args: Vec<BasicMetadataValueEnum<'ctx>> = compiled.iter().map(|v| (*v).into()).collect();
+            return Ok(self.builder.build_call(ctor_fn, &call_args, "struct_new")
+                .unwrap().try_as_basic_value().left().unwrap().into_struct_value());
+        }
 
         // ── Check for class instantiation ───────────────────────────────
         if self.classes.contains_key(&name) {
