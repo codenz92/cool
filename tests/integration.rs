@@ -2193,7 +2193,7 @@ fn test_cool_check_subcommand_reports_unresolved_imports() {
     assert!(stderr.contains(main_path.to_str().unwrap()));
     assert!(stderr.contains("unresolved module import 'missing.module'"));
     assert!(stderr.contains("unresolved file import 'missing.cool'"));
-    assert!(stderr.contains("cool check: 2 issue(s) found"));
+    assert!(stderr.contains("cool check: 2 error(s), 0 warning(s)"));
 }
 
 #[test]
@@ -2215,7 +2215,48 @@ fn test_cool_check_subcommand_reports_import_cycles() {
     assert!(stderr.contains(a_path.to_str().unwrap()));
     assert!(stderr.contains(b_path.to_str().unwrap()));
     assert!(stderr.contains("import cycle detected"));
-    assert!(stderr.contains("cool check: 1 issue(s) found"));
+    assert!(stderr.contains("cool check: 1 error(s), 0 warning(s)"));
+}
+
+#[test]
+fn test_cool_check_subcommand_warns_on_duplicate_symbols_without_failing() {
+    let temp_dir = unique_temp_dir("cool_check_command_warnings");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("app").join("util")).unwrap();
+    std::fs::write(temp_dir.join("app").join("util").join("math.cool"), "value = 1\n").unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        r#"import math
+import util.math
+
+def greet():
+    pass
+
+def greet(name):
+    return name
+
+class Person:
+    title = "x"
+
+    def title(self):
+        return "y"
+"#,
+    )
+    .unwrap();
+
+    let main_path = temp_dir.join("app").join("main.cool").canonicalize().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok: 2 module(s) checked, 0 error(s), 3 warning(s)"));
+    assert!(stderr.contains("warning[duplicate_symbol]"));
+    assert!(stderr.contains("warning[duplicate_member]"));
+    assert!(stderr.contains(main_path.to_str().unwrap()));
+    assert!(stderr.contains("top-level symbol 'math'"));
+    assert!(stderr.contains("top-level symbol 'greet'"));
+    assert!(stderr.contains("class 'Person' member 'title'"));
 }
 
 #[test]

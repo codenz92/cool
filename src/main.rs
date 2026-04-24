@@ -567,22 +567,43 @@ or import cycles. With no file argument inside a project, `cool check` uses the 
     };
 
     let report = tooling::build_check_report(&target)?;
+    let error_count = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == tooling::DiagnosticSeverity::Error)
+        .count();
+    let warning_count = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == tooling::DiagnosticSeverity::Warning)
+        .count();
     if json {
         let encoded =
             serde_json::to_string_pretty(&report).map_err(|e| format!("cool check: failed to encode JSON: {e}"))?;
         println!("{encoded}");
-    } else if report.diagnostics.is_empty() {
-        println!("check ok: {} module(s) checked, 0 issue(s)", report.modules_checked);
     } else {
-        for diagnostic in &report.diagnostics {
-            eprintln!("{}", format_tooling_diagnostic(diagnostic));
+        if report.diagnostics.is_empty() {
+            println!("check ok: {} module(s) checked, 0 issue(s)", report.modules_checked);
+        } else {
+            for diagnostic in &report.diagnostics {
+                eprintln!("{}", format_tooling_diagnostic(diagnostic));
+            }
+            if error_count == 0 {
+                println!(
+                    "check ok: {} module(s) checked, 0 error(s), {} warning(s)",
+                    report.modules_checked, warning_count
+                );
+            }
         }
     }
 
-    if report.diagnostics.is_empty() {
+    if error_count == 0 {
         Ok(())
     } else {
-        Err(format!("cool check: {} issue(s) found", report.diagnostics.len()))
+        Err(format!(
+            "cool check: {} error(s), {} warning(s)",
+            error_count, warning_count
+        ))
     }
 }
 

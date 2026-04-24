@@ -236,64 +236,11 @@ pub fn build_inspect_report(path: &Path) -> Result<InspectReport, String> {
         .ok_or_else(|| format!("inspect: '{}' has no parent directory", canonical.display()))?;
     let resolver = ModuleResolver::discover_for_script(source_dir)?;
     let program = parse_file(&canonical)?;
-    let imports = collect_imports(&program, source_dir, &resolver, "inspect")?;
-
-    let mut functions = Vec::new();
-    let mut classes = Vec::new();
-    let mut structs = Vec::new();
-    let mut assignments = Vec::new();
-    let mut current_line = None;
-
-    for stmt in &program {
-        match stmt {
-            Stmt::SetLine(line) => current_line = Some(*line),
-            Stmt::FnDef { name, params, .. } => functions.push(InspectFunction {
-                line: current_line,
-                name: name.clone(),
-                params: inspect_params(params),
-            }),
-            Stmt::Class { name, parent, body } => {
-                let (methods, class_assignments) = inspect_class_body(body);
-                classes.push(InspectClass {
-                    line: current_line,
-                    name: name.clone(),
-                    parent: parent.clone(),
-                    methods,
-                    class_assignments,
-                });
-            }
-            Stmt::Struct {
-                name,
-                fields,
-                is_packed,
-            } => structs.push(InspectStruct {
-                line: current_line,
-                name: name.clone(),
-                is_packed: *is_packed,
-                fields: fields
-                    .iter()
-                    .map(|(field_name, type_name)| InspectStructField {
-                        name: field_name.clone(),
-                        type_name: type_name.clone(),
-                    })
-                    .collect(),
-            }),
-            _ => {
-                if let Some(assignment) = inspect_assignment(stmt, current_line) {
-                    assignments.push(assignment);
-                }
-            }
-        }
-    }
-
-    Ok(InspectReport {
-        path: path_string(&canonical),
-        imports: imports.iter().map(ResolvedImport::export).collect(),
-        functions,
-        classes,
-        structs,
-        assignments,
-    })
+    let imports = collect_imports(&program, source_dir, &resolver, "inspect")?
+        .iter()
+        .map(ResolvedImport::export)
+        .collect();
+    Ok(inspect_program(path_string(&canonical), &program, imports))
 }
 
 pub fn build_inspect_diff(before_path: &Path, after_path: &Path) -> Result<InspectDiffReport, String> {
@@ -315,10 +262,17 @@ pub fn build_inspect_diff(before_path: &Path, after_path: &Path) -> Result<Inspe
 
 pub fn build_check_report(path: &Path) -> Result<CheckReport, String> {
     let graph = build_module_graph(path)?;
+    let mut diagnostics = graph.diagnostics.clone();
+    for module in &graph.modules {
+        let program = parse_file(Path::new(&module.path))?;
+        let report = inspect_program(module.path.clone(), &program, module.imports.clone());
+        diagnostics.extend(check_report_warnings(&report));
+    }
+    diagnostics.sort_by_key(diagnostic_sort_key);
     Ok(CheckReport {
         entry: graph.entry.clone(),
         modules_checked: graph.modules.len(),
-        diagnostics: graph.diagnostics,
+        diagnostics,
     })
 }
 
@@ -721,6 +675,265 @@ fn import_line_for_child(imports: &[ResolvedImport], child: &Path) -> Option<usi
         Some(resolved) if resolved == child => import.line,
         _ => None,
     })
+}
+
+fn check_report_warnings(report: &InspectReport) -> Vec<ToolingDiagnostic> {
+    let mut diagnostics = Vec::new();
+    diagnostics.extend(top_level_duplicate_warnings(report));
+    for class in &report.classes {
+        diagnostics.extend(class_duplicate_warnings(&report.path, class));
+    }
+    diagnostics
+}
+
+fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImport>) -> InspectReport {
+    let mut functions = Vec::new();
+    let mut classes = Vec::new();
+    let mut structs = Vec::new();
+    let mut assignments = Vec::new();
+    let mut current_line = None;
+
+    for stmt in program {
+        match stmt {
+            Stmt::SetLine(line) => current_line = Some(*line),
+            Stmt::FnDef { name, params, .. } => functions.push(InspectFunction {
+                line: current_line,
+                name: name.clone(),
+                params: inspect_params(params),
+            }),
+            Stmt::Class { name, parent, body } => {
+                let (methods, class_assignments) = inspect_class_body(body);
+                classes.push(InspectClass {
+                    line: current_line,
+                    name: name.clone(),
+                    parent: parent.clone(),
+                    methods,
+                    class_assignments,
+                });
+            }
+            Stmt::Struct {
+                name,
+                fields,
+                is_packed,
+            } => structs.push(InspectStruct {
+                line: current_line,
+                name: name.clone(),
+                is_packed: *is_packed,
+                fields: fields
+                    .iter()
+                    .map(|(field_name, type_name)| InspectStructField {
+                        name: field_name.clone(),
+                        type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
+            _ => {
+                if let Some(assignment) = inspect_assignment(stmt, current_line) {
+                    assignments.push(assignment);
+                }
+            }
+        }
+    }
+
+    InspectReport {
+        path,
+        imports,
+        functions,
+        classes,
+        structs,
+        assignments,
+    }
+}
+
+fn top_level_duplicate_warnings(report: &InspectReport) -> Vec<ToolingDiagnostic> {
+    #[derive(Clone)]
+    struct Symbol {
+        line: Option<usize>,
+        kind: &'static str,
+    }
+
+    let mut diagnostics = Vec::new();
+    let mut seen = std::collections::BTreeMap::<String, Symbol>::new();
+
+    for import in &report.imports {
+        if matches!(import.kind, ModuleImportKind::File) {
+            continue;
+        }
+        let binding = import.specifier.rsplit('.').next().unwrap_or(&import.specifier);
+        let symbol = Symbol {
+            line: import.line,
+            kind: "import",
+        };
+        if let Some(previous) = seen.get(binding) {
+            diagnostics.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "duplicate_symbol",
+                path: report.path.clone(),
+                line: import.line,
+                message: format!(
+                    "top-level symbol '{}' ({}) duplicates earlier {} at line {}",
+                    binding,
+                    symbol.kind,
+                    previous.kind,
+                    previous.line.unwrap_or(0)
+                ),
+            });
+        } else {
+            seen.insert(binding.to_string(), symbol);
+        }
+    }
+
+    for function in &report.functions {
+        let symbol = Symbol {
+            line: function.line,
+            kind: "function",
+        };
+        if let Some(previous) = seen.get(&function.name) {
+            diagnostics.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "duplicate_symbol",
+                path: report.path.clone(),
+                line: function.line,
+                message: format!(
+                    "top-level symbol '{}' ({}) duplicates earlier {} at line {}",
+                    function.name,
+                    symbol.kind,
+                    previous.kind,
+                    previous.line.unwrap_or(0)
+                ),
+            });
+        } else {
+            seen.insert(function.name.clone(), symbol);
+        }
+    }
+
+    for class in &report.classes {
+        let symbol = Symbol {
+            line: class.line,
+            kind: "class",
+        };
+        if let Some(previous) = seen.get(&class.name) {
+            diagnostics.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "duplicate_symbol",
+                path: report.path.clone(),
+                line: class.line,
+                message: format!(
+                    "top-level symbol '{}' ({}) duplicates earlier {} at line {}",
+                    class.name,
+                    symbol.kind,
+                    previous.kind,
+                    previous.line.unwrap_or(0)
+                ),
+            });
+        } else {
+            seen.insert(class.name.clone(), symbol);
+        }
+    }
+
+    for structure in &report.structs {
+        let symbol = Symbol {
+            line: structure.line,
+            kind: "struct",
+        };
+        if let Some(previous) = seen.get(&structure.name) {
+            diagnostics.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "duplicate_symbol",
+                path: report.path.clone(),
+                line: structure.line,
+                message: format!(
+                    "top-level symbol '{}' ({}) duplicates earlier {} at line {}",
+                    structure.name,
+                    symbol.kind,
+                    previous.kind,
+                    previous.line.unwrap_or(0)
+                ),
+            });
+        } else {
+            seen.insert(structure.name.clone(), symbol);
+        }
+    }
+
+    diagnostics
+}
+
+fn class_duplicate_warnings(path: &str, class: &InspectClass) -> Vec<ToolingDiagnostic> {
+    #[derive(Clone)]
+    struct Member {
+        line: Option<usize>,
+        kind: &'static str,
+    }
+
+    let mut diagnostics = Vec::new();
+    let mut seen = std::collections::BTreeMap::<String, Member>::new();
+
+    for assignment in &class.class_assignments {
+        for name in &assignment.names {
+            let member = Member {
+                line: assignment.line,
+                kind: "attribute",
+            };
+            if let Some(previous) = seen.get(name) {
+                diagnostics.push(ToolingDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    code: "duplicate_member",
+                    path: path.to_string(),
+                    line: assignment.line,
+                    message: format!(
+                        "class '{}' member '{}' ({}) duplicates earlier {} at line {}",
+                        class.name,
+                        name,
+                        member.kind,
+                        previous.kind,
+                        previous.line.unwrap_or(0)
+                    ),
+                });
+            } else {
+                seen.insert(name.clone(), member);
+            }
+        }
+    }
+
+    for method in &class.methods {
+        let member = Member {
+            line: method.line,
+            kind: "method",
+        };
+        if let Some(previous) = seen.get(&method.name) {
+            diagnostics.push(ToolingDiagnostic {
+                severity: DiagnosticSeverity::Warning,
+                code: "duplicate_member",
+                path: path.to_string(),
+                line: method.line,
+                message: format!(
+                    "class '{}' member '{}' ({}) duplicates earlier {} at line {}",
+                    class.name,
+                    method.name,
+                    member.kind,
+                    previous.kind,
+                    previous.line.unwrap_or(0)
+                ),
+            });
+        } else {
+            seen.insert(method.name.clone(), member);
+        }
+    }
+
+    diagnostics
+}
+
+fn diagnostic_sort_key(diagnostic: &ToolingDiagnostic) -> (u8, String, Option<usize>, &'static str, String) {
+    (
+        match diagnostic.severity {
+            DiagnosticSeverity::Error => 0,
+            DiagnosticSeverity::Warning => 1,
+        },
+        diagnostic.path.clone(),
+        diagnostic.line,
+        diagnostic.code,
+        diagnostic.message.clone(),
+    )
 }
 
 fn diff_keyed<T, F>(before: &[T], after: &[T], key_fn: F) -> DiffSetWithChanges<T>
