@@ -434,7 +434,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `struct` definitions with typed fields (`i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`), positional + keyword construction, and coercion on init across all runtimes
 - [x] Stable binary layout for structs (LLVM struct types, GEP-based field access, side-table dynamic dispatch for function-parameter path)
 - [x] `packed` structs — `packed struct Name:` syntax, consecutive byte layout with no inter-field padding, LLVM packed attribute, GEP + side-table paths both honoured
-- [ ] `union` support
+- [x] `union` support — `union Name:` syntax, all fields share offset 0 (interpreter/VM: class lowering with zero defaults; LLVM: `[max_size x i8]` body, bitcast field access, GEP fast path)
 - [ ] `extern` declarations with calling-convention and symbol control
 - [ ] Linker-section placement for functions and data
 

@@ -199,6 +199,11 @@ pub enum Stmt {
         fields: Vec<(String, String)>, // (field_name, type_name)
         is_packed: bool,
     },
+    /// union Name:\n    field: type\n    ...
+    Union {
+        name: String,
+        fields: Vec<(String, String)>, // (field_name, type_name) — all share the same memory
+    },
     /// try / except / else / finally
     Try {
         body: Vec<Stmt>,

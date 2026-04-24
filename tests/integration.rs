@@ -1492,6 +1492,57 @@ print(area(r))
 }
 
 #[test]
+fn test_union_basic() {
+    let result = run_cool(
+        r#"union Number:
+    a: i32
+    b: i32
+
+v = Number()
+v.a = 42
+print(v.a)
+w = Number(a=100)
+print(w.a)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "42\n100");
+}
+
+#[test]
+fn test_union_zero_init() {
+    let result = run_cool(
+        r#"union Num:
+    x: i32
+    y: f64
+
+v = Num()
+print(v.x)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "0");
+}
+
+#[test]
+fn test_vm_union_basic() {
+    let result = run_cool_vm(
+        r#"union Number:
+    a: i32
+    b: i32
+
+v = Number()
+v.a = 42
+print(v.a)
+w = Number(a=100)
+print(w.a)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "42\n100");
+}
+
+#[test]
 fn test_import_test_module() {
     let result = run_cool(
         r#"import test

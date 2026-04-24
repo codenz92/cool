@@ -826,9 +826,71 @@ impl Interpreter {
                         is_kwarg: false,
                     });
                     // self.field = type_fn(field) — coerce on construction
+                    let coerce_name = match type_name.as_str() {
+                        "f32" | "f64" => "float",
+                        other => other,
+                    };
                     let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
                         Expr::Call {
-                            callee: Box::new(Expr::Ident(type_name.clone())),
+                            callee: Box::new(Expr::Ident(coerce_name.to_string())),
+                            args: vec![Expr::Ident(field_name.clone())],
+                            kwargs: vec![],
+                        }
+                    } else {
+                        Expr::Ident(field_name.clone())
+                    };
+                    init_body.push(Stmt::SetAttr {
+                        object: Expr::Ident("self".to_string()),
+                        name: field_name.clone(),
+                        value: coerce_expr,
+                    });
+                }
+                let init_fn = Value::Function {
+                    name: "__init__".to_string(),
+                    params,
+                    body: init_body,
+                    closure: env.clone(),
+                };
+                let mut methods = HashMap::new();
+                methods.insert("__init__".to_string(), init_fn);
+                let cls = Rc::new(CoolClass {
+                    name: name.clone(),
+                    parent: None,
+                    methods,
+                });
+                env.set_local(name.clone(), Value::Class(cls));
+                Ok(Signal::None)
+            }
+
+            Stmt::Union { name, fields } => {
+                // Lower union to a class with zero-defaulted fields.
+                // Memory-sharing semantics are LLVM-only; in the interpreter each field is independent.
+                let mut init_body = Vec::new();
+                let mut params = vec![crate::ast::Param {
+                    name: "self".to_string(),
+                    default: None,
+                    is_vararg: false,
+                    is_kwarg: false,
+                }];
+                for (field_name, type_name) in fields {
+                    let zero_default = match type_name.as_str() {
+                        "f32" | "f64" | "float" => Expr::Float(0.0),
+                        "bool" => Expr::Bool(false),
+                        _ => Expr::Int(0),
+                    };
+                    params.push(crate::ast::Param {
+                        name: field_name.clone(),
+                        default: Some(zero_default),
+                        is_vararg: false,
+                        is_kwarg: false,
+                    });
+                    let coerce_name = match type_name.as_str() {
+                        "f32" | "f64" => "float",
+                        other => other,
+                    };
+                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                        Expr::Call {
+                            callee: Box::new(Expr::Ident(coerce_name.to_string())),
                             args: vec![Expr::Ident(field_name.clone())],
                             kwargs: vec![],
                         }

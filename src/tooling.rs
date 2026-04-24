@@ -962,6 +962,18 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
                     })
                     .collect(),
             }),
+            Stmt::Union { name, fields } => structs.push(InspectStruct {
+                line: current_line,
+                name: name.clone(),
+                is_packed: false,
+                fields: fields
+                    .iter()
+                    .map(|(field_name, type_name)| InspectStructField {
+                        name: field_name.clone(),
+                        type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
             _ => {
                 if let Some(assignment) = inspect_assignment(stmt, current_line) {
                     assignments.push(assignment);

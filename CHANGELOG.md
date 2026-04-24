@@ -2,6 +2,16 @@
 
 All notable changes to the Cool language project.
 
+## [Unreleased] - Phase 11 In Progress
+
+### Phase 11 — Freestanding Systems Foundation (In Progress)
+
+#### Data Layout And ABI
+
+- `union` declarations with typed fields (`i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`), keyword construction, and zero default init across all runtimes (interpreter, VM, LLVM)
+- Interpreter/VM: `union` lowered to a class with zero-defaulted fields; all fields independently accessible
+- LLVM: `[max_size x i8]` body, bitcast-based field access (all fields at offset 0), zero-arg ctor via `calloc`, kwarg construction emits inline stores
+
 ## [1.1.0] - 2026-04-24 - Phase 10 Complete
 
 ### Phase 10 — Production Readiness And Ecosystem (Complete)

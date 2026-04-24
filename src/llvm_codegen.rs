@@ -15,7 +15,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
-use inkwell::types::StructType;
+use inkwell::types::{BasicType, StructType};
 use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::{HashMap, HashSet};
@@ -7654,6 +7654,8 @@ struct StructInfo<'ctx> {
     /// True if declared `packed struct` — no padding between fields.
     #[allow(dead_code)]
     is_packed: bool,
+    /// True if declared `union` — all fields share offset 0, body is [max_size x i8].
+    is_union: bool,
     /// Field names in declaration order.
     field_names: Vec<String>,
     /// SFIELD_* type codes matching the C defines (reserved for union/extern work).
@@ -8396,7 +8398,7 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── attribute assignment: obj.attr = value ────────────────────────
             Stmt::SetAttr { object, name, value } => {
-                // GEP fast path: statically-known struct variable
+                // GEP fast path: statically-known struct/union variable
                 if let Expr::Ident(var_name) = object {
                     if let Some(struct_type_name) = self.var_struct_types.get(var_name).cloned() {
                         if let Some(sinfo) = self.structs.get(&struct_type_name).cloned() {
@@ -8407,12 +8409,22 @@ impl<'ctx> Compiler<'ctx> {
                                 let payload = self.builder.build_extract_value(cv_val, 1, "sv_payload").unwrap().into_int_value();
                                 let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
                                 let struct_ptr = self.builder.build_int_to_ptr(payload, ptr_type, "sv_ptr").unwrap();
-                                let i32t = self.context.i32_type();
-                                let field_ptr = unsafe {
-                                    self.builder.build_gep(sinfo.llvm_type, struct_ptr,
-                                        &[i32t.const_int(0, false), i32t.const_int(field_idx as u64, false)],
-                                        &format!("{name}_wptr"))
-                                }.unwrap();
+                                // For unions, bitcast the base ptr to the field type (all fields at offset 0).
+                                // For structs, use GEP with the field index.
+                                let field_ptr = if sinfo.is_union {
+                                    self.builder.build_bitcast(
+                                        struct_ptr,
+                                        sinfo.field_llvm_types[field_idx].ptr_type(AddressSpace::default()),
+                                        &format!("{name}_uptr"),
+                                    ).unwrap().into_pointer_value()
+                                } else {
+                                    let i32t = self.context.i32_type();
+                                    unsafe {
+                                        self.builder.build_gep(sinfo.llvm_type, struct_ptr,
+                                            &[i32t.const_int(0, false), i32t.const_int(field_idx as u64, false)],
+                                            &format!("{name}_wptr"))
+                                    }.unwrap()
+                                };
                                 let val_payload = self.builder.build_extract_value(val, 1, "wval_payload").unwrap().into_int_value();
                                 let store_val: inkwell::values::BasicValueEnum<'ctx> = if sinfo.field_is_float[field_idx] {
                                     let f64val = self.builder.build_bitcast(val_payload, self.context.f64_type(), "wf64").unwrap();
@@ -8521,6 +8533,10 @@ impl<'ctx> Compiler<'ctx> {
 
             Stmt::Struct { name, fields, is_packed } => {
                 self.compile_struct_def(name, fields, *is_packed)?;
+            }
+
+            Stmt::Union { name, fields } => {
+                self.compile_union_def(name, fields)?;
             }
 
             // ── with expr as name ───────────────────────────────────────────
@@ -9473,9 +9489,143 @@ impl<'ctx> Compiler<'ctx> {
         self.structs.insert(name.to_string(), StructInfo {
             llvm_type: struct_llvm_type,
             is_packed,
+            is_union: false,
             field_names: field_meta.iter().map(|(n, _, _, _, _, _)| n.clone()).collect(),
             field_type_codes: field_meta.iter().map(|(_, _, tc, _, _, _)| *tc).collect(),
             field_byte_offsets: offsets,
+            field_byte_sizes: field_meta.iter().map(|(_, _, _, bs, _, _)| *bs).collect(),
+            field_is_float: field_meta.iter().map(|(_, _, _, _, f, _)| *f).collect(),
+            field_is_signed: field_meta.iter().map(|(_, _, _, _, _, s)| *s).collect(),
+            field_llvm_types: field_meta.iter().map(|(_, ty, _, _, _, _)| *ty).collect(),
+            layout_global,
+        });
+
+        Ok(())
+    }
+
+    fn compile_union_def(&mut self, name: &str, fields: &[(String, String)]) -> Result<(), String> {
+        // Same field metadata extraction as compile_struct_def.
+        let field_meta: Vec<_> = fields.iter().map(|(fname, tname)| {
+            let (llvm_ty, type_code, byte_size, is_float, is_signed): (inkwell::types::BasicTypeEnum<'ctx>, u32, u32, bool, bool) = match tname.as_str() {
+                "i8"          => (self.context.i8_type().into(),  0,  1, false, true),
+                "u8"          => (self.context.i8_type().into(),  1,  1, false, false),
+                "i16"         => (self.context.i16_type().into(), 2,  2, false, true),
+                "u16"         => (self.context.i16_type().into(), 3,  2, false, false),
+                "i32"         => (self.context.i32_type().into(), 4,  4, false, true),
+                "u32"         => (self.context.i32_type().into(), 5,  4, false, false),
+                "i64"         => (self.context.i64_type().into(), 6,  8, false, true),
+                "u64"         => (self.context.i64_type().into(), 7,  8, false, false),
+                "f32"         => (self.context.f32_type().into(), 8,  4, true,  false),
+                "f64" | "float" => (self.context.f64_type().into(), 9, 8, true, false),
+                "bool"        => (self.context.i8_type().into(),  10, 1, false, false),
+                other => return Err(format!(
+                    "union '{name}': field '{fname}' has unsupported type '{other}' (unions support only i8-i64, u8-u64, f32, f64, bool)"
+                )),
+            };
+            Ok((fname.clone(), llvm_ty, type_code, byte_size, is_float, is_signed))
+        }).collect::<Result<_, String>>()?;
+
+        if field_meta.is_empty() {
+            return Err(format!("union '{name}' must have at least one field"));
+        }
+
+        // Union body: [max_size x i8] — all fields share this region.
+        let max_size = field_meta.iter().map(|(_, _, _, bs, _, _)| *bs).max().unwrap_or(1);
+        let union_body_type = self.context.i8_type().array_type(max_size);
+        let union_llvm_type = self.context.opaque_struct_type(&format!("{name}_body"));
+        union_llvm_type.set_body(&[union_body_type.into()], false);
+
+        // Build CoolStructField array with all offsets = 0.
+        let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+        let i32_type = self.context.i32_type();
+        let cool_struct_field_llvm = self.context.struct_type(&[
+            ptr_type.into(), i32_type.into(), i32_type.into(), i32_type.into(),
+        ], false);
+        let field_consts: Vec<_> = field_meta.iter()
+            .map(|(fname, _, type_code, byte_size, _, _)| {
+                let name_gptr = self.builder
+                    .build_global_string_ptr(fname, &format!("uf_{name}_{fname}_name"))
+                    .unwrap();
+                cool_struct_field_llvm.const_named_struct(&[
+                    name_gptr.as_pointer_value().as_basic_value_enum(),
+                    i32_type.const_int(*type_code as u64, false).into(),
+                    i32_type.const_int(0, false).into(), // all offsets = 0
+                    i32_type.const_int(*byte_size as u64, false).into(),
+                ])
+            })
+            .collect();
+
+        let num_fields = field_meta.len() as u32;
+        let fields_array_type = cool_struct_field_llvm.array_type(num_fields);
+        let fields_array_val = cool_struct_field_llvm.const_array(&field_consts);
+        let fields_global = self.module.add_global(fields_array_type, None, &format!("{name}_union_fields"));
+        fields_global.set_constant(true);
+        fields_global.set_linkage(inkwell::module::Linkage::Private);
+        fields_global.set_initializer(&fields_array_val);
+
+        let cool_struct_layout_llvm = self.context.struct_type(&[
+            ptr_type.into(), i32_type.into(), ptr_type.into(),
+        ], false);
+        let union_name_gptr = self.builder
+            .build_global_string_ptr(name, &format!("uf_{name}_name"))
+            .unwrap();
+        let layout_const = cool_struct_layout_llvm.const_named_struct(&[
+            union_name_gptr.as_pointer_value().as_basic_value_enum(),
+            i32_type.const_int(num_fields as u64, false).into(),
+            fields_global.as_pointer_value().as_basic_value_enum(),
+        ]);
+        let layout_global = self.module.add_global(cool_struct_layout_llvm, None, &format!("{name}_union_layout"));
+        layout_global.set_constant(true);
+        layout_global.set_linkage(inkwell::module::Linkage::Private);
+        layout_global.set_initializer(&layout_const);
+
+        // Build zero-arg constructor: allocate max_size bytes and zero them.
+        let ctor_name = format!("{}{}_ctor", self.symbol_prefix, name);
+        let ctor_fn_type = self.cv_type.fn_type(&[], false);
+        let ctor_fn = self.module.add_function(&ctor_name, ctor_fn_type, None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(ctor_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // sizeof([max_size x i8]) via GEP-from-null trick.
+        let null_ptr = ptr_type.const_null();
+        let size_gep = unsafe {
+            self.builder.build_gep(union_llvm_type, null_ptr,
+                &[self.context.i32_type().const_int(1, false)], "union_sizeof")
+        }.unwrap();
+        let byte_size_val = self.builder.build_ptr_to_int(size_gep, self.context.i64_type(), "byte_size").unwrap();
+
+        // Allocate via cool_struct_new — uses calloc, so buffer is already zeroed.
+        let cv_val = self.builder.build_call(
+            self.rt.cool_struct_new,
+            &[byte_size_val.into(), layout_global.as_pointer_value().into()],
+            "new_union",
+        ).unwrap().try_as_basic_value().left().unwrap().into_struct_value();
+
+        self.builder.build_return(Some(&cv_val)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        // Register constructor (no constructor params — union always constructed with MyUnion() or MyUnion(field=v)).
+        self.classes.insert(name.to_string(), ClassInfo {
+            constructor: ctor_fn,
+            methods: HashMap::new(),
+            method_params: HashMap::new(),
+            attributes: Vec::new(),
+            parent: None,
+            constructor_params: vec![],
+        });
+
+        self.structs.insert(name.to_string(), StructInfo {
+            llvm_type: union_llvm_type,
+            is_packed: false,
+            is_union: true,
+            field_names: field_meta.iter().map(|(n, _, _, _, _, _)| n.clone()).collect(),
+            field_type_codes: field_meta.iter().map(|(_, _, tc, _, _, _)| *tc).collect(),
+            field_byte_offsets: vec![0; field_meta.len()],
             field_byte_sizes: field_meta.iter().map(|(_, _, _, bs, _, _)| *bs).collect(),
             field_is_float: field_meta.iter().map(|(_, _, _, _, f, _)| *f).collect(),
             field_is_signed: field_meta.iter().map(|(_, _, _, _, _, s)| *s).collect(),
@@ -10197,12 +10347,21 @@ impl<'ctx> Compiler<'ctx> {
                                 let payload = self.builder.build_extract_value(cv_val, 1, "sv_payload").unwrap().into_int_value();
                                 let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
                                 let struct_ptr = self.builder.build_int_to_ptr(payload, ptr_type, "sv_ptr").unwrap();
-                                let i32t = self.context.i32_type();
-                                let field_ptr = unsafe {
-                                    self.builder.build_gep(sinfo.llvm_type, struct_ptr,
-                                        &[i32t.const_int(0, false), i32t.const_int(field_idx as u64, false)],
-                                        &format!("{name}_fptr"))
-                                }.unwrap();
+                                // For unions, bitcast the base ptr to the field type (all fields at offset 0).
+                                let field_ptr = if sinfo.is_union {
+                                    self.builder.build_bitcast(
+                                        struct_ptr,
+                                        sinfo.field_llvm_types[field_idx].ptr_type(AddressSpace::default()),
+                                        &format!("{name}_ufptr"),
+                                    ).unwrap().into_pointer_value()
+                                } else {
+                                    let i32t = self.context.i32_type();
+                                    unsafe {
+                                        self.builder.build_gep(sinfo.llvm_type, struct_ptr,
+                                            &[i32t.const_int(0, false), i32t.const_int(field_idx as u64, false)],
+                                            &format!("{name}_fptr"))
+                                    }.unwrap()
+                                };
                                 let field_llvm_type = sinfo.field_llvm_types[field_idx];
                                 let raw = self.builder.build_load(field_llvm_type, field_ptr, &format!("{name}_raw")).unwrap();
                                 let result = if sinfo.field_is_float[field_idx] {
@@ -10857,18 +11016,62 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if let Expr::Ident(name) = callee {
-            // Struct instantiation — direct LLVM args, not global-arg passing
+            // Struct/union instantiation — direct LLVM args, not global-arg passing
             if self.structs.contains_key(name) {
-                let (ctor_fn, ctor_params) = {
-                    let sinfo = self.structs.get(name).unwrap();
-                    let ctor_name = format!("{}{}_ctor", self.symbol_prefix, name);
-                    let ctor_fn = self.module.get_function(&ctor_name)
-                        .ok_or_else(|| format!("struct '{name}' constructor not found"))?;
-                    let params: Vec<crate::ast::Param> = sinfo.field_names.iter().map(|n| crate::ast::Param {
-                        name: n.clone(), default: None, is_vararg: false, is_kwarg: false,
-                    }).collect();
-                    (ctor_fn, params)
-                };
+                let sinfo = self.structs.get(name).unwrap().clone();
+                let ctor_name = format!("{}{}_ctor", self.symbol_prefix, name);
+                let ctor_fn = self.module.get_function(&ctor_name)
+                    .ok_or_else(|| format!("struct '{name}' constructor not found"))?;
+
+                if sinfo.is_union {
+                    // Union: ctor takes no args (zero-initializes); then write any kwargs.
+                    if !args.is_empty() {
+                        return Err(format!(
+                            "union '{name}': use keyword arguments to specify the active field"
+                        ));
+                    }
+                    let cv_val = self.builder
+                        .build_call(ctor_fn, &[], "union_new")
+                        .unwrap().try_as_basic_value().left().unwrap().into_struct_value();
+                    if !kwargs.is_empty() {
+                        let payload = self.builder.build_extract_value(cv_val, 1, "up_payload").unwrap().into_int_value();
+                        let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+                        let union_ptr = self.builder.build_int_to_ptr(payload, ptr_type, "up_ptr").unwrap();
+                        for (kname, kexpr) in kwargs {
+                            let field_idx = sinfo.field_names.iter().position(|n| n == kname)
+                                .ok_or_else(|| format!("union '{name}': unknown field '{kname}'"))?;
+                            let kval = self.compile_expr(kexpr)?;
+                            let field_ptr = self.builder.build_bitcast(
+                                union_ptr,
+                                sinfo.field_llvm_types[field_idx].ptr_type(AddressSpace::default()),
+                                &format!("{kname}_init_ptr"),
+                            ).unwrap().into_pointer_value();
+                            let val_payload = self.builder.build_extract_value(kval, 1, "ukv_payload").unwrap().into_int_value();
+                            let store_val: inkwell::values::BasicValueEnum<'ctx> = if sinfo.field_is_float[field_idx] {
+                                let f64val = self.builder.build_bitcast(val_payload, self.context.f64_type(), "ukf64").unwrap();
+                                if sinfo.field_byte_sizes[field_idx] == 4 {
+                                    self.builder.build_float_trunc(f64val.into_float_value(), self.context.f32_type(), "ukf32").unwrap().into()
+                                } else { f64val.into() }
+                            } else {
+                                let target_type = match sinfo.field_llvm_types[field_idx] {
+                                    inkwell::types::BasicTypeEnum::IntType(t) => t,
+                                    _ => unreachable!(),
+                                };
+                                if target_type.get_bit_width() == 64 {
+                                    val_payload.into()
+                                } else {
+                                    self.builder.build_int_truncate(val_payload, target_type, &format!("{kname}_trunc")).unwrap().into()
+                                }
+                            };
+                            self.builder.build_store(field_ptr, store_val).unwrap();
+                        }
+                    }
+                    return Ok(cv_val);
+                }
+
+                let ctor_params: Vec<crate::ast::Param> = sinfo.field_names.iter().map(|n| crate::ast::Param {
+                    name: n.clone(), default: None, is_vararg: false, is_kwarg: false,
+                }).collect();
                 let compiled = self.bind_call_args(&ctor_params, args, kwargs, 0)?;
                 let call_args: Vec<BasicMetadataValueEnum<'ctx>> = compiled.iter().map(|v| (*v).into()).collect();
                 return Ok(self.builder.build_call(ctor_fn, &call_args, "struct_new")

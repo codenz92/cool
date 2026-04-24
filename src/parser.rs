@@ -109,6 +109,7 @@ impl Parser {
                 self.eat(&Token::Struct)?;
                 self.parse_struct_body(true)
             }
+            Token::Union => self.parse_union(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::For => self.parse_for(),
@@ -262,6 +263,33 @@ impl Parser {
         }
         self.eat(&Token::Dedent)?;
         Ok(Stmt::Struct { name, fields, is_packed })
+    }
+
+    fn parse_union(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Union)?;
+        let name = self.expect_ident()?;
+        self.eat(&Token::Colon)?;
+        self.eat_newline();
+        self.eat(&Token::Indent)?;
+        let mut fields = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            self.skip_newlines();
+            if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                break;
+            }
+            if self.check(&Token::Pass) {
+                self.advance();
+                self.eat_newline();
+                continue;
+            }
+            let field_name = self.expect_ident()?;
+            self.eat(&Token::Colon)?;
+            let type_name = self.expect_ident()?;
+            self.eat_newline();
+            fields.push((field_name, type_name));
+        }
+        self.eat(&Token::Dedent)?;
+        Ok(Stmt::Union { name, fields })
     }
 
     fn parse_if(&mut self) -> Result<Stmt, String> {

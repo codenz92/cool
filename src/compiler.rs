@@ -673,9 +673,66 @@ impl Compiler {
                         is_vararg: false,
                         is_kwarg: false,
                     });
+                    let coerce_name = match type_name.as_str() {
+                        "f32" | "f64" => "float",
+                        other => other,
+                    };
                     let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
                         Expr::Call {
-                            callee: Box::new(Expr::Ident(type_name.clone())),
+                            callee: Box::new(Expr::Ident(coerce_name.to_string())),
+                            args: vec![Expr::Ident(field_name.clone())],
+                            kwargs: vec![],
+                        }
+                    } else {
+                        Expr::Ident(field_name.clone())
+                    };
+                    init_body.push(Stmt::SetAttr {
+                        object: Expr::Ident("self".to_string()),
+                        name: field_name.clone(),
+                        value: coerce_expr,
+                    });
+                }
+                let class_body = vec![Stmt::FnDef {
+                    name: "__init__".to_string(),
+                    params,
+                    body: init_body,
+                }];
+                let class_stmt = Stmt::Class {
+                    name: name.clone(),
+                    parent: None,
+                    body: class_body,
+                };
+                self.compile_stmt(&class_stmt)?;
+            }
+
+            Stmt::Union { name, fields } => {
+                // Lower union to a class with zero-defaulted fields (VM path).
+                let mut init_body: Vec<Stmt> = Vec::new();
+                let mut params = vec![Param {
+                    name: "self".to_string(),
+                    default: None,
+                    is_vararg: false,
+                    is_kwarg: false,
+                }];
+                for (field_name, type_name) in fields {
+                    let zero_default = match type_name.as_str() {
+                        "f32" | "f64" | "float" => Expr::Float(0.0),
+                        "bool" => Expr::Bool(false),
+                        _ => Expr::Int(0),
+                    };
+                    params.push(Param {
+                        name: field_name.clone(),
+                        default: Some(zero_default),
+                        is_vararg: false,
+                        is_kwarg: false,
+                    });
+                    let coerce_name = match type_name.as_str() {
+                        "f32" | "f64" => "float",
+                        other => other,
+                    };
+                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                        Expr::Call {
+                            callee: Box::new(Expr::Ident(coerce_name.to_string())),
                             args: vec![Expr::Ident(field_name.clone())],
                             kwargs: vec![],
                         }

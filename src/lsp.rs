@@ -5,9 +5,10 @@ use std::io::{BufRead, BufWriter, Write};
 use std::path::PathBuf;
 
 const COOL_KEYWORDS: &[&str] = &[
-    "def", "class", "struct", "packed", "if", "elif", "else", "while", "for", "in", "not", "and",
-    "or", "return", "break", "continue", "pass", "import", "from", "as", "try", "except",
-    "finally", "raise", "with", "lambda", "assert", "global", "nonlocal", "True", "False", "None",
+    "def", "class", "struct", "packed", "union", "if", "elif", "else", "while", "for", "in",
+    "not", "and", "or", "return", "break", "continue", "pass", "import", "from", "as", "try",
+    "except", "finally", "raise", "with", "lambda", "assert", "global", "nonlocal",
+    "True", "False", "None",
 ];
 
 const COOL_BUILTINS: &[&str] = &[
