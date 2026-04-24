@@ -414,7 +414,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [ ] A real package manager or project tool written in Cool
 - [x] A build/task runner that demonstrates modules, subprocesses, and packaging
-- [ ] A flagship TUI or networked app that proves Cool works for medium-sized software
+- [x] A flagship TUI or networked app — `browse` (TUI file browser with two-pane layout, directory traversal, file preview, arrow-key navigation, written entirely in Cool)
 
 ---
 

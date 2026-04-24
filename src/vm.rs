@@ -2258,6 +2258,13 @@ impl VM {
                         };
                         Ok(VmValue::Bool(std::path::Path::new(&path).exists()))
                     }
+                    "isdir" => {
+                        let path = match args.first() {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => return Err(self.err("os.isdir requires a string")),
+                        };
+                        Ok(VmValue::Bool(std::path::Path::new(&path).is_dir()))
+                    }
                     "getenv" => {
                         let name = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
@@ -4919,7 +4926,7 @@ impl VM {
             }
             "os" => {
                 for fname in &[
-                    "listdir", "mkdir", "remove", "rename", "exists", "getenv", "getcwd", "join", "path", "popen",
+                    "listdir", "mkdir", "remove", "rename", "exists", "isdir", "getenv", "getcwd", "join", "path", "popen",
                 ] {
                     set(&mut d, fname, bf(&format!("os.{}", fname)));
                 }

@@ -1,0 +1,254 @@
+# browse — a TUI file browser for Cool
+#
+# Keys: ↑↓ navigate, →/Enter enter directory, ← go up, q quit
+
+import term
+import os
+import string
+
+# ── ANSI helpers ──────────────────────────────────────────────────────────────
+
+def bold(s):
+    return "\x1b[1m" + s + "\x1b[0m"
+
+def dim(s):
+    return "\x1b[2m" + s + "\x1b[0m"
+
+def hilite(s):
+    return "\x1b[7m" + s + "\x1b[0m"
+
+def blue(s):
+    return "\x1b[34m" + s + "\x1b[0m"
+
+def cyan(s):
+    return "\x1b[36m" + s + "\x1b[0m"
+
+def yellow(s):
+    return "\x1b[33m" + s + "\x1b[0m"
+
+def green(s):
+    return "\x1b[32m" + s + "\x1b[0m"
+
+# ── String utilities ──────────────────────────────────────────────────────────
+
+def pad(s, width):
+    if len(s) >= width:
+        if width >= 4:
+            return s[:width - 3] + "..."
+        return s[:width]
+    result = s
+    while len(result) < width:
+        result = result + " "
+    return result
+
+def repeat(ch, n):
+    result = ""
+    i = 0
+    while i < n:
+        result = result + ch
+        i = i + 1
+    return result
+
+# ── Directory listing ─────────────────────────────────────────────────────────
+
+def list_dir(path):
+    try:
+        raw = os["listdir"](path)
+        dirs = []
+        files = []
+        for name in raw:
+            if name == "." or name == "..":
+                continue
+            full = path + "/" + name
+            if os["isdir"](full):
+                dirs = dirs + [name]
+            else:
+                files = files + [name]
+        dirs_s = sorted(dirs)
+        files_s = sorted(files)
+        result = []
+        for d in dirs_s:
+            result = result + [d + "/"]
+        for f in files_s:
+            result = result + [f]
+        return ["../"] + result
+    except err:
+        return ["(permission denied)"]
+
+def entry_path(base, entry):
+    if entry == "../":
+        parts = base.split("/")
+        if len(parts) <= 1:
+            return "/"
+        parts = parts[:len(parts) - 1]
+        joined = "/".join(parts)
+        if joined == "":
+            return "/"
+        return joined
+    if entry.endswith("/"):
+        return base + "/" + entry[:len(entry) - 1]
+    return base + "/" + entry
+
+# ── Preview ───────────────────────────────────────────────────────────────────
+
+def preview_lines(base, entry, max_lines, width):
+    if entry == "":
+        return []
+    if entry == "../":
+        return [dim("(parent directory)")]
+    full = entry_path(base, entry)
+    if entry.endswith("/"):
+        try:
+            sub = list_dir(full)
+            out = []
+            for e in sub:
+                is_d = e.endswith("/")
+                display = pad(e, width)
+                if is_d:
+                    out = out + [cyan(display)]
+                else:
+                    out = out + [display]
+                if len(out) >= max_lines:
+                    break
+            return out
+        except err:
+            return [dim("(empty)")]
+    else:
+        try:
+            content = os["popen"]("head -" + str(max_lines) + " " + full + " 2>/dev/null")
+            lines = content.split("\n")
+            out = []
+            for l in lines:
+                clean = l.replace("\t", "    ")
+                out = out + [pad(clean, width)]
+            return out
+        except err:
+            return [dim("(cannot preview)")]
+
+# ── Rendering ─────────────────────────────────────────────────────────────────
+
+def draw(path, entries, sel, rows, cols):
+    list_w = cols // 2 - 1
+    prev_w = cols - list_w - 3
+    content_rows = rows - 3
+
+    # Header: full path
+    term["move_cursor"](1, 1)
+    header = " " + bold(pad(path, cols - 2)) + " "
+    term["write"](header)
+
+    # Separator
+    term["move_cursor"](2, 1)
+    term["write"](repeat("─", list_w) + "┬" + repeat("─", prev_w + 1))
+
+    # Compute scroll window
+    start = 0
+    if sel >= content_rows:
+        start = sel - content_rows + 1
+
+    # Selected entry
+    selected = ""
+    if len(entries) > 0 and sel < len(entries):
+        selected = entries[sel]
+
+    # File list (left pane)
+    i = 0
+    while i < content_rows:
+        term["move_cursor"](3 + i, 1)
+        idx = start + i
+        if idx < len(entries):
+            entry = entries[idx]
+            is_dir = entry.endswith("/")
+            raw = pad(entry, list_w - 2)
+            if idx == sel:
+                term["write"]("> " + hilite(raw))
+            elif is_dir:
+                term["write"]("  " + blue(raw))
+            else:
+                term["write"]("  " + raw)
+        else:
+            term["write"](repeat(" ", list_w))
+        # Divider column
+        term["move_cursor"](3 + i, list_w + 1)
+        term["write"]("│")
+        i = i + 1
+
+    # Preview (right pane)
+    plines = preview_lines(path, selected, content_rows, prev_w)
+    i = 0
+    while i < content_rows:
+        term["move_cursor"](3 + i, list_w + 3)
+        if i < len(plines):
+            term["write"](plines[i])
+        else:
+            term["write"](repeat(" ", prev_w))
+        i = i + 1
+
+    # Status bar
+    count_str = str(len(entries)) + " items"
+    sel_info = ""
+    if selected != "":
+        if selected.endswith("/"):
+            sel_info = " · " + yellow(selected) + " [dir]"
+        else:
+            sel_info = " · " + green(selected)
+    hints = dim("  ↑↓ move · → enter · ← up · q quit")
+    term["move_cursor"](rows - 1, 1)
+    status = pad(count_str + sel_info + hints, cols)
+    term["write"](status)
+
+    term["flush"]()
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+
+def run():
+    path = os["getcwd"]()
+    entries = list_dir(path)
+    sel = 0
+
+    term["raw"]()
+    term["clear"]()
+    term["hide_cursor"]()
+
+    try:
+        while true:
+            size = term["size"]()
+            rows = size[0]
+            cols = size[1]
+
+            draw(path, entries, sel, rows, cols)
+
+            key = term["poll_char"](200)
+
+            if key == "UP":
+                if sel > 0:
+                    sel = sel - 1
+            elif key == "DOWN":
+                if sel < len(entries) - 1:
+                    sel = sel + 1
+            elif key == "RIGHT" or key == "\r" or key == "\n":
+                if len(entries) > 0 and sel < len(entries):
+                    entry = entries[sel]
+                    if entry.endswith("/"):
+                        new_path = entry_path(path, entry)
+                        new_entries = list_dir(new_path)
+                        path = new_path
+                        entries = new_entries
+                        sel = 0
+            elif key == "LEFT":
+                new_path = entry_path(path, "../")
+                if new_path != path:
+                    entries = list_dir(new_path)
+                    path = new_path
+                    sel = 0
+            elif key == "q" or key == "Q" or key == "ESC" or key == "CTRL_C":
+                break
+    except err:
+        pass
+
+    term["normal"]()
+    term["clear"]()
+    term["show_cursor"]()
+    print("browse: exited at " + path)
+
+run()

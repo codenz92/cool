@@ -1136,6 +1136,7 @@ impl Interpreter {
                 os_fn!("getcwd");
                 os_fn!("listdir");
                 os_fn!("exists");
+                os_fn!("isdir");
                 os_fn!("getenv");
                 os_fn!("join");
                 os_fn!("path");
@@ -3384,6 +3385,13 @@ class Stack:
                     _ => return Err(self.err("os.exists() requires a path string")),
                 };
                 Ok(Value::Bool(std::path::Path::new(&path).exists()))
+            }
+            "isdir" => {
+                let path = match args.get(0) {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("os.isdir() requires a path string")),
+                };
+                Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
             }
             "getenv" => {
                 let name = match args.get(0) {

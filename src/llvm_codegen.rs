@@ -6436,6 +6436,11 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             struct stat st;
             return cv_bool(stat(path, &st) == 0);
         }
+        if (strcmp(name, "isdir") == 0 && nargs == 1) {
+            const char* path = cool_to_str(args[0]);
+            struct stat st;
+            return cv_bool(stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+        }
         if (strcmp(name, "getenv") == 0 && nargs == 1) {
             const char* name_arg = cool_to_str(args[0]);
             const char* value = getenv(name_arg);
