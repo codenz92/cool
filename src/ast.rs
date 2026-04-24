@@ -1,6 +1,8 @@
 /// Abstract Syntax Tree for Cool.
+use serde::Serialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Expr {
     Int(i64),
     Float(f64),
@@ -61,13 +63,15 @@ pub enum Expr {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FStringPart {
     Literal(String),
     Expr(Expr),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BinOp {
     Add,
     Sub,
@@ -93,7 +97,8 @@ pub enum BinOp {
     RShift,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UnaryOp {
     Neg,
     Not,
@@ -101,7 +106,7 @@ pub enum UnaryOp {
 }
 
 /// One except clause in a try statement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExceptHandler {
     /// The exception type to catch (None = bare `except:`)
     pub exc_type: Option<String>,
@@ -111,7 +116,7 @@ pub struct ExceptHandler {
 }
 
 /// A function parameter — name plus optional default expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Param {
     pub name: String,
     pub default: Option<Expr>,
@@ -119,7 +124,8 @@ pub struct Param {
     pub is_kwarg: bool,  // **kwargs
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Stmt {
     /// Pseudo-statement: records the source line for error messages.
     SetLine(usize),

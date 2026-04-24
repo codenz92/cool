@@ -15,6 +15,7 @@ mod project;
 mod sqlite_runtime;
 mod subprocess_runtime;
 mod toml_runtime;
+mod tooling;
 mod vm;
 mod yaml_runtime;
 
@@ -22,8 +23,8 @@ use interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
 use project::{
-    add_dependency_to_manifest, install_dependencies, normalize_dependency_source_arg, CoolProject,
-    DependencySource, DependencySpec, ModuleResolver,
+    add_dependency_to_manifest, install_dependencies, normalize_dependency_source_arg, CoolProject, DependencySource,
+    DependencySpec, ModuleResolver,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -444,6 +445,68 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     }
 }
 
+// ── `cool ast` ────────────────────────────────────────────────────────────────
+
+fn cmd_ast(args: &[&String]) -> Result<(), String> {
+    let mut include_line_markers = false;
+    let mut file = None::<&str>;
+
+    for arg in args {
+        match arg.as_str() {
+            "--raw" => include_line_markers = true,
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool ast [--raw] <file.cool>
+
+Parse a Cool source file and print its AST as pretty JSON.
+
+Options:
+  --raw    Include internal SetLine markers used for runtime diagnostics"
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool ast: unexpected flag '{other}'")),
+            other => {
+                if file.is_some() {
+                    return Err("Usage: cool ast [--raw] <file.cool>".to_string());
+                }
+                file = Some(other);
+            }
+        }
+    }
+
+    let file = file.ok_or_else(|| "Usage: cool ast [--raw] <file.cool>".to_string())?;
+    let dump = tooling::build_ast_dump(Path::new(file), include_line_markers)?;
+    let json = serde_json::to_string_pretty(&dump).map_err(|e| format!("cool ast: failed to encode JSON: {e}"))?;
+    println!("{json}");
+    Ok(())
+}
+
+// ── `cool modulegraph` ────────────────────────────────────────────────────────
+
+fn cmd_modulegraph(args: &[&String]) -> Result<(), String> {
+    let file = match args {
+        [arg] if arg.as_str() != "--help" && arg.as_str() != "-h" => arg.as_str(),
+        [arg] if arg.as_str() == "--help" || arg.as_str() == "-h" => {
+            println!(
+                "\
+Usage: cool modulegraph <file.cool>
+
+Resolve a Cool entry file and print its reachable file/module imports as pretty JSON."
+            );
+            return Ok(());
+        }
+        _ => return Err("Usage: cool modulegraph <file.cool>".to_string()),
+    };
+
+    let graph = tooling::build_module_graph(Path::new(file))?;
+    let json =
+        serde_json::to_string_pretty(&graph).map_err(|e| format!("cool modulegraph: failed to encode JSON: {e}"))?;
+    println!("{json}");
+    Ok(())
+}
+
 // ── `cool new` ────────────────────────────────────────────────────────────────
 
 /// Scaffold a new Cool project.
@@ -479,7 +542,8 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     fs::write(project_dir.join("tests").join("test_main.cool"), test_src).map_err(|e| format!("cool new: {e}"))?;
 
     // .gitignore
-    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n.cool/\n")).map_err(|e| format!("cool new: {e}"))?;
+    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n.cool/\n"))
+        .map_err(|e| format!("cool new: {e}"))?;
 
     println!("  Created project '{name}'");
     println!("  ├── cool.toml");
@@ -654,8 +718,15 @@ fn cmd_add(args: &[&String]) -> Result<(), String> {
     let updated_project = CoolProject::from_manifest_path(&project.manifest_path)?;
     install_dependencies(&updated_project)?;
 
-    println!("  Added dependency '{}' to {}", dependency.name, project.manifest_path.display());
-    println!("  Installed dependencies and wrote {}", updated_project.lockfile_path().display());
+    println!(
+        "  Added dependency '{}' to {}",
+        dependency.name,
+        project.manifest_path.display()
+    );
+    println!(
+        "  Installed dependencies and wrote {}",
+        updated_project.lockfile_path().display()
+    );
     Ok(())
 }
 
@@ -708,7 +779,8 @@ fn copy_into(src: &Path, dst: &Path) -> Result<(), String> {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("bundle: {e}"))?;
         }
-        fs::copy(src, dst).map_err(|e| format!("bundle: cannot copy '{}' → '{}': {e}", src.display(), dst.display()))?;
+        fs::copy(src, dst)
+            .map_err(|e| format!("bundle: cannot copy '{}' → '{}': {e}", src.display(), dst.display()))?;
     }
     Ok(())
 }
@@ -737,7 +809,11 @@ fn cmd_bundle(args: &[&String]) -> Result<(), String> {
     println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
     let t0 = std::time::Instant::now();
     compile_to_native(&source, bin_path, &main_path)?;
-    println!("   Compiled in {:.2}s → {}", t0.elapsed().as_secs_f64(), bin_path.display());
+    println!(
+        "   Compiled in {:.2}s → {}",
+        t0.elapsed().as_secs_f64(),
+        bin_path.display()
+    );
 
     // Assemble staging directory: dist/{name}-{version}-{target}/
     let target = target_triple();
@@ -757,7 +833,9 @@ fn cmd_bundle(args: &[&String]) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&dst_bin).map_err(|e| format!("cool bundle: {e}"))?.permissions();
+        let mut perms = fs::metadata(&dst_bin)
+            .map_err(|e| format!("cool bundle: {e}"))?
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&dst_bin, perms).map_err(|e| format!("cool bundle: {e}"))?;
     }
@@ -769,14 +847,22 @@ fn cmd_bundle(args: &[&String]) -> Result<(), String> {
             eprintln!("  warning: bundle include '{}' not found, skipping", include);
             continue;
         }
-        let name = src.file_name().ok_or_else(|| format!("bundle: invalid include path '{include}'"))?;
+        let name = src
+            .file_name()
+            .ok_or_else(|| format!("bundle: invalid include path '{include}'"))?;
         copy_into(&src, &staging.join(name))?;
         println!("  Including {}", include);
     }
 
     // Create tarball via system tar
     let status = Command::new("tar")
-        .args(["czf", archive.to_str().unwrap(), "-C", dist_dir.to_str().unwrap(), &artifact_name])
+        .args([
+            "czf",
+            archive.to_str().unwrap(),
+            "-C",
+            dist_dir.to_str().unwrap(),
+            &artifact_name,
+        ])
         .status()
         .map_err(|e| format!("cool bundle: tar failed: {e}"))?;
     if !status.success() {
@@ -797,9 +883,15 @@ fn bump_version(version: &str, bump: &str) -> Result<String, String> {
     if parts.len() < 3 {
         return Err(format!("cool release: cannot parse version '{version}'"));
     }
-    let major: u64 = parts[0].parse().map_err(|_| format!("cool release: invalid version '{version}'"))?;
-    let minor: u64 = parts[1].parse().map_err(|_| format!("cool release: invalid version '{version}'"))?;
-    let patch: u64 = parts[2].parse().map_err(|_| format!("cool release: invalid version '{version}'"))?;
+    let major: u64 = parts[0]
+        .parse()
+        .map_err(|_| format!("cool release: invalid version '{version}'"))?;
+    let minor: u64 = parts[1]
+        .parse()
+        .map_err(|_| format!("cool release: invalid version '{version}'"))?;
+    let patch: u64 = parts[2]
+        .parse()
+        .map_err(|_| format!("cool release: invalid version '{version}'"))?;
     Ok(match bump {
         "major" => format!("{}.0.0", major + 1),
         "minor" => format!("{}.{}.0", major, minor + 1),
@@ -813,23 +905,31 @@ fn set_manifest_version(manifest_path: &Path, new_version: &str) -> Result<(), S
     let src = fs::read_to_string(manifest_path).map_err(|e| format!("cool release: {e}"))?;
     // Replace version = "..." under [project] or at top level — simple line-based rewrite.
     let mut found = false;
-    let new_src: String = src.lines().map(|line| {
-        let trimmed = line.trim_start();
-        if !found && trimmed.starts_with("version") {
-            let eq_pos = trimmed.find('=');
-            if let Some(eq) = eq_pos {
-                let after_eq = trimmed[eq + 1..].trim();
-                if after_eq.starts_with('"') {
-                    found = true;
-                    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                    return format!("{indent}version = \"{new_version}\"");
+    let new_src: String = src
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if !found && trimmed.starts_with("version") {
+                let eq_pos = trimmed.find('=');
+                if let Some(eq) = eq_pos {
+                    let after_eq = trimmed[eq + 1..].trim();
+                    if after_eq.starts_with('"') {
+                        found = true;
+                        let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                        return format!("{indent}version = \"{new_version}\"");
+                    }
                 }
             }
-        }
-        line.to_string()
-    }).collect::<Vec<_>>().join("\n");
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     // Preserve trailing newline if original had one
-    let new_src = if src.ends_with('\n') { format!("{new_src}\n") } else { new_src };
+    let new_src = if src.ends_with('\n') {
+        format!("{new_src}\n")
+    } else {
+        new_src
+    };
     if !found {
         return Err("cool release: could not find 'version = ...' in cool.toml".to_string());
     }
@@ -855,14 +955,23 @@ fn cmd_release(args: &[&String]) -> Result<(), String> {
         match args[i].as_str() {
             "--bump" => {
                 i += 1;
-                bump = args.get(i).map(|s| s.as_str()).ok_or("cool release: --bump requires an argument (patch|minor|major)")?;
+                bump = args
+                    .get(i)
+                    .map(|s| s.as_str())
+                    .ok_or("cool release: --bump requires an argument (patch|minor|major)")?;
                 if !matches!(bump, "patch" | "minor" | "major") {
-                    return Err(format!("cool release: --bump must be patch, minor, or major, got '{bump}'"));
+                    return Err(format!(
+                        "cool release: --bump must be patch, minor, or major, got '{bump}'"
+                    ));
                 }
             }
             "--version" => {
                 i += 1;
-                explicit_version = Some(args.get(i).map(|s| s.as_str()).ok_or("cool release: --version requires an argument")?);
+                explicit_version = Some(
+                    args.get(i)
+                        .map(|s| s.as_str())
+                        .ok_or("cool release: --version requires an argument")?,
+                );
             }
             "--no-tag" => no_tag = true,
             other => return Err(format!("cool release: unexpected argument '{other}'")),
@@ -900,7 +1009,11 @@ fn cmd_release(args: &[&String]) -> Result<(), String> {
     println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
     let t0 = std::time::Instant::now();
     compile_to_native(&source, bin_path, &main_path)?;
-    println!("   Compiled in {:.2}s → {}", t0.elapsed().as_secs_f64(), bin_path.display());
+    println!(
+        "   Compiled in {:.2}s → {}",
+        t0.elapsed().as_secs_f64(),
+        bin_path.display()
+    );
 
     // Bundle
     let target = target_triple();
@@ -917,18 +1030,30 @@ fn cmd_release(args: &[&String]) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&dst_bin).map_err(|e| format!("cool release: {e}"))?.permissions();
+        let mut perms = fs::metadata(&dst_bin)
+            .map_err(|e| format!("cool release: {e}"))?
+            .permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&dst_bin, perms).map_err(|e| format!("cool release: {e}"))?;
     }
     for include in &project.bundle_include {
         let src = project.root.join(include);
-        if !src.exists() { continue; }
-        let name = src.file_name().ok_or_else(|| format!("release: invalid include '{include}'"))?;
+        if !src.exists() {
+            continue;
+        }
+        let name = src
+            .file_name()
+            .ok_or_else(|| format!("release: invalid include '{include}'"))?;
         copy_into(&src, &staging.join(name))?;
     }
     let status = Command::new("tar")
-        .args(["czf", archive.to_str().unwrap(), "-C", dist_dir.to_str().unwrap(), &artifact_name])
+        .args([
+            "czf",
+            archive.to_str().unwrap(),
+            "-C",
+            dist_dir.to_str().unwrap(),
+            &artifact_name,
+        ])
         .status()
         .map_err(|e| format!("cool release: tar failed: {e}"))?;
     if !status.success() {
@@ -953,7 +1078,9 @@ fn cmd_release(args: &[&String]) -> Result<(), String> {
     println!();
     println!("  Released {} v{new_version}", project.name);
     println!("  Archive  → {}", archive.display());
-    if !no_tag { println!("  Run 'git push --tags' to publish the tag."); }
+    if !no_tag {
+        println!("  Run 'git push --tags' to publish the tag.");
+    }
     Ok(())
 }
 
@@ -969,6 +1096,8 @@ USAGE:
     cool <file.cool>              Run a file with the tree-walk interpreter
     cool --vm <file.cool>         Run a file with the bytecode VM
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
+    cool ast <file.cool>          Print the parsed AST as JSON
+    cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
     cool bundle                   Build and package the project into a distributable tarball
@@ -987,6 +1116,8 @@ FLAGS:
 EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
+    cool ast hello.cool           # dump the parsed AST as JSON
+    cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
     cool install                  # fetch git deps into .cool/deps and write cool.lock
@@ -1032,6 +1163,22 @@ fn main() {
     // ── Subcommand dispatch ───────────────────────────────────────────────
     if let Some(first) = args.get(1).map(|s| s.as_str()) {
         match first {
+            "ast" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_ast(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "modulegraph" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_modulegraph(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
             "build" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_build(&rest) {

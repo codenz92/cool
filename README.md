@@ -272,6 +272,8 @@ run = "cool test"
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, and `cool modulegraph <file.cool>` resolves reachable imports from that entry file and prints the resulting graph as JSON.
+
 ---
 
 ## CLI Reference
@@ -282,6 +284,8 @@ Inside test files, `import test` gives you assertion helpers like `test.equal(..
 | `cool <file.cool>` | Run a file with the tree-walk interpreter |
 | `cool --vm <file.cool>` | Run a file with the bytecode VM |
 | `cool --compile <file.cool>` | Compile to a native binary (LLVM) |
+| `cool ast <file.cool>` | Print the parsed AST as JSON |
+| `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool install` | Fetch git dependencies and write `cool.lock` |

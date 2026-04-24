@@ -340,9 +340,7 @@ fn write_basic_project(root: &std::path::Path, name: &str, source: &str) {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
         root.join("cool.toml"),
-        format!(
-            "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n"
-        ),
+        format!("[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n"),
     )
     .unwrap();
     std::fs::write(root.join("src").join("main.cool"), source).unwrap();
@@ -1438,7 +1436,7 @@ print(c.score)
     )
     .unwrap();
     let lines: Vec<_> = result.lines().collect();
-    assert_eq!(lines[0], "44");   // 300 wraps to u8: 300 % 256 = 44
+    assert_eq!(lines[0], "44"); // 300 wraps to u8: 300 % 256 = 44
     assert_eq!(lines[1], "-500000");
 }
 
@@ -1833,6 +1831,149 @@ fn test_cool_test_compile_mode() {
 }
 
 #[test]
+fn test_cool_ast_subcommand_outputs_json_ast() {
+    let temp = unique_temp_path("cool_ast_command", "cool");
+    std::fs::write(&temp, "x = 1\nif x:\n    print(x)\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let expected_path = temp.canonicalize().unwrap().display().to_string();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["ast", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(!stdout.contains("set_line"));
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["path"].as_str().unwrap(), expected_path);
+
+    let ast = parsed["ast"].as_array().unwrap();
+    assert_eq!(ast.len(), 2);
+    assert_eq!(ast[0]["assign"]["name"].as_str().unwrap(), "x");
+    assert_eq!(
+        ast[1]["if"]["then_body"][0]["expr"]["call"]["callee"]["ident"]
+            .as_str()
+            .unwrap(),
+        "print"
+    );
+}
+
+#[test]
+fn test_cool_modulegraph_subcommand_resolves_project_imports() {
+    let temp_dir = unique_temp_dir("cool_modulegraph_command");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("lib").join("util")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("deps").join("toolkit").join("src")).unwrap();
+
+    std::fs::write(
+        temp_dir.join("cool.toml"),
+        r#"[project]
+name = "graphdemo"
+version = "0.1.0"
+main = "app/main.cool"
+sources = ["app", "lib"]
+
+[dependencies]
+toolkit = { path = "deps/toolkit" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("deps").join("toolkit").join("cool.toml"),
+        r#"[project]
+name = "toolkit"
+version = "0.1.0"
+main = "src/main.cool"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        "import json\nimport helper\nimport util.math\nimport toolkit.util\nimport \"shared.cool\"\n",
+    )
+    .unwrap();
+    std::fs::write(temp_dir.join("app").join("helper.cool"), "import string\nvalue = 1\n").unwrap();
+    std::fs::write(temp_dir.join("app").join("shared.cool"), "import path\nshared = 1\n").unwrap();
+    std::fs::write(
+        temp_dir.join("lib").join("util").join("math.cool"),
+        "import time\nvalue = 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("deps").join("toolkit").join("src").join("util.cool"),
+        "import hashlib\nvalue = 1\n",
+    )
+    .unwrap();
+
+    let entry_path = temp_dir.join("app").join("main.cool").canonicalize().unwrap();
+    let helper_path = temp_dir.join("app").join("helper.cool").canonicalize().unwrap();
+    let shared_path = temp_dir.join("app").join("shared.cool").canonicalize().unwrap();
+    let lib_path = temp_dir
+        .join("lib")
+        .join("util")
+        .join("math.cool")
+        .canonicalize()
+        .unwrap();
+    let dep_path = temp_dir
+        .join("deps")
+        .join("toolkit")
+        .join("src")
+        .join("util.cool")
+        .canonicalize()
+        .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["modulegraph", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["entry"].as_str().unwrap(), entry_path.display().to_string());
+
+    let modules = parsed["modules"].as_array().unwrap();
+    let module_paths: Vec<&str> = modules.iter().map(|module| module["path"].as_str().unwrap()).collect();
+    assert!(module_paths.contains(&entry_path.to_str().unwrap()));
+    assert!(module_paths.contains(&helper_path.to_str().unwrap()));
+    assert!(module_paths.contains(&shared_path.to_str().unwrap()));
+    assert!(module_paths.contains(&lib_path.to_str().unwrap()));
+    assert!(module_paths.contains(&dep_path.to_str().unwrap()));
+
+    let entry_module = modules
+        .iter()
+        .find(|module| module["path"].as_str() == Some(entry_path.to_str().unwrap()))
+        .unwrap();
+    let imports = entry_module["imports"].as_array().unwrap();
+    assert!(imports
+        .iter()
+        .any(|import| { import["kind"].as_str() == Some("builtin") && import["specifier"].as_str() == Some("json") }));
+    assert!(imports.iter().any(|import| {
+        import["kind"].as_str() == Some("module")
+            && import["specifier"].as_str() == Some("helper")
+            && import["resolved"].as_str() == Some(helper_path.to_str().unwrap())
+    }));
+    assert!(imports.iter().any(|import| {
+        import["kind"].as_str() == Some("module")
+            && import["specifier"].as_str() == Some("util.math")
+            && import["resolved"].as_str() == Some(lib_path.to_str().unwrap())
+    }));
+    assert!(imports.iter().any(|import| {
+        import["kind"].as_str() == Some("module")
+            && import["specifier"].as_str() == Some("toolkit.util")
+            && import["resolved"].as_str() == Some(dep_path.to_str().unwrap())
+    }));
+    assert!(imports.iter().any(|import| {
+        import["kind"].as_str() == Some("file")
+            && import["specifier"].as_str() == Some("shared.cool")
+            && import["resolved"].as_str() == Some(shared_path.to_str().unwrap())
+    }));
+}
+
+#[test]
 fn test_import_path_module() {
     let file_path = unique_temp_path("cool_path_module_test", "txt");
     std::fs::write(&file_path, "ok").unwrap();
@@ -2071,11 +2212,7 @@ fn test_cool_install_fetches_git_dependency_and_build_uses_it() {
     let project_dir = workspace_dir.join("app");
     let dep_dir = workspace_dir.join("toolkit_repo");
     let dep_rev = write_git_dependency_repo(&dep_dir, 42);
-    write_basic_project(
-        &project_dir,
-        "demo",
-        "import toolkit.util\nprint(util.value)\n",
-    );
+    write_basic_project(&project_dir, "demo", "import toolkit.util\nprint(util.value)\n");
     std::fs::write(
         project_dir.join("cool.toml"),
         r#"[project]
@@ -2099,7 +2236,12 @@ toolkit = { git = "../toolkit_repo" }
     assert!(lockfile.contains("kind = \"git\""));
     assert!(lockfile.contains("git = \"../toolkit_repo\""));
     assert!(lockfile.contains(&format!("rev = \"{dep_rev}\"")));
-    assert!(project_dir.join(".cool").join("deps").join("toolkit").join(".git").exists());
+    assert!(project_dir
+        .join(".cool")
+        .join("deps")
+        .join("toolkit")
+        .join(".git")
+        .exists());
 
     let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
     assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
@@ -2117,11 +2259,7 @@ fn test_cool_build_reports_install_hint_for_missing_git_dependency() {
     let project_dir = workspace_dir.join("app");
     let dep_dir = workspace_dir.join("toolkit_repo");
     write_git_dependency_repo(&dep_dir, 12);
-    write_basic_project(
-        &project_dir,
-        "demo",
-        "import toolkit.util\nprint(util.value)\n",
-    );
+    write_basic_project(&project_dir, "demo", "import toolkit.util\nprint(util.value)\n");
     std::fs::write(
         project_dir.join("cool.toml"),
         r#"[project]
@@ -2147,11 +2285,7 @@ fn test_cool_add_path_dependency_updates_manifest_and_lockfile() {
     let workspace_dir = unique_temp_dir("cool_add_path_dependency");
     let project_dir = workspace_dir.join("app");
     let dep_dir = workspace_dir.join("toolkit");
-    write_basic_project(
-        &project_dir,
-        "demo",
-        "import toolkit.util\nprint(util.value)\n",
-    );
+    write_basic_project(&project_dir, "demo", "import toolkit.util\nprint(util.value)\n");
     let _ = std::fs::remove_dir_all(&dep_dir);
     std::fs::create_dir_all(dep_dir.join("src")).unwrap();
     std::fs::write(
@@ -2173,10 +2307,7 @@ main = "src/main.cool"
 
     let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
     let parsed: toml::Value = manifest.parse().unwrap();
-    assert_eq!(
-        parsed["dependencies"]["toolkit"]["path"].as_str(),
-        Some("../toolkit")
-    );
+    assert_eq!(parsed["dependencies"]["toolkit"]["path"].as_str(), Some("../toolkit"));
 
     let lockfile = std::fs::read_to_string(project_dir.join("cool.lock")).unwrap();
     assert!(lockfile.contains("kind = \"path\""));
@@ -2194,11 +2325,7 @@ fn test_cool_add_git_dependency_installs_and_runs() {
     let project_dir = workspace_dir.join("app");
     let dep_dir = workspace_dir.join("toolkit_repo");
     let dep_rev = write_git_dependency_repo(&dep_dir, 91);
-    write_basic_project(
-        &project_dir,
-        "demo",
-        "import toolkit.util\nprint(util.value)\n",
-    );
+    write_basic_project(&project_dir, "demo", "import toolkit.util\nprint(util.value)\n");
 
     let (stdout, stderr, code) =
         run_cool_subcommand_in_dir(&project_dir, &["add", "toolkit", "--git", "../toolkit_repo"]).unwrap();
@@ -2212,7 +2339,12 @@ fn test_cool_add_git_dependency_installs_and_runs() {
         parsed["dependencies"]["toolkit"]["git"].as_str(),
         Some("../toolkit_repo")
     );
-    assert!(project_dir.join(".cool").join("deps").join("toolkit").join(".git").exists());
+    assert!(project_dir
+        .join(".cool")
+        .join("deps")
+        .join("toolkit")
+        .join(".git")
+        .exists());
 
     let lockfile = std::fs::read_to_string(project_dir.join("cool.lock")).unwrap();
     assert!(lockfile.contains("kind = \"git\""));

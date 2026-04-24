@@ -2,6 +2,12 @@
 
 All notable changes to the Cool language project.
 
+## [Unreleased]
+
+### Added
+- `cool ast <file.cool>` for pretty-printed JSON AST dumps
+- `cool modulegraph <file.cool>` for resolved import-graph inspection across project sources and dependencies
+
 ## [1.0.0] - 2026-04-17 - The Complete Language
 
 Cool now has a working interpreter, bytecode VM, LLVM backend, FFI, a self-hosted compiler, full bootstrap self-hosting for `coolc/compiler_vm.cool`, and a steadily growing standard library. That library now includes cross-runtime `csv`, `datetime`, `hashlib`, `toml`, `yaml`, `sqlite`, `http`, `argparse`, `logging`, and `test`, plus native LLVM `try` / `except` / `finally` / `raise` support with matching `with` / context-manager cleanup through caught exceptions. The first dedicated systems-language checkpoint is also in place now: fixed-width integer helpers (`i8` / `u8` / `i16` / `u16` / `i32` / `u32` / `i64`) and wider LLVM raw-memory reads/writes for 8/16/32-bit values.
