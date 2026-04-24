@@ -234,6 +234,9 @@ fn spawn_http_test_server(expected_requests: usize) -> (String, thread::JoinHand
         while handled < expected_requests && Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Accepted sockets can inherit nonblocking mode from the listener on some
+                    // platforms; switch back to blocking reads so we don't parse partial requests.
+                    stream.set_nonblocking(false).unwrap();
                     let request = read_http_request(&mut stream);
                     let mut lines = request.lines();
                     let request_line = lines.next().unwrap_or("");
