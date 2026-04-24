@@ -858,6 +858,7 @@
         <span class="nav-group-label">Cool</span>
         <a href="#Cool-shell">Shell</a>
         <a href="#Cool-apps">Applications</a>
+        <a href="#tooling">CLI Tooling</a>
 
         <span class="nav-group-label">Project</span>
         <a href="#structure">Project Structure</a>
@@ -1649,6 +1650,41 @@ indexed  = list(enumerate(["x","y","z"]))
 desc     = sorted(nums, key=lambda x: -x)
 rev      = list(reversed(nums))</code></pre>
         </div>
+
+        <h3>Structs</h3>
+        <p>Structs are value types with named, typed fields. They work in all three runtimes (interpreter, VM, and LLVM
+          native builds) and produce stable binary layouts when compiled.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">struct Point:
+    x: i32
+    y: i32
+
+p = Point(10, 20)          # positional
+q = Point(x=3, y=4)        # keyword
+
+print(p.x, p.y)            # 10 20
+p.x = 99</code></pre>
+        </div>
+
+        <p>Use <code>packed struct</code> for consecutive byte layout with no inter-field padding — useful for binary
+          protocols, file formats, and systems work:</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">packed struct Header:
+    magic: u16
+    version: u8
+    length: u32
+
+h = Header(magic=0xCAFE, version=1, length=256)
+print(h.magic, h.version, h.length)</code></pre>
+        </div>
+
+        <div class="callout">
+          <strong>Field types:</strong> <code>i8</code>, <code>u8</code>, <code>i16</code>, <code>u16</code>,
+          <code>i32</code>, <code>u32</code>, <code>i64</code>, <code>u64</code>, <code>f32</code>, <code>f64</code>,
+          <code>bool</code>. The LLVM backend uses real LLVM struct types and GEP-based field access for stable ABI.
+        </div>
       </section>
 
       <!-- STRINGS -->
@@ -2136,6 +2172,54 @@ print(data["ok"])
 print(posted)</code></pre>
         </div>
         <div class="callout">Backed by host <code>curl</code> in every runtime, including LLVM native builds.</div>
+
+        <h3>subprocess</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import subprocess
+
+result = subprocess.run("ls -la")
+print(result["stdout"])
+print(result["exit_code"])
+
+out = subprocess.check_output("echo hello")   # returns stdout string
+ok  = subprocess.call("true")                 # returns exit code as int</code></pre>
+        </div>
+
+        <h3>socket</h3>
+        <p>TCP client and server across all runtimes (interpreter, VM, and LLVM native builds).</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import socket
+
+# TCP client
+conn = socket.connect("example.com", 80)
+socket.send(conn, "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+print(socket.recv(conn, 1024))
+socket.close(conn)
+
+# TCP server
+srv = socket.listen("0.0.0.0", 9000)
+client = socket.accept(srv)
+line = socket.readline(client)
+socket.send(client, "HTTP/1.0 200 OK\r\n\r\nHello!\n")
+socket.close(client)</code></pre>
+        </div>
+
+        <h3>path</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import path
+
+p = path.join("/usr", "local", "bin")   # /usr/local/bin
+print(path.basename(p))                  # bin
+print(path.dirname(p))                   # /usr/local
+print(path.ext("hello.cool"))            # .cool
+print(path.stem("hello.cool"))           # hello
+print(path.exists("/etc/hosts"))         # true
+print(path.isabs("/etc"))                # true
+print(path.normalize("a/../b"))          # b</code></pre>
+        </div>
 
         <h3>argparse</h3>
         <div class="code-wrap">
@@ -2879,6 +2963,15 @@ echo Done.</code></pre>
         <p>ASCII Snake game with real-time arrow key input via <code>import term</code>. Runs entirely in the terminal
           and expects an interactive TTY.</p>
 
+        <h3>browse — TUI File Browser</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">cool coolapps/browse.cool</code></pre>
+        </div>
+        <p>A two-pane terminal file browser written entirely in Cool. Left pane shows directory contents; right pane
+          previews the selected file. Navigate with arrow keys, <code>Enter</code> to descend, <code>Backspace</code>
+          to go up, <code>q</code> to quit. Requires an interactive TTY.</p>
+
         <h3>http — HTTP Client</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
@@ -2916,6 +3009,81 @@ echo Done.</code></pre>
           system.</div>
       </section>
 
+      <!-- CLI TOOLING -->
+      <section class="doc-section" id="tooling">
+        <h2>CLI Tooling</h2>
+
+        <p>Cool ships a suite of static-analysis and developer-tooling commands that output machine-readable JSON or human-readable diagnostics.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>cool ast &lt;file.cool&gt;</code></td>
+                <td>Print the parsed AST as pretty JSON</td>
+              </tr>
+              <tr>
+                <td><code>cool inspect &lt;file.cool&gt;</code></td>
+                <td>JSON summary of top-level imports, functions, classes, structs, and assignments</td>
+              </tr>
+              <tr>
+                <td><code>cool symbols [file.cool]</code></td>
+                <td>Resolved JSON symbol index across all reachable modules</td>
+              </tr>
+              <tr>
+                <td><code>cool diff &lt;before&gt; &lt;after&gt;</code></td>
+                <td>JSON summary of added, removed, and changed top-level symbols between two files</td>
+              </tr>
+              <tr>
+                <td><code>cool modulegraph &lt;file.cool&gt;</code></td>
+                <td>Resolved import graph for all reachable modules as JSON</td>
+              </tr>
+              <tr>
+                <td><code>cool check [--json] [file.cool]</code></td>
+                <td>Static checks: unresolved imports, import cycles, duplicate symbols. <code>--json</code> for machine-readable output</td>
+              </tr>
+              <tr>
+                <td><code>cool bundle</code></td>
+                <td>Build the project and package it into a distributable tarball (uses <code>[bundle].include</code> in <code>cool.toml</code>)</td>
+              </tr>
+              <tr>
+                <td><code>cool release [--bump patch]</code></td>
+                <td>Bump version in <code>cool.toml</code>, run <code>cool bundle</code>, and create a git tag</td>
+              </tr>
+              <tr>
+                <td><code>cool lsp</code></td>
+                <td>Start the language server on stdin/stdout for VS Code, Neovim, Helix, and any LSP client</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Language Server (cool lsp)</h3>
+        <p>Connect any LSP client using <code>cool lsp</code> as the server command. Capabilities:</p>
+        <ul>
+          <li><strong>Diagnostics</strong> — parse and lex errors with line numbers, duplicate-symbol warnings, pushed on every open/change</li>
+          <li><strong>Completions</strong> — keywords, built-ins, builtin module names (after <code>import</code>), functions/classes/structs from the current file</li>
+          <li><strong>Hover</strong> — function signatures, class constructors, struct field layout</li>
+          <li><strong>Go-to-definition</strong> — jump to the definition across all open files</li>
+          <li><strong>Document symbols</strong> — outline of all functions, classes, methods, and structs in a file</li>
+          <li><strong>Workspace symbols</strong> — search symbols across all open files</li>
+        </ul>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">json</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-json">// VS Code settings.json — add to your workspace
+{
+  "cool.lsp.serverCommand": ["cool", "lsp"]
+}</code></pre>
+        </div>
+      </section>
+
       <!-- PROJECT STRUCTURE -->
       <section class="doc-section" id="structure">
         <h2>Project Structure</h2>
@@ -2931,7 +3099,10 @@ echo Done.</code></pre>
 │   ├── interpreter.rs    # Tree-walk interpreter (evaluates AST)
 │   ├── opcode.rs         # Bytecode instruction set definitions
 │   ├── compiler.rs       # AST → bytecode compiler
-│   └── vm.rs             # Bytecode virtual machine
+│   ├── vm.rs             # Bytecode virtual machine
+│   ├── llvm_codegen.rs   # LLVM native compiler with embedded C runtime
+│   ├── tooling.rs        # Static analysis: AST dump, inspect, symbols, check, diff
+│   └── lsp.rs            # Language server (LSP) over stdin/stdout
 │
 ├── coolapps/
 │   ├── shell.cool        # Main Cool interactive shell
@@ -2940,6 +3111,7 @@ echo Done.</code></pre>
 │   ├── top.cool          # Process viewer
 │   ├── edit.cool         # Terminal text editor
 │   ├── snake.cool        # Snake game
+│   ├── browse.cool       # TUI file browser
 │   └── http.cool         # HTTP client
 │
 ├── examples/
@@ -3040,8 +3212,8 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>10</td>
-                <td>Production readiness — runtime parity, tooling, practical modules</td>
-                <td><span class="badge badge-progress">In Progress</span></td>
+                <td>Production readiness — LSP, socket, struct, bundle/release, tooling, browse app</td>
+                <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
                 <td>11</td>
@@ -3078,6 +3250,17 @@ echo Done.</code></pre>
           <li>✅ Bootstrap: self-hosted compiler compiles itself</li>
         </ul>
 
+        <h3>Phase 10 — Production Readiness</h3>
+        <p>Everything needed to use Cool for real projects: LSP editor integration, stable binary data layout, networking, packaging, and a full tooling suite.</p>
+        <ul>
+          <li>✅ <strong>Language server</strong> — <code>cool lsp</code> stdio server: diagnostics, completions (keywords, builtins, modules, file symbols), hover signatures, go-to-definition, document symbols, workspace symbol search</li>
+          <li>✅ <strong>Structs</strong> — <code>struct</code> and <code>packed struct</code> with typed fields and stable binary layout across all runtimes</li>
+          <li>✅ <strong>Socket module</strong> — TCP client and server via <code>import socket</code></li>
+          <li>✅ <strong>Packaging</strong> — <code>cool bundle</code>, <code>cool release</code>, semver constraint checking in <code>cool install</code></li>
+          <li>✅ <strong>Developer tooling</strong> — <code>cool ast</code>, <code>cool inspect</code>, <code>cool symbols</code>, <code>cool diff</code>, <code>cool modulegraph</code>, <code>cool check</code></li>
+          <li>✅ <strong>Browse app</strong> — TUI file browser written entirely in Cool</li>
+        </ul>
+
         <div class="callout">
           See <a href="https://github.com/codenz92/cool-lang/blob/master/ROADMAP.md" target="_blank"
             rel="noopener noreferrer">ROADMAP.md</a> and <a href="https://github.com/codenz92/cool-lang/blob/master/CHANGELOG.md" target="_blank"
@@ -3092,8 +3275,13 @@ echo Done.</code></pre>
         <p>See <a href="https://github.com/codenz92/cool-lang/blob/master/CHANGELOG.md" target="_blank"
             rel="noopener noreferrer">CHANGELOG.md</a> for the complete history.</p>
 
+        <h3>v1.1.0 - Phase 10 Complete</h3>
+        <ul>
+          <li>Phase 10: LSP language server, structs, socket module, bundle/release tooling, developer tooling suite, browse TUI app</li>
+        </ul>
+
         <h3>v1.0.0 - The Complete Language</h3>
-        <p>All 9 phases are now complete!</p>
+        <p>All 9 original phases complete.</p>
         <ul>
           <li>Phase 8: Bytecode VM, LLVM backend, FFI, inline assembly, raw memory</li>
           <li>Phase 9: Self-hosted compiler written entirely in Cool</li>

@@ -2,21 +2,49 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased]
+## [1.1.0] - 2026-04-24 - Phase 10 Complete
 
-### Added
-- `cool ast <file.cool>` for pretty-printed JSON AST dumps
-- `cool inspect <file.cool>` for JSON summaries of top-level imports and symbols
-- `cool symbols [file.cool]` for resolved JSON symbol indexes across reachable modules
-- `cool diff <before.cool> <after.cool>` for JSON summaries of added, removed, and changed top-level symbols
-- `cool modulegraph <file.cool>` for resolved import-graph inspection across project sources and dependencies
-- `cool check [file.cool]` for static unresolved-import, import-cycle, and duplicate-symbol diagnostics
+### Phase 10 — Production Readiness And Ecosystem (Complete)
+
+#### Language Server Protocol
+
+- `cool lsp` — full LSP server over stdin/stdout: parse/lex diagnostics on open/change, keyword and builtin completions, module-name completions after `import`, hover signatures for functions/classes/structs, go-to-definition across open files, document symbols, workspace symbol search
+
+#### Struct And Systems Data Layout
+
+- `struct` definitions with typed fields (`i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`), positional + keyword construction, and coercion on init across all runtimes (interpreter, VM, LLVM)
+- `packed struct` — `packed struct Name:` syntax, consecutive byte layout with no inter-field padding, LLVM packed attribute, stable GEP-based field access
+- Stable binary struct layout in LLVM — real LLVM struct types, GEP field access for locals, side-table dispatch for dynamic paths
+
+#### Networking
+
+- `import socket` — TCP client (`connect`) and server (`listen`, `accept`) with `send`, `recv`, `readline`, and `close` across all runtimes
+
+#### Packaging And Release Tooling
+
+- `cool bundle` — build + distributable tarball with `[bundle].include` from `cool.toml`
+- `cool release [--bump patch|minor|major]` — version bump + bundle + git tag
+- Semver constraint checking in `cool install` — `^`, `~`, `>=`, `>=,<`, `=`, `*` against installed versions, recorded in lockfile
+
+#### Developer Tooling
+
+- `cool ast <file.cool>` — pretty-printed JSON AST dump
+- `cool inspect <file.cool>` — JSON summary of top-level imports and symbols
+- `cool symbols [file.cool]` — resolved JSON symbol index across reachable modules
+- `cool diff <before.cool> <after.cool>` — JSON summary of added, removed, and changed top-level symbols
+- `cool modulegraph <file.cool>` — resolved import-graph inspection across project sources and dependencies
+- `cool check [file.cool]` — static unresolved-import, import-cycle, and duplicate-symbol diagnostics (`--json` flag for machine-readable output)
+
+#### Applications
+
+- `browse` — TUI file browser (`coolapps/browse.cool`): two-pane layout, directory traversal, file preview, arrow-key navigation, written entirely in Cool
 
 ## [1.0.0] - 2026-04-17 - The Complete Language
 
 Cool now has a working interpreter, bytecode VM, LLVM backend, FFI, a self-hosted compiler, full bootstrap self-hosting for `coolc/compiler_vm.cool`, and a steadily growing standard library. That library now includes cross-runtime `csv`, `datetime`, `hashlib`, `toml`, `yaml`, `sqlite`, `http`, `argparse`, `logging`, and `test`, plus native LLVM `try` / `except` / `finally` / `raise` support with matching `with` / context-manager cleanup through caught exceptions. The first dedicated systems-language checkpoint is also in place now: fixed-width integer helpers (`i8` / `u8` / `i16` / `u16` / `i32` / `u32` / `i64`) and wider LLVM raw-memory reads/writes for 8/16/32-bit values.
 
 ### Phase 1 - Core Interpreter (Complete)
+
 The foundational tree-walk interpreter.
 
 - [x] Lexer with tokens, indentation, INDENT/DEDENT handling
@@ -37,6 +65,7 @@ The foundational tree-walk interpreter.
 - [x] Comments (`#`)
 
 ### Phase 2 - Real Language Features (Complete)
+
 Enough features to write real programs.
 
 - [x] Classes (`class`, `__init__`, methods, `self`)
@@ -63,6 +92,7 @@ Enough features to write real programs.
 - [x] `runfile()` built-in
 
 ### Phase 3 - Cool Shell (Complete)
+
 A working interactive shell written entirely in Cool.
 
 - [x] ASCII banner on startup
@@ -72,6 +102,7 @@ A working interactive shell written entirely in Cool.
 - [x] Script execution: `run`, `history`, `clear`, `exit`
 
 ### Phase 4 - Quality of Life (Complete)
+
 Features that make the language pleasant to use.
 
 - [x] f-strings (`f"Hello {name}!"`)
@@ -94,6 +125,7 @@ Features that make the language pleasant to use.
 - [x] String methods: `.upper()`, `.lower()`, `.strip()`, `.split()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`
 
 ### Phase 5 - Shell: More Commands (Complete)
+
 A shell powerful enough for real use.
 
 - [x] `cp` — copy files
@@ -109,6 +141,7 @@ A shell powerful enough for real use.
 - [x] `alias` command
 
 ### Phase 6 - Standard Library (Complete)
+
 A built-in library shipped with the language across runtimes.
 
 - [x] `string` module — `split`, `join`, `strip`, `upper`, `lower`, `replace`, etc.
@@ -132,6 +165,7 @@ A built-in library shipped with the language across runtimes.
 - [x] Package system — `import foo.bar` loads `foo/bar.cool`
 
 ### Phase 7 - Cool Applications (Complete)
+
 Real applications written entirely in Cool.
 
 - [x] `calc` — Calculator REPL with persistent variables
@@ -142,6 +176,7 @@ Real applications written entirely in Cool.
 - [x] `http` — HTTP client (`get`, `post`, `head`, `getjson`)
 
 ### Phase 8 - Compiler (Complete)
+
 Bytecode VM and LLVM backend for native binaries.
 
 - [x] Bytecode VM (compile AST to bytecode, run on VM)
@@ -163,6 +198,7 @@ Bytecode VM and LLVM backend for native binaries.
 - [x] **Classes in LLVM** (`class`, `__init__`, methods, attribute access)
 
 ### Phase 9 - Self-Hosted Compiler (Complete)
+
 The compiler written in Cool itself.
 
 - [x] Lexer in Cool (`coolc/compiler_vm.cool`)
@@ -176,6 +212,7 @@ The compiler written in Cool itself.
 ## [0.9.0] - Pre-release
 
 ### Added
+
 - Initial project structure
 - Basic interpreter implementation
 - REPL support
@@ -201,7 +238,7 @@ run coolapps/snake.cool
 The interpreter and bytecode VM now share full context-manager cleanup semantics, and the LLVM backend also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import sqlite` / `import http` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, but it still has some limitations:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
-|---------|-------------|-------------|------|
+| ------- | ----------- | ----------- | ---- |
 | Classes | ✅ | ✅ | ✅ |
 | `with` / context managers (normal/control-flow exits, caught exceptions, and unhandled native raises) | ✅ | ✅ | ✅ |
 | Closures / lambdas | ✅ | ✅ | ❌ |

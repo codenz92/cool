@@ -23,7 +23,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 - List comprehensions, lambda expressions, ternary expressions
 - `nonlocal` / `global`, `assert`, `with` / context managers
 - `import math`, `import os`, `import sys`, `import path`, `import csv`, `import datetime`, `import hashlib`, `import toml`, `import yaml`, `import sqlite`, `import http`, `import argparse`, `import logging`, `import test`
-- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess` (`http` / shell app use host `curl`)
+- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket` (`http` requires host `curl`)
 - `import ffi` — call C functions from shared libraries at runtime
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
@@ -32,6 +32,8 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 - `import term` for raw terminal mode, cursor control, terminal sizing, and real-time key input across interpreter, VM, and native builds (real TTY required for interactive input)
 - `os.popen(cmd)` to run shell commands and capture output
 - Fixed-width integer helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`
+- `struct` definitions with typed fields and positional/keyword construction across all runtimes
+- `packed struct` — no inter-field padding, stable binary layout in LLVM
 - Hex / binary / octal literals, `\x` escape sequences
 - REPL mode
 
@@ -272,7 +274,7 @@ run = "cool test"
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports from that entry file and prints the resulting graph as JSON, and `cool check [file.cool]` performs static import, cycle, and duplicate-symbol checks.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static import, cycle, and duplicate-symbol checks. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
 
 ---
 
@@ -292,6 +294,9 @@ For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect
 | `cool check [file.cool]` | Statically check imports, cycles, and duplicate symbols |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
+| `cool bundle` | Build and package the project into a distributable tarball |
+| `cool release [--bump patch]` | Bump version, bundle, and git-tag a release |
+| `cool lsp` | Start the language server (LSP) on stdin/stdout |
 | `cool install` | Fetch git dependencies and write `cool.lock` |
 | `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
 | `cool test [path ...]` | Discover and run Cool tests |
@@ -359,7 +364,9 @@ src/
   opcode.rs         Bytecode instruction set and VM value types
   vm.rs             Bytecode virtual machine
   llvm_codegen.rs   LLVM native compiler (with embedded C runtime)
-  main.rs           CLI entry point, REPL, build/new subcommands
+  tooling.rs        Static analysis: AST dump, inspect, symbols, check, diff
+  lsp.rs            Language server protocol (LSP) over stdin/stdout
+  main.rs           CLI entry point, REPL, build/new/lsp subcommands
 
 coolapps/
   shell.cool        The Cool interactive shell
@@ -369,6 +376,7 @@ coolapps/
   edit.cool         Text editor
   snake.cool        Snake game
   http.cool         HTTP client
+  browse.cool       TUI file browser (two-pane layout, file preview)
 
 coolc/
   compiler_vm.cool  Self-hosted compiler
@@ -398,7 +406,7 @@ examples/
 | 7 — Cool applications (editor, calculator, snake…) | ✅ Complete |
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
 | 9 — Self-hosted compiler | ✅ Complete |
-| 10 — Production readiness and ecosystem | 🚧 In Progress |
+| 10 — Production readiness and ecosystem | ✅ Complete |
 | 11 — Freestanding systems foundation | 🚧 In Progress |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
