@@ -82,6 +82,13 @@ impl VM {
             "range",
             "str",
             "int",
+            "i8",
+            "u8",
+            "i16",
+            "u16",
+            "i32",
+            "u32",
+            "i64",
             "float",
             "bool",
             "type",
@@ -1635,28 +1642,35 @@ impl VM {
             }
             "int" => {
                 let v = args.first().ok_or_else(|| self.err("int() requires 1 argument"))?;
-                match v {
-                    VmValue::Int(n) => Ok(VmValue::Int(*n)),
-                    VmValue::Float(f) => Ok(VmValue::Int(*f as i64)),
-                    VmValue::Bool(b) => Ok(VmValue::Int(if *b { 1 } else { 0 })),
-                    VmValue::Str(s) => {
-                        let s = s.trim();
-                        if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-                            i64::from_str_radix(hex, 16)
-                                .map(VmValue::Int)
-                                .map_err(|_| self.err(&format!("invalid int: '{}'", s)))
-                        } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
-                            i64::from_str_radix(bin, 2)
-                                .map(VmValue::Int)
-                                .map_err(|_| self.err(&format!("invalid int: '{}'", s)))
-                        } else {
-                            s.parse::<i64>()
-                                .map(VmValue::Int)
-                                .map_err(|_| self.err(&format!("invalid int: '{}'", s)))
-                        }
-                    }
-                    other => Err(self.err(&format!("cannot convert {} to int", other.type_name()))),
-                }
+                Ok(VmValue::Int(self.coerce_to_int(v)?))
+            }
+            "i8" => {
+                let v = args.first().ok_or_else(|| self.err("i8() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_signed(self.coerce_to_int(v)?, 8)))
+            }
+            "u8" => {
+                let v = args.first().ok_or_else(|| self.err("u8() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_unsigned(self.coerce_to_int(v)?, 8)))
+            }
+            "i16" => {
+                let v = args.first().ok_or_else(|| self.err("i16() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_signed(self.coerce_to_int(v)?, 16)))
+            }
+            "u16" => {
+                let v = args.first().ok_or_else(|| self.err("u16() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_unsigned(self.coerce_to_int(v)?, 16)))
+            }
+            "i32" => {
+                let v = args.first().ok_or_else(|| self.err("i32() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_signed(self.coerce_to_int(v)?, 32)))
+            }
+            "u32" => {
+                let v = args.first().ok_or_else(|| self.err("u32() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_unsigned(self.coerce_to_int(v)?, 32)))
+            }
+            "i64" => {
+                let v = args.first().ok_or_else(|| self.err("i64() requires 1 argument"))?;
+                Ok(VmValue::Int(self.coerce_to_int(v)?))
             }
             "float" => {
                 let v = args.first().ok_or_else(|| self.err("float() requires 1 argument"))?;
@@ -3890,6 +3904,25 @@ impl VM {
         }
     }
 
+    fn coerce_to_int(&self, value: &VmValue) -> Result<i64, String> {
+        match value {
+            VmValue::Int(n) => Ok(*n),
+            VmValue::Float(f) => Ok(*f as i64),
+            VmValue::Bool(b) => Ok(if *b { 1 } else { 0 }),
+            VmValue::Str(s) => {
+                let s = s.trim();
+                if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                    i64::from_str_radix(hex, 16).map_err(|_| self.err(&format!("invalid int: '{}'", s)))
+                } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+                    i64::from_str_radix(bin, 2).map_err(|_| self.err(&format!("invalid int: '{}'", s)))
+                } else {
+                    s.parse::<i64>().map_err(|_| self.err(&format!("invalid int: '{}'", s)))
+                }
+            }
+            other => Err(self.err(&format!("cannot convert {} to int", other.type_name()))),
+        }
+    }
+
     fn builtin_min_max(&self, args: &[VmValue], is_max: bool) -> Result<VmValue, String> {
         let items: Vec<VmValue> = if args.len() == 1 {
             self.to_iter_vec(args[0].clone())?
@@ -4853,5 +4886,21 @@ fn resolve_slice_idx(idx: Option<i64>, len: i64, default: i64) -> i64 {
             let i = if i < 0 { len + i } else { i };
             i.max(0).min(len)
         }
+    }
+}
+
+fn wrap_unsigned(n: i64, bits: u32) -> i64 {
+    let mask = (1i128 << bits) - 1;
+    ((n as i128) & mask) as i64
+}
+
+fn wrap_signed(n: i64, bits: u32) -> i64 {
+    let modulus = 1i128 << bits;
+    let sign_bit = 1i128 << (bits - 1);
+    let wrapped = (n as i128) & (modulus - 1);
+    if (wrapped & sign_bit) != 0 {
+        (wrapped - modulus) as i64
+    } else {
+        wrapped as i64
     }
 }

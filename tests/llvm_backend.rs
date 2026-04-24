@@ -361,6 +361,57 @@ print(obj.area(2))
 }
 
 #[test]
+fn test_llvm_fixed_width_ints_and_memory() {
+    let result = compile_and_run_native(
+        r#"
+print(i8(255))
+print(u8(-1))
+print(i16(65535))
+print(u16(-1))
+print(i32(4294967295))
+print(u32(-1))
+print(i64(42.9))
+
+ptr = malloc(16)
+write_i8(ptr, -1)
+write_u8(ptr + 1, 255)
+write_i16(ptr + 2, -2)
+write_u16(ptr + 4, 65535)
+write_i32(ptr + 8, -123456)
+write_u32(ptr + 12, 4294967295)
+print(read_i8(ptr))
+print(read_u8(ptr + 1))
+print(read_i16(ptr + 2))
+print(read_u16(ptr + 4))
+print(read_i32(ptr + 8))
+print(read_u32(ptr + 12))
+free(ptr)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "-1",
+            "255",
+            "-1",
+            "65535",
+            "-1",
+            "4294967295",
+            "42",
+            "-1",
+            "255",
+            "-2",
+            "65535",
+            "-123456",
+            "4294967295",
+        ]
+    );
+}
+
+#[test]
 fn test_llvm_scalar_conversion_builtins() {
     let result = compile_and_run_native(
         r#"
@@ -1388,7 +1439,7 @@ base = "{base_url}"
 print(http.get(base + "/plain", ["X-Test: yes"]).strip())
 print(string.find(http.head(base + "/plain"), "X-Reply: plain") >= 0)
 data = http.getjson(base + "/json")
-print(data["accept"])
+print(data["ok"])
 print(data["n"])
 print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
 "#

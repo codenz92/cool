@@ -82,6 +82,13 @@ impl Env {
             "range",
             "str",
             "int",
+            "i8",
+            "u8",
+            "i16",
+            "u16",
+            "i32",
+            "u32",
+            "i64",
             "float",
             "bool",
             "type",
@@ -124,6 +131,18 @@ impl Env {
             "free",
             "read_byte",
             "write_byte",
+            "read_i8",
+            "write_i8",
+            "read_u8",
+            "write_u8",
+            "read_i16",
+            "write_i16",
+            "read_u16",
+            "write_u16",
+            "read_i32",
+            "write_i32",
+            "read_u32",
+            "write_u32",
             "read_i64",
             "write_i64",
             "read_f64",
@@ -2522,17 +2541,56 @@ class Stack:
                     .into_iter()
                     .next()
                     .ok_or_else(|| self.err("int() requires 1 argument"))?;
-                match v {
-                    Value::Int(n) => Ok(Value::Int(n)),
-                    Value::Float(f) => Ok(Value::Int(f as i64)),
-                    Value::Str(s) => s
-                        .trim()
-                        .parse::<i64>()
-                        .map(Value::Int)
-                        .map_err(|_| self.err(&format!("cannot convert \"{}\" to int", s))),
-                    Value::Bool(b) => Ok(Value::Int(if b { 1 } else { 0 })),
-                    other => Err(self.err(&format!("cannot convert {} to int", other.type_name()))),
-                }
+                Ok(Value::Int(self.coerce_to_int(&v)?))
+            }
+            "i8" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("i8() requires 1 argument"))?;
+                Ok(Value::Int(wrap_signed(self.coerce_to_int(&v)?, 8)))
+            }
+            "u8" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("u8() requires 1 argument"))?;
+                Ok(Value::Int(wrap_unsigned(self.coerce_to_int(&v)?, 8)))
+            }
+            "i16" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("i16() requires 1 argument"))?;
+                Ok(Value::Int(wrap_signed(self.coerce_to_int(&v)?, 16)))
+            }
+            "u16" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("u16() requires 1 argument"))?;
+                Ok(Value::Int(wrap_unsigned(self.coerce_to_int(&v)?, 16)))
+            }
+            "i32" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("i32() requires 1 argument"))?;
+                Ok(Value::Int(wrap_signed(self.coerce_to_int(&v)?, 32)))
+            }
+            "u32" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("u32() requires 1 argument"))?;
+                Ok(Value::Int(wrap_unsigned(self.coerce_to_int(&v)?, 32)))
+            }
+            "i64" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("i64() requires 1 argument"))?;
+                Ok(Value::Int(self.coerce_to_int(&v)?))
             }
             "float" => {
                 let v = args
@@ -3047,12 +3105,27 @@ class Stack:
                     }
                 }
             }
-            "asm" | "malloc" | "free" | "read_byte" | "write_byte" | "read_i64" | "write_i64" | "read_f64"
-            | "write_f64" | "read_str" | "write_str" => Err(self.err(&format!(
+            "asm" | "malloc" | "free" | "read_byte" | "write_byte" | "read_i8" | "write_i8" | "read_u8"
+            | "write_u8" | "read_i16" | "write_i16" | "read_u16" | "write_u16" | "read_i32" | "write_i32"
+            | "read_u32" | "write_u32" | "read_i64" | "write_i64" | "read_f64" | "write_f64" | "read_str"
+            | "write_str" => Err(self.err(&format!(
                 "'{}' is only supported in the LLVM backend — compile with `cool build`",
                 name
             ))),
             _ => Err(self.err(&format!("unknown builtin '{}'", name))),
+        }
+    }
+
+    fn coerce_to_int(&self, value: &Value) -> Result<i64, String> {
+        match value {
+            Value::Int(n) => Ok(*n),
+            Value::Float(f) => Ok(*f as i64),
+            Value::Str(s) => s
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| self.err(&format!("cannot convert \"{}\" to int", s))),
+            Value::Bool(b) => Ok(if *b { 1 } else { 0 }),
+            other => Err(self.err(&format!("cannot convert {} to int", other.type_name()))),
         }
     }
 
@@ -5338,6 +5411,22 @@ fn req_int_arg(args: &[Value], i: usize, method: &str) -> Result<i64, String> {
             other.type_name()
         )),
         None => Err(format!("{}() requires at least {} argument(s)", method, i + 1)),
+    }
+}
+
+fn wrap_unsigned(n: i64, bits: u32) -> i64 {
+    let mask = (1i128 << bits) - 1;
+    ((n as i128) & mask) as i64
+}
+
+fn wrap_signed(n: i64, bits: u32) -> i64 {
+    let modulus = 1i128 << bits;
+    let sign_bit = 1i128 << (bits - 1);
+    let wrapped = (n as i128) & (modulus - 1);
+    if (wrapped & sign_bit) != 0 {
+        (wrapped - modulus) as i64
+    } else {
+        wrapped as i64
     }
 }
 

@@ -267,6 +267,13 @@ CoolVal cool_abs(CoolVal);
 CoolVal cool_to_int(CoolVal);
 CoolVal cool_to_float_val(CoolVal);
 CoolVal cool_to_bool_val(CoolVal);
+CoolVal cool_i8(CoolVal);
+CoolVal cool_u8(CoolVal);
+CoolVal cool_i16(CoolVal);
+CoolVal cool_u16(CoolVal);
+CoolVal cool_i32(CoolVal);
+CoolVal cool_u32(CoolVal);
+CoolVal cool_i64(CoolVal);
 CoolVal cool_module_get_attr(const char*, const char*);
 CoolVal cool_module_call(const char*, const char*, int32_t, ...);
 CoolVal cool_noncallable(CoolVal);
@@ -584,6 +591,60 @@ CoolVal cool_read_byte(CoolVal addr_val) {
 CoolVal cool_write_byte(CoolVal addr_val, CoolVal val) {
     uint8_t* p = (uint8_t*)(intptr_t)addr_val.payload;
     *p = (uint8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i8(CoolVal addr_val) {
+    int8_t* p = (int8_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_i8(CoolVal addr_val, CoolVal val) {
+    int8_t* p = (int8_t*)(intptr_t)addr_val.payload;
+    *p = (int8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_u8(CoolVal addr_val) {
+    uint8_t* p = (uint8_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_u8(CoolVal addr_val, CoolVal val) {
+    uint8_t* p = (uint8_t*)(intptr_t)addr_val.payload;
+    *p = (uint8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i16(CoolVal addr_val) {
+    int16_t* p = (int16_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_i16(CoolVal addr_val, CoolVal val) {
+    int16_t* p = (int16_t*)(intptr_t)addr_val.payload;
+    *p = (int16_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_u16(CoolVal addr_val) {
+    uint16_t* p = (uint16_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_u16(CoolVal addr_val, CoolVal val) {
+    uint16_t* p = (uint16_t*)(intptr_t)addr_val.payload;
+    *p = (uint16_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i32(CoolVal addr_val) {
+    int32_t* p = (int32_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_i32(CoolVal addr_val, CoolVal val) {
+    int32_t* p = (int32_t*)(intptr_t)addr_val.payload;
+    *p = (int32_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_u32(CoolVal addr_val) {
+    uint32_t* p = (uint32_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_u32(CoolVal addr_val, CoolVal val) {
+    uint32_t* p = (uint32_t*)(intptr_t)addr_val.payload;
+    *p = (uint32_t)val.payload;
     return cv_nil();
 }
 CoolVal cool_read_i64(CoolVal addr_val) {
@@ -2174,6 +2235,34 @@ CoolVal cool_to_float_val(CoolVal v) {
 
 CoolVal cool_to_bool_val(CoolVal v) {
     return cv_bool(cool_truthy(v));
+}
+
+CoolVal cool_i8(CoolVal v) {
+    return cv_int((int64_t)(int8_t)cool_to_int(v).payload);
+}
+
+CoolVal cool_u8(CoolVal v) {
+    return cv_int((int64_t)(uint8_t)cool_to_int(v).payload);
+}
+
+CoolVal cool_i16(CoolVal v) {
+    return cv_int((int64_t)(int16_t)cool_to_int(v).payload);
+}
+
+CoolVal cool_u16(CoolVal v) {
+    return cv_int((int64_t)(uint16_t)cool_to_int(v).payload);
+}
+
+CoolVal cool_i32(CoolVal v) {
+    return cv_int((int64_t)(int32_t)cool_to_int(v).payload);
+}
+
+CoolVal cool_u32(CoolVal v) {
+    return cv_int((int64_t)(uint32_t)cool_to_int(v).payload);
+}
+
+CoolVal cool_i64(CoolVal v) {
+    return cool_to_int(v);
 }
 
 static CoolVal cool_make_argv(void) {
@@ -6882,12 +6971,31 @@ struct RuntimeFns<'ctx> {
     cool_free: FunctionValue<'ctx>,
     cool_read_byte: FunctionValue<'ctx>,
     cool_write_byte: FunctionValue<'ctx>,
+    cool_read_i8: FunctionValue<'ctx>,
+    cool_write_i8: FunctionValue<'ctx>,
+    cool_read_u8: FunctionValue<'ctx>,
+    cool_write_u8: FunctionValue<'ctx>,
+    cool_read_i16: FunctionValue<'ctx>,
+    cool_write_i16: FunctionValue<'ctx>,
+    cool_read_u16: FunctionValue<'ctx>,
+    cool_write_u16: FunctionValue<'ctx>,
+    cool_read_i32: FunctionValue<'ctx>,
+    cool_write_i32: FunctionValue<'ctx>,
+    cool_read_u32: FunctionValue<'ctx>,
+    cool_write_u32: FunctionValue<'ctx>,
     cool_read_i64: FunctionValue<'ctx>,
     cool_write_i64: FunctionValue<'ctx>,
     cool_read_f64: FunctionValue<'ctx>,
     cool_write_f64: FunctionValue<'ctx>,
     cool_read_str: FunctionValue<'ctx>,
     cool_write_str: FunctionValue<'ctx>,
+    cool_i8: FunctionValue<'ctx>,
+    cool_u8: FunctionValue<'ctx>,
+    cool_i16: FunctionValue<'ctx>,
+    cool_u16: FunctionValue<'ctx>,
+    cool_i32: FunctionValue<'ctx>,
+    cool_u32: FunctionValue<'ctx>,
+    cool_i64: FunctionValue<'ctx>,
     // list/tuple operations
     cool_list_make: FunctionValue<'ctx>,
     cool_tuple_make: FunctionValue<'ctx>,
@@ -7168,12 +7276,31 @@ impl<'ctx> Compiler<'ctx> {
             cool_free: decl!("cool_free", cv_type.fn_type(&[cv], false)),
             cool_read_byte: decl!("cool_read_byte", cv_type.fn_type(&[cv], false)),
             cool_write_byte: decl!("cool_write_byte", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i8: decl!("cool_read_i8", cv_type.fn_type(&[cv], false)),
+            cool_write_i8: decl!("cool_write_i8", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_u8: decl!("cool_read_u8", cv_type.fn_type(&[cv], false)),
+            cool_write_u8: decl!("cool_write_u8", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i16: decl!("cool_read_i16", cv_type.fn_type(&[cv], false)),
+            cool_write_i16: decl!("cool_write_i16", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_u16: decl!("cool_read_u16", cv_type.fn_type(&[cv], false)),
+            cool_write_u16: decl!("cool_write_u16", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i32: decl!("cool_read_i32", cv_type.fn_type(&[cv], false)),
+            cool_write_i32: decl!("cool_write_i32", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_u32: decl!("cool_read_u32", cv_type.fn_type(&[cv], false)),
+            cool_write_u32: decl!("cool_write_u32", cv_type.fn_type(&[cv, cv], false)),
             cool_read_i64: decl!("cool_read_i64", cv_type.fn_type(&[cv], false)),
             cool_write_i64: decl!("cool_write_i64", cv_type.fn_type(&[cv, cv], false)),
             cool_read_f64: decl!("cool_read_f64", cv_type.fn_type(&[cv], false)),
             cool_write_f64: decl!("cool_write_f64", cv_type.fn_type(&[cv, cv], false)),
             cool_read_str: decl!("cool_read_str", cv_type.fn_type(&[cv], false)),
             cool_write_str: decl!("cool_write_str", cv_type.fn_type(&[cv, cv], false)),
+            cool_i8: decl!("cool_i8", cv_type.fn_type(&[cv], false)),
+            cool_u8: decl!("cool_u8", cv_type.fn_type(&[cv], false)),
+            cool_i16: decl!("cool_i16", cv_type.fn_type(&[cv], false)),
+            cool_u16: decl!("cool_u16", cv_type.fn_type(&[cv], false)),
+            cool_i32: decl!("cool_i32", cv_type.fn_type(&[cv], false)),
+            cool_u32: decl!("cool_u32", cv_type.fn_type(&[cv], false)),
+            cool_i64: decl!("cool_i64", cv_type.fn_type(&[cv], false)),
             // list operations
             cool_list_make: decl!("cool_list_make", cv_type.fn_type(&[cv], false)),
             cool_tuple_make: decl!("cool_tuple_make", cv_type.fn_type(&[cv], false)),
@@ -10077,6 +10204,12 @@ impl<'ctx> Compiler<'ctx> {
                 "malloc" => Some(self.rt.cool_malloc),
                 "free" => Some(self.rt.cool_free),
                 "read_byte" => Some(self.rt.cool_read_byte),
+                "read_i8" => Some(self.rt.cool_read_i8),
+                "read_u8" => Some(self.rt.cool_read_u8),
+                "read_i16" => Some(self.rt.cool_read_i16),
+                "read_u16" => Some(self.rt.cool_read_u16),
+                "read_i32" => Some(self.rt.cool_read_i32),
+                "read_u32" => Some(self.rt.cool_read_u32),
                 "read_i64" => Some(self.rt.cool_read_i64),
                 "read_f64" => Some(self.rt.cool_read_f64),
                 "read_str" => Some(self.rt.cool_read_str),
@@ -10091,6 +10224,12 @@ impl<'ctx> Compiler<'ctx> {
             }
             let binary_mem_fn = match name.as_str() {
                 "write_byte" => Some(self.rt.cool_write_byte),
+                "write_i8" => Some(self.rt.cool_write_i8),
+                "write_u8" => Some(self.rt.cool_write_u8),
+                "write_i16" => Some(self.rt.cool_write_i16),
+                "write_u16" => Some(self.rt.cool_write_u16),
+                "write_i32" => Some(self.rt.cool_write_i32),
+                "write_u32" => Some(self.rt.cool_write_u32),
                 "write_i64" => Some(self.rt.cool_write_i64),
                 "write_f64" => Some(self.rt.cool_write_f64),
                 "write_str" => Some(self.rt.cool_write_str),
@@ -10190,6 +10329,31 @@ impl<'ctx> Compiler<'ctx> {
             }
             let value = self.compile_expr(&args[0])?;
             return Ok(self.call_unop_fn(self.rt.cool_to_int, value, "int"));
+        }
+
+        if name == "i8"
+            || name == "u8"
+            || name == "i16"
+            || name == "u16"
+            || name == "i32"
+            || name == "u32"
+            || name == "i64"
+        {
+            if args.len() != 1 {
+                return Err(format!("{name}() takes exactly 1 argument"));
+            }
+            let value = self.compile_expr(&args[0])?;
+            let fn_val = match name.as_str() {
+                "i8" => self.rt.cool_i8,
+                "u8" => self.rt.cool_u8,
+                "i16" => self.rt.cool_i16,
+                "u16" => self.rt.cool_u16,
+                "i32" => self.rt.cool_i32,
+                "u32" => self.rt.cool_u32,
+                "i64" => self.rt.cool_i64,
+                _ => unreachable!(),
+            };
+            return Ok(self.call_unop_fn(fn_val, value, &name));
         }
 
         if name == "float" {

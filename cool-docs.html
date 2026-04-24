@@ -2265,11 +2265,23 @@ abs_fn(-42)     # 42</code></pre>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-python"># Raw memory uses dedicated built-ins, not the ffi module
-ptr = malloc(8)
-write_i64(ptr, 42)
-value = read_i64(ptr)
-print(value)                    # 42
+ptr = malloc(16)
+write_i16(ptr, -2)
+write_u16(ptr + 2, 65535)
+write_i32(ptr + 8, -1234)
+print(read_i16(ptr))            # -2
+print(read_u16(ptr + 2))        # 65535
+print(read_i32(ptr + 8))        # -1234
 free(ptr)</code></pre>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># Fixed-width integer helpers work across runtimes
+print(i8(255))      # -1
+print(u8(-1))       # 255
+print(i16(65535))   # -1
+print(u32(-1))      # 4294967295</code></pre>
         </div>
 
         <div class="callout">
@@ -3026,6 +3038,16 @@ echo Done.</code></pre>
                 <td>Self-Hosted Compiler — compiler written in Cool itself</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
+              <tr>
+                <td>10</td>
+                <td>Production readiness — runtime parity, tooling, practical modules</td>
+                <td><span class="badge badge-progress">In Progress</span></td>
+              </tr>
+              <tr>
+                <td>11</td>
+                <td>Freestanding systems foundation — fixed-width numerics, raw memory, bare-metal path</td>
+                <td><span class="badge badge-progress">In Progress</span></td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -3039,11 +3061,11 @@ echo Done.</code></pre>
           <li>✅ LLVM backend — compile a large native subset of Cool → LLVM IR → native binary</li>
           <li>✅ FFI — available in the interpreter and LLVM native builds via <code>import ffi</code></li>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
-          <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i64</code>, <code>write_i64</code>)</li>
+          <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, fixed-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

@@ -322,6 +322,26 @@ fn test_sum_tuple() {
 }
 
 #[test]
+fn test_fixed_width_int_builtins() {
+    let result = run_cool(
+        "print(i8(255))\nprint(u8(-1))\nprint(i16(65535))\nprint(u16(-1))\nprint(i32(4294967295))\nprint(u32(-1))\nprint(i64(42.9))",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["-1", "255", "-1", "65535", "-1", "4294967295", "42"]);
+}
+
+#[test]
+fn test_vm_fixed_width_int_builtins() {
+    let result = run_cool_vm(
+        "print(i8(255))\nprint(u8(-1))\nprint(i16(65535))\nprint(u16(-1))\nprint(i32(4294967295))\nprint(u32(-1))\nprint(i64(42.9))",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["-1", "255", "-1", "65535", "-1", "4294967295", "42"]);
+}
+
+#[test]
 fn test_if_statement() {
     // Single-line ternary
     let result = run_cool("x = 5\nprint(\"big\" if x > 3 else \"small\")").unwrap();
@@ -1061,7 +1081,7 @@ base = "{base_url}"
 print(http.get(base + "/plain", ["X-Test: yes"]).strip())
 print(string.find(http.head(base + "/plain"), "X-Reply: plain") >= 0)
 data = http.getjson(base + "/json")
-print(data["accept"])
+print(data["ok"])
 print(data["n"])
 print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
 "#
@@ -1084,7 +1104,7 @@ base = "{base_url}"
 print(http.get(base + "/plain", ["X-Test: yes"]).strip())
 print(string.find(http.head(base + "/plain"), "X-Reply: plain") >= 0)
 data = http.getjson(base + "/json")
-print(data["accept"])
+print(data["ok"])
 print(data["n"])
 print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
 "#

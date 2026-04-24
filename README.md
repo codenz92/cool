@@ -31,6 +31,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 - `eval(str)` to evaluate a Cool expression or statement at runtime
 - `import term` for raw terminal mode, cursor control, and real-time key input (powered by crossterm)
 - `os.popen(cmd)` to run shell commands and capture output
+- Fixed-width integer helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`
 - Hex / binary / octal literals, `\x` escape sequences
 - REPL mode
 
@@ -68,7 +69,7 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, fixed-width integer helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** closures/lambdas.
 
@@ -105,6 +106,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`) | ✅ | ✅ | ✅ |
 | `import collections` (`Queue`, `Stack`) | ✅ | ✅ | ✅ |
 | `import subprocess` (`run`, `call`, `check_output`) | ✅ | ✅ | ✅ |
+| Fixed-width integer helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`) | ✅ | ✅ | ✅ |
 | `with` / context managers (normal/control-flow exits, caught exceptions, and unhandled native raises) | ✅ | ✅ | ✅ |
 | f-strings | ✅ | ✅ | ✅ |
 | Ternary expressions | ✅ | ✅ | ✅ |
@@ -115,7 +117,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `try` / `except` / `finally` / `raise` | ✅ | ✅ | ✅ |
 | `import ffi` | ✅ | ❌ | ✅ |
 | Inline assembly | ❌ | ❌ | ✅ |
-| Raw memory access | ❌ | ❌ | ✅ |
+| Raw memory access (`malloc`, `free`, `read_i8/u8/i16/u16/i32/u32/i64`, `write_i8/u8/i16/u16/i32/u32/i64`) | ❌ | ❌ | ✅ |
 
 ### Inline Assembly (LLVM backend)
 
@@ -137,6 +139,12 @@ buf = malloc(8)          # allocate 8 bytes, returns address as int
 write_i64(buf, 99)       # store a 64-bit integer
 val = read_i64(buf)      # load it back  →  99
 
+write_u16(buf, 65535)    # store an unsigned 16-bit value
+u = read_u16(buf)        # load it back  →  65535
+
+write_i32(buf, -1234)    # store a signed 32-bit value
+n = read_i32(buf)        # load it back  →  -1234
+
 write_f64(buf, 1.5)      # store a double
 f = read_f64(buf)        # load it back  →  1.5
 
@@ -151,7 +159,7 @@ free(buf)
 free(sbuf)
 ```
 
-Memory functions are LLVM-backend only. Pointers are plain integers (the address).
+Memory functions are LLVM-backend only. Pointers are plain integers (the address). For fixed-width arithmetic without touching memory, use `i8()`, `u8()`, `i16()`, `u16()`, `i32()`, `u32()`, and `i64()`.
 
 ### Cool Shell (`coolapps/shell.cool`)
 
@@ -354,6 +362,7 @@ examples/
 | 8 — Compiler (bytecode VM, LLVM, FFI, build tooling) | ✅ Complete |
 | 9 — Self-hosted compiler | ✅ Complete |
 | 10 — Production readiness and ecosystem | 🚧 In Progress |
+| 11 — Freestanding systems foundation | 🚧 In Progress |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

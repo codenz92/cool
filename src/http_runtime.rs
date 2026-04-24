@@ -74,3 +74,26 @@ pub fn head(url: &str, headers: &[String]) -> Result<String, String> {
 pub fn getjson(url: &str, headers: &[String]) -> Result<String, String> {
     get(url, &headers_with_json_accept(headers))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::headers_with_json_accept;
+
+    #[test]
+    fn adds_json_accept_header_when_missing() {
+        let headers = headers_with_json_accept(&["X-Test: yes".to_string()]);
+        assert_eq!(
+            headers,
+            vec!["X-Test: yes".to_string(), "Accept: application/json".to_string()]
+        );
+    }
+
+    #[test]
+    fn keeps_existing_accept_header() {
+        let headers = headers_with_json_accept(&["X-Test: yes".to_string(), "Accept: text/plain".to_string()]);
+        assert_eq!(
+            headers,
+            vec!["X-Test: yes".to_string(), "Accept: text/plain".to_string()]
+        );
+    }
+}

@@ -418,6 +418,41 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 11 — Freestanding Systems Foundation 🚧 In Progress
+
+> Goal: move Cool toward bare-metal and kernel work with a deliberate systems subset, instead of treating OS support as just “more LLVM features”
+
+### Numeric And Memory Primitives
+
+- [x] Fixed-width integer helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`
+- [x] LLVM raw-memory reads/writes for signed and unsigned 8/16/32-bit values, alongside the existing byte and 64-bit helpers
+- [ ] Volatile read/write variants for MMIO and device-driver code
+- [ ] Pointer-width aliases and target word-size helpers
+
+### Data Layout And ABI
+
+- [ ] `struct` definitions with explicit field order and stable layout
+- [ ] `packed` / alignment control
+- [ ] `union` support
+- [ ] `extern` declarations with calling-convention and symbol control
+- [ ] Linker-section placement for functions and data
+
+### Freestanding Build Mode
+
+- [ ] `cool build --freestanding`
+- [ ] Object / kernel image output without libc assumptions
+- [ ] Linker-script support and explicit entry points
+- [ ] Panic / abort strategy for no-host targets
+
+### Core Systems Runtime
+
+- [ ] `core` subset that avoids host OS facilities
+- [ ] Serial / console output primitives
+- [ ] Memory-map and paging helpers
+- [ ] Pluggable allocator hooks for kernels and runtimes
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -432,3 +467,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
 | 9 — Self-Hosted Compiler | ✅ Complete |
 | 10 — Production Readiness And Ecosystem | 🚧 In Progress |
+| 11 — Freestanding Systems Foundation | 🚧 In Progress |
