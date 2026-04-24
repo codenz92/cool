@@ -103,6 +103,7 @@ impl Parser {
         match self.peek().clone() {
             Token::Def => self.parse_fn_def(),
             Token::Class => self.parse_class(),
+            Token::Struct => self.parse_struct(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::For => self.parse_for(),
@@ -225,6 +226,33 @@ impl Parser {
         self.eat_newline();
         let body = self.parse_block()?;
         Ok(Stmt::Class { name, parent, body })
+    }
+
+    fn parse_struct(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Struct)?;
+        let name = self.expect_ident()?;
+        self.eat(&Token::Colon)?;
+        self.eat_newline();
+        self.eat(&Token::Indent)?;
+        let mut fields = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            self.skip_newlines();
+            if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                break;
+            }
+            if self.check(&Token::Pass) {
+                self.advance();
+                self.eat_newline();
+                continue;
+            }
+            let field_name = self.expect_ident()?;
+            self.eat(&Token::Colon)?;
+            let type_name = self.expect_ident()?;
+            self.eat_newline();
+            fields.push((field_name, type_name));
+        }
+        self.eat(&Token::Dedent)?;
+        Ok(Stmt::Struct { name, fields })
     }
 
     fn parse_if(&mut self) -> Result<Stmt, String> {

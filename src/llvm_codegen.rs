@@ -8,7 +8,7 @@
 //   3. compile_program() writes the runtime to /tmp, compiles it with `cc`,
 //      emits the LLVM module to a .o file, then links both together.
 
-use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
+use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Param, Program, Stmt, UnaryOp};
 use crate::project::ModuleResolver;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -46,6 +46,10 @@ const RUNTIME_C: &str = r#"
 #include <dlfcn.h>
 #include <sqlite3.h>
 #include <setjmp.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #ifdef __APPLE__
 #include <crt_externs.h>
 #endif
@@ -65,6 +69,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_FILE  12
 #define TAG_FFI_LIB 13
 #define TAG_FFI_FUNC 14
+#define TAG_SOCKET  15
 
 /* The universal Cool value.
    Layout: { int32_t tag; [4 bytes pad]; int64_t payload }  = 16 bytes.
@@ -710,6 +715,7 @@ const char* cool_type_name(int32_t tag) {
         case TAG_FILE:   return "file";
         case TAG_FFI_LIB: return "ffi_lib";
         case TAG_FFI_FUNC: return "ffi_func";
+        case TAG_SOCKET: return "socket";
         default:         return "unknown";
     }
 }
@@ -1945,6 +1951,113 @@ CoolVal cool_file_close(CoolVal file) {
     return cv_nil();
 }
 
+/* ── Socket runtime ────────────────────────────────────────────────── */
+
+typedef struct { int fd; int is_server; int closed; } CoolSocket;
+static CoolSocket* cv_sock_ptr(CoolVal v) { return (CoolSocket*)(intptr_t)v.payload; }
+static CoolVal cv_sock(CoolSocket* s) { CoolVal v; v.tag = TAG_SOCKET; v.payload = (int64_t)(intptr_t)s; return v; }
+
+static CoolVal make_socket(int fd, int is_server) {
+    CoolSocket* s = (CoolSocket*)malloc(sizeof(CoolSocket));
+    s->fd = fd; s->is_server = is_server; s->closed = 0;
+    return cv_sock(s);
+}
+
+CoolVal cool_socket_connect(CoolVal host_v, CoolVal port_v) {
+    const char* host = (const char*)(intptr_t)host_v.payload;
+    int port = (int)port_v.payload;
+    char port_str[16]; snprintf(port_str, sizeof(port_str), "%d", port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        fprintf(stderr, "socket.connect() error: could not resolve %s\n", host); exit(1);
+    }
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); fprintf(stderr, "socket.connect() error: socket() failed\n"); exit(1); }
+    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        close(fd); freeaddrinfo(res);
+        fprintf(stderr, "socket.connect() error: connect() failed\n"); exit(1);
+    }
+    freeaddrinfo(res);
+    return make_socket(fd, 0);
+}
+
+CoolVal cool_socket_listen(CoolVal host_v, CoolVal port_v) {
+    const char* host = (const char*)(intptr_t)host_v.payload;
+    int port = (int)port_v.payload;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { fprintf(stderr, "socket.listen() error: socket() failed\n"); exit(1); }
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    addr.sin_addr.s_addr = strcmp(host, "0.0.0.0") == 0 ? INADDR_ANY : inet_addr(host);
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(fd); fprintf(stderr, "socket.listen() error: bind() failed\n"); exit(1);
+    }
+    if (listen(fd, 16) < 0) {
+        close(fd); fprintf(stderr, "socket.listen() error: listen() failed\n"); exit(1);
+    }
+    return make_socket(fd, 1);
+}
+
+CoolVal cool_socket_send(CoolVal sock_v, CoolVal data_v) {
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->is_server) { fprintf(stderr, "socket.send() on invalid socket\n"); exit(1); }
+    const char* data = (const char*)(intptr_t)data_v.payload;
+    ssize_t n = write(s->fd, data, strlen(data));
+    return cv_int(n < 0 ? 0 : (int64_t)n);
+}
+
+CoolVal cool_socket_recv(CoolVal sock_v, CoolVal size_v) {
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->is_server) { fprintf(stderr, "socket.recv() on invalid socket\n"); exit(1); }
+    int size = (int)size_v.payload;
+    if (size <= 0) size = 4096;
+    char* buf = (char*)malloc(size + 1);
+    ssize_t n = read(s->fd, buf, size);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    return cv_str(buf);
+}
+
+CoolVal cool_socket_readline(CoolVal sock_v) {
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->is_server) { fprintf(stderr, "socket.readline() on invalid socket\n"); exit(1); }
+    size_t cap = 256;
+    char* buf = (char*)malloc(cap);
+    size_t len = 0;
+    char ch;
+    while (1) {
+        ssize_t n = read(s->fd, &ch, 1);
+        if (n <= 0) break;
+        if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
+        buf[len++] = ch;
+        if (ch == '\n') break;
+    }
+    buf[len] = '\0';
+    return cv_str(buf);
+}
+
+CoolVal cool_socket_accept(CoolVal sock_v) {
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || !s->is_server) { fprintf(stderr, "socket.accept() on non-server socket\n"); exit(1); }
+    struct sockaddr_storage peer_addr;
+    socklen_t peer_len = sizeof(peer_addr);
+    int client_fd = accept(s->fd, (struct sockaddr*)&peer_addr, &peer_len);
+    if (client_fd < 0) { fprintf(stderr, "socket.accept() error: accept() failed\n"); exit(1); }
+    return make_socket(client_fd, 0);
+}
+
+CoolVal cool_socket_close(CoolVal sock_v) {
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (!s->closed) { close(s->fd); s->closed = 1; }
+    return cv_nil();
+}
+
 CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
@@ -2022,6 +2135,16 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
         if (strcmp(builtin_name, "write") == 0 && nargs == 1) return cool_file_write(obj, a0);
         if (strcmp(builtin_name, "writelines") == 0 && nargs == 1) return cool_file_writelines(obj, a0);
         if (strcmp(builtin_name, "close") == 0 && nargs == 0) return cool_file_close(obj);
+    }
+    if (obj.tag == TAG_SOCKET) {
+        CoolVal a0 = nargs > 0 ? g_method_args[1] : cv_nil();
+        if (strcmp(builtin_name, "__enter__") == 0) return obj;
+        if (strcmp(builtin_name, "__exit__") == 0) return cool_socket_close(obj);
+        if (strcmp(builtin_name, "send") == 0 && nargs == 1) return cool_socket_send(obj, a0);
+        if (strcmp(builtin_name, "recv") == 0 && (nargs == 0 || nargs == 1)) return cool_socket_recv(obj, nargs == 1 ? a0 : cv_int(4096));
+        if (strcmp(builtin_name, "readline") == 0 && nargs == 0) return cool_socket_readline(obj);
+        if (strcmp(builtin_name, "accept") == 0 && nargs == 0) return cool_socket_accept(obj);
+        if (strcmp(builtin_name, "close") == 0 && nargs == 0) return cool_socket_close(obj);
     }
 
     if (obj.tag != TAG_OBJECT) return cv_nil();
@@ -6434,6 +6557,11 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
     }
 
+    if (strcmp(module, "socket") == 0) {
+        if (strcmp(name, "connect") == 0 && nargs == 2) return cool_socket_connect(args[0], args[1]);
+        if (strcmp(name, "listen") == 0 && nargs == 2) return cool_socket_listen(args[0], args[1]);
+    }
+
     if (strcmp(module, "term") == 0) {
         if (strcmp(name, "raw") == 0 && nargs == 0) {
             cool_term_enable_raw();
@@ -8169,6 +8297,45 @@ impl<'ctx> Compiler<'ctx> {
                 self.compile_class(name, parent.as_deref(), body)?;
             }
 
+            Stmt::Struct { name, fields } => {
+                // Lower struct to a class with a typed-field __init__.
+                let mut init_body: Vec<Stmt> = Vec::new();
+                let mut params = vec![Param {
+                    name: "self".to_string(),
+                    default: None,
+                    is_vararg: false,
+                    is_kwarg: false,
+                }];
+                for (field_name, type_name) in fields {
+                    params.push(Param {
+                        name: field_name.clone(),
+                        default: None,
+                        is_vararg: false,
+                        is_kwarg: false,
+                    });
+                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                        Expr::Call {
+                            callee: Box::new(Expr::Ident(type_name.clone())),
+                            args: vec![Expr::Ident(field_name.clone())],
+                            kwargs: vec![],
+                        }
+                    } else {
+                        Expr::Ident(field_name.clone())
+                    };
+                    init_body.push(Stmt::SetAttr {
+                        object: Expr::Ident("self".to_string()),
+                        name: field_name.clone(),
+                        value: coerce_expr,
+                    });
+                }
+                let class_body = vec![Stmt::FnDef {
+                    name: "__init__".to_string(),
+                    params,
+                    body: init_body,
+                }];
+                self.compile_class(name, None, &class_body)?;
+            }
+
             // ── with expr as name ───────────────────────────────────────────
             Stmt::With { expr, as_name, body } => {
                 self.compile_with(expr, as_name.as_deref(), body)?;
@@ -9452,7 +9619,7 @@ impl<'ctx> Compiler<'ctx> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
             | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "http" | "term" | "string" | "list" | "re"
-            | "collections" | "path" | "ffi" => {
+            | "collections" | "path" | "ffi" | "socket" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

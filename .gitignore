@@ -46,6 +46,10 @@
 # cool build output directory
 /dist
 
+# Temp LLVM test artifacts (binaries left by interrupted test runs)
+/temp_llvm_test_*
+/test_llvm
+
 # Temp test file
 /temp_cool_test.cool
 /test_except.cool

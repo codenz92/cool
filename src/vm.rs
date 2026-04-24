@@ -1090,6 +1090,7 @@ impl VM {
                 self.dict_method(obj.clone(), d.clone(), name)
             }
             VmValue::File(fh) => self.file_method(obj.clone(), fh.clone(), name),
+            VmValue::Socket(_) => self.vm_socket_method(obj.clone(), name),
             other => Err(self.err(&format!("'{}' has no attribute '{}'", other.type_name(), name))),
         }
     }
@@ -1595,6 +1596,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("file.") {
             return self.call_file_method(rest, args, kwargs);
+        }
+        if let Some(rest) = name.strip_prefix("socket.") {
+            return self.call_socket_module(rest, args);
         }
 
         match name {
@@ -3032,6 +3036,180 @@ impl VM {
                 Ok(VmValue::Nil)
             }
             _ => Err(self.err(&format!("file has no method '{}'", method))),
+        }
+    }
+
+    fn vm_socket_method(&self, receiver: VmValue, name: &str) -> Result<VmValue, String> {
+        match name {
+            "send" | "recv" | "readline" | "accept" | "close" => {
+                Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("socket.{}", name)))
+            }
+            "__enter__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "socket.__enter__".to_string())),
+            "__exit__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "socket.__exit__".to_string())),
+            _ => Err(self.err(&format!("socket has no method '{}'", name))),
+        }
+    }
+
+    fn call_socket_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        use crate::opcode::{VmSocket, VmSocketKind};
+        match name {
+            "connect" => {
+                let host = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.connect() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(VmValue::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.connect() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let stream = std::net::TcpStream::connect(&addr)
+                    .map_err(|e| self.err(&format!("socket.connect() error: {e}")))?;
+                Ok(VmValue::Socket(Rc::new(RefCell::new(VmSocket {
+                    kind: VmSocketKind::Stream(stream),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
+            "listen" => {
+                let host = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.listen() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(VmValue::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.listen() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let listener = std::net::TcpListener::bind(&addr)
+                    .map_err(|e| self.err(&format!("socket.listen() error: {e}")))?;
+                Ok(VmValue::Socket(Rc::new(RefCell::new(VmSocket {
+                    kind: VmSocketKind::Listener(listener),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
+            "__enter__" => Ok(args.first().cloned().unwrap_or(VmValue::Nil)),
+            "__exit__" => {
+                if let Some(VmValue::Socket(sh)) = args.first() {
+                    sh.borrow_mut().closed = true;
+                }
+                Ok(VmValue::Nil)
+            }
+            "send" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.send() requires a socket")),
+                };
+                let data = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => return Err(self.err("send() requires 1 argument")),
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("send() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Stream(stream) => {
+                        use std::io::Write as IoWrite;
+                        let bytes = data.as_bytes();
+                        stream
+                            .write_all(bytes)
+                            .map_err(|e| self.err(&format!("socket.send() error: {e}")))?;
+                        Ok(VmValue::Int(bytes.len() as i64))
+                    }
+                    VmSocketKind::Listener(_) => Err(self.err("send() on server socket")),
+                }
+            }
+            "recv" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.recv() requires a socket")),
+                };
+                let size = match args.get(1) {
+                    Some(VmValue::Int(n)) => *n as usize,
+                    Some(_) => return Err(self.err("recv() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recv() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Stream(stream) => {
+                        use std::io::Read;
+                        let mut buf = vec![0u8; size];
+                        let n = stream
+                            .read(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv() error: {e}")))?;
+                        Ok(VmValue::Str(String::from_utf8_lossy(&buf[..n]).to_string()))
+                    }
+                    VmSocketKind::Listener(_) => Err(self.err("recv() on server socket")),
+                }
+            }
+            "readline" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.readline() requires a socket")),
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("readline() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Stream(stream) => {
+                        use std::io::Read;
+                        let mut line = String::new();
+                        let mut byte = [0u8; 1];
+                        loop {
+                            let n = stream
+                                .read(&mut byte)
+                                .map_err(|e| self.err(&format!("socket.readline() error: {e}")))?;
+                            if n == 0 {
+                                break;
+                            }
+                            line.push(byte[0] as char);
+                            if byte[0] == b'\n' {
+                                break;
+                            }
+                        }
+                        Ok(VmValue::Str(line))
+                    }
+                    VmSocketKind::Listener(_) => Err(self.err("readline() on server socket")),
+                }
+            }
+            "accept" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.accept() requires a socket")),
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("accept() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Listener(listener) => {
+                        let (stream, addr) = listener
+                            .accept()
+                            .map_err(|e| self.err(&format!("socket.accept() error: {e}")))?;
+                        let peer = addr.to_string();
+                        Ok(VmValue::Socket(Rc::new(RefCell::new(VmSocket {
+                            kind: VmSocketKind::Stream(stream),
+                            closed: false,
+                            peer,
+                        }))))
+                    }
+                    VmSocketKind::Stream(_) => Err(self.err("accept() on client socket")),
+                }
+            }
+            "close" => {
+                if let Some(VmValue::Socket(sh)) = args.first() {
+                    sh.borrow_mut().closed = true;
+                }
+                Ok(VmValue::Nil)
+            }
+            other => Err(self.err(&format!("socket has no function '{other}'"))),
         }
     }
 
@@ -4852,6 +5030,11 @@ impl VM {
             "http" => {
                 for fname in &["get", "post", "head", "getjson"] {
                     set(&mut d, fname, bf(&format!("http.{}", fname)));
+                }
+            }
+            "socket" => {
+                for fname in &["connect", "listen"] {
+                    set(&mut d, fname, bf(&format!("socket.{}", fname)));
                 }
             }
             "term" => {

@@ -186,6 +186,11 @@ pub enum Stmt {
         parent: Option<String>,
         body: Vec<Stmt>,
     },
+    /// struct Name:\n    field: type\n    ...
+    Struct {
+        name: String,
+        fields: Vec<(String, String)>, // (field_name, type_name)
+    },
     /// try / except / else / finally
     Try {
         body: Vec<Stmt>,

@@ -1324,6 +1324,175 @@ print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
     assert_eq!(lines, ["hello header=yes", "true", "true", "2", "payload|header=yes"]);
 }
 
+fn spawn_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if n > 0 {
+                stream.write_all(&buf[..n]).ok();
+            }
+        }
+    });
+    (addr, handle)
+}
+
+#[test]
+fn test_import_socket_module() {
+    let (addr, handle) = spawn_echo_server();
+    let parts: Vec<&str> = addr.splitn(2, ':').collect();
+    let host = parts[0];
+    let port: i64 = parts[1].parse().unwrap();
+    let source = format!(
+        r#"import socket
+conn = socket.connect("{host}", {port})
+conn.send("hello socket\n")
+data = conn.recv(64)
+conn.close()
+print(data.strip())
+"#
+    );
+    let result = run_cool(&source).unwrap();
+    handle.join().unwrap();
+    assert_eq!(result.trim(), "hello socket");
+}
+
+#[test]
+fn test_vm_import_socket_module() {
+    let (addr, handle) = spawn_echo_server();
+    let parts: Vec<&str> = addr.splitn(2, ':').collect();
+    let host = parts[0];
+    let port: i64 = parts[1].parse().unwrap();
+    let source = format!(
+        r#"import socket
+conn = socket.connect("{host}", {port})
+conn.send("hello vm socket\n")
+data = conn.recv(64)
+conn.close()
+print(data.strip())
+"#
+    );
+    let result = run_cool_vm(&source).unwrap();
+    handle.join().unwrap();
+    assert_eq!(result.trim(), "hello vm socket");
+}
+
+#[test]
+fn test_socket_server_accept() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buf = vec![0u8; 256];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let _ = stream.write_all(&buf[..n]);
+        }
+    });
+    let source = format!(
+        r#"import socket
+conn = socket.connect("127.0.0.1", {port})
+conn.send("ping\n")
+reply = conn.readline()
+conn.close()
+print(reply.strip())
+"#
+    );
+    let result = run_cool(&source).unwrap();
+    handle.join().unwrap();
+    assert_eq!(result.trim(), "ping");
+}
+
+#[test]
+fn test_struct_basic() {
+    let result = run_cool(
+        r#"struct Point:
+    x: i32
+    y: i32
+
+p = Point(3, 4)
+print(p.x)
+print(p.y)
+p.x = 10
+print(p.x)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "3\n4\n10");
+}
+
+#[test]
+fn test_struct_type_coercion() {
+    let result = run_cool(
+        r#"struct Counts:
+    hits: u8
+    score: i32
+
+c = Counts(300, -500000)
+print(c.hits)
+print(c.score)
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().collect();
+    assert_eq!(lines[0], "44");   // 300 wraps to u8: 300 % 256 = 44
+    assert_eq!(lines[1], "-500000");
+}
+
+#[test]
+fn test_struct_kwargs() {
+    let result = run_cool(
+        r#"struct Vec2:
+    x: i64
+    y: i64
+
+v = Vec2(x=5, y=7)
+print(v.x + v.y)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "12");
+}
+
+#[test]
+fn test_vm_struct_basic() {
+    let result = run_cool_vm(
+        r#"struct Point:
+    x: i32
+    y: i32
+
+p = Point(3, 4)
+print(p.x)
+print(p.y)
+p.x = 10
+print(p.x)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "3\n4\n10");
+}
+
+#[test]
+fn test_struct_in_function() {
+    let result = run_cool(
+        r#"struct Rect:
+    w: i32
+    h: i32
+
+def area(r):
+    return r.w * r.h
+
+r = Rect(6, 7)
+print(area(r))
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "42");
+}
+
 #[test]
 fn test_import_test_module() {
     let result = run_cool(

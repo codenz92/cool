@@ -657,6 +657,50 @@ impl Compiler {
                 self.emit(op);
             }
 
+            Stmt::Struct { name, fields } => {
+                // Lower struct to a class with a typed-field __init__.
+                let mut init_body: Vec<Stmt> = Vec::new();
+                let mut params = vec![Param {
+                    name: "self".to_string(),
+                    default: None,
+                    is_vararg: false,
+                    is_kwarg: false,
+                }];
+                for (field_name, type_name) in fields {
+                    params.push(Param {
+                        name: field_name.clone(),
+                        default: None,
+                        is_vararg: false,
+                        is_kwarg: false,
+                    });
+                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                        Expr::Call {
+                            callee: Box::new(Expr::Ident(type_name.clone())),
+                            args: vec![Expr::Ident(field_name.clone())],
+                            kwargs: vec![],
+                        }
+                    } else {
+                        Expr::Ident(field_name.clone())
+                    };
+                    init_body.push(Stmt::SetAttr {
+                        object: Expr::Ident("self".to_string()),
+                        name: field_name.clone(),
+                        value: coerce_expr,
+                    });
+                }
+                let class_body = vec![Stmt::FnDef {
+                    name: "__init__".to_string(),
+                    params,
+                    body: init_body,
+                }];
+                let class_stmt = Stmt::Class {
+                    name: name.clone(),
+                    parent: None,
+                    body: class_body,
+                };
+                self.compile_stmt(&class_stmt)?;
+            }
+
             Stmt::Try {
                 body,
                 handlers,

@@ -1474,6 +1474,43 @@ print(http.post(base + "/echo", "payload", ["X-Test: yes"]).strip())
     assert_eq!(lines, ["hello header=yes", "true", "true", "2", "payload|header=yes"]);
 }
 
+fn spawn_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let handle = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            if n > 0 {
+                stream.write_all(&buf[..n]).ok();
+            }
+        }
+    });
+    (addr, handle)
+}
+
+#[test]
+fn test_llvm_import_socket_module() {
+    let (addr, handle) = spawn_echo_server();
+    let parts: Vec<&str> = addr.splitn(2, ':').collect();
+    let host = parts[0];
+    let port: i64 = parts[1].parse().unwrap();
+    let source = format!(
+        r#"
+import socket
+conn = socket.connect("{host}", {port})
+conn.send("hello llvm socket\n")
+data = conn.recv(64)
+conn.close()
+print(data.strip())
+"#
+    );
+    let result = compile_and_run_native(&source).unwrap();
+    handle.join().unwrap();
+    assert_eq!(result.trim(), "hello llvm socket");
+}
+
 #[test]
 fn test_llvm_import_test_module() {
     let result = compile_and_run_native(
@@ -1501,6 +1538,63 @@ print("ok")
 
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["boom", "AssertionError: bad", "ok"]);
+}
+
+#[test]
+fn test_llvm_struct_basic() {
+    let result = compile_and_run_native(
+        r#"
+struct Point:
+    x: i32
+    y: i32
+
+p = Point(3, 4)
+print(p.x)
+print(p.y)
+p.x = 10
+print(p.x)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "3\n4\n10");
+}
+
+#[test]
+fn test_llvm_struct_type_coercion() {
+    let result = compile_and_run_native(
+        r#"
+struct Counts:
+    hits: u8
+    score: i32
+
+c = Counts(300, -500000)
+print(c.hits)
+print(c.score)
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().collect();
+    assert_eq!(lines[0], "44");   // 300 wraps to u8: 300 % 256 = 44
+    assert_eq!(lines[1], "-500000");
+}
+
+#[test]
+fn test_llvm_struct_in_function() {
+    let result = compile_and_run_native(
+        r#"
+struct Rect:
+    w: i32
+    h: i32
+
+def area(r):
+    return r.w * r.h
+
+r = Rect(6, 7)
+print(area(r))
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "42");
 }
 
 #[test]

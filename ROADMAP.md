@@ -399,7 +399,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
-- [ ] `socket` as the remaining practical application-stack primitive
+- [x] `socket` module — TCP client (`connect`) and server (`listen`, `accept`) with `send`, `recv`, `readline`, and `close` across all runtimes
 
 ### Packaging And Developer Tooling
 
@@ -431,7 +431,8 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Data Layout And ABI
 
-- [ ] `struct` definitions with explicit field order and stable layout
+- [x] `struct` definitions with typed fields (`i8`–`i64`, `u8`–`u64`, `f32`/`f64`, `bool`), positional + keyword construction, and coercion on init across all runtimes
+- [ ] Stable binary layout for structs (actual LLVM struct types, GEP-based field access — currently stored via class-instance machinery)
 - [ ] `packed` / alignment control
 - [ ] `union` support
 - [ ] `extern` declarations with calling-convention and symbol control

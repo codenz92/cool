@@ -288,6 +288,29 @@ pub struct VmFile {
     pub closed: bool,
 }
 
+// ── Socket handle ─────────────────────────────────────────────────────────────
+
+pub enum VmSocketKind {
+    Stream(std::net::TcpStream),
+    Listener(std::net::TcpListener),
+}
+
+impl std::fmt::Debug for VmSocketKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VmSocketKind::Stream(s) => write!(f, "Stream({:?})", s),
+            VmSocketKind::Listener(l) => write!(f, "Listener({:?})", l),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct VmSocket {
+    pub kind: VmSocketKind,
+    pub closed: bool,
+    pub peer: String,
+}
+
 // ── Ordered dict ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default)]
@@ -437,6 +460,7 @@ pub enum VmValue {
     Class(Rc<VmClass>),
     Instance(Rc<VmInstance>),
     File(Rc<RefCell<VmFile>>),
+    Socket(Rc<RefCell<VmSocket>>),
     /// Used only in the constant pool; always converted to Closure at runtime.
     Proto(Rc<FnProto>),
     Iter(Rc<RefCell<VmIter>>),
@@ -473,6 +497,7 @@ impl VmValue {
             VmValue::Class(_) => "class",
             VmValue::Instance(_) => "instance",
             VmValue::File(_) => "file",
+            VmValue::Socket(_) => "socket",
             VmValue::Proto(_) => "proto",
             VmValue::Iter(_) => "iterator",
             VmValue::Super(_) => "super",
@@ -572,6 +597,7 @@ impl fmt::Display for VmValue {
                 }
             }
             VmValue::File(fh) => write!(f, "<file '{}'>", fh.borrow().path),
+            VmValue::Socket(sh) => write!(f, "<socket '{}'>", sh.borrow().peer),
             VmValue::Proto(p) => write!(f, "<proto {}>", p.name),
             VmValue::Iter(_) => write!(f, "<iterator>"),
             VmValue::Super(s) => write!(f, "<super of {}>", s.parent.name),

@@ -265,6 +265,29 @@ pub struct FileHandle {
     pub closed: bool,
 }
 
+// ── Socket handle ─────────────────────────────────────────────────────────────
+
+pub enum SocketKind {
+    Stream(std::net::TcpStream),
+    Listener(std::net::TcpListener),
+}
+
+impl std::fmt::Debug for SocketKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SocketKind::Stream(s) => write!(f, "Stream({:?})", s),
+            SocketKind::Listener(l) => write!(f, "Listener({:?})", l),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SocketHandle {
+    pub kind: SocketKind,
+    pub closed: bool,
+    pub peer: String,
+}
+
 // ── FFI handle ────────────────────────────────────────────────────────────────
 
 /// Handle to a dynamically-loaded shared library.
@@ -299,6 +322,7 @@ pub enum Value {
     Class(Rc<CoolClass>),
     Instance(Rc<CoolInstance>),
     File(Rc<RefCell<FileHandle>>),
+    Socket(Rc<RefCell<SocketHandle>>),
     /// super() proxy: holds the instance and the parent class to dispatch on
     Super {
         instance: Rc<CoolInstance>,
@@ -422,6 +446,7 @@ impl fmt::Display for Value {
             Value::Class(cls) => write!(f, "<class {}>", cls.name),
             Value::Instance(inst) => write!(f, "<{} object>", inst.class.name),
             Value::File(fh) => write!(f, "<file '{}'>", fh.borrow().path),
+            Value::Socket(sh) => write!(f, "<socket '{}'>", sh.borrow().peer),
             Value::Super { parent, .. } => write!(f, "<super of {}>", parent.name),
             Value::FfiLib(_) => write!(f, "<ffi library>"),
             Value::FfiFunc {
@@ -470,6 +495,7 @@ impl Value {
             Value::Class(_) => "class",
             Value::Instance(_) => "instance",
             Value::File(_) => "file",
+            Value::Socket(_) => "socket",
             Value::Super { .. } => "super",
             Value::FfiLib(_) => "ffi_lib",
             Value::FfiFunc { .. } => "ffi_func",
@@ -777,6 +803,55 @@ impl Interpreter {
                 let cls = Rc::new(CoolClass {
                     name: name.clone(),
                     parent: parent_class,
+                    methods,
+                });
+                env.set_local(name.clone(), Value::Class(cls));
+                Ok(Signal::None)
+            }
+
+            Stmt::Struct { name, fields } => {
+                // Lower struct to a class with a typed-field __init__.
+                let mut init_body = Vec::new();
+                let mut params = vec![crate::ast::Param {
+                    name: "self".to_string(),
+                    default: None,
+                    is_vararg: false,
+                    is_kwarg: false,
+                }];
+                for (field_name, type_name) in fields {
+                    params.push(crate::ast::Param {
+                        name: field_name.clone(),
+                        default: None,
+                        is_vararg: false,
+                        is_kwarg: false,
+                    });
+                    // self.field = type_fn(field) — coerce on construction
+                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                        Expr::Call {
+                            callee: Box::new(Expr::Ident(type_name.clone())),
+                            args: vec![Expr::Ident(field_name.clone())],
+                            kwargs: vec![],
+                        }
+                    } else {
+                        Expr::Ident(field_name.clone())
+                    };
+                    init_body.push(Stmt::SetAttr {
+                        object: Expr::Ident("self".to_string()),
+                        name: field_name.clone(),
+                        value: coerce_expr,
+                    });
+                }
+                let init_fn = Value::Function {
+                    name: "__init__".to_string(),
+                    params,
+                    body: init_body,
+                    closure: env.clone(),
+                };
+                let mut methods = HashMap::new();
+                methods.insert("__init__".to_string(), init_fn);
+                let cls = Rc::new(CoolClass {
+                    name: name.clone(),
+                    parent: None,
                     methods,
                 });
                 env.set_local(name.clone(), Value::Class(cls));
@@ -1310,6 +1385,16 @@ impl Interpreter {
                 }
                 env.set_local("logging".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "socket" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &["connect", "listen"] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("socket.{}", fn_name)),
+                    );
+                }
+                env.set_local("socket".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "term" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -1712,7 +1797,7 @@ class Stack:
                         // Fall back to a method stub (keys, values, items, etc.)
                         Ok(Value::BuiltinFn(format!("<method {} on dict>", name)))
                     }
-                    Value::Str(_) | Value::List(_) | Value::File(_) => {
+                    Value::Str(_) | Value::List(_) | Value::File(_) | Value::Socket(_) => {
                         Ok(Value::BuiltinFn(format!("<method {} on {}>", name, obj.type_name())))
                     }
                     Value::Class(cls) => {
@@ -1789,6 +1874,7 @@ class Stack:
             Value::List(_) => self.list_method(obj, method, args),
             Value::Dict(_) => self.dict_method(obj, method, args),
             Value::File(_) => self.file_method(obj, method, args),
+            Value::Socket(_) => self.socket_method(obj, method, args),
             Value::Instance(_) => self.instance_method(obj, method, args, kwargs, env),
             Value::Super { .. } => self.super_method(obj, method, args, kwargs, env),
             other => Err(self.err(&format!("'{}' has no method '{}'", other.type_name(), method))),
@@ -2445,6 +2531,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("ffi.") {
             return self.call_ffi_builtin(f, args);
+        }
+        if let Some(f) = name.strip_prefix("socket.") {
+            return self.call_socket_fn(f, args);
         }
 
         match name {
@@ -4762,6 +4851,160 @@ class Stack:
                 json_parse(&body).map_err(|e| self.err(&format!("http.getjson() invalid JSON: {}", e)))
             }
             _ => Err(self.err(&format!("http has no function '{}'", name))),
+        }
+    }
+
+    // ── socket module ────────────────────────────────────────────────────
+
+    fn call_socket_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        match name {
+            "connect" => {
+                let host = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.connect() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(Value::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.connect() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let stream = std::net::TcpStream::connect(&addr)
+                    .map_err(|e| self.err(&format!("socket.connect() error: {e}")))?;
+                Ok(Value::Socket(Rc::new(RefCell::new(SocketHandle {
+                    kind: SocketKind::Stream(stream),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
+            "listen" => {
+                let host = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.listen() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(Value::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.listen() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let listener = std::net::TcpListener::bind(&addr)
+                    .map_err(|e| self.err(&format!("socket.listen() error: {e}")))?;
+                Ok(Value::Socket(Rc::new(RefCell::new(SocketHandle {
+                    kind: SocketKind::Listener(listener),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
+            other => Err(self.err(&format!("socket has no function '{other}'"))),
+        }
+    }
+
+    fn socket_method(&self, obj: Value, method: &str, args: Vec<Value>) -> Result<Value, String> {
+        let sh_rc = match obj {
+            Value::Socket(s) => s,
+            _ => unreachable!(),
+        };
+        match method {
+            "__enter__" => Ok(Value::Socket(sh_rc)),
+            "__exit__" => {
+                sh_rc.borrow_mut().closed = true;
+                Ok(Value::Nil)
+            }
+            "send" => {
+                let data = match args.into_iter().next() {
+                    Some(Value::Str(s)) => s,
+                    Some(v) => v.to_string(),
+                    None => return Err(self.err("send() requires 1 argument")),
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("send() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Stream(stream) => {
+                        use std::io::Write as IoWrite;
+                        let bytes = data.as_bytes();
+                        stream
+                            .write_all(bytes)
+                            .map_err(|e| self.err(&format!("socket.send() error: {e}")))?;
+                        Ok(Value::Int(bytes.len() as i64))
+                    }
+                    SocketKind::Listener(_) => Err(self.err("send() on server socket")),
+                }
+            }
+            "recv" => {
+                let size = match args.into_iter().next() {
+                    Some(Value::Int(n)) => n as usize,
+                    Some(_) => return Err(self.err("recv() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recv() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Stream(stream) => {
+                        use std::io::Read;
+                        let mut buf = vec![0u8; size];
+                        let n = stream
+                            .read(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv() error: {e}")))?;
+                        Ok(Value::Str(String::from_utf8_lossy(&buf[..n]).to_string()))
+                    }
+                    SocketKind::Listener(_) => Err(self.err("recv() on server socket")),
+                }
+            }
+            "readline" => {
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("readline() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Stream(stream) => {
+                        use std::io::Read;
+                        let mut line = String::new();
+                        let mut byte = [0u8; 1];
+                        loop {
+                            let n = stream
+                                .read(&mut byte)
+                                .map_err(|e| self.err(&format!("socket.readline() error: {e}")))?;
+                            if n == 0 {
+                                break;
+                            }
+                            line.push(byte[0] as char);
+                            if byte[0] == b'\n' {
+                                break;
+                            }
+                        }
+                        Ok(Value::Str(line))
+                    }
+                    SocketKind::Listener(_) => Err(self.err("readline() on server socket")),
+                }
+            }
+            "accept" => {
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("accept() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Listener(listener) => {
+                        let (stream, addr) = listener
+                            .accept()
+                            .map_err(|e| self.err(&format!("socket.accept() error: {e}")))?;
+                        let peer = addr.to_string();
+                        Ok(Value::Socket(Rc::new(RefCell::new(SocketHandle {
+                            kind: SocketKind::Stream(stream),
+                            closed: false,
+                            peer,
+                        }))))
+                    }
+                    SocketKind::Stream(_) => Err(self.err("accept() on client socket")),
+                }
+            }
+            "close" => {
+                sh_rc.borrow_mut().closed = true;
+                Ok(Value::Nil)
+            }
+            other => Err(self.err(&format!("socket has no method '{other}'"))),
         }
     }
 
