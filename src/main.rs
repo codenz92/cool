@@ -466,7 +466,7 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
 
     // cool.toml
     let manifest = format!(
-        "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n\n[tasks.run]\ndescription = \"Run the app\"\nrun = \"cool src/main.cool\"\n\n[tasks.build]\ndescription = \"Build a native binary\"\nrun = \"cool build\"\n\n[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n"
+        "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n\n[bundle]\ninclude = []\n\n[tasks.run]\ndescription = \"Run the app\"\nrun = \"cool src/main.cool\"\n\n[tasks.build]\ndescription = \"Build a native binary\"\nrun = \"cool build\"\n\n[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n"
     );
     fs::write(project_dir.join("cool.toml"), manifest).map_err(|e| format!("cool new: {e}"))?;
 
@@ -493,6 +493,8 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     println!("    cd {name}");
     println!("    cool src/main.cool          # interpret");
     println!("    cool build                  # compile to native");
+    println!("    cool bundle                 # package distributable tarball");
+    println!("    cool release                # bump version, bundle, and tag");
     println!("    cool install                # fetch git dependencies");
     println!("    cool test                   # run tests/");
     println!("    cool task list              # show project tasks");
@@ -680,6 +682,281 @@ fn cmd_task(args: &[&String]) -> Result<(), String> {
     }
 }
 
+// ── `cool bundle` ────────────────────────────────────────────────────────────
+
+fn target_triple() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{os}-{arch}")
+}
+
+/// Recursively copy src into dst (dst is created if needed).
+fn copy_into(src: &Path, dst: &Path) -> Result<(), String> {
+    if src.is_dir() {
+        fs::create_dir_all(dst).map_err(|e| format!("bundle: cannot create '{}': {e}", dst.display()))?;
+        for entry in fs::read_dir(src).map_err(|e| format!("bundle: {e}"))? {
+            let entry = entry.map_err(|e| format!("bundle: {e}"))?;
+            copy_into(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("bundle: {e}"))?;
+        }
+        fs::copy(src, dst).map_err(|e| format!("bundle: cannot copy '{}' → '{}': {e}", src.display(), dst.display()))?;
+    }
+    Ok(())
+}
+
+/// Build the project and produce a distributable tarball under dist/.
+///
+///   cool bundle
+fn cmd_bundle(args: &[&String]) -> Result<(), String> {
+    if !args.is_empty() {
+        return Err("Usage: cool bundle".to_string());
+    }
+
+    let manifest_path = Path::new("cool.toml");
+    if !manifest_path.exists() {
+        return Err("cool bundle: no cool.toml found in current directory".to_string());
+    }
+    let project = CoolProject::from_manifest_path(manifest_path)?;
+    let main_path = project.main_path();
+    if !main_path.exists() {
+        return Err(format!("cool bundle: main file '{}' not found", project.main));
+    }
+
+    // Build the binary first
+    let bin_path = Path::new(project.output_name());
+    let source = fs::read_to_string(&main_path).map_err(|e| format!("cool bundle: {e}"))?;
+    println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
+    let t0 = std::time::Instant::now();
+    compile_to_native(&source, bin_path, &main_path)?;
+    println!("   Compiled in {:.2}s → {}", t0.elapsed().as_secs_f64(), bin_path.display());
+
+    // Assemble staging directory: dist/{name}-{version}-{target}/
+    let target = target_triple();
+    let artifact_name = format!("{}-{}-{}", project.name, project.version, target);
+    let dist_dir = Path::new("dist");
+    let staging = dist_dir.join(&artifact_name);
+    let archive = dist_dir.join(format!("{artifact_name}.tar.gz"));
+
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| format!("cool bundle: {e}"))?;
+    }
+    fs::create_dir_all(&staging).map_err(|e| format!("cool bundle: {e}"))?;
+
+    // Copy binary
+    let dst_bin = staging.join(project.output_name());
+    fs::copy(bin_path, &dst_bin).map_err(|e| format!("cool bundle: cannot copy binary: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&dst_bin).map_err(|e| format!("cool bundle: {e}"))?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&dst_bin, perms).map_err(|e| format!("cool bundle: {e}"))?;
+    }
+
+    // Copy declared include files/dirs
+    for include in &project.bundle_include {
+        let src = project.root.join(include);
+        if !src.exists() {
+            eprintln!("  warning: bundle include '{}' not found, skipping", include);
+            continue;
+        }
+        let name = src.file_name().ok_or_else(|| format!("bundle: invalid include path '{include}'"))?;
+        copy_into(&src, &staging.join(name))?;
+        println!("  Including {}", include);
+    }
+
+    // Create tarball via system tar
+    let status = Command::new("tar")
+        .args(["czf", archive.to_str().unwrap(), "-C", dist_dir.to_str().unwrap(), &artifact_name])
+        .status()
+        .map_err(|e| format!("cool bundle: tar failed: {e}"))?;
+    if !status.success() {
+        return Err("cool bundle: tar exited with error".to_string());
+    }
+
+    // Clean up staging directory
+    fs::remove_dir_all(&staging).map_err(|e| format!("cool bundle: {e}"))?;
+
+    println!("  Bundled  → {}", archive.display());
+    Ok(())
+}
+
+// ── `cool release` ────────────────────────────────────────────────────────────
+
+fn bump_version(version: &str, bump: &str) -> Result<String, String> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() < 3 {
+        return Err(format!("cool release: cannot parse version '{version}'"));
+    }
+    let major: u64 = parts[0].parse().map_err(|_| format!("cool release: invalid version '{version}'"))?;
+    let minor: u64 = parts[1].parse().map_err(|_| format!("cool release: invalid version '{version}'"))?;
+    let patch: u64 = parts[2].parse().map_err(|_| format!("cool release: invalid version '{version}'"))?;
+    Ok(match bump {
+        "major" => format!("{}.0.0", major + 1),
+        "minor" => format!("{}.{}.0", major, minor + 1),
+        "patch" => format!("{}.{}.{}", major, minor, patch + 1),
+        explicit => explicit.to_string(),
+    })
+}
+
+/// Rewrite the version field in cool.toml in place.
+fn set_manifest_version(manifest_path: &Path, new_version: &str) -> Result<(), String> {
+    let src = fs::read_to_string(manifest_path).map_err(|e| format!("cool release: {e}"))?;
+    // Replace version = "..." under [project] or at top level — simple line-based rewrite.
+    let mut found = false;
+    let new_src: String = src.lines().map(|line| {
+        let trimmed = line.trim_start();
+        if !found && trimmed.starts_with("version") {
+            let eq_pos = trimmed.find('=');
+            if let Some(eq) = eq_pos {
+                let after_eq = trimmed[eq + 1..].trim();
+                if after_eq.starts_with('"') {
+                    found = true;
+                    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                    return format!("{indent}version = \"{new_version}\"");
+                }
+            }
+        }
+        line.to_string()
+    }).collect::<Vec<_>>().join("\n");
+    // Preserve trailing newline if original had one
+    let new_src = if src.ends_with('\n') { format!("{new_src}\n") } else { new_src };
+    if !found {
+        return Err("cool release: could not find 'version = ...' in cool.toml".to_string());
+    }
+    fs::write(manifest_path, new_src).map_err(|e| format!("cool release: {e}"))?;
+    Ok(())
+}
+
+/// Build, bundle, and tag a release.
+///
+///   cool release [--bump patch|minor|major] [--version X.Y.Z] [--no-tag]
+fn cmd_release(args: &[&String]) -> Result<(), String> {
+    let manifest_path = Path::new("cool.toml");
+    if !manifest_path.exists() {
+        return Err("cool release: no cool.toml found in current directory".to_string());
+    }
+    let project = CoolProject::from_manifest_path(manifest_path)?;
+
+    let mut bump = "patch";
+    let mut explicit_version: Option<&str> = None;
+    let mut no_tag = false;
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bump" => {
+                i += 1;
+                bump = args.get(i).map(|s| s.as_str()).ok_or("cool release: --bump requires an argument (patch|minor|major)")?;
+                if !matches!(bump, "patch" | "minor" | "major") {
+                    return Err(format!("cool release: --bump must be patch, minor, or major, got '{bump}'"));
+                }
+            }
+            "--version" => {
+                i += 1;
+                explicit_version = Some(args.get(i).map(|s| s.as_str()).ok_or("cool release: --version requires an argument")?);
+            }
+            "--no-tag" => no_tag = true,
+            other => return Err(format!("cool release: unexpected argument '{other}'")),
+        }
+        i += 1;
+    }
+
+    let new_version = if let Some(v) = explicit_version {
+        v.to_string()
+    } else {
+        bump_version(&project.version, bump)?
+    };
+
+    // Warn if git working tree is dirty
+    let git_clean = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .map(|o| o.stdout.is_empty())
+        .unwrap_or(true);
+    if !git_clean {
+        eprintln!("  warning: working tree has uncommitted changes");
+    }
+
+    println!("  Releasing {} v{} → v{}", project.name, project.version, new_version);
+
+    // Bump version in cool.toml
+    set_manifest_version(manifest_path, &new_version)?;
+    println!("  Updated  cool.toml version → {new_version}");
+
+    // Build + bundle with the updated manifest
+    let project = CoolProject::from_manifest_path(manifest_path)?;
+    let main_path = project.main_path();
+    let source = fs::read_to_string(&main_path).map_err(|e| format!("cool release: {e}"))?;
+    let bin_path = Path::new(project.output_name());
+    println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
+    let t0 = std::time::Instant::now();
+    compile_to_native(&source, bin_path, &main_path)?;
+    println!("   Compiled in {:.2}s → {}", t0.elapsed().as_secs_f64(), bin_path.display());
+
+    // Bundle
+    let target = target_triple();
+    let artifact_name = format!("{}-{}-{}", project.name, project.version, target);
+    let dist_dir = Path::new("dist");
+    let staging = dist_dir.join(&artifact_name);
+    let archive = dist_dir.join(format!("{artifact_name}.tar.gz"));
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| format!("cool release: {e}"))?;
+    }
+    fs::create_dir_all(&staging).map_err(|e| format!("cool release: {e}"))?;
+    let dst_bin = staging.join(project.output_name());
+    fs::copy(bin_path, &dst_bin).map_err(|e| format!("cool release: cannot copy binary: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&dst_bin).map_err(|e| format!("cool release: {e}"))?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&dst_bin, perms).map_err(|e| format!("cool release: {e}"))?;
+    }
+    for include in &project.bundle_include {
+        let src = project.root.join(include);
+        if !src.exists() { continue; }
+        let name = src.file_name().ok_or_else(|| format!("release: invalid include '{include}'"))?;
+        copy_into(&src, &staging.join(name))?;
+    }
+    let status = Command::new("tar")
+        .args(["czf", archive.to_str().unwrap(), "-C", dist_dir.to_str().unwrap(), &artifact_name])
+        .status()
+        .map_err(|e| format!("cool release: tar failed: {e}"))?;
+    if !status.success() {
+        return Err("cool release: tar exited with error".to_string());
+    }
+    fs::remove_dir_all(&staging).map_err(|e| format!("cool release: {e}"))?;
+    println!("  Bundled  → {}", archive.display());
+
+    // Git tag
+    if !no_tag {
+        let tag = format!("v{new_version}");
+        let tag_result = Command::new("git")
+            .args(["tag", "-a", &tag, "-m", &format!("Release {tag}")])
+            .status();
+        match tag_result {
+            Ok(s) if s.success() => println!("  Tagged   → {tag}"),
+            Ok(_) => eprintln!("  warning: git tag failed (already exists or not a git repo)"),
+            Err(_) => eprintln!("  warning: git not found, skipping tag"),
+        }
+    }
+
+    println!();
+    println!("  Released {} v{new_version}", project.name);
+    println!("  Archive  → {}", archive.display());
+    if !no_tag { println!("  Run 'git push --tags' to publish the tag."); }
+    Ok(())
+}
+
 // ── help ──────────────────────────────────────────────────────────────────────
 
 fn print_help() {
@@ -694,6 +971,8 @@ USAGE:
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
+    cool bundle                   Build and package the project into a distributable tarball
+    cool release [--bump patch]   Bump version, bundle, and git-tag a release
     cool install                  Fetch and lock project dependencies
     cool add <name> ...           Add a path or git dependency to cool.toml
     cool test [path ...]          Run discovered or explicit Cool tests
@@ -797,6 +1076,22 @@ fn main() {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_task(&rest) {
                     eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "bundle" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_bundle(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "release" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_release(&rest) {
+                    eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
                 return;

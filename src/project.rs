@@ -45,6 +45,8 @@ pub struct CoolProject {
     pub output: Option<String>,
     pub sources: Vec<String>,
     pub dependencies: Vec<DependencySpec>,
+    /// Files/directories listed under [bundle].include in cool.toml.
+    pub bundle_include: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -459,6 +461,28 @@ impl CoolProject {
             }
         }
 
+        // Parse [bundle].include = ["file", ...]
+        let bundle_include = match root.get("bundle").and_then(toml::Value::as_table).and_then(|t| t.get("include")) {
+            None => Vec::new(),
+            Some(toml::Value::Array(items)) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    match item {
+                        toml::Value::String(s) => out.push(s.clone()),
+                        other => return Err(format!(
+                            "cool.toml: [bundle].include must be an array of strings, got {}",
+                            other.type_str()
+                        )),
+                    }
+                }
+                out
+            }
+            Some(other) => return Err(format!(
+                "cool.toml: [bundle].include must be an array, got {}",
+                other.type_str()
+            )),
+        };
+
         Ok(CoolProject {
             root: manifest_dir.clone(),
             manifest_path: manifest_dir.join("cool.toml"),
@@ -468,6 +492,7 @@ impl CoolProject {
             output: opt_string("output")?,
             sources: opt_string_list("sources")?,
             dependencies,
+            bundle_include,
         })
     }
 
