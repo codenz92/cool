@@ -265,7 +265,7 @@
 #### Terminal, UI, And Presentation
 
 - [ ] `ansi` module — terminal colors, cursor movement, box drawing, and styling helpers
-- [ ] `term` module — raw terminal mode, key events, mouse events, and screen buffers
+- [~] `term` module — raw terminal mode, key events, mouse events, and screen buffers (runtime parity now covers interpreter / VM / LLVM for raw mode, cursor control, sizing, and key input; mouse and richer screen buffers still open)
 - [ ] `tui` module — higher-level terminal UI widgets, layout, focus, and event loops
 - [ ] `theme` module — reusable palettes, spacing scales, and text-style presets for TUIs
 - [ ] `color` module — RGB/HSL/HSV conversion, palettes, gradients, and contrast helpers
@@ -405,7 +405,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [x] `cool test` command for discovered and explicit Cool test files, with interpreter / VM / native runner modes
 - [x] Standard `test` module for in-language unit/integration helpers and assertions (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`)
-- [ ] Package/dependency metadata beyond `cool.toml`, including manifests, semver, and dependency resolution
+- [~] Package/dependency metadata beyond `cool.toml`, including manifests, semver, and dependency resolution
 - [ ] App bundling / release tooling (`package`, `bundle`, `release`)
 - [ ] AST / inspect / modulegraph / diff helpers for tooling and static analysis
 - [ ] Language-server and editor tooling (`lsp`)
@@ -413,7 +413,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### Flagship Cool Software
 
 - [ ] A real package manager or project tool written in Cool
-- [ ] A build/task runner that demonstrates modules, subprocesses, and packaging
+- [x] A build/task runner that demonstrates modules, subprocesses, and packaging
 - [ ] A flagship TUI or networked app that proves Cool works for medium-sized software
 
 ---

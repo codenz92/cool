@@ -150,6 +150,33 @@ fn run_cool_with_pty_input(path: &str, extra_args: &[&str], input: &[u8]) -> Res
     Ok((stdout, stderr, output.status.code().unwrap_or(-1)))
 }
 
+fn run_cool_with_pty_input_delayed_close(
+    path: &str,
+    extra_args: &[&str],
+    input: &[u8],
+    delay_ms: u64,
+) -> Result<(String, String, i32), String> {
+    let mut cmd = Command::new("script");
+    cmd.arg("-q").arg("/dev/null").arg(cool_bin()).arg(path);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    {
+        let mut child_stdin = child.stdin.take().ok_or_else(|| "missing stdin pipe".to_string())?;
+        child_stdin.write_all(input).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(delay_ms));
+    }
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok((stdout, stderr, output.status.code().unwrap_or(-1)))
+}
+
 fn run_cool_subcommand_in_dir(cwd: &std::path::Path, args: &[&str]) -> Result<(String, String, i32), String> {
     let output = Command::new(cool_bin())
         .current_dir(cwd)
@@ -161,6 +188,110 @@ fn run_cool_subcommand_in_dir(cwd: &std::path::Path, args: &[&str]) -> Result<(S
         String::from_utf8_lossy(&output.stderr).to_string(),
         output.status.code().unwrap_or(-1),
     ))
+}
+
+fn write_project_with_sources_and_dependencies(root: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(root);
+    std::fs::create_dir_all(root.join("app")).unwrap();
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    std::fs::create_dir_all(root.join("deps").join("toolkit").join("src")).unwrap();
+    std::fs::create_dir_all(root.join("deps").join("extra").join("src")).unwrap();
+
+    std::fs::write(
+        root.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "app/main.cool"
+sources = ["app", "lib"]
+
+[dependencies]
+toolkit = { path = "deps/toolkit" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("app").join("main.cool"),
+        "import helper\nimport toolkit.util\nprint(helper.value)\nprint(util.value)\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("lib").join("helper.cool"), "value = 7\n").unwrap();
+
+    std::fs::write(
+        root.join("deps").join("toolkit").join("cool.toml"),
+        r#"[project]
+name = "toolkit"
+version = "0.2.0"
+main = "src/main.cool"
+sources = ["src"]
+
+[dependencies]
+extra = { path = "../extra" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("deps").join("toolkit").join("src").join("main.cool"),
+        "value = 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("deps").join("toolkit").join("src").join("util.cool"),
+        "import extra.more\nvalue = more.value + 1\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        root.join("deps").join("extra").join("cool.toml"),
+        r#"[project]
+name = "extra"
+version = "0.1.0"
+main = "src/main.cool"
+sources = ["src"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("deps").join("extra").join("src").join("main.cool"),
+        "value = 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("deps").join("extra").join("src").join("more.cool"),
+        "value = 8\n",
+    )
+    .unwrap();
+}
+
+fn write_task_project(root: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("scripts")).unwrap();
+
+    std::fs::write(
+        root.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "src/main.cool"
+
+[tasks.prepare]
+description = "Prepare output"
+run = "printf 'prep\n'"
+
+[tasks.hello]
+description = "Say hello"
+deps = ["prepare"]
+run = ["printf 'hello %s\n' {args}", "printf 'done\n'"]
+
+[tasks.cwd]
+description = "Show task cwd"
+cwd = "scripts"
+run = "pwd"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src").join("main.cool"), "print(\"demo\")\n").unwrap();
 }
 
 fn assert_logging_file_output(contents: &str) {
@@ -427,6 +558,26 @@ fn test_fstring() {
 fn test_dict() {
     let result = run_cool("d = {\"a\": 1, \"b\": 2}\nprint(d[\"a\"])").unwrap();
     assert!(result.contains("1"));
+}
+
+#[test]
+fn test_dict_copy() {
+    let result = run_cool(
+        "d = {\"a\": 1}\nc = d.copy()\nd[\"a\"] = 2\nc[\"b\"] = 3\nprint(d[\"a\"])\nprint(c[\"a\"])\nprint(\"b\" in d)\nprint(\"b\" in c)",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["2", "1", "false", "true"]);
+}
+
+#[test]
+fn test_vm_dict_copy() {
+    let result = run_cool_vm(
+        "d = {\"a\": 1}\nc = d.copy()\nd[\"a\"] = 2\nc[\"b\"] = 3\nprint(d[\"a\"])\nprint(c[\"a\"])\nprint(\"b\" in d)\nprint(\"b\" in c)",
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["2", "1", "false", "true"]);
 }
 
 #[test]
@@ -1351,6 +1502,26 @@ fn test_cool_new_writes_project_table_manifest() {
 }
 
 #[test]
+fn test_repl_banner_shows_current_version() {
+    let mut cmd = Command::new(cool_bin());
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"exit\n").unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Cool 1.0.0"));
+    assert!(stdout.contains("type 'exit' to quit"));
+}
+
+#[test]
 fn test_cool_test_discovers_named_tests() {
     let temp_dir = unique_temp_dir("cool_test_command_discovery");
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1623,6 +1794,101 @@ fn test_vm_import_dotted_module_package_path() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
     assert!(result.contains("42"));
+}
+
+#[test]
+fn test_project_sources_and_dependencies_resolve_imports() {
+    let temp_dir = unique_temp_dir("cool_project_sources_and_deps");
+    write_project_with_sources_and_dependencies(&temp_dir);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+    let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["7", "9"]);
+}
+
+#[test]
+fn test_vm_project_sources_and_dependencies_resolve_imports() {
+    let temp_dir = unique_temp_dir("cool_vm_project_sources_and_deps");
+    write_project_with_sources_and_dependencies(&temp_dir);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["--vm", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+    let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["7", "9"]);
+}
+
+#[test]
+fn test_cool_build_uses_sources_and_dependencies() {
+    let temp_dir = unique_temp_dir("cool_build_sources_and_deps");
+    write_project_with_sources_and_dependencies(&temp_dir);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let binary_path = temp_dir.join("demo");
+    let output = Command::new(&binary_path).output().unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(output.status.success());
+    let binary_stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<_> = binary_stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["7", "9"]);
+}
+
+#[test]
+fn test_cool_task_list_and_run() {
+    let temp_dir = unique_temp_dir("cool_task_runner");
+    write_task_project(&temp_dir);
+
+    let (list_stdout, list_stderr, list_code) = run_cool_subcommand_in_dir(&temp_dir, &["task", "list"]).unwrap();
+    assert_eq!(list_code, 0, "stderr:\n{list_stderr}");
+    assert!(list_stdout.contains("prepare - Prepare output"));
+    assert!(list_stdout.contains("hello - Say hello"));
+    assert!(list_stdout.contains("cwd - Show task cwd"));
+
+    let (run_stdout, run_stderr, run_code) =
+        run_cool_subcommand_in_dir(&temp_dir, &["task", "hello", "world"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(run_code, 0, "stderr:\n{run_stderr}");
+    assert!(run_stdout.contains("prep"));
+    assert!(run_stdout.contains("hello world"));
+    assert!(run_stdout.contains("done"));
+    assert!(run_stdout.find("prep").unwrap() < run_stdout.find("hello world").unwrap());
+}
+
+#[test]
+fn test_cool_task_respects_task_cwd() {
+    let temp_dir = unique_temp_dir("cool_task_runner_cwd");
+    write_task_project(&temp_dir);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["task", "cwd"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+    assert!(stdout.contains("/scripts"));
+}
+
+#[test]
+fn test_vm_term_get_char() {
+    let source_path = unique_temp_path("cool_vm_term_module", "cool");
+    std::fs::write(
+        &source_path,
+        "import term\nterm.raw()\nch = term.get_char()\nterm.normal()\nprint(ch)\n",
+    )
+    .unwrap();
+
+    let (stdout, _stderr, status) =
+        run_cool_with_pty_input_delayed_close(source_path.to_str().unwrap(), &["--vm"], b"q", 100).unwrap();
+    let _ = std::fs::remove_file(&source_path);
+
+    assert_eq!(status, 0, "stdout:\n{stdout}");
+    assert!(stdout.trim_end().ends_with('q'));
 }
 
 #[test]

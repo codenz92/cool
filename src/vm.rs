@@ -5,11 +5,16 @@ use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::project::ModuleResolver;
 use crate::sqlite_runtime::{self, SqlData};
 use crate::toml_runtime::{self, TomlData};
 use crate::yaml_runtime::{self, YamlData};
+use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::execute;
+use crossterm::terminal;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Write;
 use std::rc::Rc;
 
 use crate::opcode::*;
@@ -42,6 +47,7 @@ pub struct VM {
     /// Currently active exception (for bare `raise`).
     current_exc: Option<VmValue>,
     source_dir: std::path::PathBuf,
+    module_resolver: ModuleResolver,
     current_line: usize,
     /// xorshift64 RNG state.
     rng: u64,
@@ -53,7 +59,7 @@ pub struct VM {
 }
 
 impl VM {
-    pub fn new(source_dir: std::path::PathBuf) -> Self {
+    pub fn new(source_dir: std::path::PathBuf, module_resolver: ModuleResolver) -> Self {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -65,6 +71,7 @@ impl VM {
             exc_handlers: Vec::new(),
             current_exc: None,
             source_dir,
+            module_resolver,
             current_line: 0,
             rng: if seed == 0 { 1 } else { seed },
             open_upvalues: Vec::new(),
@@ -1558,6 +1565,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("http.") {
             return self.call_http_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("term.") {
+            return self.call_term_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("test.") {
             return self.call_test_module(rest, args);
@@ -4513,6 +4523,102 @@ impl VM {
         }
     }
 
+    fn call_term_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        match name {
+            "raw" => {
+                terminal::enable_raw_mode().map_err(|e| self.err(&format!("term.raw() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "normal" => {
+                terminal::disable_raw_mode().map_err(|e| self.err(&format!("term.normal() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "clear" => {
+                execute!(
+                    std::io::stdout(),
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                    crossterm::cursor::MoveTo(0, 0)
+                )
+                .map_err(|e| self.err(&format!("term.clear() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "clear_line" => {
+                execute!(
+                    std::io::stdout(),
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+                )
+                .map_err(|e| self.err(&format!("term.clear_line() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "move_cursor" => {
+                let row = match args.first() {
+                    Some(VmValue::Int(n)) => (*n as u16).saturating_sub(1),
+                    _ => return Err(self.err("term.move_cursor(row, col) requires integers")),
+                };
+                let col = match args.get(1) {
+                    Some(VmValue::Int(n)) => (*n as u16).saturating_sub(1),
+                    _ => return Err(self.err("term.move_cursor(row, col) requires integers")),
+                };
+                execute!(std::io::stdout(), crossterm::cursor::MoveTo(col, row))
+                    .map_err(|e| self.err(&format!("term.move_cursor() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "hide_cursor" => {
+                execute!(std::io::stdout(), crossterm::cursor::Hide)
+                    .map_err(|e| self.err(&format!("term.hide_cursor() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "show_cursor" => {
+                execute!(std::io::stdout(), crossterm::cursor::Show)
+                    .map_err(|e| self.err(&format!("term.show_cursor() error: {}", e)))?;
+                Ok(VmValue::Nil)
+            }
+            "write" => {
+                let s = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => return Ok(VmValue::Nil),
+                };
+                print!("{}", s);
+                std::io::stdout().flush().ok();
+                Ok(VmValue::Nil)
+            }
+            "flush" => {
+                std::io::stdout().flush().ok();
+                Ok(VmValue::Nil)
+            }
+            "size" => {
+                let (w, h) = terminal::size().map_err(|e| self.err(&format!("term.size() error: {}", e)))?;
+                Ok(VmValue::Tuple(Rc::new(vec![
+                    VmValue::Int(w as i64),
+                    VmValue::Int(h as i64),
+                ])))
+            }
+            "get_char" => loop {
+                if let Ok(Event::Key(key)) = ct_event::read() {
+                    return Ok(VmValue::Str(vm_key_to_string(key)));
+                }
+            },
+            "poll_char" => {
+                let ms = match args.first() {
+                    Some(VmValue::Int(n)) => *n as u64,
+                    Some(VmValue::Float(f)) => *f as u64,
+                    None => 0,
+                    _ => return Err(self.err("term.poll_char(ms) requires a number")),
+                };
+                if ct_event::poll(std::time::Duration::from_millis(ms))
+                    .map_err(|e| self.err(&format!("term.poll_char() error: {}", e)))?
+                {
+                    if let Ok(Event::Key(key)) = ct_event::read() {
+                        return Ok(VmValue::Str(vm_key_to_string(key)));
+                    }
+                }
+                Ok(VmValue::Nil)
+            }
+            _ => Err(self.err(&format!("unknown term function '{}'", name))),
+        }
+    }
+
     fn eval_source(&mut self, src: &str) -> Result<VmValue, String> {
         let mut lexer = crate::lexer::Lexer::new(src);
         let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
@@ -4525,64 +4631,55 @@ impl VM {
 
     fn import_module(&mut self, name: &str) -> Result<VmValue, String> {
         // Try to load from source dir first (e.g., math.cool, foo/bar.cool).
-        let file_path = name.replace('.', "/");
-        let candidates = [
-            self.source_dir.join(format!("{}.cool", file_path)),
-            self.source_dir.join(&file_path).join("__init__.cool"),
-            // stdlib lives next to the interpreter binary or in a known path.
-            std::path::PathBuf::from(format!("lib/{}.cool", file_path)),
-        ];
-        for path in &candidates {
-            if path.exists() {
-                let module_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if self.importing_modules.contains(&module_path) {
-                    return Err(self.err(&format!("circular import detected for '{}'", module_path.display())));
-                }
-                self.importing_modules.push(module_path);
-                let source = std::fs::read_to_string(path).map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
-                // Run the module in an isolated VM so imports expose a namespace
-                // instead of leaking module locals into the caller's globals.
-                let module_dir = path.parent().unwrap_or(&self.source_dir).to_path_buf();
-                let mut module_vm = VM::new(module_dir);
-                module_vm.importing_modules = self.importing_modules.clone();
-                let builtin_keys: std::collections::HashSet<String> = module_vm.globals.keys().cloned().collect();
-                let mut lexer = crate::lexer::Lexer::new(&source);
-                let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
-                    Ok(tokens) => tokens,
-                    Err(err) => {
-                        self.importing_modules.pop();
-                        return Err(err);
-                    }
-                };
-                let mut parser = crate::parser::Parser::new(tokens);
-                let program = match parser.parse_program().map_err(|e| self.err(&e)) {
-                    Ok(program) => program,
-                    Err(err) => {
-                        self.importing_modules.pop();
-                        return Err(err);
-                    }
-                };
-                let chunk = match crate::compiler::compile(&program).map_err(|e| self.err(&e)) {
-                    Ok(chunk) => chunk,
-                    Err(err) => {
-                        self.importing_modules.pop();
-                        return Err(err);
-                    }
-                };
-                if let Err(err) = module_vm.run(&chunk) {
+        if let Some(path) = self.module_resolver.resolve_module(&self.source_dir, name) {
+            let module_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if self.importing_modules.contains(&module_path) {
+                return Err(self.err(&format!("circular import detected for '{}'", module_path.display())));
+            }
+            self.importing_modules.push(module_path);
+            let source = std::fs::read_to_string(&path).map_err(|e| self.err(&format!("import {}: {}", name, e)))?;
+            // Run the module in an isolated VM so imports expose a namespace
+            // instead of leaking module locals into the caller's globals.
+            let module_dir = path.parent().unwrap_or(&self.source_dir).to_path_buf();
+            let mut module_vm = VM::new(module_dir, self.module_resolver.clone());
+            module_vm.importing_modules = self.importing_modules.clone();
+            let builtin_keys: std::collections::HashSet<String> = module_vm.globals.keys().cloned().collect();
+            let mut lexer = crate::lexer::Lexer::new(&source);
+            let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
+                Ok(tokens) => tokens,
+                Err(err) => {
                     self.importing_modules.pop();
                     return Err(err);
                 }
-                self.importing_modules.pop();
-                // Return the module's exported namespace.
-                let mut d = VmDict::new();
-                for (k, v) in &module_vm.globals {
-                    if !builtin_keys.contains(k) {
-                        d.set(VmValue::Str(k.clone()), v.clone());
-                    }
+            };
+            let mut parser = crate::parser::Parser::new(tokens);
+            let program = match parser.parse_program().map_err(|e| self.err(&e)) {
+                Ok(program) => program,
+                Err(err) => {
+                    self.importing_modules.pop();
+                    return Err(err);
                 }
-                return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));
+            };
+            let chunk = match crate::compiler::compile(&program).map_err(|e| self.err(&e)) {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    self.importing_modules.pop();
+                    return Err(err);
+                }
+            };
+            if let Err(err) = module_vm.run(&chunk) {
+                self.importing_modules.pop();
+                return Err(err);
             }
+            self.importing_modules.pop();
+            // Return the module's exported namespace.
+            let mut d = VmDict::new();
+            for (k, v) in &module_vm.globals {
+                if !builtin_keys.contains(k) {
+                    d.set(VmValue::Str(k.clone()), v.clone());
+                }
+            }
+            return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));
         }
         // Fall back: built-in stub modules.
         self.make_builtin_module(name)
@@ -4757,6 +4854,24 @@ impl VM {
                     set(&mut d, fname, bf(&format!("http.{}", fname)));
                 }
             }
+            "term" => {
+                for fname in &[
+                    "raw",
+                    "normal",
+                    "clear",
+                    "clear_line",
+                    "move_cursor",
+                    "hide_cursor",
+                    "show_cursor",
+                    "write",
+                    "flush",
+                    "size",
+                    "get_char",
+                    "poll_char",
+                ] {
+                    set(&mut d, fname, bf(&format!("term.{}", fname)));
+                }
+            }
             "re" => {
                 for fname in &["match", "search", "fullmatch", "findall", "sub", "split"] {
                     set(&mut d, fname, bf(&format!("re.{}", fname)));
@@ -4874,6 +4989,31 @@ fn vm_cmp_order(a: &VmValue, b: &VmValue) -> std::cmp::Ordering {
         (VmValue::Float(x), VmValue::Int(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
         (VmValue::Str(x), VmValue::Str(y)) => x.cmp(y),
         _ => std::cmp::Ordering::Equal,
+    }
+}
+
+fn vm_key_to_string(key: KeyEvent) -> String {
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        if let KeyCode::Char(c) = key.code {
+            return format!("CTRL_{}", c.to_uppercase().next().unwrap_or(c));
+        }
+    }
+    match key.code {
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Up => "UP".to_string(),
+        KeyCode::Down => "DOWN".to_string(),
+        KeyCode::Left => "LEFT".to_string(),
+        KeyCode::Right => "RIGHT".to_string(),
+        KeyCode::Enter => "ENTER".to_string(),
+        KeyCode::Backspace => "BACKSPACE".to_string(),
+        KeyCode::Delete => "DELETE".to_string(),
+        KeyCode::Esc => "ESC".to_string(),
+        KeyCode::Tab => "TAB".to_string(),
+        KeyCode::Home => "HOME".to_string(),
+        KeyCode::End => "END".to_string(),
+        KeyCode::PageUp => "PAGEUP".to_string(),
+        KeyCode::PageDown => "PAGEDOWN".to_string(),
+        _ => "UNKNOWN".to_string(),
     }
 }
 

@@ -322,6 +322,13 @@ CoolVal cool_dict_update(CoolVal dict, CoolVal other) {
         cool_dict_set_raw(cv_dict_ptr(dict), d->keys[i], d->vals[i]);
     return cv_nil();
 }
+CoolVal cool_dict_copy(CoolVal dict) {
+    CoolDict* d = cv_dict_ptr(dict);
+    CoolVal res = cool_dict_new();
+    CoolDict* out = cv_dict_ptr(res);
+    for (int64_t i = 0; i < d->len; i++) cool_dict_set_raw(out, d->keys[i], d->vals[i]);
+    return res;
+}
 CoolVal cool_dict_pop(CoolVal dict, CoolVal key) {
     CoolDict* d = cv_dict_ptr(dict);
     for (int64_t i = 0; i < d->len; i++) {
@@ -1034,7 +1041,7 @@ CoolVal cool_dispatch(CoolVal self, const char* name, int32_t argc, CoolVal* arg
         if (!strcmp(name,"remove")) return cool_dict_remove(self, a0);
         if (!strcmp(name,"clear"))  return cool_dict_clear(self);
         if (!strcmp(name,"update")) return cool_dict_update(self, a0);
-        if (!strcmp(name,"copy"))   return cool_dict_new(); /* TODO: real copy */
+        if (!strcmp(name,"copy"))   return cool_dict_copy(self);
         fprintf(stderr, "AttributeError: dict has no method '%s'\n", name); exit(1);
     }
     /* ── FILE methods ──────────────────────────────────────────────────── */

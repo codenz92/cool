@@ -29,7 +29,7 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
 - `runfile()` to execute another `.cool` file at runtime
 - `eval(str)` to evaluate a Cool expression or statement at runtime
-- `import term` for raw terminal mode, cursor control, and real-time key input (powered by crossterm)
+- `import term` for raw terminal mode, cursor control, terminal sizing, and real-time key input across interpreter, VM, and native builds (real TTY required for interactive input)
 - `os.popen(cmd)` to run shell commands and capture output
 - Fixed-width integer helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`
 - Hex / binary / octal literals, `\x` escape sequences
@@ -227,6 +227,12 @@ cool src/main.cool
 # Run tests
 cool test
 
+# List project tasks
+cool task list
+
+# Run a manifest task
+cool task build
+
 # Compile for release
 cool build          # reads cool.toml, produces ./myapp
 ./myapp
@@ -240,9 +246,23 @@ name = "myapp"
 version = "0.1.0"
 main = "src/main.cool"
 output = "myapp"    # optional, defaults to name
+sources = ["src", "lib"]   # optional additional module roots
+
+[dependencies]
+toolkit = { path = "deps/toolkit" }   # imported as `toolkit.*`
+
+[tasks.build]
+description = "Build a native binary"
+run = "cool build"
+
+[tasks.test]
+description = "Run Cool tests"
+run = "cool test"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `cool new` also scaffolds `tests/test_main.cool`, so `cool test` works immediately in new projects. By default the runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` adds path-based dependencies that are imported by dependency name. `cool new` also scaffolds `tests/test_main.cool`, so `cool test` works immediately in new projects, and includes starter tasks for `cool task`. By default the runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+
+`cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
@@ -259,6 +279,7 @@ Inside test files, `import test` gives you assertion helpers like `test.equal(..
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool test [path ...]` | Discover and run Cool tests |
+| `cool task [name|list ...]` | List or run manifest-defined project tasks |
 | `cool new <name>` | Scaffold a new Cool project |
 | `cool help` | Show usage help |
 

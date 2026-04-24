@@ -5,6 +5,7 @@ use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::project::ModuleResolver;
 use crate::sqlite_runtime::{self, SqlData};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
 use crate::toml_runtime::{self, TomlData};
@@ -493,6 +494,7 @@ type RlEditor = rustyline::Editor<CoolHelper, rustyline::history::DefaultHistory
 pub struct Interpreter {
     pub current_line: usize,
     pub source_dir: std::path::PathBuf,
+    module_resolver: ModuleResolver,
     /// Source lines, for rich error messages.
     source_lines: Vec<String>,
     /// Stash for a raised exception value that must cross a Result<Value,String> boundary.
@@ -531,7 +533,7 @@ macro_rules! compare_op {
 }
 
 impl Interpreter {
-    pub fn new(source_dir: std::path::PathBuf, source: &str) -> Self {
+    pub fn new(source_dir: std::path::PathBuf, source: &str, module_resolver: ModuleResolver) -> Self {
         let readline_editor = rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
             .ok()
             .map(|mut ed| {
@@ -547,6 +549,7 @@ impl Interpreter {
         Interpreter {
             current_line: 0,
             source_dir,
+            module_resolver,
             source_lines: source.lines().map(|l| l.to_string()).collect(),
             pending_raise: None,
             readline_editor,
@@ -1412,11 +1415,7 @@ class Stack:
                 env.set_local("ffi".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             _ => {
-                // Try to load as a .cool file from source_dir.
-                // Support dotted names: "foo.bar" → "foo/bar.cool".
-                let file_path = name.replace('.', "/");
-                let path = self.source_dir.join(format!("{}.cool", file_path));
-                if path.exists() {
+                if let Some(path) = self.module_resolver.resolve_module(&self.source_dir, name) {
                     let source =
                         std::fs::read_to_string(&path).map_err(|e| self.err(&format!("import error: {}", e)))?;
                     let mut lexer = crate::lexer::Lexer::new(&source);
@@ -1424,7 +1423,11 @@ class Stack:
                     let mut parser = crate::parser::Parser::new(tokens);
                     let program = parser.parse_program().map_err(|e| self.err(&e))?;
                     let child = Env::new_child(env.clone());
-                    self.exec_block(&program, &child)?;
+                    let old_dir = self.source_dir.clone();
+                    self.source_dir = path.parent().unwrap_or(&old_dir).to_path_buf();
+                    let result = self.exec_block(&program, &child);
+                    self.source_dir = old_dir;
+                    result?;
                     let child_vars = child.0.borrow();
                     let mut exports = IndexedMap::new();
                     for (k, v) in &child_vars.vars {

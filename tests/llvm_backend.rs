@@ -364,6 +364,26 @@ print(obj.area(2))
 }
 
 #[test]
+fn test_llvm_dict_copy() {
+    let result = compile_and_run_native(
+        r#"
+d = {"a": 1}
+c = d.copy()
+d["a"] = 2
+c["b"] = 3
+print(d["a"])
+print(c["a"])
+print("b" in d)
+print("b" in c)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["2", "1", "false", "true"]);
+}
+
+#[test]
 fn test_llvm_fixed_width_ints_and_memory() {
     let result = compile_and_run_native(
         r#"
@@ -1557,4 +1577,22 @@ fn test_llvm_import_file_flattens_exports() {
     let _ = fs::remove_dir_all(&temp_dir);
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["10", "5", "7", "8"]);
+}
+
+#[test]
+fn test_llvm_term_get_char() {
+    let stdout = compile_and_run_native(
+        r#"
+import term
+size = term.size()
+print(size[0] > 0)
+print(size[1] > 0)
+term.write("native-term")
+term.flush()
+"#,
+    )
+    .unwrap();
+
+    assert!(stdout.contains("true"));
+    assert!(stdout.contains("native-term"));
 }

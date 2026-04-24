@@ -1,0 +1,206 @@
+import os
+import sys
+import toml
+import path
+import subprocess
+import term
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("task v1.0 — manifest-driven task runner")
+    print("  cool task list")
+    print("  cool task <name> [args...]")
+    print("  cool task run <name> [args...]")
+
+def discover_project_root():
+    cur = os.getcwd()
+    while true:
+        manifest = path.join(cur, "cool.toml")
+        if path.exists(manifest):
+            return cur
+        parent = path.dirname(cur)
+        if parent == cur or parent == "":
+            raise "cool task: no cool.toml found in this directory or any parent"
+        cur = parent
+
+def read_manifest(project_root):
+    manifest_path = path.join(project_root, "cool.toml")
+    with open(manifest_path, "r") as f:
+        return toml.loads(f.read())
+
+def ensure_tasks_table(manifest):
+    tasks = manifest.get("tasks", {})
+    if not isinstance(tasks, "dict"):
+        raise "cool task: [tasks] must be a table"
+    return tasks
+
+def normalize_run_steps(name, raw_run):
+    if isinstance(raw_run, "str"):
+        return [raw_run]
+    if isinstance(raw_run, "list"):
+        steps = []
+        for item in raw_run:
+            steps.append(str(item))
+        return steps
+    raise "cool task: task '" + name + "' run must be a string or list"
+
+def normalize_deps(name, raw_deps):
+    if raw_deps == nil:
+        return []
+    if isinstance(raw_deps, "str"):
+        return [raw_deps]
+    if isinstance(raw_deps, "list"):
+        deps = []
+        for dep in raw_deps:
+            deps.append(str(dep))
+        return deps
+    raise "cool task: task '" + name + "' deps must be a string or list"
+
+def normalize_env(name, raw_env):
+    if raw_env == nil:
+        return {}
+    if isinstance(raw_env, "dict"):
+        return raw_env
+    raise "cool task: task '" + name + "' env must be a dict"
+
+def normalize_task(tasks, name):
+    if not (name in tasks):
+        raise "cool task: unknown task '" + name + "'"
+    raw = tasks[name]
+    if isinstance(raw, "str") or isinstance(raw, "list"):
+        return {
+            "name": name,
+            "description": "",
+            "deps": [],
+            "run": normalize_run_steps(name, raw),
+            "cwd": nil,
+            "env": {},
+        }
+    if isinstance(raw, "dict"):
+        run = raw.get("run", raw.get("cmd", nil))
+        if run == nil:
+            raise "cool task: task '" + name + "' is missing 'run'"
+        return {
+            "name": name,
+            "description": str(raw.get("description", "")),
+            "deps": normalize_deps(name, raw.get("deps", [])),
+            "run": normalize_run_steps(name, run),
+            "cwd": raw.get("cwd", nil),
+            "env": normalize_env(name, raw.get("env", {})),
+        }
+    raise "cool task: task '" + name + "' must be a string, list, or table"
+
+def quoted_args(args):
+    if len(args) == 0:
+        return ""
+    parts = []
+    for arg in args:
+        parts.append(shell_quote(arg))
+    return " ".join(parts)
+
+def render_command(cmd, extra_args):
+    rendered = str(cmd)
+    args_text = quoted_args(extra_args)
+    if "{args}" in rendered:
+        return rendered.replace("{args}", args_text)
+    if args_text == "":
+        return rendered
+    return rendered + " " + args_text
+
+def task_cwd(project_root, task):
+    cwd = task.get("cwd", nil)
+    if cwd == nil or cwd == "":
+        return project_root
+    cwd = str(cwd)
+    if path.isabs(cwd):
+        return cwd
+    return path.join(project_root, cwd)
+
+def env_prefix(task):
+    env = task.get("env", {})
+    if len(env) == 0:
+        return ""
+    parts = []
+    for pair in env.items():
+        parts.append(str(pair[0]) + "=" + shell_quote(str(pair[1])))
+    return " ".join(parts)
+
+def build_shell_command(project_root, task, step, extra_args):
+    cmd = render_command(step, extra_args)
+    prefix = env_prefix(task)
+    if prefix != "":
+        cmd = prefix + " " + cmd
+    cwd = task_cwd(project_root, task)
+    if cwd != "":
+        cmd = "cd " + shell_quote(cwd) + " && " + cmd
+    return cmd
+
+def stream_result(result):
+    if result["stdout"] != "":
+        term.write(result["stdout"])
+    if result["stderr"] != "":
+        term.write(result["stderr"])
+
+def run_task(name, tasks, project_root, extra_args, completed, stack):
+    if completed.get(name, false):
+        return
+    if name in stack:
+        raise "cool task: dependency cycle detected: " + " -> ".join(stack + [name])
+
+    task = normalize_task(tasks, name)
+    stack.append(name)
+    for dep in task["deps"]:
+        run_task(dep, tasks, project_root, extra_args, completed, stack)
+    stack.pop()
+
+    for step in task["run"]:
+        shell_cmd = build_shell_command(project_root, task, step, extra_args)
+        term.write("$ " + shell_cmd + "\n")
+        result = subprocess.run(shell_cmd)
+        stream_result(result)
+        if result["timed_out"]:
+            raise "cool task: command timed out in task '" + name + "'"
+        if result["code"] != 0:
+            exit(result["code"])
+
+    completed[name] = true
+
+def list_tasks(tasks):
+    names = sorted(tasks.keys())
+    if len(names) == 0:
+        print("No tasks defined in cool.toml")
+        return
+    print("Tasks:")
+    for name in names:
+        task = normalize_task(tasks, name)
+        if task["description"] == "":
+            print("  " + str(name))
+        else:
+            print("  " + str(name) + " - " + task["description"])
+
+argv = sys.argv
+project_root = discover_project_root()
+manifest = read_manifest(project_root)
+tasks = ensure_tasks_table(manifest)
+
+if len(argv) <= 1:
+    list_tasks(tasks)
+elif argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h":
+    usage()
+elif argv[1] == "list":
+    list_tasks(tasks)
+else:
+    task_name = argv[1]
+    extra_args = argv[2:]
+    if task_name == "run":
+        if len(argv) < 3:
+            usage()
+            exit(1)
+        task_name = argv[2]
+        extra_args = argv[3:]
+    completed = {}
+    stack = []
+    run_task(task_name, tasks, project_root, extra_args, completed, stack)

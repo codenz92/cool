@@ -9,6 +9,7 @@
 //      emits the LLVM module to a .o file, then links both together.
 
 use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
+use crate::project::ModuleResolver;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -38,8 +39,10 @@ const RUNTIME_C: &str = r#"
 #include <regex.h>
 #include <signal.h>
 #include <sys/select.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <termios.h>
 #include <dlfcn.h>
 #include <sqlite3.h>
 #include <setjmp.h>
@@ -252,13 +255,23 @@ CoolVal cool_type(CoolVal);
 CoolVal cool_list_get(CoolVal, CoolVal);
 CoolVal cool_list_set(CoolVal, CoolVal, CoolVal);
 CoolVal cool_list_push(CoolVal, CoolVal);
+CoolVal cool_list_pop(CoolVal);
+CoolVal cool_list_copy(CoolVal);
+CoolVal cool_list_clear(CoolVal);
+CoolVal cool_list_reverse(CoolVal);
 CoolVal cool_list_concat(CoolVal, CoolVal);
 CoolVal cool_dict_new(void);
 CoolVal cool_dict_get(CoolVal, CoolVal);
 CoolVal cool_dict_set(CoolVal, CoolVal, CoolVal);
+CoolVal cool_dict_copy(CoolVal);
+CoolVal cool_dict_keys(CoolVal);
+CoolVal cool_dict_values(CoolVal);
+CoolVal cool_dict_items(CoolVal);
 CoolVal cool_dict_len(CoolVal);
 CoolVal cool_dict_contains(CoolVal, CoolVal);
 CoolVal cool_dict_get_opt(CoolVal, CoolVal);
+CoolVal cool_dict_clear(CoolVal);
+CoolVal cool_dict_update(CoolVal, CoolVal);
 CoolVal cool_index(CoolVal, CoolVal);
 CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
@@ -744,6 +757,31 @@ CoolVal cool_list_pop(CoolVal list_val) {
     CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
     if (lst->length <= 0) return cv_nil();
     return ((CoolVal*)lst->data)[--lst->length];
+}
+CoolVal cool_list_copy(CoolVal list_val) {
+    if (list_val.tag != TAG_LIST && list_val.tag != TAG_TUPLE) return cv_nil();
+    CoolList* src = (CoolList*)(intptr_t)list_val.payload;
+    CoolVal out = list_val.tag == TAG_TUPLE ? cool_tuple_make(cv_int(src->length)) : cool_list_make(cv_int(src->length));
+    for (int64_t i = 0; i < src->length; i++) {
+        cool_list_push(out, ((CoolVal*)src->data)[i]);
+    }
+    return out;
+}
+CoolVal cool_list_clear(CoolVal list_val) {
+    if (list_val.tag != TAG_LIST) return cv_nil();
+    ((CoolList*)(intptr_t)list_val.payload)->length = 0;
+    return cv_nil();
+}
+CoolVal cool_list_reverse(CoolVal list_val) {
+    if (list_val.tag != TAG_LIST) return cv_nil();
+    CoolList* lst = (CoolList*)(intptr_t)list_val.payload;
+    CoolVal* items = (CoolVal*)lst->data;
+    for (int64_t i = 0, j = lst->length - 1; i < j; i++, j--) {
+        CoolVal tmp = items[i];
+        items[i] = items[j];
+        items[j] = tmp;
+    }
+    return cv_nil();
 }
 /* ── len() ──────────────────────────────────────────────────────────────── */
 CoolVal cool_len(CoolVal v) {
@@ -1948,12 +1986,31 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
         }
     }
 
-    if (obj.tag == TAG_LIST && strcmp(builtin_name, "append") == 0 && nargs == 1) {
-        cool_list_push(obj, g_method_args[1]);
-        return cv_nil();
+    if (obj.tag == TAG_LIST) {
+        if (strcmp(builtin_name, "append") == 0 && nargs == 1) {
+            cool_list_push(obj, g_method_args[1]);
+            return cv_nil();
+        }
+        if (strcmp(builtin_name, "pop") == 0 && nargs == 0) return cool_list_pop(obj);
+        if (strcmp(builtin_name, "copy") == 0 && nargs == 0) return cool_list_copy(obj);
+        if (strcmp(builtin_name, "clear") == 0 && nargs == 0) return cool_list_clear(obj);
+        if (strcmp(builtin_name, "reverse") == 0 && nargs == 0) return cool_list_reverse(obj);
     }
-    if (obj.tag == TAG_DICT && (strcmp(builtin_name, "contains") == 0 || strcmp(builtin_name, "has_key") == 0) && nargs == 1) {
-        return cool_dict_contains(obj, g_method_args[1]);
+    if (obj.tag == TAG_DICT) {
+        if ((strcmp(builtin_name, "contains") == 0 || strcmp(builtin_name, "has_key") == 0) && nargs == 1) {
+            return cool_dict_contains(obj, g_method_args[1]);
+        }
+        if (strcmp(builtin_name, "copy") == 0 && nargs == 0) return cool_dict_copy(obj);
+        if (strcmp(builtin_name, "keys") == 0 && nargs == 0) return cool_dict_keys(obj);
+        if (strcmp(builtin_name, "values") == 0 && nargs == 0) return cool_dict_values(obj);
+        if (strcmp(builtin_name, "items") == 0 && nargs == 0) return cool_dict_items(obj);
+        if (strcmp(builtin_name, "get") == 0 && nargs == 1) return cool_dict_get_opt(obj, g_method_args[1]);
+        if (strcmp(builtin_name, "get") == 0 && nargs == 2) {
+            CoolVal value = cool_dict_get_opt(obj, g_method_args[1]);
+            return value.tag == TAG_NIL ? g_method_args[2] : value;
+        }
+        if (strcmp(builtin_name, "clear") == 0 && nargs == 0) return cool_dict_clear(obj);
+        if (strcmp(builtin_name, "update") == 0 && nargs == 1) return cool_dict_update(obj, g_method_args[1]);
     }
     if (obj.tag == TAG_FILE) {
         CoolVal a0 = nargs > 0 ? g_method_args[1] : cv_nil();
@@ -2075,6 +2132,60 @@ CoolVal cool_dict_contains(CoolVal dict_v, CoolVal key) {
     for (int64_t i = 0; i < d->len; i++)
         if (cv_eq_raw(d->keys[i], key)) return cv_bool(1);
     return cv_bool(0);
+}
+
+CoolVal cool_dict_copy(CoolVal dict_v) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    CoolVal out = cool_dict_new();
+    for (int64_t i = 0; i < d->len; i++) {
+        cool_dict_set(out, d->keys[i], d->vals[i]);
+    }
+    return out;
+}
+
+CoolVal cool_dict_keys(CoolVal dict_v) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    CoolVal out = cool_list_make(cv_int(d->len));
+    for (int64_t i = 0; i < d->len; i++) cool_list_push(out, d->keys[i]);
+    return out;
+}
+
+CoolVal cool_dict_values(CoolVal dict_v) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    CoolVal out = cool_list_make(cv_int(d->len));
+    for (int64_t i = 0; i < d->len; i++) cool_list_push(out, d->vals[i]);
+    return out;
+}
+
+CoolVal cool_dict_items(CoolVal dict_v) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* d = (CoolDict*)(intptr_t)dict_v.payload;
+    CoolVal out = cool_list_make(cv_int(d->len));
+    for (int64_t i = 0; i < d->len; i++) {
+        CoolVal pair = cool_tuple_make(cv_int(2));
+        cool_list_push(pair, d->keys[i]);
+        cool_list_push(pair, d->vals[i]);
+        cool_list_push(out, pair);
+    }
+    return out;
+}
+
+CoolVal cool_dict_clear(CoolVal dict_v) {
+    if (dict_v.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    ((CoolDict*)(intptr_t)dict_v.payload)->len = 0;
+    return cv_nil();
+}
+
+CoolVal cool_dict_update(CoolVal dict_v, CoolVal other) {
+    if (dict_v.tag != TAG_DICT || other.tag != TAG_DICT) { fprintf(stderr, "TypeError: not a dict\n"); exit(1); }
+    CoolDict* src = (CoolDict*)(intptr_t)other.payload;
+    for (int64_t i = 0; i < src->len; i++) {
+        cool_dict_set(dict_v, src->keys[i], src->vals[i]);
+    }
+    return cv_nil();
 }
 
 /* Unified index: dispatches list, tuple, dict */
@@ -5827,6 +5938,139 @@ CoolVal cool_noncallable(CoolVal v) {
     exit(1);
 }
 
+static struct termios g_term_orig;
+static int g_term_saved = 0;
+static int g_term_active = 0;
+
+static void cool_term_restore(void) {
+    if (g_term_saved && g_term_active) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_term_orig);
+        g_term_active = 0;
+    }
+}
+
+static CoolVal cool_term_emit_key(const char* text) {
+    return cv_str(strdup(text));
+}
+
+static CoolVal cool_term_decode_key(unsigned char ch) {
+    if (ch == 27) {
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(STDIN_FILENO, &set);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 10000;
+        if (select(STDIN_FILENO + 1, &set, NULL, NULL, &tv) > 0) {
+            unsigned char seq1 = 0;
+            if (read(STDIN_FILENO, &seq1, 1) == 1) {
+                if (seq1 == '[') {
+                    unsigned char seq2 = 0;
+                    if (read(STDIN_FILENO, &seq2, 1) == 1) {
+                        switch (seq2) {
+                            case 'A': return cool_term_emit_key("UP");
+                            case 'B': return cool_term_emit_key("DOWN");
+                            case 'C': return cool_term_emit_key("RIGHT");
+                            case 'D': return cool_term_emit_key("LEFT");
+                            case 'H': return cool_term_emit_key("HOME");
+                            case 'F': return cool_term_emit_key("END");
+                            case '3': {
+                                unsigned char seq3 = 0;
+                                if (read(STDIN_FILENO, &seq3, 1) == 1 && seq3 == '~') return cool_term_emit_key("DELETE");
+                                break;
+                            }
+                            case '5': {
+                                unsigned char seq3 = 0;
+                                if (read(STDIN_FILENO, &seq3, 1) == 1 && seq3 == '~') return cool_term_emit_key("PAGEUP");
+                                break;
+                            }
+                            case '6': {
+                                unsigned char seq3 = 0;
+                                if (read(STDIN_FILENO, &seq3, 1) == 1 && seq3 == '~') return cool_term_emit_key("PAGEDOWN");
+                                break;
+                            }
+                        }
+                    }
+                } else if (seq1 == 'O') {
+                    unsigned char seq2 = 0;
+                    if (read(STDIN_FILENO, &seq2, 1) == 1) {
+                        switch (seq2) {
+                            case 'H': return cool_term_emit_key("HOME");
+                            case 'F': return cool_term_emit_key("END");
+                        }
+                    }
+                }
+            }
+        }
+        return cool_term_emit_key("ESC");
+    }
+    if (ch == '\r' || ch == '\n') return cool_term_emit_key("ENTER");
+    if (ch == 127 || ch == 8) return cool_term_emit_key("BACKSPACE");
+    if (ch == 9) return cool_term_emit_key("TAB");
+    if (ch >= 1 && ch <= 26) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "CTRL_%c", 'A' + ch - 1);
+        return cool_term_emit_key(buf);
+    }
+    char* out = (char*)malloc(2);
+    out[0] = (char)ch;
+    out[1] = '\0';
+    return cv_str(out);
+}
+
+static void cool_term_enable_raw(void) {
+    if (!isatty(STDIN_FILENO)) {
+        fprintf(stderr, "RuntimeError: term.raw() requires a TTY\n");
+        exit(1);
+    }
+    if (!g_term_saved) {
+        if (tcgetattr(STDIN_FILENO, &g_term_orig) != 0) {
+            fprintf(stderr, "RuntimeError: term.raw() failed\n");
+            exit(1);
+        }
+        g_term_saved = 1;
+        atexit(cool_term_restore);
+    }
+    struct termios raw = g_term_orig;
+    cfmakeraw(&raw);
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
+        fprintf(stderr, "RuntimeError: term.raw() failed\n");
+        exit(1);
+    }
+    g_term_active = 1;
+}
+
+static CoolVal cool_term_get_char(int use_timeout, int timeout_ms) {
+    if (use_timeout) {
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(STDIN_FILENO, &set);
+        struct timeval tv;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        int ready = select(STDIN_FILENO + 1, &set, NULL, NULL, &tv);
+        if (ready <= 0) return cv_nil();
+    }
+    unsigned char ch = 0;
+    ssize_t n = read(STDIN_FILENO, &ch, 1);
+    if (n <= 0) return cv_nil();
+    return cool_term_decode_key(ch);
+}
+
+static CoolVal cool_term_size_val(void) {
+    struct winsize ws;
+    unsigned short cols = 80;
+    unsigned short rows = 24;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        if (ws.ws_col > 0) cols = ws.ws_col;
+        if (ws.ws_row > 0) rows = ws.ws_row;
+    }
+    CoolVal out = cool_tuple_make(cv_int(2));
+    cool_list_push(out, cv_int(cols));
+    cool_list_push(out, cv_int(rows));
+    return out;
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -6187,6 +6431,69 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         }
         if (strcmp(name, "getjson") == 0 && (nargs == 1 || nargs == 2)) {
             return cool_http_getjson(args[0], nargs == 2 ? args[1] : cv_nil());
+        }
+    }
+
+    if (strcmp(module, "term") == 0) {
+        if (strcmp(name, "raw") == 0 && nargs == 0) {
+            cool_term_enable_raw();
+            return cv_nil();
+        }
+        if (strcmp(name, "normal") == 0 && nargs == 0) {
+            cool_term_restore();
+            return cv_nil();
+        }
+        if (strcmp(name, "clear") == 0 && nargs == 0) {
+            fputs("\033[2J\033[H", stdout);
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "clear_line") == 0 && nargs == 0) {
+            fputs("\033[2K", stdout);
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "move_cursor") == 0 && nargs == 2) {
+            int64_t row = cool_to_int(args[0]).payload;
+            int64_t col = cool_to_int(args[1]).payload;
+            if (row < 1) row = 1;
+            if (col < 1) col = 1;
+            fprintf(stdout, "\033[%lld;%lldH", (long long)row, (long long)col);
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "hide_cursor") == 0 && nargs == 0) {
+            fputs("\033[?25l", stdout);
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "show_cursor") == 0 && nargs == 0) {
+            fputs("\033[?25h", stdout);
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "write") == 0 && nargs <= 1) {
+            if (nargs == 1) fputs(cool_to_str(args[0]), stdout);
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "flush") == 0 && nargs == 0) {
+            fflush(stdout);
+            return cv_nil();
+        }
+        if (strcmp(name, "size") == 0 && nargs == 0) {
+            return cool_term_size_val();
+        }
+        if (strcmp(name, "get_char") == 0 && nargs == 0) {
+            return cool_term_get_char(0, 0);
+        }
+        if (strcmp(name, "poll_char") == 0 && nargs <= 1) {
+            int timeout_ms = 0;
+            if (nargs == 1 && args[0].tag != TAG_NIL) {
+                timeout_ms = (int)cv_to_float(args[0]);
+                if (timeout_ms < 0) timeout_ms = 0;
+            }
+            return cool_term_get_char(1, timeout_ms);
         }
     }
 
@@ -7121,6 +7428,7 @@ struct Compiler<'ctx> {
     compiling_modules: Vec<PathBuf>,
     /// Source directory used to resolve relative imports for the current compilation unit.
     current_source_dir: PathBuf,
+    module_resolver: ModuleResolver,
     /// Prefix applied to generated LLVM symbols for the current compilation unit.
     symbol_prefix: String,
     /// Whether the current compilation unit accepts top-level `def` and `class` statements.
@@ -7212,6 +7520,7 @@ impl<'ctx> Compiler<'ctx> {
             compiled_modules: HashMap::new(),
             compiling_modules: Vec::new(),
             current_source_dir: PathBuf::from("."),
+            module_resolver: ModuleResolver::local_only(PathBuf::from(".")),
             symbol_prefix: String::new(),
             allow_toplevel_defs: false,
             cleanup_stack: Vec::new(),
@@ -7428,16 +7737,7 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn resolve_import_module_path(&self, name: &str) -> Option<PathBuf> {
-        let file_path = name.replace('.', "/");
-        let candidates = [
-            self.current_source_dir.join(format!("{}.cool", file_path)),
-            self.current_source_dir.join(&file_path).join("__init__.cool"),
-            PathBuf::from(format!("lib/{}.cool", file_path)),
-        ];
-        candidates
-            .into_iter()
-            .find(|path| path.exists())
-            .map(|path| path.canonicalize().unwrap_or(path))
+        self.module_resolver.resolve_module(&self.current_source_dir, name)
     }
 
     fn fresh_name(&mut self) -> String {
@@ -9151,7 +9451,7 @@ impl<'ctx> Compiler<'ctx> {
     fn compile_import_module(&mut self, name: &str) -> Result<(), String> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
-            | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "http" | "string" | "list" | "re"
+            | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "http" | "term" | "string" | "list" | "re"
             | "collections" | "path" | "ffi" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
@@ -10511,6 +10811,7 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
     let context = Context::create();
     let mut compiler = Compiler::new(&context);
     compiler.current_source_dir = script_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    compiler.module_resolver = ModuleResolver::discover_for_script(&compiler.current_source_dir)?;
 
     // ── Pass 1: forward-declare all top-level functions ──────────────────────
     compiler.declare_top_level_functions(program)?;

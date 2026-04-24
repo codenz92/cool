@@ -11,6 +11,7 @@ mod llvm_codegen;
 mod logging_runtime;
 mod opcode;
 mod parser;
+mod project;
 mod sqlite_runtime;
 mod subprocess_runtime;
 mod toml_runtime;
@@ -20,6 +21,7 @@ mod yaml_runtime;
 use interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
+use project::{CoolProject, ModuleResolver};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,7 +35,8 @@ fn run_source(source: &str, source_dir: PathBuf) -> Result<(), String> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    let mut interpreter = Interpreter::new(source_dir, source);
+    let module_resolver = ModuleResolver::discover_for_script(&source_dir)?;
+    let mut interpreter = Interpreter::new(source_dir, source, module_resolver);
     interpreter.run(&program)
 }
 
@@ -45,7 +48,8 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
     let program = parser.parse_program()?;
 
     let chunk = compiler::compile(&program)?;
-    let mut machine = vm::VM::new(source_dir);
+    let module_resolver = ModuleResolver::discover_for_script(&source_dir)?;
+    let mut machine = vm::VM::new(source_dir, module_resolver);
     machine.run(&chunk)
 }
 
@@ -59,12 +63,18 @@ fn compile_to_native(source: &str, output_path: &Path, script_path: &Path) -> Re
     llvm_codegen::compile_program(&program, output_path, script_path)
 }
 
+fn task_app_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("coolapps")
+        .join("task.cool")
+}
+
 // ── REPL ──────────────────────────────────────────────────────────────────────
 
 fn repl() {
     use std::io::{self, BufRead, Write};
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    println!("Cool 0.2.0 — type 'exit' to quit");
+    println!("Cool 1.0.0 — type 'exit' to quit");
     let stdin = io::stdin();
     loop {
         print!(">>> ");
@@ -80,53 +90,6 @@ fn repl() {
         if let Err(e) = run_source(&line, cwd.clone()) {
             eprintln!("Error: {}", e);
         }
-    }
-}
-
-// ── cool.toml project file ────────────────────────────────────────────────────
-
-#[derive(Debug)]
-struct CoolProject {
-    name: String,
-    version: String,
-    main: String,
-    output: Option<String>,
-}
-
-impl CoolProject {
-    fn from_str(src: &str) -> Result<Self, String> {
-        let parsed: toml::Value = src
-            .parse()
-            .map_err(|e: toml::de::Error| format!("cool.toml parse error: {}", e.message()))?;
-        let root = parsed
-            .as_table()
-            .ok_or_else(|| "cool.toml: root must be a table".to_string())?;
-        let project = root.get("project").and_then(toml::Value::as_table);
-
-        let field =
-            |key: &str| -> Option<&toml::Value> { project.and_then(|table| table.get(key)).or_else(|| root.get(key)) };
-        let req_str = |key: &str| -> Result<Option<String>, String> {
-            match field(key) {
-                None => Ok(None),
-                Some(toml::Value::String(s)) => Ok(Some(s.clone())),
-                Some(other) => Err(format!(
-                    "cool.toml: field '{}' must be a string, got {}",
-                    key,
-                    other.type_str()
-                )),
-            }
-        };
-
-        Ok(CoolProject {
-            name: req_str("name")?.unwrap_or_else(|| "project".to_string()),
-            version: req_str("version")?.unwrap_or_else(|| "0.1.0".to_string()),
-            main: req_str("main")?.ok_or("cool.toml: missing required key 'main'")?,
-            output: req_str("output")?,
-        })
-    }
-
-    fn output_name(&self) -> &str {
-        self.output.as_deref().unwrap_or(&self.name)
     }
 }
 
@@ -404,11 +367,9 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
                     .to_string());
             }
 
-            let manifest_src =
-                fs::read_to_string(manifest_path).map_err(|e| format!("cool build: cannot read cool.toml: {e}"))?;
-            let project = CoolProject::from_str(&manifest_src)?;
+            let project = CoolProject::from_manifest_path(manifest_path)?;
 
-            let main_path = Path::new(&project.main);
+            let main_path = project.main_path();
             if !main_path.exists() {
                 return Err(format!(
                     "cool build: main file '{}' not found (from cool.toml)",
@@ -416,14 +377,14 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
                 ));
             }
 
-            let source = fs::read_to_string(main_path).map_err(|e| format!("cool build: {e}"))?;
+            let source = fs::read_to_string(&main_path).map_err(|e| format!("cool build: {e}"))?;
 
             let output_path = Path::new(project.output_name());
 
             println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
 
             let t0 = std::time::Instant::now();
-            compile_to_native(&source, output_path, main_path)?;
+            compile_to_native(&source, output_path, &main_path)?;
             let elapsed = t0.elapsed();
 
             println!(
@@ -487,7 +448,9 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     fs::create_dir_all(project_dir.join("tests")).map_err(|e| format!("cool new: {e}"))?;
 
     // cool.toml
-    let manifest = format!("[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n");
+    let manifest = format!(
+        "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n\n[tasks.run]\ndescription = \"Run the app\"\nrun = \"cool src/main.cool\"\n\n[tasks.build]\ndescription = \"Build a native binary\"\nrun = \"cool build\"\n\n[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n"
+    );
     fs::write(project_dir.join("cool.toml"), manifest).map_err(|e| format!("cool new: {e}"))?;
 
     // src/main.cool
@@ -514,7 +477,33 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     println!("    cool src/main.cool          # interpret");
     println!("    cool build                  # compile to native");
     println!("    cool test                   # run tests/");
+    println!("    cool task list              # show project tasks");
     Ok(())
+}
+
+// ── `cool task` ───────────────────────────────────────────────────────────────
+
+fn cmd_task(args: &[&String]) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cool task: cannot resolve current executable: {e}"))?;
+    let task_app = task_app_path();
+    if !task_app.exists() {
+        return Err(format!("cool task: task runner not found at '{}'", task_app.display()));
+    }
+
+    let status = Command::new(exe)
+        .arg(&task_app)
+        .args(args.iter().map(|arg| arg.as_str()))
+        .status()
+        .map_err(|e| format!("cool task: failed to launch task runner: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(match status.code() {
+            Some(code) => format!("cool task failed with exit code {code}"),
+            None => "cool task failed".to_string(),
+        })
+    }
 }
 
 // ── help ──────────────────────────────────────────────────────────────────────
@@ -532,6 +521,7 @@ USAGE:
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
     cool test [path ...]          Run discovered or explicit Cool tests
+    cool task [name|list ...]     Run or list manifest-defined project tasks
     cool new <name>               Scaffold a new Cool project
     cool help                     Show this help message
 
@@ -543,6 +533,7 @@ EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool test                     # run test_*.cool / *_test.cool under tests/
+    cool task list                # list tasks from cool.toml
     cool new myapp                # create myapp/ project
     cool build                    # compile using myapp/cool.toml
 
@@ -602,6 +593,14 @@ fn main() {
             "test" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_test(&rest) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "task" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_task(&rest) {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }

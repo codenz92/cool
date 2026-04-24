@@ -12,5 +12,21 @@ main = "src/main.cool"
 # Optional: additional source directories
 # sources = ["src", "lib"]
 
-# Optional: dependencies (loaded from source directories)
-# dependencies = ["utils", "math"]
+# Optional: path dependencies, imported by dependency name
+#
+# [dependencies]
+# toolkit = { path = "deps/toolkit" }
+
+# Optional: manifest tasks for `cool task`
+#
+# [tasks.run]
+# description = "Run the app"
+# run = "cool src/main.cool"
+#
+# [tasks.build]
+# description = "Build a native binary"
+# run = "cool build"
+#
+# [tasks.test]
+# description = "Run Cool tests"
+# run = "cool test"
