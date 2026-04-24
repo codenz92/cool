@@ -65,6 +65,14 @@ pub struct CheckReport {
     pub diagnostics: Vec<ToolingDiagnostic>,
 }
 
+#[derive(Serialize)]
+pub struct SymbolIndexReport {
+    pub entry: String,
+    pub modules_indexed: usize,
+    pub symbols: Vec<SymbolLocation>,
+    pub diagnostics: Vec<ToolingDiagnostic>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct InspectReport {
     pub path: String,
@@ -118,6 +126,34 @@ pub struct InspectParam {
     pub has_default: bool,
     pub is_vararg: bool,
     pub is_kwarg: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolKind {
+    Import,
+    Function,
+    Class,
+    Method,
+    Struct,
+    Assignment,
+    ClassAssignment,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SymbolLocation {
+    pub path: String,
+    pub line: Option<usize>,
+    pub name: String,
+    pub kind: SymbolKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_kind: Option<ModuleImportKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_specifier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_resolved: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -257,6 +293,23 @@ pub fn build_inspect_diff(before_path: &Path, after_path: &Path) -> Result<Inspe
         classes: diff_keyed(&before.classes, &after.classes, |item| item.name.clone()),
         structs: diff_keyed(&before.structs, &after.structs, |item| item.name.clone()),
         assignments: diff_by_identity(&before.assignments, &after.assignments, assignment_identity_key),
+    })
+}
+
+pub fn build_symbol_index(path: &Path) -> Result<SymbolIndexReport, String> {
+    let graph = build_module_graph(path)?;
+    let mut symbols = Vec::new();
+    for module in &graph.modules {
+        let program = parse_file(Path::new(&module.path))?;
+        let report = inspect_program(module.path.clone(), &program, module.imports.clone());
+        symbols.extend(symbols_from_report(&report));
+    }
+    symbols.sort_by_key(symbol_sort_key);
+    Ok(SymbolIndexReport {
+        entry: graph.entry.clone(),
+        modules_indexed: graph.modules.len(),
+        symbols,
+        diagnostics: graph.diagnostics.clone(),
     })
 }
 
@@ -686,6 +739,114 @@ fn check_report_warnings(report: &InspectReport) -> Vec<ToolingDiagnostic> {
     diagnostics
 }
 
+fn symbols_from_report(report: &InspectReport) -> Vec<SymbolLocation> {
+    let mut symbols = Vec::new();
+
+    for import in &report.imports {
+        if matches!(import.kind, ModuleImportKind::File) {
+            continue;
+        }
+        symbols.push(SymbolLocation {
+            path: report.path.clone(),
+            line: import.line,
+            name: import_binding_name(&import.specifier),
+            kind: SymbolKind::Import,
+            container: None,
+            import_kind: Some(import.kind),
+            import_specifier: Some(import.specifier.clone()),
+            import_resolved: import.resolved.clone(),
+        });
+    }
+
+    for function in &report.functions {
+        symbols.push(SymbolLocation {
+            path: report.path.clone(),
+            line: function.line,
+            name: function.name.clone(),
+            kind: SymbolKind::Function,
+            container: None,
+            import_kind: None,
+            import_specifier: None,
+            import_resolved: None,
+        });
+    }
+
+    for class in &report.classes {
+        symbols.push(SymbolLocation {
+            path: report.path.clone(),
+            line: class.line,
+            name: class.name.clone(),
+            kind: SymbolKind::Class,
+            container: None,
+            import_kind: None,
+            import_specifier: None,
+            import_resolved: None,
+        });
+        for method in &class.methods {
+            symbols.push(SymbolLocation {
+                path: report.path.clone(),
+                line: method.line,
+                name: method.name.clone(),
+                kind: SymbolKind::Method,
+                container: Some(class.name.clone()),
+                import_kind: None,
+                import_specifier: None,
+                import_resolved: None,
+            });
+        }
+        for assignment in &class.class_assignments {
+            if !assignment_defines_symbol(assignment) {
+                continue;
+            }
+            for name in &assignment.names {
+                symbols.push(SymbolLocation {
+                    path: report.path.clone(),
+                    line: assignment.line,
+                    name: name.clone(),
+                    kind: SymbolKind::ClassAssignment,
+                    container: Some(class.name.clone()),
+                    import_kind: None,
+                    import_specifier: None,
+                    import_resolved: None,
+                });
+            }
+        }
+    }
+
+    for structure in &report.structs {
+        symbols.push(SymbolLocation {
+            path: report.path.clone(),
+            line: structure.line,
+            name: structure.name.clone(),
+            kind: SymbolKind::Struct,
+            container: None,
+            import_kind: None,
+            import_specifier: None,
+            import_resolved: None,
+        });
+    }
+
+    for assignment in &report.assignments {
+        if !assignment_defines_symbol(assignment) {
+            continue;
+        }
+        for name in &assignment.names {
+            symbols.push(SymbolLocation {
+                path: report.path.clone(),
+                line: assignment.line,
+                name: name.clone(),
+                kind: SymbolKind::Assignment,
+                container: None,
+                import_kind: None,
+                import_specifier: None,
+                import_resolved: None,
+            });
+        }
+    }
+
+    symbols
+}
+
 fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImport>) -> InspectReport {
     let mut functions = Vec::new();
     let mut classes = Vec::new();
@@ -936,6 +1097,25 @@ fn diagnostic_sort_key(diagnostic: &ToolingDiagnostic) -> (u8, String, Option<us
     )
 }
 
+fn symbol_sort_key(symbol: &SymbolLocation) -> (String, Option<usize>, u8, Option<String>, String, Option<String>) {
+    (
+        symbol.path.clone(),
+        symbol.line,
+        match symbol.kind {
+            SymbolKind::Import => 0,
+            SymbolKind::Assignment => 1,
+            SymbolKind::Function => 2,
+            SymbolKind::Class => 3,
+            SymbolKind::ClassAssignment => 4,
+            SymbolKind::Method => 5,
+            SymbolKind::Struct => 6,
+        },
+        symbol.container.clone(),
+        symbol.name.clone(),
+        symbol.import_specifier.clone(),
+    )
+}
+
 fn diff_keyed<T, F>(before: &[T], after: &[T], key_fn: F) -> DiffSetWithChanges<T>
 where
     T: Clone + PartialEq,
@@ -1000,6 +1180,14 @@ where
 
 fn assignment_identity_key(item: &InspectAssignment) -> String {
     format!("{}:{}:{}", item.line.unwrap_or(0), item.kind, item.names.join(","))
+}
+
+fn assignment_defines_symbol(item: &InspectAssignment) -> bool {
+    matches!(item.kind, "assign" | "aug_assign" | "unpack")
+}
+
+fn import_binding_name(specifier: &str) -> String {
+    specifier.rsplit('.').next().unwrap_or(specifier).to_string()
 }
 
 fn inspect_params(params: &[crate::ast::Param]) -> Vec<InspectParam> {

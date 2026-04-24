@@ -7,6 +7,7 @@ All notable changes to the Cool language project.
 ### Added
 - `cool ast <file.cool>` for pretty-printed JSON AST dumps
 - `cool inspect <file.cool>` for JSON summaries of top-level imports and symbols
+- `cool symbols [file.cool]` for resolved JSON symbol indexes across reachable modules
 - `cool diff <before.cool> <after.cool>` for JSON summaries of added, removed, and changed top-level symbols
 - `cool modulegraph <file.cool>` for resolved import-graph inspection across project sources and dependencies
 - `cool check [file.cool]` for static unresolved-import, import-cycle, and duplicate-symbol diagnostics

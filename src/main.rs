@@ -508,6 +508,39 @@ classes, structs, and assigned symbols."
     Ok(())
 }
 
+// ── `cool symbols` ────────────────────────────────────────────────────────────
+
+fn cmd_symbols(args: &[&String]) -> Result<(), String> {
+    let file = match args {
+        [] => None,
+        [arg] if arg.as_str() == "--help" || arg.as_str() == "-h" => {
+            println!(
+                "\
+Usage: cool symbols [file.cool]
+
+Resolve a Cool entry file and print a JSON symbol index for reachable imports and
+top-level definitions. With no file argument inside a project, `cool symbols` uses
+the manifest main file."
+            );
+            return Ok(());
+        }
+        [arg] if !arg.starts_with('-') => Some(arg.as_str()),
+        [arg] => return Err(format!("cool symbols: unexpected flag '{arg}'")),
+        _ => return Err("Usage: cool symbols [file.cool]".to_string()),
+    };
+
+    let target = match file {
+        Some(path) => PathBuf::from(path),
+        None => current_project("cool symbols")?.main_path(),
+    };
+
+    let report = tooling::build_symbol_index(&target)?;
+    let json =
+        serde_json::to_string_pretty(&report).map_err(|e| format!("cool symbols: failed to encode JSON: {e}"))?;
+    println!("{json}");
+    Ok(())
+}
+
 // ── `cool diff` ───────────────────────────────────────────────────────────────
 
 fn cmd_diff(args: &[&String]) -> Result<(), String> {
@@ -1239,6 +1272,7 @@ USAGE:
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool ast <file.cool>          Print the parsed AST as JSON
     cool inspect <file.cool>      Print a JSON summary of top-level symbols
+    cool symbols [file.cool]      Print a resolved JSON symbol index
     cool diff <before> <after>    Print a JSON summary of top-level changes
     cool check [file.cool]        Statically check imports and cycles
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
@@ -1262,6 +1296,7 @@ EXAMPLES:
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool ast hello.cool           # dump the parsed AST as JSON
     cool inspect hello.cool       # summarize top-level symbols as JSON
+    cool symbols hello.cool       # index resolved symbol locations as JSON
     cool diff old.cool new.cool   # compare top-level imports and symbols
     cool check hello.cool         # statically check imports and cycles
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
@@ -1321,6 +1356,14 @@ fn main() {
             "inspect" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_inspect(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "symbols" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_symbols(&rest) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

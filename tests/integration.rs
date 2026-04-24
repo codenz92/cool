@@ -2024,6 +2024,128 @@ packed struct Header:
 }
 
 #[test]
+fn test_cool_symbols_subcommand_indexes_project_symbols() {
+    let temp_dir = unique_temp_dir("cool_symbols_command");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("lib").join("util")).unwrap();
+
+    std::fs::write(
+        temp_dir.join("cool.toml"),
+        r#"[project]
+name = "symboldemo"
+version = "0.1.0"
+main = "app/main.cool"
+sources = ["app", "lib"]
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        r#"import json
+import util.math
+import "shared.cool"
+
+APP_NAME = "symboldemo"
+
+def greet(name):
+    return math.add(1, 2)
+
+class Person:
+    title = "dev"
+
+    def rename(self, name):
+        self.name = name
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("shared.cool"),
+        r#"def shared_helper():
+    return "ok"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("lib").join("util").join("math.cool"),
+        r#"def add(a, b):
+    return a + b
+"#,
+    )
+    .unwrap();
+
+    let entry_path = temp_dir.join("app").join("main.cool").canonicalize().unwrap();
+    let shared_path = temp_dir.join("app").join("shared.cool").canonicalize().unwrap();
+    let math_path = temp_dir
+        .join("lib")
+        .join("util")
+        .join("math.cool")
+        .canonicalize()
+        .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["symbols"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(parsed["entry"].as_str().unwrap(), entry_path.display().to_string());
+    assert_eq!(parsed["modules_indexed"].as_u64().unwrap(), 3);
+    assert!(parsed["diagnostics"].as_array().unwrap().is_empty());
+
+    let symbols = parsed["symbols"].as_array().unwrap();
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("json")
+            && symbol["kind"].as_str() == Some("import")
+            && symbol["import_kind"].as_str() == Some("builtin")
+            && symbol["import_specifier"].as_str() == Some("json")
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("math")
+            && symbol["kind"].as_str() == Some("import")
+            && symbol["import_kind"].as_str() == Some("module")
+            && symbol["import_specifier"].as_str() == Some("util.math")
+            && symbol["import_resolved"].as_str() == Some(math_path.to_str().unwrap())
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("APP_NAME")
+            && symbol["kind"].as_str() == Some("assignment")
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("greet")
+            && symbol["kind"].as_str() == Some("function")
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("Person")
+            && symbol["kind"].as_str() == Some("class")
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("title")
+            && symbol["kind"].as_str() == Some("class_assignment")
+            && symbol["container"].as_str() == Some("Person")
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(entry_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("rename")
+            && symbol["kind"].as_str() == Some("method")
+            && symbol["container"].as_str() == Some("Person")
+    }));
+    assert!(symbols.iter().any(|symbol| {
+        symbol["path"].as_str() == Some(shared_path.to_str().unwrap())
+            && symbol["name"].as_str() == Some("shared_helper")
+            && symbol["kind"].as_str() == Some("function")
+    }));
+}
+
+#[test]
 fn test_cool_diff_subcommand_reports_top_level_changes() {
     let temp_dir = unique_temp_dir("cool_diff_command");
     let _ = std::fs::remove_dir_all(&temp_dir);
