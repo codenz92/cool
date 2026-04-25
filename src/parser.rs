@@ -262,7 +262,11 @@ impl Parser {
             fields.push((field_name, type_name));
         }
         self.eat(&Token::Dedent)?;
-        Ok(Stmt::Struct { name, fields, is_packed })
+        Ok(Stmt::Struct {
+            name,
+            fields,
+            is_packed,
+        })
     }
 
     fn parse_union(&mut self) -> Result<Stmt, String> {

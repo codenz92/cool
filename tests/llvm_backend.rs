@@ -128,6 +128,19 @@ fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
     format!("{stdout}{stderr}")
 }
 
+fn host_pointer_bits() -> i64 {
+    usize::BITS as i64
+}
+
+fn host_pointer_bytes() -> i64 {
+    std::mem::size_of::<usize>() as i64
+}
+
+fn wrap_unsigned_host(n: i64) -> i64 {
+    let mask = (1i128 << usize::BITS) - 1;
+    ((n as i128) & mask) as i64
+}
+
 fn compile_and_run_native_manual(source: &str, envs: &[(&str, &str)]) -> Result<(String, PathBuf), String> {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -432,6 +445,32 @@ free(ptr)
             "4294967295",
         ]
     );
+}
+
+#[test]
+fn test_llvm_pointer_width_helpers() {
+    let result = compile_and_run_native(
+        r#"
+print(isize(-1))
+print(usize(4294967296))
+print(word_bits())
+print(word_bytes())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    let expected = vec![
+        "-1".to_string(),
+        wrap_unsigned_host(4_294_967_296).to_string(),
+        host_pointer_bits().to_string(),
+        host_pointer_bytes().to_string(),
+    ];
+    assert_eq!(lines, expected);
 }
 
 #[test]
@@ -1619,8 +1658,25 @@ print(c.score)
     )
     .unwrap();
     let lines: Vec<_> = result.lines().collect();
-    assert_eq!(lines[0], "44");   // 300 wraps to u8: 300 % 256 = 44
+    assert_eq!(lines[0], "44"); // 300 wraps to u8: 300 % 256 = 44
     assert_eq!(lines[1], "-500000");
+}
+
+#[test]
+fn test_llvm_struct_pointer_width_aliases() {
+    let result = compile_and_run_native(
+        r#"
+struct PtrSized:
+    addr: usize
+    delta: isize
+
+p = PtrSized(123, -7)
+print(p.addr)
+print(p.delta)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "123\n-7");
 }
 
 #[test]
@@ -1719,7 +1775,7 @@ print(sum_header(h))
     assert_eq!(lines[3], "1");
     assert_eq!(lines[4], "42");
     assert_eq!(lines[5], "9");
-    assert_eq!(lines[6], "52");  // 1 + 42 + 9
+    assert_eq!(lines[6], "52"); // 1 + 42 + 9
 }
 
 #[test]
@@ -1734,12 +1790,14 @@ pow_fn = ffi.func(libm, "pow", "f64", ["f64", "f64"])
 
 libc = ffi.open("libc")
 abs_fn = ffi.func(libc, "abs", "i32", ["i32"])
-strlen_fn = ffi.func(libc, "strlen", "u64", ["str"])
+labs_fn = ffi.func(libc, "labs", "isize", ["isize"])
+strlen_fn = ffi.func(libc, "strlen", "usize", ["str"])
 dup_fn = ffi.func(libc, "strdup", "str", ["str"])
 
 print(sqrt_fn(81.0))
 print(pow_fn(2.0, 5.0))
 print(abs_fn(-42))
+print(labs_fn(-42))
 print(strlen_fn("cool"))
 print(dup_fn("ffi-ok"))
 "#,
@@ -1747,7 +1805,7 @@ print(dup_fn("ffi-ok"))
     .unwrap();
 
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
-    assert_eq!(lines, ["9", "32", "42", "4", "ffi-ok"]);
+    assert_eq!(lines, ["9", "32", "42", "42", "4", "ffi-ok"]);
 }
 
 #[test]

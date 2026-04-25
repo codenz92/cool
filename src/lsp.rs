@@ -5,31 +5,129 @@ use std::io::{BufRead, BufWriter, Write};
 use std::path::PathBuf;
 
 const COOL_KEYWORDS: &[&str] = &[
-    "def", "class", "struct", "packed", "union", "if", "elif", "else", "while", "for", "in",
-    "not", "and", "or", "return", "break", "continue", "pass", "import", "from", "as", "try",
-    "except", "finally", "raise", "with", "lambda", "assert", "global", "nonlocal",
-    "True", "False", "None",
+    "def", "class", "struct", "packed", "union", "if", "elif", "else", "while", "for", "in", "not", "and", "or",
+    "return", "break", "continue", "pass", "import", "from", "as", "try", "except", "finally", "raise", "with",
+    "lambda", "assert", "global", "nonlocal", "True", "False", "None",
 ];
 
 const COOL_BUILTINS: &[&str] = &[
-    "print", "len", "range", "input", "str", "int", "float", "bool", "list", "dict", "tuple",
-    "set", "min", "max", "sum", "abs", "round", "sorted", "reversed", "enumerate", "zip", "map",
-    "filter", "type", "isinstance", "hasattr", "getattr", "open", "repr", "ord", "chr", "hex",
-    "bin", "oct", "any", "all", "callable", "i8", "u8", "i16", "u16", "i32", "u32", "i64",
-    "asm", "malloc", "free", "read_byte", "write_byte", "read_i8", "write_i8", "read_u8",
-    "write_u8", "read_i16", "write_i16", "read_u16", "write_u16", "read_i32", "write_i32",
-    "read_u32", "write_u32", "read_i64", "write_i64", "read_f64", "write_f64", "read_str",
-    "write_str", "read_byte_volatile", "write_byte_volatile", "read_i8_volatile",
-    "write_i8_volatile", "read_u8_volatile", "write_u8_volatile", "read_i16_volatile",
-    "write_i16_volatile", "read_u16_volatile", "write_u16_volatile", "read_i32_volatile",
-    "write_i32_volatile", "read_u32_volatile", "write_u32_volatile", "read_i64_volatile",
-    "write_i64_volatile", "read_f64_volatile", "write_f64_volatile",
+    "print",
+    "len",
+    "range",
+    "input",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "list",
+    "dict",
+    "tuple",
+    "set",
+    "min",
+    "max",
+    "sum",
+    "abs",
+    "round",
+    "sorted",
+    "reversed",
+    "enumerate",
+    "zip",
+    "map",
+    "filter",
+    "type",
+    "isinstance",
+    "hasattr",
+    "getattr",
+    "open",
+    "repr",
+    "ord",
+    "chr",
+    "hex",
+    "bin",
+    "oct",
+    "any",
+    "all",
+    "callable",
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "isize",
+    "usize",
+    "word_bits",
+    "word_bytes",
+    "asm",
+    "malloc",
+    "free",
+    "read_byte",
+    "write_byte",
+    "read_i8",
+    "write_i8",
+    "read_u8",
+    "write_u8",
+    "read_i16",
+    "write_i16",
+    "read_u16",
+    "write_u16",
+    "read_i32",
+    "write_i32",
+    "read_u32",
+    "write_u32",
+    "read_i64",
+    "write_i64",
+    "read_f64",
+    "write_f64",
+    "read_str",
+    "write_str",
+    "read_byte_volatile",
+    "write_byte_volatile",
+    "read_i8_volatile",
+    "write_i8_volatile",
+    "read_u8_volatile",
+    "write_u8_volatile",
+    "read_i16_volatile",
+    "write_i16_volatile",
+    "read_u16_volatile",
+    "write_u16_volatile",
+    "read_i32_volatile",
+    "write_i32_volatile",
+    "read_u32_volatile",
+    "write_u32_volatile",
+    "read_i64_volatile",
+    "write_i64_volatile",
+    "read_f64_volatile",
+    "write_f64_volatile",
 ];
 
 const COOL_MODULES: &[&str] = &[
-    "argparse", "collections", "csv", "datetime", "ffi", "hashlib", "http", "json", "list",
-    "logging", "math", "os", "path", "random", "re", "socket", "sqlite", "string", "subprocess",
-    "sys", "term", "test", "time", "toml", "yaml",
+    "argparse",
+    "collections",
+    "csv",
+    "datetime",
+    "ffi",
+    "hashlib",
+    "http",
+    "json",
+    "list",
+    "logging",
+    "math",
+    "os",
+    "path",
+    "random",
+    "re",
+    "socket",
+    "sqlite",
+    "string",
+    "subprocess",
+    "sys",
+    "term",
+    "test",
+    "time",
+    "toml",
+    "yaml",
 ];
 
 struct LspServer {
@@ -154,8 +252,7 @@ impl LspServer {
         let result = word_at_position(content, line_num, char_num)
             .and_then(|word| {
                 let report = tooling::inspect_source(content, &uri);
-                hover_markdown(&word, &report)
-                    .map(|md| json!({"contents": {"kind": "markdown", "value": md}}))
+                hover_markdown(&word, &report).map(|md| json!({"contents": {"kind": "markdown", "value": md}}))
             })
             .unwrap_or(Value::Null);
         json!({"jsonrpc": "2.0", "id": id, "result": result})
@@ -173,12 +270,13 @@ impl LspServer {
             .and_then(|word| {
                 let report = tooling::inspect_source(content, &uri);
                 find_definition_in_report(&word, &report, &uri).or_else(|| {
-                    self.open_files.iter().filter(|(u, _)| u.as_str() != uri).find_map(
-                        |(other_uri, other_content)| {
+                    self.open_files
+                        .iter()
+                        .filter(|(u, _)| u.as_str() != uri)
+                        .find_map(|(other_uri, other_content)| {
                             let r = tooling::inspect_source(other_content, other_uri);
                             find_definition_in_report(&word, &r, other_uri)
-                        },
-                    )
+                        })
                 })
             })
             .unwrap_or(Value::Null);
@@ -328,11 +426,7 @@ fn report_to_symbols(report: &tooling::InspectReport, uri: &str) -> Vec<Value> {
     symbols
 }
 
-fn find_definition_in_report(
-    word: &str,
-    report: &tooling::InspectReport,
-    uri: &str,
-) -> Option<Value> {
+fn find_definition_in_report(word: &str, report: &tooling::InspectReport, uri: &str) -> Option<Value> {
     let location = |line: Option<usize>| {
         let lsp_line = line.unwrap_or(1).saturating_sub(1) as u64;
         json!({
@@ -369,8 +463,7 @@ fn hover_markdown(word: &str, report: &tooling::InspectReport) -> Option<String>
     }
     if let Some(c) = report.classes.iter().find(|c| c.name == word) {
         if let Some(init) = c.methods.iter().find(|m| m.name == "__init__") {
-            let non_self: Vec<&InspectParam> =
-                init.params.iter().filter(|p| p.name != "self").collect();
+            let non_self: Vec<&InspectParam> = init.params.iter().filter(|p| p.name != "self").collect();
             let sig = format!("class {}({})", c.name, fmt_params_slice(&non_self));
             return Some(format!("```cool\n{sig}\n```"));
         }
@@ -393,10 +486,7 @@ fn hover_markdown(word: &str, report: &tooling::InspectReport) -> Option<String>
 fn compute_completions(content: &str, uri: &str, line_prefix: &str) -> Vec<Value> {
     let trimmed = line_prefix.trim_start();
     if trimmed.starts_with("import ") || trimmed == "import" || trimmed.starts_with("from ") {
-        return COOL_MODULES
-            .iter()
-            .map(|m| json!({"label": m, "kind": 9}))
-            .collect();
+        return COOL_MODULES.iter().map(|m| json!({"label": m, "kind": 9})).collect();
     }
     let mut items = Vec::new();
     for kw in COOL_KEYWORDS {

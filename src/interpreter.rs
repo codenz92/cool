@@ -90,6 +90,10 @@ impl Env {
             "i32",
             "u32",
             "i64",
+            "isize",
+            "usize",
+            "word_bits",
+            "word_bytes",
             "float",
             "bool",
             "type",
@@ -848,7 +852,22 @@ impl Interpreter {
                         "f32" | "f64" => "float",
                         other => other,
                     };
-                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                    let coerce_expr = if matches!(
+                        type_name.as_str(),
+                        "i8" | "u8"
+                            | "i16"
+                            | "u16"
+                            | "i32"
+                            | "u32"
+                            | "i64"
+                            | "u64"
+                            | "isize"
+                            | "usize"
+                            | "f32"
+                            | "f64"
+                            | "float"
+                            | "bool"
+                    ) {
                         Expr::Call {
                             callee: Box::new(Expr::Ident(coerce_name.to_string())),
                             args: vec![Expr::Ident(field_name.clone())],
@@ -906,7 +925,22 @@ impl Interpreter {
                         "f32" | "f64" => "float",
                         other => other,
                     };
-                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                    let coerce_expr = if matches!(
+                        type_name.as_str(),
+                        "i8" | "u8"
+                            | "i16"
+                            | "u16"
+                            | "i32"
+                            | "u32"
+                            | "i64"
+                            | "u64"
+                            | "isize"
+                            | "usize"
+                            | "f32"
+                            | "f64"
+                            | "float"
+                            | "bool"
+                    ) {
                         Expr::Call {
                             callee: Box::new(Expr::Ident(coerce_name.to_string())),
                             args: vec![Expr::Ident(field_name.clone())],
@@ -2764,6 +2798,32 @@ class Stack:
                     .next()
                     .ok_or_else(|| self.err("i64() requires 1 argument"))?;
                 Ok(Value::Int(self.coerce_to_int(&v)?))
+            }
+            "isize" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("isize() requires 1 argument"))?;
+                Ok(Value::Int(wrap_signed(self.coerce_to_int(&v)?, COOL_POINTER_BITS)))
+            }
+            "usize" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("usize() requires 1 argument"))?;
+                Ok(Value::Int(wrap_unsigned(self.coerce_to_int(&v)?, COOL_POINTER_BITS)))
+            }
+            "word_bits" => {
+                if !args.is_empty() {
+                    return Err(self.err("word_bits() takes no arguments"));
+                }
+                Ok(Value::Int(COOL_POINTER_BITS as i64))
+            }
+            "word_bytes" => {
+                if !args.is_empty() {
+                    return Err(self.err("word_bytes() takes no arguments"));
+                }
+                Ok(Value::Int(COOL_POINTER_BYTES))
             }
             "float" => {
                 let v = args
@@ -5011,8 +5071,8 @@ class Stack:
                     _ => return Err(self.err("socket.listen() requires an integer port")),
                 };
                 let addr = format!("{host}:{port}");
-                let listener = std::net::TcpListener::bind(&addr)
-                    .map_err(|e| self.err(&format!("socket.listen() error: {e}")))?;
+                let listener =
+                    std::net::TcpListener::bind(&addr).map_err(|e| self.err(&format!("socket.listen() error: {e}")))?;
                 Ok(Value::Socket(Rc::new(RefCell::new(SocketHandle {
                     kind: SocketKind::Listener(listener),
                     closed: false,
@@ -5623,7 +5683,7 @@ class Stack:
         let mut slots: Vec<Slot> = Vec::with_capacity(args.len());
         for (i, (v, ty)) in args.iter().zip(arg_types.iter()).enumerate() {
             let slot = match ty.as_str() {
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "ptr" => {
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "isize" | "usize" | "ptr" => {
                     let n = match v {
                         Value::Int(n) => *n,
                         Value::Bool(b) => {
@@ -5800,6 +5860,9 @@ fn wrap_signed(n: i64, bits: u32) -> i64 {
         wrapped as i64
     }
 }
+
+const COOL_POINTER_BITS: u32 = usize::BITS;
+const COOL_POINTER_BYTES: i64 = std::mem::size_of::<usize>() as i64;
 
 fn key_to_string(key: KeyEvent) -> String {
     // Ctrl+letter → "CTRL_X"
@@ -6117,6 +6180,8 @@ unsafe fn ffi_dispatch(sym: usize, ret: &str, arg_types: &[String], slots: &[Slo
                 "u8" => $raw as u8 as i64,
                 "u16" => $raw as u16 as i64,
                 "u32" => $raw as u32 as i64,
+                "isize" => wrap_signed($raw, COOL_POINTER_BITS),
+                "usize" => wrap_unsigned($raw, COOL_POINTER_BITS),
                 _ => $raw, // i64, u64, ptr — use as-is
             }))
         };

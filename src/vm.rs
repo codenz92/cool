@@ -96,6 +96,10 @@ impl VM {
             "i32",
             "u32",
             "i64",
+            "isize",
+            "usize",
+            "word_bits",
+            "word_bytes",
             "float",
             "bool",
             "type",
@@ -1771,6 +1775,26 @@ impl VM {
                 let v = args.first().ok_or_else(|| self.err("i64() requires 1 argument"))?;
                 Ok(VmValue::Int(self.coerce_to_int(v)?))
             }
+            "isize" => {
+                let v = args.first().ok_or_else(|| self.err("isize() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_signed(self.coerce_to_int(v)?, COOL_POINTER_BITS)))
+            }
+            "usize" => {
+                let v = args.first().ok_or_else(|| self.err("usize() requires 1 argument"))?;
+                Ok(VmValue::Int(wrap_unsigned(self.coerce_to_int(v)?, COOL_POINTER_BITS)))
+            }
+            "word_bits" => {
+                if !args.is_empty() {
+                    return Err(self.err("word_bits() takes no arguments"));
+                }
+                Ok(VmValue::Int(COOL_POINTER_BITS as i64))
+            }
+            "word_bytes" => {
+                if !args.is_empty() {
+                    return Err(self.err("word_bytes() takes no arguments"));
+                }
+                Ok(VmValue::Int(COOL_POINTER_BYTES))
+            }
             "float" => {
                 let v = args.first().ok_or_else(|| self.err("float() requires 1 argument"))?;
                 match v {
@@ -3136,7 +3160,10 @@ impl VM {
             "send" | "recv" | "readline" | "accept" | "close" => {
                 Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("socket.{}", name)))
             }
-            "__enter__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "socket.__enter__".to_string())),
+            "__enter__" => Ok(VmValue::BoundBuiltin(
+                Box::new(receiver),
+                "socket.__enter__".to_string(),
+            )),
             "__exit__" => Ok(VmValue::BoundBuiltin(Box::new(receiver), "socket.__exit__".to_string())),
             _ => Err(self.err(&format!("socket has no method '{}'", name))),
         }
@@ -3173,8 +3200,8 @@ impl VM {
                     _ => return Err(self.err("socket.listen() requires an integer port")),
                 };
                 let addr = format!("{host}:{port}");
-                let listener = std::net::TcpListener::bind(&addr)
-                    .map_err(|e| self.err(&format!("socket.listen() error: {e}")))?;
+                let listener =
+                    std::net::TcpListener::bind(&addr).map_err(|e| self.err(&format!("socket.listen() error: {e}")))?;
                 Ok(VmValue::Socket(Rc::new(RefCell::new(VmSocket {
                     kind: VmSocketKind::Listener(listener),
                     closed: false,
@@ -5011,7 +5038,8 @@ impl VM {
             }
             "os" => {
                 for fname in &[
-                    "listdir", "mkdir", "remove", "rename", "exists", "isdir", "getenv", "getcwd", "join", "path", "popen",
+                    "listdir", "mkdir", "remove", "rename", "exists", "isdir", "getenv", "getcwd", "join", "path",
+                    "popen",
                 ] {
                     set(&mut d, fname, bf(&format!("os.{}", fname)));
                 }
@@ -5319,3 +5347,6 @@ fn wrap_signed(n: i64, bits: u32) -> i64 {
         wrapped as i64
     }
 }
+
+const COOL_POINTER_BITS: u32 = usize::BITS;
+const COOL_POINTER_BYTES: i64 = std::mem::size_of::<usize>() as i64;

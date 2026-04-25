@@ -9,6 +9,7 @@ All notable changes to the Cool language project.
 #### Numeric And Memory Primitives
 
 - Volatile LLVM raw-memory helpers for MMIO/device-style access: `read_*_volatile` / `write_*_volatile` across byte, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`, and `f64`
+- Pointer-width aliases and host-word helpers across all runtimes: `isize`, `usize`, `word_bits()`, and `word_bytes()`, plus `isize`/`usize` support in native FFI signatures and struct/union field types
 - Interpreter and bytecode VM now reserve LLVM-only raw-memory builtins and raise the same backend-specific guidance (`compile with cool build`) instead of a missing-name error
 
 #### Data Layout And ABI

@@ -677,7 +677,22 @@ impl Compiler {
                         "f32" | "f64" => "float",
                         other => other,
                     };
-                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                    let coerce_expr = if matches!(
+                        type_name.as_str(),
+                        "i8" | "u8"
+                            | "i16"
+                            | "u16"
+                            | "i32"
+                            | "u32"
+                            | "i64"
+                            | "u64"
+                            | "isize"
+                            | "usize"
+                            | "f32"
+                            | "f64"
+                            | "float"
+                            | "bool"
+                    ) {
                         Expr::Call {
                             callee: Box::new(Expr::Ident(coerce_name.to_string())),
                             args: vec![Expr::Ident(field_name.clone())],
@@ -730,7 +745,22 @@ impl Compiler {
                         "f32" | "f64" => "float",
                         other => other,
                     };
-                    let coerce_expr = if matches!(type_name.as_str(), "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64" | "float" | "bool") {
+                    let coerce_expr = if matches!(
+                        type_name.as_str(),
+                        "i8" | "u8"
+                            | "i16"
+                            | "u16"
+                            | "i32"
+                            | "u32"
+                            | "i64"
+                            | "u64"
+                            | "isize"
+                            | "usize"
+                            | "f32"
+                            | "f64"
+                            | "float"
+                            | "bool"
+                    ) {
                         Expr::Call {
                             callee: Box::new(Expr::Ident(coerce_name.to_string())),
                             args: vec![Expr::Ident(field_name.clone())],

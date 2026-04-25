@@ -427,7 +427,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] Fixed-width integer helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`
 - [x] LLVM raw-memory reads/writes for signed and unsigned 8/16/32-bit values, alongside the existing byte and 64-bit helpers
 - [x] Volatile read/write variants for MMIO and device-driver code
-- [ ] Pointer-width aliases and target word-size helpers
+- [x] Pointer-width aliases and target word-size helpers
 
 ### Data Layout And ABI
 

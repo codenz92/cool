@@ -106,11 +106,7 @@ fn unique_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     out
 }
 
-fn parse_string_field(
-    value: Option<&toml::Value>,
-    field_name: &str,
-    context: &str,
-) -> Result<Option<String>, String> {
+fn parse_string_field(value: Option<&toml::Value>, field_name: &str, context: &str) -> Result<Option<String>, String> {
     match value {
         None => Ok(None),
         Some(toml::Value::String(s)) => Ok(Some(s.clone())),
@@ -241,12 +237,7 @@ impl DependencySpec {
             DependencySource::Path { path } => {
                 table.insert("path".to_string(), toml::Value::String(manifest_dependency_path(path)));
             }
-            DependencySource::Git {
-                git,
-                branch,
-                tag,
-                rev,
-            } => {
+            DependencySource::Git { git, branch, tag, rev } => {
                 table.insert("git".to_string(), toml::Value::String(git.clone()));
                 if let Some(branch) = branch {
                     table.insert("branch".to_string(), toml::Value::String(branch.clone()));
@@ -328,9 +319,8 @@ impl CoolProject {
 
         let field =
             |key: &str| -> Option<&toml::Value> { project.and_then(|table| table.get(key)).or_else(|| root.get(key)) };
-        let opt_string = |key: &str| -> Result<Option<String>, String> {
-            parse_string_field(field(key), key, "cool.toml")
-        };
+        let opt_string =
+            |key: &str| -> Result<Option<String>, String> { parse_string_field(field(key), key, "cool.toml") };
         let opt_string_list = |key: &str| -> Result<Vec<String>, String> {
             match field(key) {
                 None => Ok(Vec::new()),
@@ -397,12 +387,7 @@ impl CoolProject {
                                     dependencies.push(DependencySpec {
                                         name: name.clone(),
                                         version,
-                                        source: DependencySource::Git {
-                                            git,
-                                            branch,
-                                            tag,
-                                            rev,
-                                        },
+                                        source: DependencySource::Git { git, branch, tag, rev },
                                     });
                                 } else {
                                     let path = match dep_table.get("path") {
@@ -462,25 +447,33 @@ impl CoolProject {
         }
 
         // Parse [bundle].include = ["file", ...]
-        let bundle_include = match root.get("bundle").and_then(toml::Value::as_table).and_then(|t| t.get("include")) {
+        let bundle_include = match root
+            .get("bundle")
+            .and_then(toml::Value::as_table)
+            .and_then(|t| t.get("include"))
+        {
             None => Vec::new(),
             Some(toml::Value::Array(items)) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
                     match item {
                         toml::Value::String(s) => out.push(s.clone()),
-                        other => return Err(format!(
-                            "cool.toml: [bundle].include must be an array of strings, got {}",
-                            other.type_str()
-                        )),
+                        other => {
+                            return Err(format!(
+                                "cool.toml: [bundle].include must be an array of strings, got {}",
+                                other.type_str()
+                            ))
+                        }
                     }
                 }
                 out
             }
-            Some(other) => return Err(format!(
-                "cool.toml: [bundle].include must be an array, got {}",
-                other.type_str()
-            )),
+            Some(other) => {
+                return Err(format!(
+                    "cool.toml: [bundle].include must be an array, got {}",
+                    other.type_str()
+                ))
+            }
         };
 
         Ok(CoolProject {
@@ -547,8 +540,7 @@ impl CoolLockfile {
             return Ok(None);
         }
 
-        let src = fs::read_to_string(path)
-            .map_err(|e| format!("cool.lock: cannot read '{}': {e}", path.display()))?;
+        let src = fs::read_to_string(path).map_err(|e| format!("cool.lock: cannot read '{}': {e}", path.display()))?;
         let parsed: toml::Value = src
             .parse()
             .map_err(|e: toml::de::Error| format!("cool.lock parse error: {}", e.message()))?;
@@ -594,8 +586,14 @@ impl CoolLockfile {
                     .and_then(toml::Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                let version = table.get("version").and_then(toml::Value::as_str).map(ToOwned::to_owned);
-                let required_version = table.get("required_version").and_then(toml::Value::as_str).map(ToOwned::to_owned);
+                let version = table
+                    .get("version")
+                    .and_then(toml::Value::as_str)
+                    .map(ToOwned::to_owned);
+                let required_version = table
+                    .get("required_version")
+                    .and_then(toml::Value::as_str)
+                    .map(ToOwned::to_owned);
                 let git = table.get("git").and_then(toml::Value::as_str).map(ToOwned::to_owned);
                 let branch = table.get("branch").and_then(toml::Value::as_str).map(ToOwned::to_owned);
                 let tag = table.get("tag").and_then(toml::Value::as_str).map(ToOwned::to_owned);
@@ -646,15 +644,15 @@ impl CoolLockfile {
             out.push_str(&format!("name = {}\n", escape_toml_string(&dep.name)));
             out.push_str(&format!("kind = {}\n", escape_toml_string(&dep.kind)));
             out.push_str(&format!("path = {}\n", escape_toml_string(&dep.path)));
-            out.push_str(&format!(
-                "resolved_path = {}\n",
-                escape_toml_string(&dep.resolved_path)
-            ));
+            out.push_str(&format!("resolved_path = {}\n", escape_toml_string(&dep.resolved_path)));
             if let Some(version) = &dep.version {
                 out.push_str(&format!("version = {}\n", escape_toml_string(version)));
             }
             if let Some(required_version) = &dep.required_version {
-                out.push_str(&format!("required_version = {}\n", escape_toml_string(required_version)));
+                out.push_str(&format!(
+                    "required_version = {}\n",
+                    escape_toml_string(required_version)
+                ));
             }
             if let Some(git) = &dep.git {
                 out.push_str(&format!("git = {}\n", escape_toml_string(git)));
@@ -777,8 +775,7 @@ pub fn add_dependency_to_manifest(manifest_path: &Path, dependency: &DependencyS
         .ok_or_else(|| "cool.toml: [dependencies] must be a table".to_string())?;
     deps_table.insert(dependency.name.clone(), dependency.manifest_value());
 
-    let rendered = toml::to_string_pretty(&parsed)
-        .map_err(|e| format!("cool.toml: cannot serialize manifest: {e}"))?;
+    let rendered = toml::to_string_pretty(&parsed).map_err(|e| format!("cool.toml: cannot serialize manifest: {e}"))?;
     fs::write(manifest_path, rendered)
         .map_err(|e| format!("cool.toml: cannot write '{}': {e}", manifest_path.display()))
 }
@@ -913,12 +910,7 @@ fn materialize_dependency(
             });
             Ok(dep_root)
         }
-        DependencySource::Git {
-            git,
-            branch,
-            tag,
-            rev,
-        } => {
+        DependencySource::Git { git, branch, tag, rev } => {
             let dep_root = dep.resolved_root(&project.root);
             let parent = dep_root
                 .parent()
@@ -960,10 +952,7 @@ fn materialize_dependency(
                 )?;
             }
 
-            let resolved_rev = run_git_command(
-                Some(&dep_root),
-                &["rev-parse".to_string(), "HEAD".to_string()],
-            )?;
+            let resolved_rev = run_git_command(Some(&dep_root), &["rev-parse".to_string(), "HEAD".to_string()])?;
             let installed_version = maybe_project_version(&dep_root)?;
             if let (Some(required), Some(installed)) = (&dep.version, &installed_version) {
                 check_version_constraint(&dep.name, required, installed)?;
@@ -1058,12 +1047,10 @@ impl VersionReq {
 }
 
 fn check_version_constraint(name: &str, required: &str, installed: &str) -> Result<(), String> {
-    let req = VersionReq::parse(required).ok_or_else(|| {
-        format!("cool install: dependency '{name}' has invalid version constraint '{required}'")
-    })?;
-    let ver = SemVer::parse(installed).ok_or_else(|| {
-        format!("cool install: dependency '{name}' has invalid installed version '{installed}'")
-    })?;
+    let req = VersionReq::parse(required)
+        .ok_or_else(|| format!("cool install: dependency '{name}' has invalid version constraint '{required}'"))?;
+    let ver = SemVer::parse(installed)
+        .ok_or_else(|| format!("cool install: dependency '{name}' has invalid installed version '{installed}'"))?;
     if !req.matches(&ver) {
         return Err(format!(
             "cool install: dependency '{name}' requires version '{required}' but found '{installed}'"
@@ -1111,10 +1098,38 @@ mod semver_tests {
 
     #[test]
     fn test_semver_parse() {
-        assert_eq!(ver("1.2.3"), SemVer { major: 1, minor: 2, patch: 3 });
-        assert_eq!(ver("v2.0.0"), SemVer { major: 2, minor: 0, patch: 0 });
-        assert_eq!(ver("1.0"), SemVer { major: 1, minor: 0, patch: 0 });
-        assert_eq!(ver("1.2.3-alpha+build"), SemVer { major: 1, minor: 2, patch: 3 });
+        assert_eq!(
+            ver("1.2.3"),
+            SemVer {
+                major: 1,
+                minor: 2,
+                patch: 3
+            }
+        );
+        assert_eq!(
+            ver("v2.0.0"),
+            SemVer {
+                major: 2,
+                minor: 0,
+                patch: 0
+            }
+        );
+        assert_eq!(
+            ver("1.0"),
+            SemVer {
+                major: 1,
+                minor: 0,
+                patch: 0
+            }
+        );
+        assert_eq!(
+            ver("1.2.3-alpha+build"),
+            SemVer {
+                major: 1,
+                minor: 2,
+                patch: 3
+            }
+        );
     }
 
     #[test]

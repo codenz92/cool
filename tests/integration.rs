@@ -129,6 +129,19 @@ fn run_cool_stdin_with_args(path: &str, extra_args: &[&str], stdin: &str) -> Res
     }
 }
 
+fn host_pointer_bits() -> i64 {
+    usize::BITS as i64
+}
+
+fn host_pointer_bytes() -> i64 {
+    std::mem::size_of::<usize>() as i64
+}
+
+fn wrap_unsigned_host(n: i64) -> i64 {
+    let mask = (1i128 << usize::BITS) - 1;
+    ((n as i128) & mask) as i64
+}
+
 fn run_cool_with_pty_input(path: &str, extra_args: &[&str], input: &[u8]) -> Result<(String, String, i32), String> {
     let mut cmd = Command::new("script");
     cmd.arg("-q").arg("/dev/null").arg(cool_bin()).arg(path);
@@ -525,6 +538,42 @@ fn test_vm_fixed_width_int_builtins() {
     .unwrap();
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["-1", "255", "-1", "65535", "-1", "4294967295", "42"]);
+}
+
+#[test]
+fn test_pointer_width_helpers() {
+    let result =
+        run_cool("print(isize(-1))\nprint(usize(4294967296))\nprint(word_bits())\nprint(word_bytes())").unwrap();
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    let expected = vec![
+        "-1".to_string(),
+        wrap_unsigned_host(4_294_967_296).to_string(),
+        host_pointer_bits().to_string(),
+        host_pointer_bytes().to_string(),
+    ];
+    assert_eq!(lines, expected);
+}
+
+#[test]
+fn test_vm_pointer_width_helpers() {
+    let result =
+        run_cool_vm("print(isize(-1))\nprint(usize(4294967296))\nprint(word_bits())\nprint(word_bytes())").unwrap();
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    let expected = vec![
+        "-1".to_string(),
+        wrap_unsigned_host(4_294_967_296).to_string(),
+        host_pointer_bits().to_string(),
+        host_pointer_bytes().to_string(),
+    ];
+    assert_eq!(lines, expected);
 }
 
 #[test]
@@ -1455,6 +1504,22 @@ print(c.score)
 }
 
 #[test]
+fn test_struct_pointer_width_aliases() {
+    let result = run_cool(
+        r#"struct PtrSized:
+    addr: usize
+    delta: isize
+
+p = PtrSized(123, -7)
+print(p.addr)
+print(p.delta)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "123\n-7");
+}
+
+#[test]
 fn test_struct_kwargs() {
     let result = run_cool(
         r#"struct Vec2:
@@ -1485,6 +1550,22 @@ print(p.x)
     )
     .unwrap();
     assert_eq!(result.trim(), "3\n4\n10");
+}
+
+#[test]
+fn test_vm_struct_pointer_width_aliases() {
+    let result = run_cool_vm(
+        r#"struct PtrSized:
+    addr: usize
+    delta: isize
+
+p = PtrSized(123, -7)
+print(p.addr)
+print(p.delta)
+"#,
+    )
+    .unwrap();
+    assert_eq!(result.trim(), "123\n-7");
 }
 
 #[test]
@@ -3374,7 +3455,12 @@ fn test_lsp_document_symbols() {
         }
     });
     let did_open = serde_json::to_string(&did_open_val).unwrap();
-    child.stdin.as_mut().unwrap().write_all(&lsp_message(&did_open)).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&lsp_message(&did_open))
+        .unwrap();
     let _diag_notif = read_lsp_response(&mut reader); // publishDiagnostics
 
     let sym_req = r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///tmp/sym_test.cool"}}}"#;

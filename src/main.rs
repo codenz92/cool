@@ -1319,6 +1319,7 @@ NOTES:
     ternary expressions, in/not in, print()/str(), range(), len(),
     min()/max()/sum()/round()/sorted(), abs()/int()/float()/bool(),
     fixed-width int helpers i8/u8/i16/u16/i32/u32/i64,
+    pointer-width aliases isize/usize and word_bits()/word_bytes(),
     source-relative file imports and project/package imports,
     native import ffi (ffi.open/ffi.func),
     built-in import math/os/sys/path/csv/datetime/hashlib/toml/yaml/sqlite/http/subprocess/argparse/logging/test/time and import random
