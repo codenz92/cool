@@ -3279,8 +3279,9 @@ echo Done.</code></pre>
             </tbody>
           </table>
         </div>
-        <p><code>cool build</code> reads <code>cool.toml</code> manifests, <code>cool task</code> runs the
-          bundled <code>cmd/task.cool</code> task runner, and <code>cool test</code> discovers
+        <p><code>cool new</code> scaffolds starter tasks and tests, <code>cool build</code> reads
+          <code>cool.toml</code> manifests, <code>cool task</code> runs the bundled
+          <code>cmd/task.cool</code> task runner, and <code>cool test</code> discovers
           <code>test_*.cool</code> / <code>*_test.cool</code> by default under <code>tests/</code>.</p>
 
         <h3>Language Server (cool lsp)</h3>
@@ -3350,6 +3351,7 @@ echo Done.</code></pre>
 │   └── http.cool         # HTTP client
 │
 ├── cmd/
+│   ├── new.cool          # Project scaffolder used by `cool new`
 │   ├── task.cool         # Manifest task runner used by `cool task`
 │   ├── add.cool          # Dependency updater used by `cool add`
 │   ├── install.cool      # Dependency installer used by `cool install`

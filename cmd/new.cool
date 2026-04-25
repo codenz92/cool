@@ -1,0 +1,66 @@
+import os
+import sys
+import path
+
+def usage():
+    print("new v1.0 — scaffold a new Cool project")
+    print("  cool new <project-name>")
+
+def write_text_file(file_path, contents):
+    with open(file_path, "w") as f:
+        f.write(contents)
+
+argv = sys.argv
+
+if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
+    usage()
+    exit(0)
+
+if len(argv) != 2:
+    usage()
+    exit(1)
+
+name = argv[1]
+workspace_dir = os.getcwd()
+project_dir = path.join(workspace_dir, name)
+if os["exists"](project_dir):
+    raise "cool new: directory '" + name + "' already exists"
+
+os["mkdir"](path.join(project_dir, "src"))
+os["mkdir"](path.join(project_dir, "tests"))
+
+manifest = "[project]\n"
+manifest = manifest + "name = \"" + name + "\"\n"
+manifest = manifest + "version = \"0.1.0\"\n"
+manifest = manifest + "main = \"src/main.cool\"\n\n"
+manifest = manifest + "[bundle]\ninclude = []\n\n"
+manifest = manifest + "[tasks.run]\ndescription = \"Run the app\"\nrun = \"cool src/main.cool\"\n\n"
+manifest = manifest + "[tasks.build]\ndescription = \"Build a native binary\"\nrun = \"cool build\"\n\n"
+manifest = manifest + "[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n"
+manifest = manifest + "[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n"
+manifest = manifest + "[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n"
+write_text_file(path.join(project_dir, "cool.toml"), manifest)
+
+main_src = "# " + name + "\n\nprint(\"Hello from " + name + "!\")\n"
+write_text_file(path.join(project_dir, "src", "main.cool"), main_src)
+write_text_file(path.join(project_dir, "tests", "test_main.cool"), "assert 1 + 1 == 2\n")
+write_text_file(path.join(project_dir, ".gitignore"), name + "\n*.o\n.cool/\n")
+
+print("  Created project '" + name + "'")
+print("  ├── cool.toml")
+print("  ├── src/")
+print("  │   └── main.cool")
+print("  ├── tests/")
+print("  │   └── test_main.cool")
+print("  └── .gitignore")
+print("")
+print("  Run your project:")
+print("    cd " + name)
+print("    cool src/main.cool          # interpret")
+print("    cool build                  # compile to native")
+print("    cool build --freestanding   # emit a freestanding object file")
+print("    cool bundle                 # package distributable tarball")
+print("    cool release                # bump version, bundle, and tag")
+print("    cool install                # fetch git dependencies")
+print("    cool test                   # run tests/")
+print("    cool task list              # show project tasks")

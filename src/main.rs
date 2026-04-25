@@ -103,6 +103,10 @@ fn add_command_path() -> PathBuf {
     bundled_command_path("add.cool")
 }
 
+fn new_command_path() -> PathBuf {
+    bundled_command_path("new.cool")
+}
+
 fn run_bundled_app(
     command_name: &str,
     app_path: &Path,
@@ -809,57 +813,8 @@ Resolve a Cool entry file and print its reachable file/module imports as pretty 
 ///
 /// cool new <name>
 fn cmd_new(args: &[&String]) -> Result<(), String> {
-    let name = match args.first() {
-        Some(n) => n.as_str(),
-        None => return Err("Usage: cool new <project-name>".to_string()),
-    };
-
-    let project_dir = Path::new(name);
-    if project_dir.exists() {
-        return Err(format!("cool new: directory '{}' already exists", name));
-    }
-
-    // Create directory structure
-    fs::create_dir_all(project_dir.join("src")).map_err(|e| format!("cool new: {e}"))?;
-    fs::create_dir_all(project_dir.join("tests")).map_err(|e| format!("cool new: {e}"))?;
-
-    // cool.toml
-    let manifest = format!(
-        "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n\n[bundle]\ninclude = []\n\n[tasks.run]\ndescription = \"Run the app\"\nrun = \"cool src/main.cool\"\n\n[tasks.build]\ndescription = \"Build a native binary\"\nrun = \"cool build\"\n\n[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n"
-    );
-    fs::write(project_dir.join("cool.toml"), manifest).map_err(|e| format!("cool new: {e}"))?;
-
-    // src/main.cool
-    let main_src = format!("# {name}\n\nprint(\"Hello from {name}!\")\n");
-    fs::write(project_dir.join("src").join("main.cool"), main_src).map_err(|e| format!("cool new: {e}"))?;
-
-    // tests/test_main.cool
-    let test_src = "assert 1 + 1 == 2\n";
-    fs::write(project_dir.join("tests").join("test_main.cool"), test_src).map_err(|e| format!("cool new: {e}"))?;
-
-    // .gitignore
-    fs::write(project_dir.join(".gitignore"), format!("{name}\n*.o\n.cool/\n"))
-        .map_err(|e| format!("cool new: {e}"))?;
-
-    println!("  Created project '{name}'");
-    println!("  ├── cool.toml");
-    println!("  ├── src/");
-    println!("  │   └── main.cool");
-    println!("  ├── tests/");
-    println!("  │   └── test_main.cool");
-    println!("  └── .gitignore");
-    println!();
-    println!("  Run your project:");
-    println!("    cd {name}");
-    println!("    cool src/main.cool          # interpret");
-    println!("    cool build                  # compile to native");
-    println!("    cool build --freestanding   # emit a freestanding object file");
-    println!("    cool bundle                 # package distributable tarball");
-    println!("    cool release                # bump version, bundle, and tag");
-    println!("    cool install                # fetch git dependencies");
-    println!("    cool test                   # run tests/");
-    println!("    cool task list              # show project tasks");
-    Ok(())
+    let new_app = new_command_path();
+    run_bundled_app("cool new", &new_app, args, &[])
 }
 
 // ── `cool task` ───────────────────────────────────────────────────────────────
