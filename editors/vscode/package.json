@@ -1,0 +1,76 @@
+{
+  "name": "cool-vscode",
+  "displayName": "Cool Language Support",
+  "description": "VS Code language support for Cool via cool lsp, with syntax highlighting and editor integration.",
+  "version": "0.1.0",
+  "publisher": "codenz92",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "cool",
+    "cool-lang",
+    "lsp",
+    "language-server"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/codenz92/cool-lang.git"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:cool"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "cool",
+        "aliases": [
+          "Cool",
+          "cool"
+        ],
+        "extensions": [
+          ".cool"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cool",
+        "scopeName": "source.cool",
+        "path": "./syntaxes/cool.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Cool",
+      "properties": {
+        "cool.lsp.serverCommand": {
+          "type": "array",
+          "default": [
+            "cool",
+            "lsp"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Command used to start the Cool language server. The first item is the executable and the rest are arguments."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "lint": "node -e \"const fs=require('fs'); JSON.parse(fs.readFileSync('package.json','utf8')); JSON.parse(fs.readFileSync('language-configuration.json','utf8')); JSON.parse(fs.readFileSync('syntaxes/cool.tmLanguage.json','utf8'));\"",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.27.0"
+  }
+}

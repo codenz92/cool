@@ -360,6 +360,27 @@ Inside test files, `import test` gives you assertion helpers like `test.equal(..
 
 For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static import, cycle, and duplicate-symbol checks. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
 
+## VS Code
+
+A first-party VS Code extension now lives in [`editors/vscode/`](editors/vscode/). It registers `.cool` files as a language, adds syntax highlighting and indentation rules, and connects VS Code to `cool lsp`.
+
+To install it locally:
+
+```bash
+cargo build --release
+cd editors/vscode
+npm install
+npx @vscode/vsce package
+```
+
+Then in VS Code run `Extensions: Install from VSIX...` and choose the generated `.vsix` file. If `cool` is not already on your `PATH`, point the extension at your binary:
+
+```json
+{
+  "cool.lsp.serverCommand": ["/absolute/path/to/cool", "lsp"]
+}
+```
+
 ---
 
 ## CLI Reference
@@ -467,6 +488,11 @@ cmd/
   task.cool         Manifest task runner used by `cool task`
   bundle.cool       Project bundler for `cool bundle`
   release.cool      Release manager for `cool release`
+
+editors/vscode/
+  extension.js      VS Code extension entry point and LSP client
+  package.json      Extension manifest
+  syntaxes/         TextMate grammar for `.cool` files
 
 coolc/
   compiler_vm.cool  Self-hosted compiler

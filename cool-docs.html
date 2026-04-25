@@ -3301,6 +3301,10 @@ echo Done.</code></pre>
   "cool.lsp.serverCommand": ["cool", "lsp"]
 }</code></pre>
         </div>
+
+        <p>A first-party VS Code extension now ships in <code>editors/vscode/</code>. Build the compiler, run
+          <code>npm install</code> in that folder, package it with <code>npx @vscode/vsce package</code>, then use
+          <code>Extensions: Install from VSIX...</code> inside VS Code.</p>
       </section>
 
       <!-- PROJECT STRUCTURE -->
@@ -3349,6 +3353,12 @@ echo Done.</code></pre>
 │   ├── task.cool         # Manifest task runner used by `cool task`
 │   ├── bundle.cool       # Project bundler used by `cool bundle`
 │   └── release.cool      # Release manager used by `cool release`
+│
+├── editors/
+│   └── vscode/
+│       ├── extension.js        # VS Code extension entry point + LSP client
+│       ├── package.json        # VS Code extension manifest
+│       └── syntaxes/           # TextMate grammar for `.cool`
 │
 ├── examples/
 │   ├── hello.cool              # Variables, loops, functions — start here

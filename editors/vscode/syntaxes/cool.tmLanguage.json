@@ -1,0 +1,216 @@
+{
+  "name": "Cool",
+  "scopeName": "source.cool",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#definitions"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#builtins"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.cool",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.multi.cool",
+          "begin": "([fF]?[rR]?|[rR]?[fF]?)\"\"\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cool"
+            }
+          },
+          "end": "\"\"\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cool"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.cool"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.multi.cool",
+          "begin": "([fF]?[rR]?|[rR]?[fF]?)'''",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cool"
+            }
+          },
+          "end": "'''",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cool"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.cool"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.cool",
+          "begin": "([fF]?[rR]?|[rR]?[fF]?)\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cool"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cool"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.cool"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.cool",
+          "begin": "([fF]?[rR]?|[rR]?[fF]?)'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cool"
+            }
+          },
+          "end": "'",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cool"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\.",
+              "name": "constant.character.escape.cool"
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.cool",
+          "match": "\\b(?:def|data|extern|class|struct|packed|union|if|elif|else|while|for|in|not|and|or|return|break|continue|pass|import|from|as|try|except|finally|raise|with|lambda|assert|global|nonlocal)\\b"
+        }
+      ]
+    },
+    "definitions": {
+      "patterns": [
+        {
+          "name": "meta.function.cool",
+          "match": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.cool"
+            },
+            "2": {
+              "name": "entity.name.function.cool"
+            }
+          }
+        },
+        {
+          "name": "meta.type.cool",
+          "match": "\\b(class|struct|union)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.cool"
+            },
+            "2": {
+              "name": "entity.name.type.cool"
+            }
+          }
+        },
+        {
+          "name": "meta.type.cool",
+          "match": "\\b(packed)\\s+(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.cool"
+            },
+            "2": {
+              "name": "keyword.control.cool"
+            },
+            "3": {
+              "name": "entity.name.type.cool"
+            }
+          }
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.cool",
+          "match": "\\b(?:True|False|None|nil)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.cool",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.cool",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.cool",
+          "match": "\\b0[oO][0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.cool",
+          "match": "\\b\\d+(?:_\\d+)*(?:\\.\\d+(?:_\\d+)*)?(?:[eE][+-]?\\d+)?\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.cool",
+          "match": "\\b(?:print|len|range|input|str|int|float|bool|list|dict|tuple|set|min|max|sum|abs|round|sorted|reversed|enumerate|zip|map|filter|type|isinstance|hasattr|getattr|open|repr|ord|chr|hex|bin|oct|any|all|callable|i8|u8|i16|u16|i32|u32|i64|isize|usize|word_bits|word_bytes|asm|malloc|free|read_byte|write_byte|read_i8|write_i8|read_u8|write_u8|read_i16|write_i16|read_u16|write_u16|read_i32|write_i32|read_u32|write_u32|read_i64|write_i64|read_f64|write_f64|read_str|write_str|read_byte_volatile|write_byte_volatile|read_i8_volatile|write_i8_volatile|read_u8_volatile|write_u8_volatile|read_i16_volatile|write_i16_volatile|read_u16_volatile|write_u16_volatile|read_i32_volatile|write_i32_volatile|read_u32_volatile|write_u32_volatile|read_i64_volatile|write_i64_volatile|read_f64_volatile|write_f64_volatile)\\b"
+        },
+        {
+          "name": "support.type.module.cool",
+          "match": "\\b(?:argparse|collections|csv|datetime|ffi|hashlib|http|json|list|logging|math|os|path|platform|random|re|socket|sqlite|string|subprocess|sys|term|test|time|toml|yaml)\\b"
+        }
+      ]
+    }
+  }
+}

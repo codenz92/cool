@@ -38,6 +38,10 @@ All notable changes to the Cool language project.
 - `cool bundle` now delegates to `cmd/bundle.cool`, moving packaging logic out of Rust and into Cool itself
 - `cool release` now delegates to `cmd/release.cool`, moving version bumping, bundling, and git tagging out of Rust and into Cool itself
 
+#### Editor Tooling
+
+- First-party VS Code extension under `editors/vscode/`: `.cool` language registration, syntax highlighting, indentation rules, and `cool lsp` integration via `cool.lsp.serverCommand`
+
 ## [1.1.0] - 2026-04-24 - Phase 10 Complete
 
 ### Phase 10 — Production Readiness And Ecosystem (Complete)
