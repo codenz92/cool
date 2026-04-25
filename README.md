@@ -138,7 +138,7 @@ cool build --freestanding hello.cool         # emits → ./hello.o
 cool build --linker-script=link.ld hello.cool  # emits → ./hello.o, then links → ./hello.elf
 ```
 
-`cool build --freestanding` skips the hosted C runtime compile/link step and writes an object file instead. Freestanding builds accept declaration-style top-level programs only: `def`, `extern def`, `data`, `struct`, and `union`. Top-level executable statements, imports, and classes are rejected. Freestanding `assert` failure paths lower to a direct LLVM trap instead of depending on libc `abort()`. Use `entry: "symbol_name"` metadata on a zero-argument `def` to export an additional raw entry symbol for custom link flows.
+`cool build --freestanding` skips the hosted C runtime compile/link step and writes an object file instead. Freestanding builds accept declaration-style top-level programs only: `def`, `extern def`, `data`, `struct`, and `union`. Top-level executable statements, imports, and classes are rejected. Freestanding `assert` failure paths lower to a direct LLVM trap instead of depending on libc `abort()`. Use `entry: "symbol_name"` metadata on a zero-argument `def` to export an additional raw entry symbol for custom link flows. All raw memory builtins (`read_*`, `write_*`, and `_volatile` variants) are lowered directly to LLVM IR in freestanding mode — no C runtime symbols are needed.
 
 `--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`.
 

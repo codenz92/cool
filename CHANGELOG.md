@@ -33,6 +33,7 @@ All notable changes to the Cool language project.
 - Freestanding top-level functions now accept `entry: "symbol"` metadata to export an additional raw entry symbol for custom link flows
 - `cool build --linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using a GNU linker script; linker is found by probing `ld.lld`, `lld`, and versioned variants; clear error when LLD is absent
 - `linker_script = "link.ld"` field in `cool.toml` enables the same kernel image workflow for project builds; path is resolved relative to the project root; CLI flag takes precedence over the manifest field
+- All 38 raw memory builtins (`read_byte`, `read_i8`–`read_f64`, their `_volatile` variants, and matching `write_*` forms) are now lowered directly to LLVM IR in freestanding mode; previously they dispatched to external C runtime symbols (`cool_write_u8_volatile` etc.) that were left undefined in the `.o`, making them silently unusable in freestanding builds
 
 #### Self-Hosted Tooling
 
