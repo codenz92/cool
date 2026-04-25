@@ -15,7 +15,15 @@ const COOL_BUILTINS: &[&str] = &[
     "print", "len", "range", "input", "str", "int", "float", "bool", "list", "dict", "tuple",
     "set", "min", "max", "sum", "abs", "round", "sorted", "reversed", "enumerate", "zip", "map",
     "filter", "type", "isinstance", "hasattr", "getattr", "open", "repr", "ord", "chr", "hex",
-    "bin", "oct", "any", "all", "callable",
+    "bin", "oct", "any", "all", "callable", "i8", "u8", "i16", "u16", "i32", "u32", "i64",
+    "asm", "malloc", "free", "read_byte", "write_byte", "read_i8", "write_i8", "read_u8",
+    "write_u8", "read_i16", "write_i16", "read_u16", "write_u16", "read_i32", "write_i32",
+    "read_u32", "write_u32", "read_i64", "write_i64", "read_f64", "write_f64", "read_str",
+    "write_str", "read_byte_volatile", "write_byte_volatile", "read_i8_volatile",
+    "write_i8_volatile", "read_u8_volatile", "write_u8_volatile", "read_i16_volatile",
+    "write_i16_volatile", "read_u16_volatile", "write_u16_volatile", "read_i32_volatile",
+    "write_i32_volatile", "read_u32_volatile", "write_u32_volatile", "read_i64_volatile",
+    "write_i64_volatile", "read_f64_volatile", "write_f64_volatile",
 ];
 
 const COOL_MODULES: &[&str] = &[

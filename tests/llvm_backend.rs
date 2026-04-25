@@ -435,6 +435,51 @@ free(ptr)
 }
 
 #[test]
+fn test_llvm_volatile_memory_builtins() {
+    let result = compile_and_run_native(
+        r#"
+ptr = malloc(32)
+write_byte_volatile(ptr, 0xAB)
+write_i8_volatile(ptr + 1, -1)
+write_u8_volatile(ptr + 2, 255)
+write_i16_volatile(ptr + 4, -2)
+write_u16_volatile(ptr + 6, 65535)
+write_i32_volatile(ptr + 8, -123456)
+write_u32_volatile(ptr + 12, 4294967295)
+write_i64_volatile(ptr + 16, -9876543210)
+write_f64_volatile(ptr + 24, 3.25)
+print(read_byte_volatile(ptr))
+print(read_i8_volatile(ptr + 1))
+print(read_u8_volatile(ptr + 2))
+print(read_i16_volatile(ptr + 4))
+print(read_u16_volatile(ptr + 6))
+print(read_i32_volatile(ptr + 8))
+print(read_u32_volatile(ptr + 12))
+print(read_i64_volatile(ptr + 16))
+print(read_f64_volatile(ptr + 24))
+free(ptr)
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        [
+            "171",
+            "-1",
+            "255",
+            "-2",
+            "65535",
+            "-123456",
+            "4294967295",
+            "-9876543210",
+            "3.25"
+        ]
+    );
+}
+
+#[test]
 fn test_llvm_scalar_conversion_builtins() {
     let result = compile_and_run_native(
         r#"

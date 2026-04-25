@@ -119,7 +119,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `try` / `except` / `finally` / `raise` | ✅ | ✅ | ✅ |
 | `import ffi` | ✅ | ❌ | ✅ |
 | Inline assembly | ❌ | ❌ | ✅ |
-| Raw memory access (`malloc`, `free`, `read_i8/u8/i16/u16/i32/u32/i64`, `write_i8/u8/i16/u16/i32/u32/i64`) | ❌ | ❌ | ✅ |
+| Raw memory access (`malloc`, `free`, `read_i8/u8/i16/u16/i32/u32/i64`, `write_i8/u8/i16/u16/i32/u32/i64`, plus volatile variants) | ❌ | ❌ | ✅ |
 
 ### Inline Assembly (LLVM backend)
 
@@ -162,6 +162,15 @@ free(sbuf)
 ```
 
 Memory functions are LLVM-backend only. Pointers are plain integers (the address). For fixed-width arithmetic without touching memory, use `i8()`, `u8()`, `i16()`, `u16()`, `i32()`, `u32()`, and `i64()`.
+
+For MMIO or device-register style access, append `_volatile` to the scalar helpers:
+
+```python
+write_u32_volatile(buf, 0xDEADBEEF)
+status = read_u32_volatile(buf)
+```
+
+Volatile variants exist for `byte`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, and `f64`.
 
 ### Cool Shell (`coolapps/shell.cool`)
 

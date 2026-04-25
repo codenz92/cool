@@ -528,6 +528,20 @@ fn test_vm_fixed_width_int_builtins() {
 }
 
 #[test]
+fn test_interpreter_volatile_memory_builtin_requires_llvm() {
+    let err = run_cool("ptr = 0\nprint(read_i32_volatile(ptr))").unwrap_err();
+    assert!(err.contains("only supported in the LLVM backend"));
+    assert!(err.contains("compile with `cool build`"));
+}
+
+#[test]
+fn test_vm_volatile_memory_builtin_requires_llvm() {
+    let err = run_cool_vm("ptr = 0\nprint(read_i32_volatile(ptr))").unwrap_err();
+    assert!(err.contains("only supported in the LLVM backend"));
+    assert!(err.contains("compile with `cool build`"));
+}
+
+#[test]
 fn test_if_statement() {
     // Single-line ternary
     let result = run_cool("x = 5\nprint(\"big\" if x > 3 else \"small\")").unwrap();

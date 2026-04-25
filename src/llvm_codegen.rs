@@ -318,6 +318,24 @@ CoolVal cool_u16(CoolVal);
 CoolVal cool_i32(CoolVal);
 CoolVal cool_u32(CoolVal);
 CoolVal cool_i64(CoolVal);
+CoolVal cool_read_byte_volatile(CoolVal);
+CoolVal cool_write_byte_volatile(CoolVal, CoolVal);
+CoolVal cool_read_i8_volatile(CoolVal);
+CoolVal cool_write_i8_volatile(CoolVal, CoolVal);
+CoolVal cool_read_u8_volatile(CoolVal);
+CoolVal cool_write_u8_volatile(CoolVal, CoolVal);
+CoolVal cool_read_i16_volatile(CoolVal);
+CoolVal cool_write_i16_volatile(CoolVal, CoolVal);
+CoolVal cool_read_u16_volatile(CoolVal);
+CoolVal cool_write_u16_volatile(CoolVal, CoolVal);
+CoolVal cool_read_i32_volatile(CoolVal);
+CoolVal cool_write_i32_volatile(CoolVal, CoolVal);
+CoolVal cool_read_u32_volatile(CoolVal);
+CoolVal cool_write_u32_volatile(CoolVal, CoolVal);
+CoolVal cool_read_i64_volatile(CoolVal);
+CoolVal cool_write_i64_volatile(CoolVal, CoolVal);
+CoolVal cool_read_f64_volatile(CoolVal);
+CoolVal cool_write_f64_volatile(CoolVal, CoolVal);
 CoolVal cool_module_get_attr(const char*, const char*);
 CoolVal cool_module_call(const char*, const char*, int32_t, ...);
 CoolVal cool_noncallable(CoolVal);
@@ -706,6 +724,87 @@ CoolVal cool_read_f64(CoolVal addr_val) {
 }
 CoolVal cool_write_f64(CoolVal addr_val, CoolVal val) {
     double* p = (double*)(intptr_t)addr_val.payload;
+    *p = cv_to_float(val);
+    return cv_nil();
+}
+CoolVal cool_read_byte_volatile(CoolVal addr_val) {
+    volatile uint8_t* p = (volatile uint8_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_byte_volatile(CoolVal addr_val, CoolVal val) {
+    volatile uint8_t* p = (volatile uint8_t*)(intptr_t)addr_val.payload;
+    *p = (uint8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i8_volatile(CoolVal addr_val) {
+    volatile int8_t* p = (volatile int8_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_i8_volatile(CoolVal addr_val, CoolVal val) {
+    volatile int8_t* p = (volatile int8_t*)(intptr_t)addr_val.payload;
+    *p = (int8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_u8_volatile(CoolVal addr_val) {
+    volatile uint8_t* p = (volatile uint8_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_u8_volatile(CoolVal addr_val, CoolVal val) {
+    volatile uint8_t* p = (volatile uint8_t*)(intptr_t)addr_val.payload;
+    *p = (uint8_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i16_volatile(CoolVal addr_val) {
+    volatile int16_t* p = (volatile int16_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_i16_volatile(CoolVal addr_val, CoolVal val) {
+    volatile int16_t* p = (volatile int16_t*)(intptr_t)addr_val.payload;
+    *p = (int16_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_u16_volatile(CoolVal addr_val) {
+    volatile uint16_t* p = (volatile uint16_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_u16_volatile(CoolVal addr_val, CoolVal val) {
+    volatile uint16_t* p = (volatile uint16_t*)(intptr_t)addr_val.payload;
+    *p = (uint16_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i32_volatile(CoolVal addr_val) {
+    volatile int32_t* p = (volatile int32_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_i32_volatile(CoolVal addr_val, CoolVal val) {
+    volatile int32_t* p = (volatile int32_t*)(intptr_t)addr_val.payload;
+    *p = (int32_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_u32_volatile(CoolVal addr_val) {
+    volatile uint32_t* p = (volatile uint32_t*)(intptr_t)addr_val.payload;
+    return cv_int((int64_t)*p);
+}
+CoolVal cool_write_u32_volatile(CoolVal addr_val, CoolVal val) {
+    volatile uint32_t* p = (volatile uint32_t*)(intptr_t)addr_val.payload;
+    *p = (uint32_t)val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_i64_volatile(CoolVal addr_val) {
+    volatile int64_t* p = (volatile int64_t*)(intptr_t)addr_val.payload;
+    return cv_int(*p);
+}
+CoolVal cool_write_i64_volatile(CoolVal addr_val, CoolVal val) {
+    volatile int64_t* p = (volatile int64_t*)(intptr_t)addr_val.payload;
+    *p = val.payload;
+    return cv_nil();
+}
+CoolVal cool_read_f64_volatile(CoolVal addr_val) {
+    volatile double* p = (volatile double*)(intptr_t)addr_val.payload;
+    return cv_float(*p);
+}
+CoolVal cool_write_f64_volatile(CoolVal addr_val, CoolVal val) {
+    volatile double* p = (volatile double*)(intptr_t)addr_val.payload;
     *p = cv_to_float(val);
     return cv_nil();
 }
@@ -7545,6 +7644,24 @@ struct RuntimeFns<'ctx> {
     cool_write_i64: FunctionValue<'ctx>,
     cool_read_f64: FunctionValue<'ctx>,
     cool_write_f64: FunctionValue<'ctx>,
+    cool_read_byte_volatile: FunctionValue<'ctx>,
+    cool_write_byte_volatile: FunctionValue<'ctx>,
+    cool_read_i8_volatile: FunctionValue<'ctx>,
+    cool_write_i8_volatile: FunctionValue<'ctx>,
+    cool_read_u8_volatile: FunctionValue<'ctx>,
+    cool_write_u8_volatile: FunctionValue<'ctx>,
+    cool_read_i16_volatile: FunctionValue<'ctx>,
+    cool_write_i16_volatile: FunctionValue<'ctx>,
+    cool_read_u16_volatile: FunctionValue<'ctx>,
+    cool_write_u16_volatile: FunctionValue<'ctx>,
+    cool_read_i32_volatile: FunctionValue<'ctx>,
+    cool_write_i32_volatile: FunctionValue<'ctx>,
+    cool_read_u32_volatile: FunctionValue<'ctx>,
+    cool_write_u32_volatile: FunctionValue<'ctx>,
+    cool_read_i64_volatile: FunctionValue<'ctx>,
+    cool_write_i64_volatile: FunctionValue<'ctx>,
+    cool_read_f64_volatile: FunctionValue<'ctx>,
+    cool_write_f64_volatile: FunctionValue<'ctx>,
     cool_read_str: FunctionValue<'ctx>,
     cool_write_str: FunctionValue<'ctx>,
     cool_i8: FunctionValue<'ctx>,
@@ -7895,6 +8012,24 @@ impl<'ctx> Compiler<'ctx> {
             cool_write_i64: decl!("cool_write_i64", cv_type.fn_type(&[cv, cv], false)),
             cool_read_f64: decl!("cool_read_f64", cv_type.fn_type(&[cv], false)),
             cool_write_f64: decl!("cool_write_f64", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_byte_volatile: decl!("cool_read_byte_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_byte_volatile: decl!("cool_write_byte_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i8_volatile: decl!("cool_read_i8_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_i8_volatile: decl!("cool_write_i8_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_u8_volatile: decl!("cool_read_u8_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_u8_volatile: decl!("cool_write_u8_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i16_volatile: decl!("cool_read_i16_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_i16_volatile: decl!("cool_write_i16_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_u16_volatile: decl!("cool_read_u16_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_u16_volatile: decl!("cool_write_u16_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i32_volatile: decl!("cool_read_i32_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_i32_volatile: decl!("cool_write_i32_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_u32_volatile: decl!("cool_read_u32_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_u32_volatile: decl!("cool_write_u32_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_i64_volatile: decl!("cool_read_i64_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_i64_volatile: decl!("cool_write_i64_volatile", cv_type.fn_type(&[cv, cv], false)),
+            cool_read_f64_volatile: decl!("cool_read_f64_volatile", cv_type.fn_type(&[cv], false)),
+            cool_write_f64_volatile: decl!("cool_write_f64_volatile", cv_type.fn_type(&[cv, cv], false)),
             cool_read_str: decl!("cool_read_str", cv_type.fn_type(&[cv], false)),
             cool_write_str: decl!("cool_write_str", cv_type.fn_type(&[cv, cv], false)),
             cool_i8: decl!("cool_i8", cv_type.fn_type(&[cv], false)),
@@ -11365,6 +11500,15 @@ impl<'ctx> Compiler<'ctx> {
                 "read_u32" => Some(self.rt.cool_read_u32),
                 "read_i64" => Some(self.rt.cool_read_i64),
                 "read_f64" => Some(self.rt.cool_read_f64),
+                "read_byte_volatile" => Some(self.rt.cool_read_byte_volatile),
+                "read_i8_volatile" => Some(self.rt.cool_read_i8_volatile),
+                "read_u8_volatile" => Some(self.rt.cool_read_u8_volatile),
+                "read_i16_volatile" => Some(self.rt.cool_read_i16_volatile),
+                "read_u16_volatile" => Some(self.rt.cool_read_u16_volatile),
+                "read_i32_volatile" => Some(self.rt.cool_read_i32_volatile),
+                "read_u32_volatile" => Some(self.rt.cool_read_u32_volatile),
+                "read_i64_volatile" => Some(self.rt.cool_read_i64_volatile),
+                "read_f64_volatile" => Some(self.rt.cool_read_f64_volatile),
                 "read_str" => Some(self.rt.cool_read_str),
                 _ => None,
             };
@@ -11385,6 +11529,15 @@ impl<'ctx> Compiler<'ctx> {
                 "write_u32" => Some(self.rt.cool_write_u32),
                 "write_i64" => Some(self.rt.cool_write_i64),
                 "write_f64" => Some(self.rt.cool_write_f64),
+                "write_byte_volatile" => Some(self.rt.cool_write_byte_volatile),
+                "write_i8_volatile" => Some(self.rt.cool_write_i8_volatile),
+                "write_u8_volatile" => Some(self.rt.cool_write_u8_volatile),
+                "write_i16_volatile" => Some(self.rt.cool_write_i16_volatile),
+                "write_u16_volatile" => Some(self.rt.cool_write_u16_volatile),
+                "write_i32_volatile" => Some(self.rt.cool_write_i32_volatile),
+                "write_u32_volatile" => Some(self.rt.cool_write_u32_volatile),
+                "write_i64_volatile" => Some(self.rt.cool_write_i64_volatile),
+                "write_f64_volatile" => Some(self.rt.cool_write_f64_volatile),
                 "write_str" => Some(self.rt.cool_write_str),
                 _ => None,
             };
