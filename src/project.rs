@@ -1,25 +1,16 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub enum DependencySource {
-    Path {
-        path: PathBuf,
-    },
-    Git {
-        git: String,
-        branch: Option<String>,
-        tag: Option<String>,
-        rev: Option<String>,
-    },
+    Path { path: PathBuf },
+    Git,
 }
 
 #[derive(Debug, Clone)]
 pub struct DependencySpec {
     pub name: String,
-    pub version: Option<String>,
     pub source: DependencySource,
 }
 
@@ -38,36 +29,12 @@ pub struct ModuleResolver {
 #[derive(Debug, Clone)]
 pub struct CoolProject {
     pub root: PathBuf,
-    pub manifest_path: PathBuf,
     pub name: String,
     pub version: String,
     pub main: String,
     pub output: Option<String>,
     pub sources: Vec<String>,
     pub dependencies: Vec<DependencySpec>,
-}
-
-#[derive(Debug, Clone)]
-pub struct LockfileDependency {
-    pub name: String,
-    pub kind: String,
-    pub path: String,
-    pub resolved_path: String,
-    /// The installed package's own version (from its cool.toml).
-    pub version: Option<String>,
-    /// The version constraint required by the parent manifest.
-    pub required_version: Option<String>,
-    pub git: Option<String>,
-    pub branch: Option<String>,
-    pub tag: Option<String>,
-    pub rev: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CoolLockfile {
-    pub project_name: String,
-    pub project_version: String,
-    pub dependencies: Vec<LockfileDependency>,
 }
 
 fn canonical_or_path(path: PathBuf) -> PathBuf {
@@ -131,158 +98,17 @@ fn validate_git_selector(
     Ok(())
 }
 
-fn is_remote_git_source(source: &str) -> bool {
-    source.contains("://") || source.starts_with("git@")
-}
-
-fn shell_join(args: &[String]) -> String {
-    args.join(" ")
-}
-
-fn run_git_command(cwd: Option<&Path>, args: &[String]) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    if let Some(cwd) = cwd {
-        cmd.current_dir(cwd);
-    }
-    let output = cmd
-        .args(args)
-        .output()
-        .map_err(|e| format!("git {}: {e}", shell_join(args)))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let details = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            "git command failed".to_string()
-        };
-        Err(format!("git {}: {details}", shell_join(args)))
-    }
-}
-
-fn escape_toml_string(text: &str) -> String {
-    format!("{text:?}")
-}
-
-fn manifest_dependency_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn diff_paths(target: &Path, base: &Path) -> Option<PathBuf> {
-    let target_components: Vec<Component<'_>> = target.components().collect();
-    let base_components: Vec<Component<'_>> = base.components().collect();
-
-    if target_components.is_empty() || base_components.is_empty() {
-        return None;
-    }
-
-    if target_components.first() != base_components.first() {
-        return None;
-    }
-
-    let mut common = 0usize;
-    while common < target_components.len()
-        && common < base_components.len()
-        && target_components[common] == base_components[common]
-    {
-        common += 1;
-    }
-
-    let mut out = PathBuf::new();
-    for _ in common..base_components.len() {
-        out.push("..");
-    }
-    for component in &target_components[common..] {
-        out.push(component.as_os_str());
-    }
-
-    if out.as_os_str().is_empty() {
-        Some(PathBuf::from("."))
-    } else {
-        Some(out)
-    }
-}
-
 impl DependencySpec {
-    pub fn path(name: impl Into<String>, path: impl Into<PathBuf>) -> Self {
-        Self {
-            name: name.into(),
-            version: None,
-            source: DependencySource::Path { path: path.into() },
-        }
-    }
-
-    pub fn git(name: impl Into<String>, git: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            version: None,
-            source: DependencySource::Git {
-                git: git.into(),
-                branch: None,
-                tag: None,
-                rev: None,
-            },
-        }
-    }
-
-    pub fn manifest_value(&self) -> toml::Value {
-        let mut table = toml::map::Map::new();
-        match &self.source {
-            DependencySource::Path { path } => {
-                table.insert("path".to_string(), toml::Value::String(manifest_dependency_path(path)));
-            }
-            DependencySource::Git { git, branch, tag, rev } => {
-                table.insert("git".to_string(), toml::Value::String(git.clone()));
-                if let Some(branch) = branch {
-                    table.insert("branch".to_string(), toml::Value::String(branch.clone()));
-                }
-                if let Some(tag) = tag {
-                    table.insert("tag".to_string(), toml::Value::String(tag.clone()));
-                }
-                if let Some(rev) = rev {
-                    table.insert("rev".to_string(), toml::Value::String(rev.clone()));
-                }
-            }
-        }
-        if let Some(version) = &self.version {
-            table.insert("version".to_string(), toml::Value::String(version.clone()));
-        }
-        toml::Value::Table(table)
-    }
-
     pub fn resolved_root(&self, project_root: &Path) -> PathBuf {
         match &self.source {
             DependencySource::Path { path } => canonical_or_path(project_root.join(path)),
-            DependencySource::Git { .. } => canonical_or_path(project_root.join(".cool").join("deps").join(&self.name)),
-        }
-    }
-
-    fn git_clone_source(&self, project_root: &Path) -> Option<String> {
-        match &self.source {
-            DependencySource::Git { git, .. } => {
-                if is_remote_git_source(git) {
-                    Some(git.clone())
-                } else {
-                    let raw = Path::new(git);
-                    let path = if raw.is_absolute() {
-                        raw.to_path_buf()
-                    } else {
-                        project_root.join(raw)
-                    };
-                    Some(path.to_string_lossy().to_string())
-                }
-            }
-            DependencySource::Path { .. } => None,
+            DependencySource::Git => canonical_or_path(project_root.join(".cool").join("deps").join(&self.name)),
         }
     }
 
     fn install_hint(&self, project_root: &Path) -> String {
         match &self.source {
-            DependencySource::Git { .. } => format!(
+            DependencySource::Git => format!(
                 "git dependency '{}' is not installed at '{}'. Run `cool install`.",
                 self.name,
                 self.resolved_root(project_root).display()
@@ -362,19 +188,18 @@ impl CoolProject {
                         match spec {
                             toml::Value::String(path) => dependencies.push(DependencySpec {
                                 name: name.clone(),
-                                version: None,
                                 source: DependencySource::Path {
                                     path: PathBuf::from(path),
                                 },
                             }),
                             toml::Value::Table(dep_table) => {
-                                let version = parse_string_field(dep_table.get("version"), "version", "cool.toml")?;
+                                parse_string_field(dep_table.get("version"), "version", "cool.toml")?;
                                 let git = parse_string_field(dep_table.get("git"), "git", "cool.toml")?;
                                 let branch = parse_string_field(dep_table.get("branch"), "branch", "cool.toml")?;
                                 let tag = parse_string_field(dep_table.get("tag"), "tag", "cool.toml")?;
                                 let rev = parse_string_field(dep_table.get("rev"), "rev", "cool.toml")?;
 
-                                if let Some(git) = git {
+                                if git.is_some() {
                                     if dep_table.get("path").is_some() {
                                         return Err(format!(
                                             "cool.toml: dependency '{}' may not specify both 'git' and 'path'",
@@ -384,8 +209,7 @@ impl CoolProject {
                                     validate_git_selector("cool.toml", name, &branch, &tag, &rev)?;
                                     dependencies.push(DependencySpec {
                                         name: name.clone(),
-                                        version,
-                                        source: DependencySource::Git { git, branch, tag, rev },
+                                        source: DependencySource::Git,
                                     });
                                 } else {
                                     let path = match dep_table.get("path") {
@@ -401,7 +225,6 @@ impl CoolProject {
                                     };
                                     dependencies.push(DependencySpec {
                                         name: name.clone(),
-                                        version,
                                         source: DependencySource::Path { path },
                                     });
                                 }
@@ -421,7 +244,6 @@ impl CoolProject {
                         match item {
                             toml::Value::String(name) => dependencies.push(DependencySpec {
                                 name: name.clone(),
-                                version: None,
                                 source: DependencySource::Path {
                                     path: PathBuf::from("deps").join(name),
                                 },
@@ -445,8 +267,7 @@ impl CoolProject {
         }
 
         Ok(CoolProject {
-            root: manifest_dir.clone(),
-            manifest_path: manifest_dir.join("cool.toml"),
+            root: manifest_dir,
             name: opt_string("name")?.unwrap_or_else(|| "project".to_string()),
             version: opt_string("version")?.unwrap_or_else(|| "0.1.0".to_string()),
             main: opt_string("main")?.ok_or("cool.toml: missing required key 'main'")?,
@@ -462,14 +283,6 @@ impl CoolProject {
 
     pub fn main_path(&self) -> PathBuf {
         self.root.join(&self.main)
-    }
-
-    pub fn managed_dir(&self) -> PathBuf {
-        self.root.join(".cool")
-    }
-
-    pub fn lockfile_path(&self) -> PathBuf {
-        self.root.join("cool.lock")
     }
 
     pub fn local_module_roots(&self) -> Result<Vec<PathBuf>, String> {
@@ -498,144 +311,6 @@ impl CoolProject {
             out.push(canonical_or_path(root));
         }
         Ok(unique_paths(out))
-    }
-}
-
-impl CoolLockfile {
-    pub fn read(path: &Path) -> Result<Option<Self>, String> {
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        let src = fs::read_to_string(path).map_err(|e| format!("cool.lock: cannot read '{}': {e}", path.display()))?;
-        let parsed: toml::Value = src
-            .parse()
-            .map_err(|e: toml::de::Error| format!("cool.lock parse error: {}", e.message()))?;
-        let root = parsed
-            .as_table()
-            .ok_or_else(|| "cool.lock: root must be a table".to_string())?;
-
-        let project = root.get("project").and_then(toml::Value::as_table);
-        let project_name = project
-            .and_then(|table| table.get("name"))
-            .and_then(toml::Value::as_str)
-            .unwrap_or("project")
-            .to_string();
-        let project_version = project
-            .and_then(|table| table.get("version"))
-            .and_then(toml::Value::as_str)
-            .unwrap_or("0.1.0")
-            .to_string();
-
-        let mut dependencies = Vec::new();
-        if let Some(items) = root.get("dependency").and_then(toml::Value::as_array) {
-            for item in items {
-                let table = item
-                    .as_table()
-                    .ok_or_else(|| "cool.lock: [[dependency]] entries must be tables".to_string())?;
-                let name = table
-                    .get("name")
-                    .and_then(toml::Value::as_str)
-                    .ok_or_else(|| "cool.lock: dependency entry missing string field 'name'".to_string())?
-                    .to_string();
-                let kind = table
-                    .get("kind")
-                    .and_then(toml::Value::as_str)
-                    .ok_or_else(|| "cool.lock: dependency entry missing string field 'kind'".to_string())?
-                    .to_string();
-                let path = table
-                    .get("path")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let resolved_path = table
-                    .get("resolved_path")
-                    .and_then(toml::Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let version = table
-                    .get("version")
-                    .and_then(toml::Value::as_str)
-                    .map(ToOwned::to_owned);
-                let required_version = table
-                    .get("required_version")
-                    .and_then(toml::Value::as_str)
-                    .map(ToOwned::to_owned);
-                let git = table.get("git").and_then(toml::Value::as_str).map(ToOwned::to_owned);
-                let branch = table.get("branch").and_then(toml::Value::as_str).map(ToOwned::to_owned);
-                let tag = table.get("tag").and_then(toml::Value::as_str).map(ToOwned::to_owned);
-                let rev = table.get("rev").and_then(toml::Value::as_str).map(ToOwned::to_owned);
-                dependencies.push(LockfileDependency {
-                    name,
-                    kind,
-                    path,
-                    resolved_path,
-                    version,
-                    required_version,
-                    git,
-                    branch,
-                    tag,
-                    rev,
-                });
-            }
-        }
-
-        Ok(Some(Self {
-            project_name,
-            project_version,
-            dependencies,
-        }))
-    }
-
-    pub fn write(&self, path: &Path) -> Result<(), String> {
-        fs::write(path, self.render()).map_err(|e| format!("cool.lock: cannot write '{}': {e}", path.display()))
-    }
-
-    pub fn locked_rev(&self, name: &str) -> Option<&str> {
-        self.dependencies
-            .iter()
-            .rev()
-            .find(|dep| dep.name == name && dep.kind == "git")
-            .and_then(|dep| dep.rev.as_deref())
-    }
-
-    fn render(&self) -> String {
-        let mut out = String::new();
-        out.push_str("version = 1\n\n");
-        out.push_str("[project]\n");
-        out.push_str(&format!("name = {}\n", escape_toml_string(&self.project_name)));
-        out.push_str(&format!("version = {}\n", escape_toml_string(&self.project_version)));
-
-        for dep in &self.dependencies {
-            out.push_str("\n[[dependency]]\n");
-            out.push_str(&format!("name = {}\n", escape_toml_string(&dep.name)));
-            out.push_str(&format!("kind = {}\n", escape_toml_string(&dep.kind)));
-            out.push_str(&format!("path = {}\n", escape_toml_string(&dep.path)));
-            out.push_str(&format!("resolved_path = {}\n", escape_toml_string(&dep.resolved_path)));
-            if let Some(version) = &dep.version {
-                out.push_str(&format!("version = {}\n", escape_toml_string(version)));
-            }
-            if let Some(required_version) = &dep.required_version {
-                out.push_str(&format!(
-                    "required_version = {}\n",
-                    escape_toml_string(required_version)
-                ));
-            }
-            if let Some(git) = &dep.git {
-                out.push_str(&format!("git = {}\n", escape_toml_string(git)));
-            }
-            if let Some(branch) = &dep.branch {
-                out.push_str(&format!("branch = {}\n", escape_toml_string(branch)));
-            }
-            if let Some(tag) = &dep.tag {
-                out.push_str(&format!("tag = {}\n", escape_toml_string(tag)));
-            }
-            if let Some(rev) = &dep.rev {
-                out.push_str(&format!("rev = {}\n", escape_toml_string(rev)));
-            }
-        }
-
-        out
     }
 }
 
@@ -705,67 +380,6 @@ impl ModuleResolver {
     }
 }
 
-pub fn normalize_dependency_source_arg(project_root: &Path, current_dir: &Path, source: &str) -> String {
-    if is_remote_git_source(source) {
-        return source.to_string();
-    }
-
-    let raw = Path::new(source);
-    let absolute = if raw.is_absolute() {
-        raw.to_path_buf()
-    } else {
-        current_dir.join(raw)
-    };
-    let absolute = canonical_or_path(absolute);
-    let project_root = canonical_or_path(project_root.to_path_buf());
-
-    diff_paths(&absolute, &project_root)
-        .unwrap_or(absolute)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-pub fn add_dependency_to_manifest(manifest_path: &Path, dependency: &DependencySpec) -> Result<(), String> {
-    let manifest_src = fs::read_to_string(manifest_path)
-        .map_err(|e| format!("cool.toml: cannot read '{}': {e}", manifest_path.display()))?;
-    let mut parsed: toml::Value = manifest_src
-        .parse()
-        .map_err(|e: toml::de::Error| format!("cool.toml parse error: {}", e.message()))?;
-    let root = parsed
-        .as_table_mut()
-        .ok_or_else(|| "cool.toml: root must be a table".to_string())?;
-    let deps = root
-        .entry("dependencies")
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-    let deps_table = deps
-        .as_table_mut()
-        .ok_or_else(|| "cool.toml: [dependencies] must be a table".to_string())?;
-    deps_table.insert(dependency.name.clone(), dependency.manifest_value());
-
-    let rendered = toml::to_string_pretty(&parsed).map_err(|e| format!("cool.toml: cannot serialize manifest: {e}"))?;
-    fs::write(manifest_path, rendered)
-        .map_err(|e| format!("cool.toml: cannot write '{}': {e}", manifest_path.display()))
-}
-
-pub fn install_dependencies(project: &CoolProject) -> Result<CoolLockfile, String> {
-    let existing_lockfile = CoolLockfile::read(&project.lockfile_path())?;
-    let mut dependencies = Vec::new();
-    let mut seen = HashSet::new();
-    install_project_dependencies(project, existing_lockfile.as_ref(), &mut dependencies, &mut seen)?;
-
-    let lockfile = CoolLockfile {
-        project_name: project.name.clone(),
-        project_version: project.version.clone(),
-        dependencies,
-    };
-    if !project.managed_dir().exists() {
-        fs::create_dir_all(project.managed_dir())
-            .map_err(|e| format!("cool install: cannot create '{}': {e}", project.managed_dir().display()))?;
-    }
-    lockfile.write(&project.lockfile_path())?;
-    Ok(lockfile)
-}
-
 fn dependency_roots_for_path(dep_root: &Path) -> Result<Vec<PathBuf>, String> {
     let src_root = dep_root.join("src");
     let mut roots = Vec::new();
@@ -814,345 +428,4 @@ fn collect_dependency_roots(
         }
     }
     Ok(())
-}
-
-fn install_project_dependencies(
-    project: &CoolProject,
-    existing_lockfile: Option<&CoolLockfile>,
-    out: &mut Vec<LockfileDependency>,
-    visited: &mut HashSet<PathBuf>,
-) -> Result<(), String> {
-    for dep in &project.dependencies {
-        let dep_root = materialize_dependency(project, dep, existing_lockfile, out)?;
-        let dep_root = canonical_or_path(dep_root);
-        if !visited.insert(dep_root.clone()) {
-            continue;
-        }
-
-        let dep_manifest = dep_root.join("cool.toml");
-        if dep_manifest.exists() {
-            let dep_project = CoolProject::from_manifest_path(&dep_manifest)?;
-            install_project_dependencies(&dep_project, existing_lockfile, out, visited)?;
-        }
-    }
-    Ok(())
-}
-
-fn maybe_project_version(root: &Path) -> Result<Option<String>, String> {
-    let manifest = root.join("cool.toml");
-    if !manifest.exists() {
-        return Ok(None);
-    }
-    let project = CoolProject::from_manifest_path(&manifest)?;
-    Ok(Some(project.version))
-}
-
-fn materialize_dependency(
-    project: &CoolProject,
-    dep: &DependencySpec,
-    existing_lockfile: Option<&CoolLockfile>,
-    out: &mut Vec<LockfileDependency>,
-) -> Result<PathBuf, String> {
-    match &dep.source {
-        DependencySource::Path { path } => {
-            let dep_root = dep.resolved_root(&project.root);
-            if !dep_root.exists() {
-                return Err(format!("cool install: {}", dep.install_hint(&project.root)));
-            }
-            let installed_version = maybe_project_version(&dep_root)?;
-            if let (Some(required), Some(installed)) = (&dep.version, &installed_version) {
-                check_version_constraint(&dep.name, required, installed)?;
-            }
-            out.push(LockfileDependency {
-                name: dep.name.clone(),
-                kind: "path".to_string(),
-                path: manifest_dependency_path(path),
-                resolved_path: dep_root.to_string_lossy().to_string(),
-                version: installed_version,
-                required_version: dep.version.clone(),
-                git: None,
-                branch: None,
-                tag: None,
-                rev: None,
-            });
-            Ok(dep_root)
-        }
-        DependencySource::Git { git, branch, tag, rev } => {
-            let dep_root = dep.resolved_root(&project.root);
-            let parent = dep_root
-                .parent()
-                .ok_or_else(|| format!("cool install: invalid dependency directory '{}'", dep_root.display()))?;
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("cool install: cannot create '{}': {e}", parent.display()))?;
-
-            if !dep_root.exists() {
-                let clone_source = dep
-                    .git_clone_source(&project.root)
-                    .ok_or_else(|| format!("cool install: dependency '{}' is not a git source", dep.name))?;
-                run_git_command(
-                    None,
-                    &[
-                        "clone".to_string(),
-                        clone_source,
-                        dep_root.to_string_lossy().to_string(),
-                    ],
-                )?;
-            } else if !dep_root.join(".git").exists() {
-                return Err(format!(
-                    "cool install: managed dependency directory '{}' exists but is not a git checkout",
-                    dep_root.display()
-                ));
-            }
-
-            let locked_rev = existing_lockfile.and_then(|lockfile| lockfile.locked_rev(&dep.name));
-            if branch.is_some() || tag.is_some() {
-                let _ = run_git_command(
-                    Some(&dep_root),
-                    &["fetch".to_string(), "--all".to_string(), "--tags".to_string()],
-                );
-            }
-
-            if let Some(target) = desired_git_ref(branch, tag, rev, locked_rev) {
-                run_git_command(
-                    Some(&dep_root),
-                    &["checkout".to_string(), "--detach".to_string(), target],
-                )?;
-            }
-
-            let resolved_rev = run_git_command(Some(&dep_root), &["rev-parse".to_string(), "HEAD".to_string()])?;
-            let installed_version = maybe_project_version(&dep_root)?;
-            if let (Some(required), Some(installed)) = (&dep.version, &installed_version) {
-                check_version_constraint(&dep.name, required, installed)?;
-            }
-            out.push(LockfileDependency {
-                name: dep.name.clone(),
-                kind: "git".to_string(),
-                path: format!(".cool/deps/{}", dep.name),
-                resolved_path: dep_root.to_string_lossy().to_string(),
-                version: installed_version,
-                required_version: dep.version.clone(),
-                git: Some(git.clone()),
-                branch: branch.clone(),
-                tag: tag.clone(),
-                rev: Some(resolved_rev),
-            });
-            Ok(dep_root)
-        }
-    }
-}
-
-// ── Semver ────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct SemVer {
-    major: u64,
-    minor: u64,
-    patch: u64,
-}
-
-impl SemVer {
-    fn parse(s: &str) -> Option<Self> {
-        let s = s.trim().strip_prefix('v').unwrap_or(s.trim());
-        let s = s.split(['-', '+']).next().unwrap_or(s);
-        let mut parts = s.split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-        let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
-        Some(SemVer { major, minor, patch })
-    }
-}
-
-#[derive(Debug)]
-enum VersionReq {
-    Any,
-    Exact(SemVer),
-    Caret(SemVer),
-    Tilde(SemVer),
-    Gte(SemVer),
-    Range(SemVer, SemVer),
-}
-
-impl VersionReq {
-    fn parse(s: &str) -> Option<Self> {
-        let s = s.trim();
-        if s.is_empty() || s == "*" {
-            return Some(VersionReq::Any);
-        }
-        if let Some(rest) = s.strip_prefix('^') {
-            return SemVer::parse(rest).map(VersionReq::Caret);
-        }
-        if let Some(rest) = s.strip_prefix('~') {
-            return SemVer::parse(rest).map(VersionReq::Tilde);
-        }
-        if s.contains(',') {
-            let mut parts = s.splitn(2, ',');
-            let a = parts.next()?.trim();
-            let b = parts.next()?.trim();
-            let lo = a.strip_prefix(">=").and_then(|r| SemVer::parse(r))?;
-            let hi = b.strip_prefix('<').and_then(|r| SemVer::parse(r))?;
-            return Some(VersionReq::Range(lo, hi));
-        }
-        if let Some(rest) = s.strip_prefix(">=") {
-            return SemVer::parse(rest).map(VersionReq::Gte);
-        }
-        if let Some(rest) = s.strip_prefix('=') {
-            return SemVer::parse(rest).map(VersionReq::Exact);
-        }
-        SemVer::parse(s).map(VersionReq::Exact)
-    }
-
-    fn matches(&self, v: &SemVer) -> bool {
-        match self {
-            VersionReq::Any => true,
-            VersionReq::Exact(req) => v == req,
-            VersionReq::Caret(req) => v.major == req.major && *v >= *req,
-            VersionReq::Tilde(req) => v.major == req.major && v.minor == req.minor && *v >= *req,
-            VersionReq::Gte(req) => *v >= *req,
-            VersionReq::Range(lo, hi) => *v >= *lo && *v < *hi,
-        }
-    }
-}
-
-fn check_version_constraint(name: &str, required: &str, installed: &str) -> Result<(), String> {
-    let req = VersionReq::parse(required)
-        .ok_or_else(|| format!("cool install: dependency '{name}' has invalid version constraint '{required}'"))?;
-    let ver = SemVer::parse(installed)
-        .ok_or_else(|| format!("cool install: dependency '{name}' has invalid installed version '{installed}'"))?;
-    if !req.matches(&ver) {
-        return Err(format!(
-            "cool install: dependency '{name}' requires version '{required}' but found '{installed}'"
-        ));
-    }
-    Ok(())
-}
-
-fn desired_git_ref(
-    branch: &Option<String>,
-    tag: &Option<String>,
-    rev: &Option<String>,
-    locked_rev: Option<&str>,
-) -> Option<String> {
-    if let Some(rev) = rev {
-        return Some(rev.clone());
-    }
-    if let Some(tag) = tag {
-        return Some(format!("refs/tags/{tag}"));
-    }
-    if let Some(branch) = branch {
-        return Some(format!("origin/{branch}"));
-    }
-    locked_rev.map(ToOwned::to_owned)
-}
-
-#[cfg(test)]
-mod semver_tests {
-    use super::*;
-
-    fn ver(s: &str) -> SemVer {
-        SemVer::parse(s).unwrap_or_else(|| panic!("bad semver: {s}"))
-    }
-
-    fn ok(req: &str, installed: &str) {
-        check_version_constraint("pkg", req, installed).unwrap_or_else(|e| panic!("{e}"));
-    }
-
-    fn err(req: &str, installed: &str) {
-        assert!(
-            check_version_constraint("pkg", req, installed).is_err(),
-            "expected constraint '{req}' to reject '{installed}'"
-        );
-    }
-
-    #[test]
-    fn test_semver_parse() {
-        assert_eq!(
-            ver("1.2.3"),
-            SemVer {
-                major: 1,
-                minor: 2,
-                patch: 3
-            }
-        );
-        assert_eq!(
-            ver("v2.0.0"),
-            SemVer {
-                major: 2,
-                minor: 0,
-                patch: 0
-            }
-        );
-        assert_eq!(
-            ver("1.0"),
-            SemVer {
-                major: 1,
-                minor: 0,
-                patch: 0
-            }
-        );
-        assert_eq!(
-            ver("1.2.3-alpha+build"),
-            SemVer {
-                major: 1,
-                minor: 2,
-                patch: 3
-            }
-        );
-    }
-
-    #[test]
-    fn test_semver_ordering() {
-        assert!(ver("1.2.3") < ver("1.2.4"));
-        assert!(ver("1.2.3") < ver("1.3.0"));
-        assert!(ver("1.2.3") < ver("2.0.0"));
-        assert!(ver("1.2.3") == ver("1.2.3"));
-    }
-
-    #[test]
-    fn test_caret() {
-        ok("^1.0.0", "1.0.0");
-        ok("^1.0.0", "1.2.3");
-        ok("^1.0.0", "1.99.99");
-        err("^1.0.0", "0.9.9");
-        err("^1.0.0", "2.0.0");
-        err("^2.0.0", "1.9.9");
-    }
-
-    #[test]
-    fn test_tilde() {
-        ok("~1.2.0", "1.2.0");
-        ok("~1.2.0", "1.2.9");
-        err("~1.2.0", "1.3.0");
-        err("~1.2.0", "1.1.9");
-        err("~1.2.0", "2.2.0");
-    }
-
-    #[test]
-    fn test_exact() {
-        ok("1.2.3", "1.2.3");
-        ok("=1.2.3", "1.2.3");
-        err("1.2.3", "1.2.4");
-        err("=1.2.3", "1.2.2");
-    }
-
-    #[test]
-    fn test_gte() {
-        ok(">=1.0.0", "1.0.0");
-        ok(">=1.0.0", "2.5.0");
-        err(">=1.0.0", "0.9.9");
-    }
-
-    #[test]
-    fn test_range() {
-        ok(">=1.0.0,<2.0.0", "1.0.0");
-        ok(">=1.0.0,<2.0.0", "1.9.9");
-        err(">=1.0.0,<2.0.0", "0.9.9");
-        err(">=1.0.0,<2.0.0", "2.0.0");
-    }
-
-    #[test]
-    fn test_wildcard() {
-        ok("*", "0.0.1");
-        ok("*", "99.99.99");
-        ok("", "1.0.0");
-    }
 }
