@@ -2027,6 +2027,59 @@ include = ["assets", "README.txt"]
 }
 
 #[test]
+fn test_cool_release_bumps_version_bundles_and_tags_via_cool_app() {
+    let project_dir = unique_temp_dir("cool_project_release");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[bundle]
+include = ["README.txt"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"release ok\")\n").unwrap();
+    std::fs::write(project_dir.join("README.txt"), "hello\n").unwrap();
+
+    run_git_in_dir(&project_dir, &["init"]);
+    run_git_in_dir(&project_dir, &["config", "user.name", "Cool Test"]);
+    run_git_in_dir(&project_dir, &["config", "user.email", "cool-test@example.com"]);
+    run_git_in_dir(&project_dir, &["add", "."]);
+    run_git_in_dir(&project_dir, &["commit", "-m", "init"]);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["release", "--bump", "minor"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Releasing demo v0.2.0 -> v0.3.0"));
+    assert!(stdout.contains("Updated  cool.toml version -> 0.3.0"));
+    assert!(stdout.contains("Bundled"));
+    assert!(stdout.contains("Tagged   -> v0.3.0"));
+    assert!(stdout.contains("Released demo v0.3.0"));
+
+    let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
+    assert!(manifest.contains("version = \"0.3.0\""));
+
+    let artifact_name = format!("demo-0.3.0-{}", host_target_triple());
+    let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    assert!(
+        archive_path.exists(),
+        "expected release archive at {}",
+        archive_path.display()
+    );
+
+    let tags = run_git_in_dir(&project_dir, &["tag", "--list", "v0.3.0"]);
+    assert_eq!(tags.trim(), "v0.3.0");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
 fn test_cool_build_freestanding_emits_project_object_file() {
     let project_dir = unique_temp_dir("cool_project_freestanding");
     let _ = std::fs::remove_dir_all(&project_dir);

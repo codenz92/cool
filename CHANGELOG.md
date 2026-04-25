@@ -36,6 +36,7 @@ All notable changes to the Cool language project.
 
 - Bundled Cool programs are now split by role: end-user apps live under `apps/`, while CLI subcommand implementations like `cool task` and `cool bundle` live under `cmd/`
 - `cool bundle` now delegates to `cmd/bundle.cool`, moving packaging logic out of Rust and into Cool itself
+- `cool release` now delegates to `cmd/release.cool`, moving version bumping, bundling, and git tagging out of Rust and into Cool itself
 
 ## [1.1.0] - 2026-04-24 - Phase 10 Complete
 

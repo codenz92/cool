@@ -1,0 +1,213 @@
+import os
+import sys
+import toml
+import path
+import term
+import platform
+import subprocess
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("release v1.0 — bump version, bundle, and tag a release")
+    print("  cool release [--bump patch|minor|major]")
+    print("  cool release [--version X.Y.Z] [--no-tag]")
+
+def discover_project_root():
+    cur = os.getcwd()
+    while true:
+        manifest = path.join(cur, "cool.toml")
+        if path.exists(manifest):
+            return cur
+        parent = path.dirname(cur)
+        if parent == cur or parent == "":
+            raise "cool release: no cool.toml found in this directory or any parent"
+        cur = parent
+
+def read_manifest(project_root):
+    manifest_path = path.join(project_root, "cool.toml")
+    with open(manifest_path, "r") as f:
+        return toml.loads(f.read())
+
+def project_table(manifest):
+    project = manifest.get("project", nil)
+    if project == nil:
+        return manifest
+    if not isinstance(project, "dict"):
+        raise "cool release: [project] must be a table"
+    return project
+
+def read_text_file(file_path):
+    with open(file_path, "r") as f:
+        return f.read()
+
+def optional_string(table, key, default_value, context):
+    value = table.get(key, nil)
+    if value == nil:
+        return default_value
+    if not isinstance(value, "str"):
+        raise context + ": key '" + key + "' must be a string"
+    return value
+
+def target_triple():
+    os_name = platform.os()
+    if os_name == "macos":
+        os_name = "darwin"
+    arch = platform.arch()
+    if arch == "aarch64":
+        arch = "arm64"
+    return os_name + "-" + arch
+
+def stream_result(result):
+    if result["stdout"] != "":
+        term.write(result["stdout"])
+    if result["stderr"] != "":
+        term.write(result["stderr"])
+
+def run_shell_checked(context, command):
+    result = subprocess.run(command)
+    stream_result(result)
+    if result["timed_out"]:
+        raise "cool release: " + context + " timed out"
+    if result["code"] != 0:
+        exit(result["code"])
+    return result
+
+def leading_whitespace(text):
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if not (ch == " " or ch == "\t"):
+            break
+        i += 1
+    return text[:i]
+
+def bump_version(version, bump):
+    parts = str(version).split(".")
+    if len(parts) < 3:
+        raise "cool release: cannot parse version '" + str(version) + "'"
+    try:
+        major = int(parts[0])
+        minor = int(parts[1])
+        patch = int(parts[2])
+    except:
+        raise "cool release: invalid version '" + str(version) + "'"
+    if bump == "major":
+        return str(major + 1) + ".0.0"
+    if bump == "minor":
+        return str(major) + "." + str(minor + 1) + ".0"
+    if bump == "patch":
+        return str(major) + "." + str(minor) + "." + str(patch + 1)
+    return str(bump)
+
+def set_manifest_version(manifest_path, new_version):
+    src = read_text_file(manifest_path)
+
+    found = false
+    new_lines = []
+    for line in src.split("\n"):
+        if not found:
+            indent = leading_whitespace(line)
+            trimmed = line[len(indent):]
+            if trimmed.startswith("version"):
+                eq = trimmed.find("=")
+                if eq >= 0:
+                    after_eq = trimmed[eq + 1:].strip()
+                    if after_eq.startswith("\""):
+                        found = true
+                        new_lines.append(indent + "version = \"" + str(new_version) + "\"")
+                        continue
+        new_lines.append(line)
+
+    if not found:
+        raise "cool release: could not find 'version = ...' in cool.toml"
+
+    with open(manifest_path, "w") as f:
+        f.write("\n".join(new_lines))
+
+def maybe_warn_dirty(project_root):
+    result = subprocess.run("cd " + shell_quote(project_root) + " && git status --porcelain")
+    if result["code"] == 0 and result["stdout"].strip() != "":
+        print("  warning: working tree has uncommitted changes")
+
+def bundle_project(project_root, cool_exe):
+    cmd = "cd " + shell_quote(project_root) + " && COOL_EXE_PATH=" + shell_quote(cool_exe)
+    cmd = cmd + " " + shell_quote(cool_exe) + " bundle"
+    run_shell_checked("bundle project", cmd)
+
+def tag_release(project_root, tag):
+    command = "cd " + shell_quote(project_root) + " && git tag -a " + shell_quote(tag)
+    command = command + " -m " + shell_quote("Release " + tag)
+    result = subprocess.run(command)
+    if result["timed_out"]:
+        print("  warning: git tag timed out")
+        return
+    if result["code"] == 0:
+        print("  Tagged   -> " + tag)
+        return
+    print("  warning: git tag failed (already exists or not a git repo)")
+
+argv = sys.argv
+
+if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
+    usage()
+    exit(0)
+
+project_root = discover_project_root()
+manifest_path = path.join(project_root, "cool.toml")
+manifest = read_manifest(project_root)
+project = project_table(manifest)
+
+name = optional_string(project, "name", "project", "cool.toml")
+current_version = optional_string(project, "version", "0.1.0", "cool.toml")
+cool_exe = os.getenv("COOL_EXE_PATH")
+if cool_exe == nil or cool_exe == "":
+    cool_exe = "cool"
+
+bump = "patch"
+explicit_version = nil
+no_tag = false
+i = 1
+while i < len(argv):
+    arg = argv[i]
+    if arg == "--bump":
+        i += 1
+        if i >= len(argv):
+            raise "cool release: --bump requires an argument (patch|minor|major)"
+        bump = argv[i]
+        if not (bump == "patch" or bump == "minor" or bump == "major"):
+            raise "cool release: --bump must be patch, minor, or major, got '" + str(bump) + "'"
+    elif arg == "--version":
+        i += 1
+        if i >= len(argv):
+            raise "cool release: --version requires an argument"
+        explicit_version = argv[i]
+    elif arg == "--no-tag":
+        no_tag = true
+    else:
+        raise "cool release: unexpected argument '" + str(arg) + "'"
+    i += 1
+
+new_version = explicit_version
+if new_version == nil:
+    new_version = bump_version(current_version, bump)
+
+maybe_warn_dirty(project_root)
+
+print("  Releasing " + name + " v" + str(current_version) + " -> v" + str(new_version))
+set_manifest_version(manifest_path, new_version)
+print("  Updated  cool.toml version -> " + str(new_version))
+
+bundle_project(project_root, cool_exe)
+
+archive = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".tar.gz")
+if not no_tag:
+    tag_release(project_root, "v" + str(new_version))
+
+print("")
+print("  Released " + name + " v" + str(new_version))
+print("  Archive  -> " + archive)
+if not no_tag:
+    print("  Run 'git push --tags' to publish the tag.")
