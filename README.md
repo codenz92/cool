@@ -242,7 +242,7 @@ status = read_u32_volatile(buf)
 
 Volatile variants exist for `byte`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, and `f64`.
 
-### Bundled Shell (`coolapps/shell.cool`)
+### Bundled Shell (`apps/shell.cool`)
 
 Cool also ships with a fully interactive shell written in Cool:
 
@@ -262,7 +262,7 @@ clear
 - Tab completion and up-arrow history navigation in interactive TTY sessions
 - Shell scripting via `source <file>`
 
-Interactive terminal apps such as `coolapps/edit.cool`, `coolapps/top.cool`, and `coolapps/snake.cool`
+Interactive terminal apps such as `apps/edit.cool`, `apps/top.cool`, and `apps/snake.cool`
 expect a real TTY because they rely on `import term` raw-mode input and screen control.
 
 ---
@@ -293,7 +293,7 @@ cargo build --release
 ./hello
 
 # Launch Cool shell
-./target/release/cool coolapps/shell.cool
+./target/release/cool apps/shell.cool
 
 # Show all CLI options
 ./target/release/cool help
@@ -453,7 +453,7 @@ src/
   lsp.rs            Language server protocol (LSP) over stdin/stdout
   main.rs           CLI entry point, REPL, build/new/lsp subcommands
 
-coolapps/
+apps/
   shell.cool        The Cool interactive shell
   calc.cool         Calculator REPL
   notes.cool        Note-taking app
@@ -462,6 +462,10 @@ coolapps/
   snake.cool        Snake game
   http.cool         HTTP client
   browse.cool       TUI file browser (two-pane layout, file preview)
+
+cmd/
+  task.cool         Manifest task runner used by `cool task`
+  bundle.cool       Project bundler for `cool bundle`
 
 coolc/
   compiler_vm.cool  Self-hosted compiler
@@ -501,6 +505,8 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 ## Self-Hosted Compiler
 
 The self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
+
+Project tooling is starting to move over too: `cool bundle` now delegates to `cmd/bundle.cool`, and `cool task` delegates to `cmd/task.cool`, so packaged CLI workflows now run in Cool rather than Rust.
 
 It supports:
 

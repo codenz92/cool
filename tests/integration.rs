@@ -283,6 +283,20 @@ fn object_has_symbol(path: &std::path::Path, symbol: &str) -> Result<bool, Strin
     Ok(String::from_utf8_lossy(&output.stdout).contains(symbol))
 }
 
+fn host_target_triple() -> String {
+    let os = if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        std::env::consts::OS
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        std::env::consts::ARCH
+    };
+    format!("{os}-{arch}")
+}
+
 fn run_git_in_dir(cwd: &std::path::Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -1959,6 +1973,60 @@ output = "demo-bin"
 }
 
 #[test]
+fn test_cool_bundle_packages_project_via_cool_app() {
+    let project_dir = unique_temp_dir("cool_project_bundle");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::create_dir_all(project_dir.join("assets")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[bundle]
+include = ["assets", "README.txt"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"bundle ok\")\n").unwrap();
+    std::fs::write(project_dir.join("assets").join("info.txt"), "asset\n").unwrap();
+    std::fs::write(project_dir.join("README.txt"), "hello\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["bundle"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Bundled"));
+
+    let artifact_name = format!("demo-0.2.0-{}", host_target_triple());
+    let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    assert!(
+        archive_path.exists(),
+        "expected bundle archive at {}",
+        archive_path.display()
+    );
+
+    let tar_output = Command::new("tar")
+        .args(["tzf", archive_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        tar_output.status.success(),
+        "tar list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&tar_output.stdout),
+        String::from_utf8_lossy(&tar_output.stderr)
+    );
+    let listing = String::from_utf8_lossy(&tar_output.stdout);
+    assert!(listing.contains(&format!("{artifact_name}/demo-bin")));
+    assert!(listing.contains(&format!("{artifact_name}/assets/info.txt")));
+    assert!(listing.contains(&format!("{artifact_name}/README.txt")));
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
 fn test_cool_build_freestanding_emits_project_object_file() {
     let project_dir = unique_temp_dir("cool_project_freestanding");
     let _ = std::fs::remove_dir_all(&project_dir);
@@ -3372,7 +3440,7 @@ fn test_http_app_cli_args() {
     let url = format!("file://{}", body_path.display());
 
     let output = Command::new(cool_bin())
-        .args(["coolapps/http.cool", "get", &url])
+        .args(["apps/http.cool", "get", &url])
         .output()
         .unwrap();
 
@@ -3394,7 +3462,7 @@ fn test_http_app_getjson_and_head() {
     let json_url = format!("file://{}", json_path.display());
 
     let getjson_output = Command::new(cool_bin())
-        .args(["coolapps/http.cool", "getjson", &json_url])
+        .args(["apps/http.cool", "getjson", &json_url])
         .output()
         .unwrap();
     assert!(getjson_output.status.success());
@@ -3407,7 +3475,7 @@ fn test_http_app_getjson_and_head() {
     let body_url = format!("file://{}", body_path.display());
 
     let head_output = Command::new(cool_bin())
-        .args(["coolapps/http.cool", "head", &body_url])
+        .args(["apps/http.cool", "head", &body_url])
         .output()
         .unwrap();
 
@@ -3446,7 +3514,7 @@ fn test_runfile_passes_program_args() {
 
 #[test]
 fn test_shell_http_app_launch() {
-    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "http help\nexit\n").unwrap();
+    let result = run_cool_stdin_with_args("apps/shell.cool", &[], "http help\nexit\n").unwrap();
     assert!(result.contains("http v1.0 — simple HTTP client"));
     assert!(result.contains("http get <url>"));
 }
@@ -3454,7 +3522,7 @@ fn test_shell_http_app_launch() {
 #[test]
 fn test_shell_alias_env_and_history() {
     let input = "set NAME=Cool\necho $NAME\nalias hi echo hello\nhi\necho one\necho two\nhistory\nexit\n";
-    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], input).unwrap();
+    let result = run_cool_stdin_with_args("apps/shell.cool", &[], input).unwrap();
     assert!(result.contains("Cool"));
     assert!(result.contains("hello"));
     assert!(result.contains("0  set NAME=Cool"));
@@ -3476,7 +3544,7 @@ fn test_shell_source_and_pipe() {
         script_path.display(),
         pipe_path.display()
     );
-    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], &input).unwrap();
+    let result = run_cool_stdin_with_args("apps/shell.cool", &[], &input).unwrap();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
     assert!(result.contains("sourced"));
@@ -3492,7 +3560,7 @@ fn test_shell_run_passes_program_args() {
     std::fs::write(&script_path, "import sys\nprint(sys.argv[1])\nprint(sys.argv[2])\n").unwrap();
 
     let input = format!("run {} one two\nexit\n", script_path.display());
-    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], &input).unwrap();
+    let result = run_cool_stdin_with_args("apps/shell.cool", &[], &input).unwrap();
 
     let _ = std::fs::remove_dir_all(&temp_dir);
     assert!(result.contains("one"));
@@ -3501,7 +3569,7 @@ fn test_shell_run_passes_program_args() {
 
 #[test]
 fn test_shell_calc_app_launch() {
-    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "calc\n2 + 3\nexit\nexit\n").unwrap();
+    let result = run_cool_stdin_with_args("apps/shell.cool", &[], "calc\n2 + 3\nexit\nexit\n").unwrap();
     assert!(result.contains("calc v1.0 — expression calculator"));
     assert!(result.contains("= 5"));
 }
@@ -3509,13 +3577,13 @@ fn test_shell_calc_app_launch() {
 #[test]
 fn test_calc_app_persistent_variables() {
     let input = "x = 5\nx * 2\nexit\n";
-    let result = run_cool_stdin_with_args("coolapps/calc.cool", &[], input).unwrap();
+    let result = run_cool_stdin_with_args("apps/calc.cool", &[], input).unwrap();
     assert!(result.contains("= 10"));
 }
 
 #[test]
 fn test_shell_notes_app_launch() {
-    let result = run_cool_stdin_with_args("coolapps/shell.cool", &[], "notes\nexit\nexit\n").unwrap();
+    let result = run_cool_stdin_with_args("apps/shell.cool", &[], "notes\nexit\nexit\n").unwrap();
     assert!(result.contains("notes v1.0 — commands:"));
     assert!(result.contains("new <name>"));
 }
@@ -3528,7 +3596,7 @@ fn test_notes_app_crud_flow() {
 
     let input = "new demo\nfirst line\nsecond line\n\nshow demo\nappend demo\nextra\nshow demo\nsearch second\ndelete demo\nlist\nexit\n";
     let mut cmd = Command::new(cool_bin());
-    cmd.arg("coolapps/notes.cool");
+    cmd.arg("apps/notes.cool");
     cmd.env("HOME", &temp_dir);
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::piped());
@@ -3560,7 +3628,7 @@ fn test_edit_app_can_save_empty_existing_file() {
     std::fs::write(&file_path, "").unwrap();
 
     let (stdout, _stderr, status) =
-        run_cool_with_pty_input("coolapps/edit.cool", &[file_path.to_str().unwrap()], b"abc\x18y").unwrap();
+        run_cool_with_pty_input("apps/edit.cool", &[file_path.to_str().unwrap()], b"abc\x18y").unwrap();
 
     let saved = std::fs::read_to_string(&file_path).unwrap();
     let _ = std::fs::remove_file(&file_path);
@@ -3572,7 +3640,7 @@ fn test_edit_app_can_save_empty_existing_file() {
 
 #[test]
 fn test_snake_app_quits_on_q() {
-    let (stdout, _stderr, status) = run_cool_with_pty_input("coolapps/snake.cool", &[], b"q").unwrap();
+    let (stdout, _stderr, status) = run_cool_with_pty_input("apps/snake.cool", &[], b"q").unwrap();
     assert_eq!(status, 0);
     assert!(stdout.contains("Game over! Final score:"));
 }

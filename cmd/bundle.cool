@@ -1,0 +1,183 @@
+import os
+import sys
+import toml
+import path
+import term
+import platform
+import subprocess
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("bundle v1.0 — package a Cool project")
+    print("  cool bundle")
+
+def discover_project_root():
+    cur = os.getcwd()
+    while true:
+        manifest = path.join(cur, "cool.toml")
+        if path.exists(manifest):
+            return cur
+        parent = path.dirname(cur)
+        if parent == cur or parent == "":
+            raise "cool bundle: no cool.toml found in this directory or any parent"
+        cur = parent
+
+def read_manifest(project_root):
+    manifest_path = path.join(project_root, "cool.toml")
+    with open(manifest_path, "r") as f:
+        return toml.loads(f.read())
+
+def project_table(manifest):
+    project = manifest.get("project", nil)
+    if project == nil:
+        return manifest
+    if not isinstance(project, "dict"):
+        raise "cool bundle: [project] must be a table"
+    return project
+
+def require_string(table, key, context):
+    value = table.get(key, nil)
+    if value == nil:
+        raise context + ": missing required key '" + key + "'"
+    if not isinstance(value, "str"):
+        raise context + ": key '" + key + "' must be a string"
+    return value
+
+def optional_string(table, key, default_value, context):
+    value = table.get(key, nil)
+    if value == nil:
+        return default_value
+    if not isinstance(value, "str"):
+        raise context + ": key '" + key + "' must be a string"
+    return value
+
+def bundle_include(manifest):
+    bundle = manifest.get("bundle", nil)
+    if bundle == nil:
+        return []
+    if not isinstance(bundle, "dict"):
+        raise "cool bundle: [bundle] must be a table"
+    include = bundle.get("include", [])
+    if include == nil:
+        return []
+    if not isinstance(include, "list"):
+        raise "cool bundle: [bundle].include must be an array"
+    out = []
+    for item in include:
+        if not isinstance(item, "str"):
+            raise "cool bundle: [bundle].include must contain only strings"
+        out.append(item)
+    return out
+
+def target_triple():
+    os_name = platform.os()
+    if os_name == "macos":
+        os_name = "darwin"
+    arch = platform.arch()
+    if arch == "aarch64":
+        arch = "arm64"
+    return os_name + "-" + arch
+
+def stream_result(result):
+    if result["stdout"] != "":
+        term.write(result["stdout"])
+    if result["stderr"] != "":
+        term.write(result["stderr"])
+
+def run_shell_checked(context, command):
+    result = subprocess.run(command)
+    stream_result(result)
+    if result["timed_out"]:
+        raise "cool bundle: " + context + " timed out"
+    if result["code"] != 0:
+        exit(result["code"])
+
+def ensure_dir(dir_path):
+    if not os["exists"](dir_path):
+        os["mkdir"](dir_path)
+
+def copy_path(src, dst):
+    run_shell_checked("copy " + src, "cp -R " + shell_quote(src) + " " + shell_quote(dst))
+
+def remove_tree(target):
+    if os["exists"](target):
+        run_shell_checked("remove " + target, "rm -rf " + shell_quote(target))
+
+def build_project(project_root, cool_exe):
+    cmd = "cd " + shell_quote(project_root) + " && " + shell_quote(cool_exe) + " build"
+    run_shell_checked("build project", cmd)
+
+def chmod_executable(target):
+    run_shell_checked("chmod " + target, "chmod 755 " + shell_quote(target))
+
+def create_archive(project_root, dist_dir, artifact_name, archive):
+    cmd = "cd " + shell_quote(project_root) + " && tar czf " + shell_quote(archive)
+    cmd = cmd + " -C " + shell_quote(dist_dir) + " " + shell_quote(artifact_name)
+    run_shell_checked("create archive", cmd)
+
+argv = sys.argv
+
+if len(argv) > 2:
+    usage()
+    exit(1)
+
+if len(argv) == 2 and not (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
+    usage()
+    exit(1)
+
+if len(argv) == 2:
+    usage()
+    exit(0)
+
+project_root = discover_project_root()
+manifest = read_manifest(project_root)
+project = project_table(manifest)
+
+name = optional_string(project, "name", "project", "cool.toml")
+version = optional_string(project, "version", "0.1.0", "cool.toml")
+main = require_string(project, "main", "cool.toml")
+output = optional_string(project, "output", name, "cool.toml")
+include = bundle_include(manifest)
+
+main_path = path.join(project_root, main)
+if not os["exists"](main_path):
+    raise "cool bundle: main file '" + main + "' not found"
+
+cool_exe = os.getenv("COOL_EXE_PATH")
+if cool_exe == nil or cool_exe == "":
+    cool_exe = "cool"
+
+build_project(project_root, cool_exe)
+
+target = target_triple()
+artifact_name = name + "-" + version + "-" + target
+dist_dir = path.join(project_root, "dist")
+staging = path.join(dist_dir, artifact_name)
+archive = path.join(dist_dir, artifact_name + ".tar.gz")
+bin_path = path.join(project_root, output)
+dst_bin = path.join(staging, output)
+
+ensure_dir(dist_dir)
+remove_tree(staging)
+ensure_dir(staging)
+copy_path(bin_path, dst_bin)
+chmod_executable(dst_bin)
+
+for item in include:
+    src = path.join(project_root, item)
+    if not os["exists"](src):
+        print("  warning: bundle include '" + item + "' not found, skipping")
+    else:
+        name = path.basename(src)
+        if name == "":
+            raise "cool bundle: invalid include path '" + item + "'"
+        copy_path(src, path.join(staging, name))
+        print("  Including " + item)
+
+create_archive(project_root, dist_dir, artifact_name, archive)
+remove_tree(staging)
+
+print("  Bundled  -> " + archive)

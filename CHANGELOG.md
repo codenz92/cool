@@ -32,6 +32,11 @@ All notable changes to the Cool language project.
 - Freestanding LLVM `assert` failure paths now lower to a direct trap instead of importing libc `abort()` and hosted print helpers
 - Freestanding top-level functions now accept `entry: "symbol"` metadata to export an additional raw entry symbol for custom link flows
 
+#### Self-Hosted Tooling
+
+- Bundled Cool programs are now split by role: end-user apps live under `apps/`, while CLI subcommand implementations like `cool task` and `cool bundle` live under `cmd/`
+- `cool bundle` now delegates to `cmd/bundle.cool`, moving packaging logic out of Rust and into Cool itself
+
 ## [1.1.0] - 2026-04-24 - Phase 10 Complete
 
 ### Phase 10 — Production Readiness And Ecosystem (Complete)

@@ -989,7 +989,7 @@ cargo build --release</code></pre>
                 <td>Start the interactive REPL</td>
               </tr>
               <tr>
-                <td><code>./target/release/cool coolapps/shell.cool</code></td>
+                <td><code>./target/release/cool apps/shell.cool</code></td>
                 <td>Launch the bundled Cool shell app</td>
               </tr>
               <tr>
@@ -2843,7 +2843,7 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
 
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">./target/release/cool coolapps/shell.cool</code></pre>
+          <pre><code class="language-bash">./target/release/cool apps/shell.cool</code></pre>
         </div>
 
         <h3>File System Commands</h3>
@@ -3039,7 +3039,7 @@ echo Done.</code></pre>
         <h3>calc — Calculator REPL</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/calc.cool</code></pre>
+          <pre><code class="language-bash">cool apps/calc.cool</code></pre>
         </div>
         <p>Interactive calculator with persistent variables and full <code>math</code> library support.</p>
         <div class="code-wrap">
@@ -3056,7 +3056,7 @@ echo Done.</code></pre>
         <h3>notes — Note-taking App</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/notes.cool</code></pre>
+          <pre><code class="language-bash">cool apps/notes.cool</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -3098,7 +3098,7 @@ echo Done.</code></pre>
         <h3>top — Process Viewer</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/top.cool</code></pre>
+          <pre><code class="language-bash">cool apps/top.cool</code></pre>
         </div>
         <p>Displays running processes and system statistics using <code>os.popen("ps aux")</code>. Updates in real time
           and expects an interactive TTY.</p>
@@ -3106,7 +3106,7 @@ echo Done.</code></pre>
         <h3>edit — Text Editor</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/edit.cool filename.txt</code></pre>
+          <pre><code class="language-bash">cool apps/edit.cool filename.txt</code></pre>
         </div>
         <p>A nano-like terminal text editor powered by <code>import term</code>. It expects an interactive TTY.</p>
         <div class="table-wrap">
@@ -3137,7 +3137,7 @@ echo Done.</code></pre>
         <h3>snake — Snake Game</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/snake.cool</code></pre>
+          <pre><code class="language-bash">cool apps/snake.cool</code></pre>
         </div>
         <p>ASCII Snake game with real-time arrow key input via <code>import term</code>. Runs entirely in the terminal
           and expects an interactive TTY.</p>
@@ -3145,7 +3145,7 @@ echo Done.</code></pre>
         <h3>browse — TUI File Browser</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/browse.cool</code></pre>
+          <pre><code class="language-bash">cool apps/browse.cool</code></pre>
         </div>
         <p>A two-pane terminal file browser written entirely in Cool. Left pane shows directory contents; right pane
           previews the selected file. Navigate with arrow keys, <code>Enter</code> to descend, <code>←</code>
@@ -3154,7 +3154,7 @@ echo Done.</code></pre>
         <h3>http — HTTP Client</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool coolapps/http.cool help</code></pre>
+          <pre><code class="language-bash">cool apps/http.cool help</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -3280,7 +3280,7 @@ echo Done.</code></pre>
           </table>
         </div>
         <p><code>cool build</code> reads <code>cool.toml</code> manifests, <code>cool task</code> runs the
-          bundled <code>coolapps/task.cool</code> task runner, and <code>cool test</code> discovers
+          bundled <code>cmd/task.cool</code> task runner, and <code>cool test</code> discovers
           <code>test_*.cool</code> / <code>*_test.cool</code> by default under <code>tests/</code>.</p>
 
         <h3>Language Server (cool lsp)</h3>
@@ -3335,7 +3335,7 @@ echo Done.</code></pre>
 │   ├── toml_runtime.rs
 │   └── yaml_runtime.rs
 │
-├── coolapps/
+├── apps/
 │   ├── shell.cool        # Main Cool interactive shell
 │   ├── calc.cool         # Calculator REPL
 │   ├── notes.cool        # Note-taking application
@@ -3343,8 +3343,11 @@ echo Done.</code></pre>
 │   ├── edit.cool         # Terminal text editor
 │   ├── snake.cool        # Snake game
 │   ├── browse.cool       # TUI file browser
-│   ├── http.cool         # HTTP client
-│   └── task.cool         # Manifest task runner used by `cool task`
+│   └── http.cool         # HTTP client
+│
+├── cmd/
+│   ├── task.cool         # Manifest task runner used by `cool task`
+│   └── bundle.cool       # Project bundler used by `cool bundle`
 │
 ├── examples/
 │   ├── hello.cool              # Variables, loops, functions — start here

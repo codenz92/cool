@@ -82,10 +82,50 @@ fn compile_to_native_with_mode(
     }
 }
 
-fn task_app_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("coolapps")
-        .join("task.cool")
+fn bundled_command_path(file_name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cmd").join(file_name)
+}
+
+fn task_command_path() -> PathBuf {
+    bundled_command_path("task.cool")
+}
+
+fn bundle_command_path() -> PathBuf {
+    bundled_command_path("bundle.cool")
+}
+
+fn run_bundled_app(
+    command_name: &str,
+    app_path: &Path,
+    args: &[&String],
+    extra_env: &[(&str, String)],
+) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("{command_name}: cannot resolve current executable: {e}"))?;
+    if !app_path.exists() {
+        return Err(format!(
+            "{command_name}: bundled app not found at '{}'",
+            app_path.display()
+        ));
+    }
+
+    let mut cmd = Command::new(&exe);
+    cmd.arg(app_path).args(args.iter().map(|arg| arg.as_str()));
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+
+    let status = cmd
+        .status()
+        .map_err(|e| format!("{command_name}: failed to launch bundled app: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(match status.code() {
+            Some(code) => format!("{command_name} failed with exit code {code}"),
+            None => format!("{command_name} failed"),
+        })
+    }
 }
 
 fn current_project(command_name: &str) -> Result<CoolProject, String> {
@@ -983,29 +1023,23 @@ fn cmd_add(args: &[&String]) -> Result<(), String> {
 }
 
 fn cmd_task(args: &[&String]) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("cool task: cannot resolve current executable: {e}"))?;
-    let task_app = task_app_path();
-    if !task_app.exists() {
-        return Err(format!("cool task: task runner not found at '{}'", task_app.display()));
-    }
-
-    let status = Command::new(exe)
-        .arg(&task_app)
-        .args(args.iter().map(|arg| arg.as_str()))
-        .status()
-        .map_err(|e| format!("cool task: failed to launch task runner: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(match status.code() {
-            Some(code) => format!("cool task failed with exit code {code}"),
-            None => "cool task failed".to_string(),
-        })
-    }
+    let task_app = task_command_path();
+    run_bundled_app("cool task", &task_app, args, &[])
 }
 
 // ── `cool bundle` ────────────────────────────────────────────────────────────
+fn cmd_bundle(args: &[&String]) -> Result<(), String> {
+    let bundle_app = bundle_command_path();
+    let exe = std::env::current_exe().map_err(|e| format!("cool bundle: cannot resolve current executable: {e}"))?;
+    run_bundled_app(
+        "cool bundle",
+        &bundle_app,
+        args,
+        &[("COOL_EXE_PATH", exe.to_string_lossy().to_string())],
+    )
+}
+
+// ── `cool release` ────────────────────────────────────────────────────────────
 
 fn target_triple() -> String {
     let os = match std::env::consts::OS {
@@ -1036,99 +1070,6 @@ fn copy_into(src: &Path, dst: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
-/// Build the project and produce a distributable tarball under dist/.
-///
-///   cool bundle
-fn cmd_bundle(args: &[&String]) -> Result<(), String> {
-    if !args.is_empty() {
-        return Err("Usage: cool bundle".to_string());
-    }
-
-    let manifest_path = Path::new("cool.toml");
-    if !manifest_path.exists() {
-        return Err("cool bundle: no cool.toml found in current directory".to_string());
-    }
-    let project = CoolProject::from_manifest_path(manifest_path)?;
-    let main_path = project.main_path();
-    if !main_path.exists() {
-        return Err(format!("cool bundle: main file '{}' not found", project.main));
-    }
-
-    // Build the binary first
-    let bin_path = Path::new(project.output_name());
-    let source = fs::read_to_string(&main_path).map_err(|e| format!("cool bundle: {e}"))?;
-    println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
-    let t0 = std::time::Instant::now();
-    compile_to_native(&source, bin_path, &main_path)?;
-    println!(
-        "   Compiled in {:.2}s → {}",
-        t0.elapsed().as_secs_f64(),
-        bin_path.display()
-    );
-
-    // Assemble staging directory: dist/{name}-{version}-{target}/
-    let target = target_triple();
-    let artifact_name = format!("{}-{}-{}", project.name, project.version, target);
-    let dist_dir = Path::new("dist");
-    let staging = dist_dir.join(&artifact_name);
-    let archive = dist_dir.join(format!("{artifact_name}.tar.gz"));
-
-    if staging.exists() {
-        fs::remove_dir_all(&staging).map_err(|e| format!("cool bundle: {e}"))?;
-    }
-    fs::create_dir_all(&staging).map_err(|e| format!("cool bundle: {e}"))?;
-
-    // Copy binary
-    let dst_bin = staging.join(project.output_name());
-    fs::copy(bin_path, &dst_bin).map_err(|e| format!("cool bundle: cannot copy binary: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&dst_bin)
-            .map_err(|e| format!("cool bundle: {e}"))?
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&dst_bin, perms).map_err(|e| format!("cool bundle: {e}"))?;
-    }
-
-    // Copy declared include files/dirs
-    for include in &project.bundle_include {
-        let src = project.root.join(include);
-        if !src.exists() {
-            eprintln!("  warning: bundle include '{}' not found, skipping", include);
-            continue;
-        }
-        let name = src
-            .file_name()
-            .ok_or_else(|| format!("bundle: invalid include path '{include}'"))?;
-        copy_into(&src, &staging.join(name))?;
-        println!("  Including {}", include);
-    }
-
-    // Create tarball via system tar
-    let status = Command::new("tar")
-        .args([
-            "czf",
-            archive.to_str().unwrap(),
-            "-C",
-            dist_dir.to_str().unwrap(),
-            &artifact_name,
-        ])
-        .status()
-        .map_err(|e| format!("cool bundle: tar failed: {e}"))?;
-    if !status.success() {
-        return Err("cool bundle: tar exited with error".to_string());
-    }
-
-    // Clean up staging directory
-    fs::remove_dir_all(&staging).map_err(|e| format!("cool bundle: {e}"))?;
-
-    println!("  Bundled  → {}", archive.display());
-    Ok(())
-}
-
-// ── `cool release` ────────────────────────────────────────────────────────────
 
 fn bump_version(version: &str, bump: &str) -> Result<String, String> {
     let parts: Vec<&str> = version.split('.').collect();
