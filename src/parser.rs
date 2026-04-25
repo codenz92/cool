@@ -103,6 +103,7 @@ impl Parser {
         match self.peek().clone() {
             Token::Def => self.parse_fn_def(),
             Token::Data => self.parse_data_def(),
+            Token::Ident(name) if name == "data" && self.is_data_declaration_stmt() => self.parse_data_def(),
             Token::Extern => self.parse_extern_fn(),
             Token::Class => self.parse_class(),
             Token::Struct => self.parse_struct(false),
@@ -166,7 +167,15 @@ impl Parser {
     }
 
     fn parse_data_def(&mut self) -> Result<Stmt, String> {
-        self.eat(&Token::Data)?;
+        match self.peek().clone() {
+            Token::Data => {
+                self.advance();
+            }
+            Token::Ident(name) if name == "data" => {
+                self.advance();
+            }
+            _ => self.eat(&Token::Data)?,
+        }
         let name = self.expect_ident()?;
         self.eat(&Token::Colon)?;
         let type_name = self.expect_ident()?;
@@ -196,6 +205,12 @@ impl Parser {
             value,
             section,
         })
+    }
+
+    fn is_data_declaration_stmt(&self) -> bool {
+        matches!(self.peek(), Token::Ident(name) if name == "data")
+            && matches!(self.token_at(1), Token::Ident(_))
+            && matches!(self.token_at(2), Token::Colon)
     }
 
     fn parse_extern_fn(&mut self) -> Result<Stmt, String> {

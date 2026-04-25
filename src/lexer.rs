@@ -308,7 +308,6 @@ impl Lexer {
         }
         let token = match s.as_str() {
             "def" => Token::Def,
-            "data" => Token::Data,
             "extern" => Token::Extern,
             "return" => Token::Return,
             "if" => Token::If,
