@@ -310,6 +310,24 @@ fn object_has_symbol(object_path: &PathBuf, symbol: &str) -> Result<bool, String
     Ok(String::from_utf8_lossy(&output.stdout).contains(symbol))
 }
 
+fn object_has_undefined_symbol(object_path: &PathBuf, symbol: &str) -> Result<bool, String> {
+    let output = Command::new("nm")
+        .args(["-u", object_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(name) = line.split_whitespace().last() {
+            if name.trim_start_matches('_') == symbol {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn assert_logging_file_output(contents: &str) {
     let lines: Vec<&str> = contents.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines.len(), 3);
@@ -715,6 +733,27 @@ data BOOT_MAGIC: u32 = 464367618:
     assert!(has_data_section);
     assert!(has_boot_entry);
     assert!(!binary_path.exists());
+}
+
+#[test]
+fn test_llvm_freestanding_assert_traps_without_libc_abort() {
+    let source = r#"
+def boot_entry():
+    assert(false, "boom")
+    return 7
+"#;
+
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let has_boot_entry = object_has_symbol(&object_path, "boot_entry").unwrap();
+    let has_abort = object_has_undefined_symbol(&object_path, "abort").unwrap();
+    let has_cool_print = object_has_undefined_symbol(&object_path, "cool_print").unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(has_boot_entry);
+    assert!(!has_abort);
+    assert!(!has_cool_print);
 }
 
 #[test]

@@ -7765,6 +7765,8 @@ struct RuntimeFns<'ctx> {
     cool_print: FunctionValue<'ctx>,
     /// void abort(void)
     abort_fn: FunctionValue<'ctx>,
+    /// void llvm.trap(void)
+    trap_fn: FunctionValue<'ctx>,
     // raw memory
     cool_malloc: FunctionValue<'ctx>,
     cool_free: FunctionValue<'ctx>,
@@ -8194,6 +8196,7 @@ impl<'ctx> Compiler<'ctx> {
             // void cool_print(i32 n, ...)  — is_var_arg = true
             cool_print: decl!("cool_print", voidt.fn_type(&[i32m], true)),
             abort_fn: decl!("abort", voidt.fn_type(&[], false)),
+            trap_fn: decl!("llvm.trap", voidt.fn_type(&[], false)),
             // raw memory — all take CoolVal(s) and return CoolVal
             cool_malloc: decl!("cool_malloc", cv_type.fn_type(&[cv], false)),
             cool_free: decl!("cool_free", cv_type.fn_type(&[cv], false)),
@@ -11177,18 +11180,26 @@ impl<'ctx> Compiler<'ctx> {
         let fail_bb = self.context.append_basic_block(fn_val, "assert_fail");
         self.builder.build_conditional_branch(i1, ok_bb, fail_bb).unwrap();
 
-        // Failure path: print message and abort
+        // Failure path: hosted builds print + abort; freestanding builds trap
+        // directly so emitted objects do not depend on libc abort/stdio.
         self.builder.position_at_end(fail_bb);
-        let msg_cv = if let Some(msg_expr) = message {
-            self.compile_expr(msg_expr)?
+        if self.build_mode.is_freestanding() {
+            if let Some(msg_expr) = message {
+                let _ = self.compile_expr(msg_expr)?;
+            }
+            self.builder.build_call(self.rt.trap_fn, &[], "").unwrap();
         } else {
-            self.build_str("AssertionError")
-        };
-        let n1 = self.context.i32_type().const_int(1, false);
-        self.builder
-            .build_call(self.rt.cool_print, &[n1.into(), msg_cv.into()], "")
-            .unwrap();
-        self.builder.build_call(self.rt.abort_fn, &[], "").unwrap();
+            let msg_cv = if let Some(msg_expr) = message {
+                self.compile_expr(msg_expr)?
+            } else {
+                self.build_str("AssertionError")
+            };
+            let n1 = self.context.i32_type().const_int(1, false);
+            self.builder
+                .build_call(self.rt.cool_print, &[n1.into(), msg_cv.into()], "")
+                .unwrap();
+            self.builder.build_call(self.rt.abort_fn, &[], "").unwrap();
+        }
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_bb);
