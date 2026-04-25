@@ -1341,22 +1341,22 @@ fn cmd_release(args: &[&String]) -> Result<(), String> {
 fn print_help() {
     println!(
         "\
-Cool 1.0.0 — a Python-inspired scripting language
+Cool 1.0.0 — a native-first high-level systems language
 
 USAGE:
-    cool                          Start the REPL
+    cool build                    Build the project described by cool.toml
+    cool build <file.cool>        Compile a single file to a native binary
+    cool build --freestanding     Build a freestanding object file (.o)
+    cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool <file.cool>              Run a file with the tree-walk interpreter
     cool --vm <file.cool>         Run a file with the bytecode VM
-    cool --compile <file.cool>    Compile a file to a native binary (LLVM)
+    cool                          Start the REPL
     cool ast <file.cool>          Print the parsed AST as JSON
     cool inspect <file.cool>      Print a JSON summary of top-level symbols
     cool symbols [file.cool]      Print a resolved JSON symbol index
     cool diff <before> <after>    Print a JSON summary of top-level changes
     cool check [file.cool]        Statically check imports and cycles
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
-    cool build                    Build the project described by cool.toml
-    cool build <file.cool>        Compile a single file to a native binary
-    cool build --freestanding     Build a freestanding object file (.o)
     cool bundle                   Build and package the project into a distributable tarball
     cool release [--bump patch]   Bump version, bundle, and git-tag a release
     cool install                  Fetch and lock project dependencies

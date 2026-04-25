@@ -1,5 +1,31 @@
 # Cool Language Roadmap
 
+## Direction
+
+> North star: Cool should be known as a native-first, high-level systems language — not as a scripting language with extra backends.
+
+### Product Position
+
+- Primary identity: compiled language for real software, with interpreter/VM modes as development tools and compatibility layers
+- Unique bet: one language across interpreter, VM, native binary, and freestanding object output
+- Competitive edge: Python-level readability with stronger deployment, ABI, layout, and systems reach
+
+### Roadmap Rules
+
+- Backend parity is a feature: semantics must stay aligned across interpreter, VM, native, and freestanding subsets whenever the language surface overlaps
+- Native-first work wins priority over shell-first work
+- Compile-time structure, diagnostics, and tooling matter more than novelty syntax
+- Systems interop must feel first-class, not bolted on
+- Cool should not chase full Python compatibility as a goal in itself
+
+### Current Critical Path
+
+1. Finish the freestanding systems foundation
+2. Add a real static semantic core for ordinary `def`/module code
+3. Add typed language features that make large compiled programs pleasant and safe
+4. Harden the native toolchain so shipping Cool binaries feels routine
+5. Turn systems interop into a signature advantage (`bindgen`, ABI, targets, link flow)
+
 ## Legend
 
 - [x] Done
@@ -374,7 +400,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ## Phase 10 — Production Readiness And Ecosystem ✅ Complete
 
-> Goal: make Cool feel default for real applications, not just impressive for demos, scripts, and experiments
+> Goal: make Cool feel default for real applications, not just impressive for demos and experiments
 
 ### Runtime Parity
 
@@ -454,6 +480,160 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 12 — Static Semantic Core
+
+> Goal: give Cool a disciplined compile-time spine so it reads like a high-level language but scales like a serious compiled one
+
+### Declarations And Modules
+
+- [ ] Typed parameters and return types for ordinary `def`
+- [ ] Typed local bindings and module-level constants
+- [ ] Immutable bindings / constant declarations
+- [ ] Explicit public/private module visibility
+- [ ] Export surface rules and import validation for large projects
+
+### Type Checking
+
+- [ ] A real type checker for normal program code, not just FFI/data-layout declarations
+- [ ] Assignability and coercion rules for primitives, structs, unions, and tuples
+- [ ] Compile-time checking of function returns on all code paths
+- [ ] Module-level symbol/type resolution before codegen
+- [ ] `cool check --strict` / strict project mode
+
+### Tooling Integration
+
+- [ ] Type-aware LSP completions, hover, and diagnostics
+- [ ] Typed `cool ast` / `inspect` output for tooling consumers
+- [ ] Compiler diagnostics with fix suggestions for type and import issues
+
+---
+
+## Phase 13 — Typed Language Features
+
+> Goal: make Cool comfortable for large native codebases, not just dynamic-style programs that happen to compile
+
+### Core Language Features
+
+- [ ] Enums / tagged unions / algebraic data types
+- [ ] `match` with exhaustiveness checking
+- [ ] `Option` / `Result` style standard types and language sugar where justified
+- [ ] Generic functions
+- [ ] Generic structs / enums / collections
+- [ ] Traits / interfaces / protocols for shared behavior
+- [ ] Trait bounds or equivalent constraints for generic code
+
+### Collections And APIs
+
+- [ ] Typed standard collections with clear generic surfaces
+- [ ] Method/trait design that works consistently across interpreter, VM, and native builds
+- [ ] Error-handling conventions for compiled application code
+
+---
+
+## Phase 14 — Runtime And Memory Model
+
+> Goal: define the runtime semantics clearly enough that Cool is trusted for systems-facing native software
+
+### Memory Semantics
+
+- [ ] Choose and document the primary memory-management model for high-level values in native code
+- [ ] Define ownership boundaries between Cool-managed values, raw memory, and FFI-owned memory
+- [ ] Deterministic cleanup story for native resources beyond `with`
+- [ ] Large-value move/copy/clone semantics
+- [ ] Arena/region or other explicit allocator strategies where they make sense
+
+### Runtime Profiles
+
+- [ ] Clear hosted vs freestanding runtime profile documentation
+- [ ] Stable `core`/`std` split for host-free builds
+- [ ] Native panic / abort / diagnostics policy
+- [ ] Thread/task safety rules for future concurrency features
+
+---
+
+## Phase 15 — Native Toolchain And Distribution
+
+> Goal: make shipping Cool software feel more like shipping a serious compiled language product than running a script with extra steps
+
+### Compiler And Build UX
+
+- [ ] Incremental compilation
+- [ ] Cross-compilation via explicit target triples
+- [ ] Build profiles (`dev`, `release`, `freestanding`, and stricter checked modes)
+- [ ] Reproducible builds and toolchain pinning
+- [ ] Better binary/object/library output selection
+
+### Debugging, Docs, And Observability
+
+- [ ] Native debug info and better stack traces
+- [ ] Profiling and benchmark tooling
+- [ ] `cool fmt`
+- [ ] First-class doc generation for modules, types, and APIs
+- [ ] Better release artifact metadata and symbol maps
+
+### Packaging
+
+- [ ] Registry-quality package/distribution workflow
+- [ ] Stronger lockfile and dependency reproducibility guarantees
+- [ ] Project templates aimed at native apps, libraries, services, and freestanding targets
+
+---
+
+## Phase 16 — Systems Interop And Targets
+
+> Goal: make Cool unusually strong at crossing the line between high-level application code and low-level native/system boundaries
+
+### C / ABI Interop
+
+- [ ] `cool bindgen` for C headers
+- [ ] Richer ABI metadata for `extern def`
+- [ ] Better native library loading/linking workflows
+- [ ] Static library and shared library output
+- [ ] Clear FFI ownership/lifetime annotations
+
+### Targeting And Linking
+
+- [ ] Linker-script support and explicit entry-point control
+- [ ] Object / kernel image output without libc assumptions
+- [ ] Target CPU / feature flags
+- [ ] No-libc syscall/runtime support where appropriate
+- [ ] Better section/link layout tooling for embedded/kernel use
+
+### Systems Libraries
+
+- [ ] Register/MMIO helpers built on the existing raw-memory primitives
+- [ ] Safer pointer/address abstractions on top of raw integer addresses
+- [ ] Host-independent `core` facilities for allocators, strings, formatting, and collections
+
+---
+
+## Phase 17 — Signature Features And Flagship Software
+
+> Goal: give Cool a recognizable identity beyond “another compiled language” and prove it with software people care about
+
+### Signature Capability
+
+- [ ] Capability/permission model declared in `cool.toml` for file/network/env/process access
+- [ ] Runtime enforcement and diagnostics for denied capabilities
+- [ ] Capability-aware stdlib APIs and package metadata
+
+### Concurrency
+
+- [ ] Structured concurrency primitives
+- [ ] Tasks, cancellation, deadlines, and channels
+- [ ] Process/network orchestration APIs that compose with the stdlib
+- [ ] Clear semantics across interpreter, VM, and native builds
+
+### Flagship Software
+
+- [ ] A real package manager / project tool written in Cool
+- [ ] A substantial native CLI people would actually use outside the repo
+- [ ] A flagship TUI or desktop-like terminal app that demonstrates the compiled language story
+- [ ] A service/backend example large enough to stress the type system, tooling, and packaging
+- [ ] A freestanding/kernel/boot-path demo that proves the systems subset is not theoretical
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -469,3 +649,9 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 9 — Self-Hosted Compiler | ✅ Complete |
 | 10 — Production Readiness And Ecosystem | ✅ Complete |
 | 11 — Freestanding Systems Foundation | 🚧 In Progress |
+| 12 — Static Semantic Core | ⏳ Planned |
+| 13 — Typed Language Features | ⏳ Planned |
+| 14 — Runtime And Memory Model | ⏳ Planned |
+| 15 — Native Toolchain And Distribution | ⏳ Planned |
+| 16 — Systems Interop And Targets | ⏳ Planned |
+| 17 — Signature Features And Flagship Software | ⏳ Planned |

@@ -5,16 +5,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description"
-      content="Official documentation for Cool — a Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and an interactive shell, all implemented in Rust.">
+      content="Official documentation for Cool — a native-first, high-level systems language with Python-like syntax, a bytecode VM, LLVM native compiler, FFI, and freestanding build support.">
     <meta name="robots" content="index, follow">
     <meta property="og:title" content="Cool Language — Documentation">
     <meta property="og:description"
-      content="A Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and an interactive shell, implemented in Rust.">
+      content="A native-first, high-level systems language with Python-like syntax, a bytecode VM, LLVM native compiler, FFI, and freestanding build support.">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Cool Language — Documentation">
     <meta name="twitter:description"
-      content="A Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and an interactive shell, implemented in Rust.">
+      content="A native-first, high-level systems language with Python-like syntax, a bytecode VM, LLVM native compiler, FFI, and freestanding build support.">
     <link rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄</text></svg>">
     <title>Cool Language — Documentation</title>
@@ -880,8 +880,8 @@
       <!-- HERO -->
       <div class="hero">
         <h1><span>Cool</span> Language<br>Documentation</h1>
-        <p class="hero-sub">A Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and a
-          fully-featured shell — all implemented in Rust.</p>
+        <p class="hero-sub">A native-first, high-level systems language with Python-like syntax, a bytecode VM, LLVM
+          native compiler, FFI, and freestanding build support.</p>
         <div class="hero-actions">
           <a href="#getting-started" class="btn btn-primary">Get Started</a>
           <a href="https://github.com/codenz92/cool-lang" target="_blank" rel="noopener noreferrer"
@@ -892,9 +892,10 @@
       <!-- INTRODUCTION -->
       <section class="doc-section" id="introduction">
         <h2>Introduction</h2>
-        <p>Cool is a tree-walk interpreted language with Python-like syntax built on a clean Rust runtime. It also
-          ships with a bytecode VM, an LLVM native compiler, an FFI layer, and <strong>Cool</strong> — a fully
-          interactive OS shell written entirely in Cool itself.
+        <p>Cool is a high-level systems language with Python-like syntax and a native-first toolchain. Its primary
+          compilation path targets native binaries and freestanding object files through LLVM, while the interpreter
+          and bytecode VM provide fast iteration, tooling support, and runtime parity. It also ships with FFI, ABI and
+          data-layout controls, and bundled terminal apps written in Cool itself.
         </p>
 
         <div class="feature-grid">
@@ -920,8 +921,8 @@
               platform, toml, yaml, sqlite, http, subprocess, argparse, logging, test, socket, term, ffi, and more.</div>
           </div>
           <div class="feature-card">
-            <div class="fc-title">Cool Shell</div>
-            <div class="fc-desc">Full interactive shell. Pipes, env vars, tab complete.</div>
+            <div class="fc-title">Native Builds</div>
+            <div class="fc-desc">LLVM backend, native binaries, freestanding object output, and ABI-level control.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Rust Implementation</div>
@@ -964,32 +965,32 @@ cargo build --release</code></pre>
             </thead>
             <tbody>
               <tr>
-                <td><code>./target/release/cool</code></td>
-                <td>Start the interactive REPL</td>
-              </tr>
-              <tr>
-                <td><code>./target/release/cool hello.cool</code></td>
-                <td>Run a Cool script</td>
-              </tr>
-              <tr>
-                <td><code>./target/release/cool --vm hello.cool</code></td>
-                <td>Run a script with the bytecode VM</td>
-              </tr>
-              <tr>
                 <td><code>./target/release/cool build hello.cool</code></td>
-                <td>Compile a script to a native binary (requires LLVM 17)</td>
-              </tr>
-              <tr>
-                <td><code>./target/release/cool build --freestanding hello.cool</code></td>
-                <td>Emit a freestanding object file (<code>hello.o</code>)</td>
+                <td>Compile a source file to a native binary (requires LLVM 17)</td>
               </tr>
               <tr>
                 <td><code>./hello</code></td>
                 <td>Run the compiled native binary</td>
               </tr>
               <tr>
+                <td><code>./target/release/cool build --freestanding hello.cool</code></td>
+                <td>Emit a freestanding object file (<code>hello.o</code>)</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool hello.cool</code></td>
+                <td>Run a source file with the tree-walk interpreter</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool --vm hello.cool</code></td>
+                <td>Run a source file with the bytecode VM</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool</code></td>
+                <td>Start the interactive REPL</td>
+              </tr>
+              <tr>
                 <td><code>./target/release/cool coolapps/shell.cool</code></td>
-                <td>Launch Cool shell</td>
+                <td>Launch the bundled Cool shell app</td>
               </tr>
               <tr>
                 <td><code>./target/release/cool help</code></td>
@@ -2835,10 +2836,10 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
 
       <!-- Cool SHELL -->
       <section class="doc-section" id="Cool-shell">
-        <h2>Cool Shell</h2>
-        <p>Cool is a fully interactive shell written entirely in Cool. It runs on top of the Cool interpreter and
-          provides a Unix-like command-line environment. Tab completion and up-arrow history navigation are available
-          in interactive TTY sessions.</p>
+        <h2>Bundled Shell</h2>
+        <p>Cool also ships with a fully interactive shell written entirely in Cool. It runs on top of the Cool
+          interpreter and provides a Unix-like command-line environment. Tab completion and up-arrow history
+          navigation are available in interactive TTY sessions.</p>
 
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>

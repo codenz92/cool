@@ -1,8 +1,8 @@
 # Cool
 
-A Python-inspired scripting language with a native compiler, FFI, and an interactive OS shell — all implemented in Rust.
+A native-first, high-level systems language with Python-like syntax, an LLVM compiler, FFI, and freestanding build support — all implemented in Rust.
 
-Cool is a tree-walk interpreted language with Python-like syntax — indentation-based blocks, classes, closures, f-strings, list comprehensions, and more — built on a clean Rust runtime. It also ships with a **bytecode VM**, an **LLVM native compiler**, a **foreign function interface**, and **Cool shell**, a fully-featured interactive shell written entirely in Cool itself.
+Cool is a high-level systems language with Python-like syntax and a native-first toolchain. Its primary compilation path targets native binaries and freestanding object files through LLVM, while the tree-walk interpreter and bytecode VM provide fast iteration, tooling support, and runtime parity. It also ships with a **foreign function interface**, explicit ABI/data-layout features, and bundled terminal apps written in Cool itself.
 
 ---
 
@@ -10,6 +10,8 @@ Cool is a tree-walk interpreted language with Python-like syntax — indentation
 
 ### Language
 
+- Native-first toolchain: tree-walk interpreter, bytecode VM, LLVM native compiler, and freestanding object output
+- Systems reach: `extern def`, `data`, structs/unions, FFI, inline assembly, and raw memory operations
 - Indentation-based block syntax (Python-style)
 - Variables, arithmetic, comparisons, logical and bitwise operators
 - `if` / `elif` / `else`, `while`, `for`, `break`, `continue`
@@ -240,9 +242,9 @@ status = read_u32_volatile(buf)
 
 Volatile variants exist for `byte`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, and `f64`.
 
-### Cool Shell (`coolapps/shell.cool`)
+### Bundled Shell (`coolapps/shell.cool`)
 
-A fully interactive shell written in Cool:
+Cool also ships with a fully interactive shell written in Cool:
 
 ```text
 ls [path]          cd <path>          pwd
@@ -273,7 +275,11 @@ expect a real TTY because they rely on `import term` raw-mode input and screen c
 # Build
 cargo build --release
 
-# Run a file (tree-walk interpreter)
+# Compile a native binary
+./target/release/cool build hello.cool
+./hello
+
+# Run a source file with the tree-walk interpreter
 ./target/release/cool hello.cool
 
 # Start the REPL
