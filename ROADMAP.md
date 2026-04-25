@@ -173,7 +173,7 @@
 - [ ] `tempfile` module — temporary files/directories with cleanup helpers
 - [ ] `fswatch` module — file watching for rebuild loops, editors, and automation
 - [ ] `process` module — PID info, signals, environment inspection, and runtime metadata
-- [ ] `platform` module — OS/arch/runtime detection and host capability helpers
+- [x] `platform` module — OS/arch/runtime detection and host capability helpers
 - [x] `subprocess` module — structured process spawning, exit codes, stdout/stderr capture
 - [ ] `daemon` module — service lifecycle helpers, PID files, logs, and restart policies
 - [ ] `sandbox` module — constrained command/file execution helpers for safer automation

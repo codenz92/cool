@@ -6428,6 +6428,114 @@ static CoolVal cool_term_size_val(void) {
     return out;
 }
 
+static const char* cool_platform_os_name(void) {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#elif defined(__ANDROID__)
+    return "android";
+#elif defined(__linux__)
+    return "linux";
+#elif defined(__FreeBSD__)
+    return "freebsd";
+#elif defined(__NetBSD__)
+    return "netbsd";
+#elif defined(__OpenBSD__)
+    return "openbsd";
+#elif defined(__DragonFly__)
+    return "dragonfly";
+#elif defined(__sun)
+    return "solaris";
+#elif defined(__Fuchsia__)
+    return "fuchsia";
+#elif defined(__HAIKU__)
+    return "haiku";
+#elif defined(__wasi__)
+    return "wasi";
+#elif defined(__EMSCRIPTEN__)
+    return "emscripten";
+#else
+    return "unknown";
+#endif
+}
+
+static const char* cool_platform_arch_name(void) {
+#if defined(__x86_64__) || defined(_M_X64)
+    return "x86_64";
+#elif defined(__aarch64__)
+    return "aarch64";
+#elif defined(__i386__) || defined(_M_IX86)
+    return "x86";
+#elif defined(__arm__) || defined(_M_ARM)
+    return "arm";
+#elif defined(__riscv) && __riscv_xlen == 64
+    return "riscv64";
+#elif defined(__riscv) && __riscv_xlen == 32
+    return "riscv32";
+#elif defined(__powerpc64__)
+    return "powerpc64";
+#elif defined(__powerpc__)
+    return "powerpc";
+#elif defined(__s390x__)
+    return "s390x";
+#elif defined(__loongarch64) || defined(__loongarch64__)
+    return "loongarch64";
+#elif defined(__wasm64__)
+    return "wasm64";
+#elif defined(__wasm32__)
+    return "wasm32";
+#else
+    return "unknown";
+#endif
+}
+
+static const char* cool_platform_family_name(void) {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__EMSCRIPTEN__) || defined(__wasm32__) || defined(__wasm64__) || defined(__wasi__)
+    return "wasm";
+#elif defined(__unix__) || defined(__unix) || defined(__APPLE__)
+    return "unix";
+#else
+    return "unknown";
+#endif
+}
+
+static const char* cool_platform_exe_ext(void) {
+#if defined(_WIN32)
+    return "exe";
+#else
+    return "";
+#endif
+}
+
+static const char* cool_platform_shared_lib_ext(void) {
+#if defined(_WIN32)
+    return "dll";
+#elif defined(__APPLE__)
+    return "dylib";
+#else
+    return "so";
+#endif
+}
+
+static const char* cool_platform_path_sep(void) {
+#if defined(_WIN32)
+    return "\\";
+#else
+    return "/";
+#endif
+}
+
+static const char* cool_platform_newline(void) {
+#if defined(_WIN32)
+    return "\r\n";
+#else
+    return "\n";
+#endif
+}
+
 CoolVal cool_module_get_attr(const char* module, const char* name) {
     if (strcmp(module, "math") == 0) {
         if (strcmp(name, "pi") == 0) return cv_float(M_PI);
@@ -6536,6 +6644,23 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             const char* path = cool_to_str(args[0]);
             return cv_bool(path[0] == '/');
         }
+    }
+
+    if (strcmp(module, "platform") == 0) {
+        if (strcmp(name, "os") == 0 && nargs == 0) return cv_str(cool_platform_os_name());
+        if (strcmp(name, "arch") == 0 && nargs == 0) return cv_str(cool_platform_arch_name());
+        if (strcmp(name, "family") == 0 && nargs == 0) return cv_str(cool_platform_family_name());
+        if (strcmp(name, "runtime") == 0 && nargs == 0) return cv_str("native");
+        if (strcmp(name, "exe_ext") == 0 && nargs == 0) return cv_str(cool_platform_exe_ext());
+        if (strcmp(name, "shared_lib_ext") == 0 && nargs == 0) return cv_str(cool_platform_shared_lib_ext());
+        if (strcmp(name, "path_sep") == 0 && nargs == 0) return cv_str(cool_platform_path_sep());
+        if (strcmp(name, "newline") == 0 && nargs == 0) return cv_str(cool_platform_newline());
+        if (strcmp(name, "is_windows") == 0 && nargs == 0) return cv_bool(strcmp(cool_platform_family_name(), "windows") == 0);
+        if (strcmp(name, "is_unix") == 0 && nargs == 0) return cv_bool(strcmp(cool_platform_family_name(), "unix") == 0);
+        if (strcmp(name, "has_ffi") == 0 && nargs == 0) return cv_bool(1);
+        if (strcmp(name, "has_raw_memory") == 0 && nargs == 0) return cv_bool(1);
+        if (strcmp(name, "has_extern") == 0 && nargs == 0) return cv_bool(1);
+        if (strcmp(name, "has_inline_asm") == 0 && nargs == 0) return cv_bool(1);
     }
 
     if (strcmp(module, "os") == 0) {
@@ -11581,7 +11706,7 @@ impl<'ctx> Compiler<'ctx> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
             | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "http" | "term" | "string" | "list" | "re"
-            | "collections" | "path" | "ffi" | "socket" => {
+            | "collections" | "path" | "platform" | "ffi" | "socket" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);

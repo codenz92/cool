@@ -917,7 +917,7 @@
           <div class="feature-card">
             <div class="fc-title">Standard Library</div>
             <div class="fc-desc">math, os, sys, json, re, time, random, collections, path, csv, datetime, hashlib,
-              toml, yaml, sqlite, http, subprocess, argparse, logging, test, socket, term, ffi, and more.</div>
+              platform, toml, yaml, sqlite, http, subprocess, argparse, logging, test, socket, term, ffi, and more.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Cool Shell</div>
@@ -1958,6 +1958,7 @@ except ValueError as e:
 import os
 import sys
 import path
+import platform
 import csv
 import datetime
 import hashlib
@@ -2275,6 +2276,26 @@ print(path.stem("hello.cool"))           # hello
 print(path.exists("/etc/hosts"))         # true
 print(path.isabs("/etc"))                # true
 print(path.normalize("a/../b"))          # b</code></pre>
+        </div>
+
+        <h3>platform</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import platform
+
+print(platform.os())              # "macos", "linux", "windows", ...
+print(platform.arch())            # "x86_64", "aarch64", ...
+print(platform.family())          # "unix" or "windows"
+print(platform.runtime())         # "interpreter", "vm", or "native"
+print(platform.exe_ext())         # "exe" on Windows, "" elsewhere
+print(platform.shared_lib_ext())  # "dylib", "so", or "dll"
+print(platform.path_sep())        # "/" or "\\"
+print(platform.newline())         # "\n" or "\r\n"
+
+print(platform.has_ffi())
+print(platform.has_raw_memory())
+print(platform.has_extern())
+print(platform.has_inline_asm())</code></pre>
         </div>
 
         <h3>argparse</h3>
@@ -3404,7 +3425,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>6</td>
-                <td>Standard library — json, re, time, random, collections, string, list, path, csv, datetime, hashlib, toml, yaml, sqlite, http, subprocess, argparse, logging, test</td>
+                <td>Standard library — json, re, time, random, collections, string, list, path, platform, csv, datetime, hashlib, toml, yaml, sqlite, http, subprocess, argparse, logging, test</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -3450,7 +3471,7 @@ echo Done.</code></pre>
           <li>✅ <code>cool build</code> for hosted native binaries and <code>cool build --freestanding</code> for object-file output</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>platform.os()</code>/<code>arch()</code>/<code>runtime()</code> and capability helpers, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

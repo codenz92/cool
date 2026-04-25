@@ -1624,6 +1624,9 @@ impl VM {
         if let Some(rest) = name.strip_prefix("path.") {
             return self.call_path_module(rest, args);
         }
+        if let Some(rest) = name.strip_prefix("platform.") {
+            return self.call_platform_module(rest, args);
+        }
         if let Some(rest) = name.strip_prefix("listmod.") {
             return self.call_list_module(rest, args, kwargs);
         }
@@ -4199,6 +4202,40 @@ impl VM {
         }
     }
 
+    fn call_platform_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        if !args.is_empty() {
+            return Err(self.err(&format!("platform.{name}() takes no arguments")));
+        }
+
+        let value = match name {
+            "os" => VmValue::Str(std::env::consts::OS.to_string()),
+            "arch" => VmValue::Str(std::env::consts::ARCH.to_string()),
+            "family" => VmValue::Str(std::env::consts::FAMILY.to_string()),
+            "runtime" => VmValue::Str("vm".to_string()),
+            "exe_ext" => VmValue::Str(std::env::consts::EXE_EXTENSION.to_string()),
+            "shared_lib_ext" => VmValue::Str(
+                if cfg!(target_os = "windows") {
+                    "dll"
+                } else if cfg!(target_os = "macos") {
+                    "dylib"
+                } else {
+                    "so"
+                }
+                .to_string(),
+            ),
+            "path_sep" => VmValue::Str(std::path::MAIN_SEPARATOR.to_string()),
+            "newline" => VmValue::Str(if cfg!(windows) { "\r\n" } else { "\n" }.to_string()),
+            "is_windows" => VmValue::Bool(cfg!(windows)),
+            "is_unix" => VmValue::Bool(cfg!(unix)),
+            "has_ffi" => VmValue::Bool(false),
+            "has_raw_memory" => VmValue::Bool(false),
+            "has_extern" => VmValue::Bool(false),
+            "has_inline_asm" => VmValue::Bool(false),
+            _ => return Err(self.err(&format!("unknown platform function '{}'", name))),
+        };
+        Ok(value)
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn vm_len(&self, v: &VmValue) -> Result<usize, String> {
@@ -5074,6 +5111,26 @@ impl VM {
                     "isabs",
                 ] {
                     set(&mut d, fname, bf(&format!("path.{}", fname)));
+                }
+            }
+            "platform" => {
+                for fname in &[
+                    "os",
+                    "arch",
+                    "family",
+                    "runtime",
+                    "exe_ext",
+                    "shared_lib_ext",
+                    "path_sep",
+                    "newline",
+                    "is_windows",
+                    "is_unix",
+                    "has_ffi",
+                    "has_raw_memory",
+                    "has_extern",
+                    "has_inline_asm",
+                ] {
+                    set(&mut d, fname, bf(&format!("platform.{}", fname)));
                 }
             }
             "subprocess" => {

@@ -1307,6 +1307,31 @@ impl Interpreter {
                 }
                 env.set_local("path".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
+            "platform" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &[
+                    "os",
+                    "arch",
+                    "family",
+                    "runtime",
+                    "exe_ext",
+                    "shared_lib_ext",
+                    "path_sep",
+                    "newline",
+                    "is_windows",
+                    "is_unix",
+                    "has_ffi",
+                    "has_raw_memory",
+                    "has_extern",
+                    "has_inline_asm",
+                ] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("platform.{}", fn_name)),
+                    );
+                }
+                env.set_local("platform".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
             "string" => {
                 let mut map = IndexedMap::new();
                 for fn_name in &[
@@ -2651,6 +2676,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("term.") {
             return self.call_term_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("platform.") {
+            return self.call_platform_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("ffi.") {
             return self.call_ffi_builtin(f, args);
@@ -4489,6 +4517,40 @@ class Stack:
             }
             _ => Err(self.err(&format!("path has no function '{}'", name))),
         }
+    }
+
+    fn call_platform_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        if !args.is_empty() {
+            return Err(self.err(&format!("platform.{name}() takes no arguments")));
+        }
+
+        let value = match name {
+            "os" => Value::Str(std::env::consts::OS.to_string()),
+            "arch" => Value::Str(std::env::consts::ARCH.to_string()),
+            "family" => Value::Str(std::env::consts::FAMILY.to_string()),
+            "runtime" => Value::Str("interpreter".to_string()),
+            "exe_ext" => Value::Str(std::env::consts::EXE_EXTENSION.to_string()),
+            "shared_lib_ext" => Value::Str(
+                if cfg!(target_os = "windows") {
+                    "dll"
+                } else if cfg!(target_os = "macos") {
+                    "dylib"
+                } else {
+                    "so"
+                }
+                .to_string(),
+            ),
+            "path_sep" => Value::Str(std::path::MAIN_SEPARATOR.to_string()),
+            "newline" => Value::Str(if cfg!(windows) { "\r\n" } else { "\n" }.to_string()),
+            "is_windows" => Value::Bool(cfg!(windows)),
+            "is_unix" => Value::Bool(cfg!(unix)),
+            "has_ffi" => Value::Bool(true),
+            "has_raw_memory" => Value::Bool(false),
+            "has_extern" => Value::Bool(false),
+            "has_inline_asm" => Value::Bool(false),
+            _ => return Err(self.err(&format!("platform has no function '{}'", name))),
+        };
+        Ok(value)
     }
 
     // ── string module ─────────────────────────────────────────────────────

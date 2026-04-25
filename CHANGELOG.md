@@ -6,6 +6,10 @@ All notable changes to the Cool language project.
 
 ### Phase 11 — Freestanding Systems Foundation (In Progress)
 
+#### Cross-Runtime Platform Introspection
+
+- New `platform` module across the interpreter, bytecode VM, and LLVM backend: `os()`, `arch()`, `family()`, `runtime()`, `exe_ext()`, `shared_lib_ext()`, `path_sep()`, `newline()`, `is_windows()`, `is_unix()`, `has_ffi()`, `has_raw_memory()`, `has_extern()`, and `has_inline_asm()`
+
 #### Numeric And Memory Primitives
 
 - Volatile LLVM raw-memory helpers for MMIO/device-style access: `read_*_volatile` / `write_*_volatile` across byte, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`, and `f64`

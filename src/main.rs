@@ -1402,7 +1402,7 @@ NOTES:
     source-relative file imports and project/package imports,
     LLVM-native extern def/data declarations with symbol/cc/section metadata,
     native import ffi (ffi.open/ffi.func),
-    built-in import math/os/sys/path/csv/datetime/hashlib/toml/yaml/sqlite/http/subprocess/argparse/logging/test/time and import random
+    built-in import math/os/sys/path/platform/csv/datetime/hashlib/toml/yaml/sqlite/http/subprocess/argparse/logging/test/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/

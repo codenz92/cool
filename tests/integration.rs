@@ -137,6 +137,49 @@ fn host_pointer_bytes() -> i64 {
     std::mem::size_of::<usize>() as i64
 }
 
+fn host_shared_lib_ext() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "dll"
+    } else if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    }
+}
+
+fn host_exe_ext_display() -> &'static str {
+    if std::env::consts::EXE_EXTENSION.is_empty() {
+        "<none>"
+    } else {
+        std::env::consts::EXE_EXTENSION
+    }
+}
+
+fn expected_platform_lines(
+    runtime: &str,
+    has_ffi: bool,
+    has_raw_memory: bool,
+    has_extern: bool,
+    has_inline_asm: bool,
+) -> Vec<String> {
+    vec![
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+        std::env::consts::FAMILY.to_string(),
+        runtime.to_string(),
+        host_exe_ext_display().to_string(),
+        host_shared_lib_ext().to_string(),
+        std::path::MAIN_SEPARATOR.to_string(),
+        if cfg!(windows) { "2" } else { "1" }.to_string(),
+        cfg!(windows).to_string(),
+        cfg!(unix).to_string(),
+        has_ffi.to_string(),
+        has_raw_memory.to_string(),
+        has_extern.to_string(),
+        has_inline_asm.to_string(),
+    ]
+}
+
 fn wrap_unsigned_host(n: i64) -> i64 {
     let mask = (1i128 << usize::BITS) - 1;
     ((n as i128) & mask) as i64
@@ -2565,6 +2608,25 @@ main = "app/main.cool"
 }
 
 #[test]
+fn test_cool_check_subcommand_accepts_platform_builtin_module() {
+    let temp_dir = unique_temp_dir("cool_check_platform_builtin");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        "import platform\nprint(platform.runtime())\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok: 1 module(s) checked, 0 issue(s)"));
+    assert!(stderr.trim().is_empty());
+}
+
+#[test]
 fn test_cool_check_subcommand_reports_unresolved_imports() {
     let temp_dir = unique_temp_dir("cool_check_command_missing");
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -2806,6 +2868,68 @@ fn test_vm_import_path_module() {
     assert!(result.contains("[\"a/b\", \"c.txt\"]") || result.contains("[\"a/b\",\"c.txt\"]"));
     assert!(result.contains("a/c/d.txt"));
     assert!(result.matches("true").count() >= 2);
+}
+
+#[test]
+fn test_import_platform_module() {
+    let result = run_cool(
+        r#"import platform
+print(platform.os())
+print(platform.arch())
+print(platform.family())
+print(platform.runtime())
+ext = platform.exe_ext()
+print("<none>" if ext == "" else ext)
+print(platform.shared_lib_ext())
+print(platform.path_sep())
+print(len(platform.newline()))
+print(platform.is_windows())
+print(platform.is_unix())
+print(platform.has_ffi())
+print(platform.has_raw_memory())
+print(platform.has_extern())
+print(platform.has_inline_asm())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_platform_lines("interpreter", true, false, false, false));
+}
+
+#[test]
+fn test_vm_import_platform_module() {
+    let result = run_cool_vm(
+        r#"import platform
+print(platform.os())
+print(platform.arch())
+print(platform.family())
+print(platform.runtime())
+ext = platform.exe_ext()
+print("<none>" if ext == "" else ext)
+print(platform.shared_lib_ext())
+print(platform.path_sep())
+print(len(platform.newline()))
+print(platform.is_windows())
+print(platform.is_unix())
+print(platform.has_ffi())
+print(platform.has_raw_memory())
+print(platform.has_extern())
+print(platform.has_inline_asm())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_platform_lines("vm", false, false, false, false));
 }
 
 #[test]

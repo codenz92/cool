@@ -95,6 +95,7 @@ const BUILTIN_MODULES: &[&str] = &[
     "math",
     "os",
     "path",
+    "platform",
     "random",
     "re",
     "socket",
