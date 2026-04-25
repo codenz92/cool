@@ -487,7 +487,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Declarations And Modules
 
-- [ ] Typed parameters and return types for ordinary `def`
+- [x] Typed parameters and return types for ordinary `def`
 - [ ] Typed local bindings and module-level constants
 - [ ] Immutable bindings / constant declarations
 - [ ] Explicit public/private module visibility

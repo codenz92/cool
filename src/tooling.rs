@@ -1400,12 +1400,14 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
         Stmt::FnDef {
             name,
             params,
+            return_type,
             section,
             entry,
             body,
         } => Some(Stmt::FnDef {
             name: name.clone(),
             params: params.clone(),
+            return_type: return_type.clone(),
             section: section.clone(),
             entry: entry.clone(),
             body: strip_line_markers(body),

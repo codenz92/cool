@@ -7956,6 +7956,8 @@ struct Compiler<'ctx> {
     functions: HashMap<String, FunctionValue<'ctx>>,
     /// Top-level user-defined function signatures.
     function_params: HashMap<String, Vec<crate::ast::Param>>,
+    /// Top-level user-defined function declared return types.
+    function_return_types: HashMap<String, Option<ExternAbiType>>,
     /// Top-level user-defined classes (name → ClassInfo).
     classes: HashMap<String, ClassInfo<'ctx>>,
     /// Top-level raw data symbols (name → linker-visible global).
@@ -7965,6 +7967,8 @@ struct Compiler<'ctx> {
     loop_stack: Vec<LoopFrame<'ctx>>,
     /// The function currently being compiled (Some(main_fn) at top level).
     current_fn: Option<FunctionValue<'ctx>>,
+    /// Declared return type of the current typed def, if any.
+    current_fn_return_type: Option<ExternAbiType>,
     /// Captured variables for closures (var name → capture index).
     #[allow(dead_code)]
     captured_vars: HashMap<String, usize>,
@@ -8022,6 +8026,7 @@ struct ModuleInfo<'ctx> {
     exports: Vec<String>,
     functions: HashMap<String, FunctionValue<'ctx>>,
     function_params: HashMap<String, Vec<crate::ast::Param>>,
+    function_return_types: HashMap<String, Option<ExternAbiType>>,
     classes: HashMap<String, ClassInfo<'ctx>>,
 }
 
@@ -8120,11 +8125,13 @@ impl<'ctx> Compiler<'ctx> {
             locals: HashMap::new(),
             functions: HashMap::new(),
             function_params: HashMap::new(),
+            function_return_types: HashMap::new(),
             classes: HashMap::new(),
             data_globals: HashMap::new(),
             str_counter: 0,
             loop_stack: Vec::new(),
             current_fn: None,
+            current_fn_return_type: None,
             captured_vars: HashMap::new(),
             nested_functions: Vec::new(),
             current_class: None,
@@ -9035,8 +9042,140 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    fn bind_top_level_function_closure(&mut self, name: &str, fn_val: FunctionValue<'ctx>) {
-        let fn_ptr = fn_val.as_global_value().as_pointer_value();
+    fn default_return_value_for_abi(
+        &self,
+        ty: ExternAbiType,
+    ) -> Result<Option<inkwell::values::BasicValueEnum<'ctx>>, String> {
+        match ty {
+            ExternAbiType::Void => Ok(None),
+            ExternAbiType::I8 | ExternAbiType::I16 | ExternAbiType::I32 | ExternAbiType::I64 => Ok(Some(
+                self.extern_abi_basic_type(ty)
+                    .expect("signed integer ABI types must lower to an integer type")
+                    .into_int_type()
+                    .const_zero()
+                    .into(),
+            )),
+            ExternAbiType::U8 | ExternAbiType::U16 | ExternAbiType::U32 | ExternAbiType::U64 => Ok(Some(
+                self.extern_abi_basic_type(ty)
+                    .expect("unsigned integer ABI types must lower to an integer type")
+                    .into_int_type()
+                    .const_zero()
+                    .into(),
+            )),
+            ExternAbiType::Isize | ExternAbiType::Usize => Ok(Some(self.pointer_int_type().const_zero().into())),
+            ExternAbiType::F32 | ExternAbiType::F64 => Ok(Some(
+                self.extern_abi_basic_type(ty)
+                    .expect("float ABI types must lower to a float type")
+                    .into_float_type()
+                    .const_zero()
+                    .into(),
+            )),
+            ExternAbiType::Ptr | ExternAbiType::Str => Ok(Some(
+                self.context
+                    .i8_type()
+                    .ptr_type(AddressSpace::default())
+                    .const_null()
+                    .into(),
+            )),
+        }
+    }
+
+    fn erase_param_type_annotations(&self, params: &[crate::ast::Param]) -> Vec<crate::ast::Param> {
+        params
+            .iter()
+            .cloned()
+            .map(|mut param| {
+                param.type_name = None;
+                param
+            })
+            .collect()
+    }
+
+    fn compile_typed_closure_wrapper(
+        &mut self,
+        name: &str,
+        fn_val: FunctionValue<'ctx>,
+        params: &[crate::ast::Param],
+        return_type: Option<ExternAbiType>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let wrapper_name = self.mangle_global_name(&format!("{name}$closure"));
+        if let Some(existing) = self.module.get_function(&wrapper_name) {
+            return Ok(existing);
+        }
+
+        let wrapper_param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+            params.iter().map(|_| self.cv_type.into()).collect();
+        let wrapper_fn =
+            self.module
+                .add_function(&wrapper_name, self.cv_type.fn_type(&wrapper_param_types, false), None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_functions = self.functions.clone();
+        let saved_function_params = self.function_params.clone();
+        let saved_function_return_types = self.function_return_types.clone();
+        let saved_classes = self.classes.clone();
+        let saved_fn = self.current_fn.replace(wrapper_fn);
+        let saved_ret_type = self.current_fn_return_type;
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
+        self.current_fn_return_type = None;
+        self.imported_modules = saved_imports.clone();
+        self.imported_user_modules = saved_user_modules.clone();
+
+        let entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let mut args = Vec::with_capacity(params.len());
+        for (i, _) in params.iter().enumerate() {
+            let arg = wrapper_fn
+                .get_nth_param(i as u32)
+                .ok_or_else(|| format!("closure wrapper '{name}' missing parameter {i}"))?
+                .into_struct_value();
+            args.push(arg);
+        }
+
+        let result =
+            self.call_fn_with_struct_args(fn_val, params, return_type, &args, &format!("{name}_closure_call"))?;
+        self.builder.build_return(Some(&result)).unwrap();
+
+        self.locals = saved_locals;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
+        self.classes = saved_classes;
+        self.current_fn = saved_fn;
+        self.current_fn_return_type = saved_ret_type;
+        self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
+        self.var_struct_types = saved_var_struct_types;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(wrapper_fn)
+    }
+
+    fn bind_top_level_function_closure(&mut self, name: &str, fn_val: FunctionValue<'ctx>) -> Result<(), String> {
+        let params = self.function_params.get(name).cloned().unwrap_or_default();
+        let return_type = self.function_return_types.get(name).copied().flatten();
+        let closure_target = if params.iter().any(|param| param.type_name.is_some()) || return_type.is_some() {
+            self.compile_typed_closure_wrapper(name, fn_val, &params, return_type)?
+        } else {
+            fn_val
+        };
+
+        let fn_ptr = closure_target.as_global_value().as_pointer_value();
         let fn_ptr_int = self
             .builder
             .build_ptr_to_int(fn_ptr, self.context.i64_type(), &format!("{}_fn_ptr", name))
@@ -9063,6 +9202,7 @@ impl<'ctx> Compiler<'ctx> {
             p
         };
         self.builder.build_store(ptr, closure).unwrap();
+        Ok(())
     }
 
     fn declare_top_level_types(&mut self, program: &Program) -> Result<(), String> {
@@ -9125,7 +9265,11 @@ impl<'ctx> Compiler<'ctx> {
         for stmt in program {
             match stmt {
                 Stmt::FnDef {
-                    name, params, section, ..
+                    name,
+                    params,
+                    return_type,
+                    section,
+                    ..
                 } => {
                     if self.functions.contains_key(name) {
                         continue;
@@ -9135,9 +9279,42 @@ impl<'ctx> Compiler<'ctx> {
                             "function '{name}': *args / **kwargs are not supported in LLVM backend"
                         ));
                     }
-                    let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
-                        params.iter().map(|_| self.cv_type.into()).collect();
-                    let fn_type = self.cv_type.fn_type(&param_types, false);
+
+                    // Build LLVM param types: native for annotated params, CoolVal otherwise.
+                    let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                        Vec::with_capacity(params.len());
+                    for p in params {
+                        if let Some(type_name) = &p.type_name {
+                            let abi =
+                                self.parse_extern_abi_type(type_name, &format!("def '{name}' param '{}'", p.name))?;
+                            if abi == ExternAbiType::Void {
+                                return Err(format!("def '{name}' parameter '{}' cannot have type 'void'", p.name));
+                            }
+                            param_types.push(
+                                self.extern_abi_basic_type(abi)
+                                    .expect("non-void param must lower to a basic type")
+                                    .into(),
+                            );
+                        } else {
+                            param_types.push(self.cv_type.into());
+                        }
+                    }
+
+                    // Build LLVM return type: native if annotated, CoolVal otherwise.
+                    let parsed_ret_abi = match return_type {
+                        Some(ret_name) => {
+                            Some(self.parse_extern_abi_type(ret_name, &format!("def '{name}' return type"))?)
+                        }
+                        None => None,
+                    };
+                    let fn_type = match parsed_ret_abi {
+                        Some(ret_abi) => match self.extern_abi_basic_type(ret_abi) {
+                            Some(basic) => basic.fn_type(&param_types, false),
+                            None => self.context.void_type().fn_type(&param_types, false),
+                        },
+                        None => self.cv_type.fn_type(&param_types, false),
+                    };
+
                     let fn_name = self.mangle_global_name(name);
                     let fn_val = self.module.add_function(&fn_name, fn_type, None);
                     if let Some(section_name) = section.as_deref() {
@@ -9145,6 +9322,7 @@ impl<'ctx> Compiler<'ctx> {
                     }
                     self.functions.insert(name.clone(), fn_val);
                     self.function_params.insert(name.clone(), params.clone());
+                    self.function_return_types.insert(name.clone(), parsed_ret_abi);
                 }
                 Stmt::ExternFn {
                     name, params, section, ..
@@ -9170,9 +9348,11 @@ impl<'ctx> Compiler<'ctx> {
                                 default: None,
                                 is_vararg: false,
                                 is_kwarg: false,
+                                type_name: None,
                             })
                             .collect(),
                     );
+                    self.function_return_types.insert(name.clone(), None);
                 }
                 _ => {}
             }
@@ -9183,49 +9363,45 @@ impl<'ctx> Compiler<'ctx> {
     // Lower raw memory read/write builtins to direct LLVM IR in freestanding mode.
     // Returns Some(CoolVal) if the name was a memory builtin, None otherwise.
     // This keeps the object file free of undefined C runtime symbols (cool_*_volatile etc.).
-    fn compile_freestanding_raw_mem(
-        &mut self,
-        name: &str,
-        args: &[Expr],
-    ) -> Result<Option<StructValue<'ctx>>, String> {
+    fn compile_freestanding_raw_mem(&mut self, name: &str, args: &[Expr]) -> Result<Option<StructValue<'ctx>>, String> {
         // (is_write, bit_width, is_float, is_signed, is_volatile)
         let op: Option<(bool, u32, bool, bool, bool)> = match name {
-            "read_byte"           => Some((false, 8,  false, false, false)),
-            "read_i8"             => Some((false, 8,  false, true,  false)),
-            "read_u8"             => Some((false, 8,  false, false, false)),
-            "read_i16"            => Some((false, 16, false, true,  false)),
-            "read_u16"            => Some((false, 16, false, false, false)),
-            "read_i32"            => Some((false, 32, false, true,  false)),
-            "read_u32"            => Some((false, 32, false, false, false)),
-            "read_i64"            => Some((false, 64, false, true,  false)),
-            "read_f64"            => Some((false, 64, true,  false, false)),
-            "read_byte_volatile"  => Some((false, 8,  false, false, true)),
-            "read_i8_volatile"    => Some((false, 8,  false, true,  true)),
-            "read_u8_volatile"    => Some((false, 8,  false, false, true)),
-            "read_i16_volatile"   => Some((false, 16, false, true,  true)),
-            "read_u16_volatile"   => Some((false, 16, false, false, true)),
-            "read_i32_volatile"   => Some((false, 32, false, true,  true)),
-            "read_u32_volatile"   => Some((false, 32, false, false, true)),
-            "read_i64_volatile"   => Some((false, 64, false, true,  true)),
-            "read_f64_volatile"   => Some((false, 64, true,  false, true)),
-            "write_byte"          => Some((true,  8,  false, false, false)),
-            "write_i8"            => Some((true,  8,  false, false, false)),
-            "write_u8"            => Some((true,  8,  false, false, false)),
-            "write_i16"           => Some((true,  16, false, false, false)),
-            "write_u16"           => Some((true,  16, false, false, false)),
-            "write_i32"           => Some((true,  32, false, false, false)),
-            "write_u32"           => Some((true,  32, false, false, false)),
-            "write_i64"           => Some((true,  64, false, false, false)),
-            "write_f64"           => Some((true,  64, true,  false, false)),
-            "write_byte_volatile" => Some((true,  8,  false, false, true)),
-            "write_i8_volatile"   => Some((true,  8,  false, false, true)),
-            "write_u8_volatile"   => Some((true,  8,  false, false, true)),
-            "write_i16_volatile"  => Some((true,  16, false, false, true)),
-            "write_u16_volatile"  => Some((true,  16, false, false, true)),
-            "write_i32_volatile"  => Some((true,  32, false, false, true)),
-            "write_u32_volatile"  => Some((true,  32, false, false, true)),
-            "write_i64_volatile"  => Some((true,  64, false, false, true)),
-            "write_f64_volatile"  => Some((true,  64, true,  false, true)),
+            "read_byte" => Some((false, 8, false, false, false)),
+            "read_i8" => Some((false, 8, false, true, false)),
+            "read_u8" => Some((false, 8, false, false, false)),
+            "read_i16" => Some((false, 16, false, true, false)),
+            "read_u16" => Some((false, 16, false, false, false)),
+            "read_i32" => Some((false, 32, false, true, false)),
+            "read_u32" => Some((false, 32, false, false, false)),
+            "read_i64" => Some((false, 64, false, true, false)),
+            "read_f64" => Some((false, 64, true, false, false)),
+            "read_byte_volatile" => Some((false, 8, false, false, true)),
+            "read_i8_volatile" => Some((false, 8, false, true, true)),
+            "read_u8_volatile" => Some((false, 8, false, false, true)),
+            "read_i16_volatile" => Some((false, 16, false, true, true)),
+            "read_u16_volatile" => Some((false, 16, false, false, true)),
+            "read_i32_volatile" => Some((false, 32, false, true, true)),
+            "read_u32_volatile" => Some((false, 32, false, false, true)),
+            "read_i64_volatile" => Some((false, 64, false, true, true)),
+            "read_f64_volatile" => Some((false, 64, true, false, true)),
+            "write_byte" => Some((true, 8, false, false, false)),
+            "write_i8" => Some((true, 8, false, false, false)),
+            "write_u8" => Some((true, 8, false, false, false)),
+            "write_i16" => Some((true, 16, false, false, false)),
+            "write_u16" => Some((true, 16, false, false, false)),
+            "write_i32" => Some((true, 32, false, false, false)),
+            "write_u32" => Some((true, 32, false, false, false)),
+            "write_i64" => Some((true, 64, false, false, false)),
+            "write_f64" => Some((true, 64, true, false, false)),
+            "write_byte_volatile" => Some((true, 8, false, false, true)),
+            "write_i8_volatile" => Some((true, 8, false, false, true)),
+            "write_u8_volatile" => Some((true, 8, false, false, true)),
+            "write_i16_volatile" => Some((true, 16, false, false, true)),
+            "write_u16_volatile" => Some((true, 16, false, false, true)),
+            "write_i32_volatile" => Some((true, 32, false, false, true)),
+            "write_u32_volatile" => Some((true, 32, false, false, true)),
+            "write_i64_volatile" => Some((true, 64, false, false, true)),
+            "write_f64_volatile" => Some((true, 64, true, false, true)),
             _ => None,
         };
 
@@ -9242,10 +9418,7 @@ impl<'ctx> Compiler<'ctx> {
         let addr_cv = self.compile_expr(&args[0])?;
         let addr_i64 = self.coolval_payload_i64(addr_cv, "mmio_addr");
         let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
-        let ptr = self
-            .builder
-            .build_int_to_ptr(addr_i64, ptr_type, "mmio_ptr")
-            .unwrap();
+        let ptr = self.builder.build_int_to_ptr(addr_i64, ptr_type, "mmio_ptr").unwrap();
 
         if is_write {
             let val_cv = self.compile_expr(&args[1])?;
@@ -9865,13 +10038,44 @@ impl<'ctx> Compiler<'ctx> {
                     let zero = self.context.i32_type().const_int(0, false);
                     self.builder.build_return(Some(&zero)).unwrap();
                 } else {
-                    let val = match opt_expr {
-                        Some(e) => self.compile_expr(e)?,
-                        None => self.build_nil(),
-                    };
                     self.emit_try_exit_from_cleanup_depth(0);
                     self.emit_cleanup_from_depth(0)?;
-                    self.builder.build_return(Some(&val)).unwrap();
+                    match self.current_fn_return_type {
+                        None => {
+                            let val = match opt_expr {
+                                Some(e) => self.compile_expr(e)?,
+                                None => self.build_nil(),
+                            };
+                            self.builder.build_return(Some(&val)).unwrap();
+                        }
+                        Some(ret_abi) => {
+                            if ret_abi == ExternAbiType::Void {
+                                if let Some(e) = opt_expr {
+                                    self.compile_expr(e)?;
+                                }
+                                self.builder.build_return(None).unwrap();
+                            } else if let Some(e) = opt_expr {
+                                let val = self.compile_expr(e)?;
+                                let native = self.extern_arg_value(val, ret_abi, "typed_ret")?;
+                                let bve: inkwell::values::BasicValueEnum<'ctx> = match native {
+                                    inkwell::values::BasicMetadataValueEnum::IntValue(v) => v.into(),
+                                    inkwell::values::BasicMetadataValueEnum::FloatValue(v) => v.into(),
+                                    inkwell::values::BasicMetadataValueEnum::PointerValue(v) => v.into(),
+                                    _ => {
+                                        return Err(
+                                            "typed return: unexpected value type (expected int, float, or pointer)"
+                                                .to_string(),
+                                        )
+                                    }
+                                };
+                                self.builder.build_return(Some(&bve)).unwrap();
+                            } else if let Some(default_value) = self.default_return_value_for_abi(ret_abi)? {
+                                self.builder.build_return(Some(&default_value)).unwrap();
+                            } else {
+                                self.builder.build_return(None).unwrap();
+                            }
+                        }
+                    }
                 }
             }
 
@@ -9913,6 +10117,7 @@ impl<'ctx> Compiler<'ctx> {
             Stmt::FnDef {
                 name,
                 params,
+                return_type,
                 section,
                 entry,
                 body,
@@ -9922,7 +10127,7 @@ impl<'ctx> Compiler<'ctx> {
                         fn_val.set_section(Some(section_name));
                     }
                 }
-                self.compile_fndef(name, params, body, entry.as_deref())?;
+                self.compile_fndef(name, params, return_type.as_deref(), body, entry.as_deref())?;
             }
 
             Stmt::ExternFn {
@@ -10249,6 +10454,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
+        let saved_function_return_types = self.function_return_types.clone();
         let saved_classes = self.classes.clone();
         let saved_fn = self.current_fn.replace(wrapper_fn);
         let saved_loops = std::mem::take(&mut self.loop_stack);
@@ -10272,19 +10478,24 @@ impl<'ctx> Compiler<'ctx> {
                 .ok_or_else(|| format!("entry wrapper '{wrapper_name}' missing parameter {i}"))?;
             args.push(arg.into());
         }
-        let result = self
+        let call = self
             .builder
             .build_call(fn_val, &args, &format!("{name}_entry_call"))
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .ok_or_else(|| format!("entry wrapper '{wrapper_name}' expected a return value"))?
-            .into_struct_value();
-        self.builder.build_return(Some(&result)).unwrap();
+            .unwrap();
+        if fn_val.get_type().get_return_type().is_some() {
+            let result = call
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| format!("entry wrapper '{wrapper_name}' expected a return value"))?;
+            self.builder.build_return(Some(&result)).unwrap();
+        } else {
+            self.builder.build_return(None).unwrap();
+        }
 
         self.locals = saved_locals;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
         self.classes = saved_classes;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
@@ -10305,6 +10516,7 @@ impl<'ctx> Compiler<'ctx> {
         &mut self,
         name: &str,
         params: &[crate::ast::Param],
+        return_type: Option<&str>,
         body: &[Stmt],
         entry_symbol: Option<&str>,
     ) -> Result<(), String> {
@@ -10317,13 +10529,21 @@ impl<'ctx> Compiler<'ctx> {
             .get(name)
             .ok_or_else(|| format!("function '{name}' was not pre-declared"))?;
 
+        // Resolve the declared return type, if any.
+        let ret_abi: Option<ExternAbiType> = match return_type {
+            Some(rt) => Some(self.parse_extern_abi_type(rt, &format!("def '{name}' return type"))?),
+            None => None,
+        };
+
         // Save caller state
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
+        let saved_function_return_types = self.function_return_types.clone();
         let saved_classes = self.classes.clone();
         let saved_fn = self.current_fn.replace(fn_val);
+        let saved_ret_type = self.current_fn_return_type;
         let saved_loops = std::mem::take(&mut self.loop_stack);
         let saved_imports = std::mem::take(&mut self.imported_modules);
         let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
@@ -10332,21 +10552,30 @@ impl<'ctx> Compiler<'ctx> {
         let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
         self.allow_toplevel_defs = false;
+        self.current_fn_return_type = ret_abi;
         self.imported_modules = saved_imports.clone();
         self.imported_user_modules = saved_user_modules.clone();
 
         // Build entry block
-        let entry = self.context.append_basic_block(fn_val, "entry");
-        self.builder.position_at_end(entry);
+        let entry_bb = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry_bb);
 
-        // Bind parameters
+        // Bind parameters. For typed params, the LLVM value is a native type;
+        // box it into a CoolVal so the body can use it uniformly.
         for (i, param) in params.iter().enumerate() {
             if param.is_vararg || param.is_kwarg {
                 return Err("*args / **kwargs are not supported in the LLVM backend".into());
             }
-            if let Some(param_val) = fn_val.get_nth_param(i as u32) {
+            if let Some(native_val) = fn_val.get_nth_param(i as u32) {
+                let cv = if let Some(type_name) = &param.type_name {
+                    let abi = self.parse_extern_abi_type(type_name, &format!("def '{name}' param '{}'", param.name))?;
+                    // Wrap the native LLVM value into a CoolVal for the body.
+                    self.extern_return_value(native_val, abi, &format!("{}_box", param.name))?
+                } else {
+                    native_val.into_struct_value()
+                };
                 let alloca = self.build_entry_alloca(&param.name);
-                self.builder.build_store(alloca, param_val).unwrap();
+                self.builder.build_store(alloca, cv).unwrap();
                 self.locals.insert(param.name.clone(), alloca);
             }
         }
@@ -10354,18 +10583,32 @@ impl<'ctx> Compiler<'ctx> {
         // Compile body
         self.compile_stmts(body)?;
 
-        // Implicit return nil if body didn't terminate
+        // Implicit return: emit zero/nil of the right type if body didn't terminate.
         if !self.current_block_terminated() {
-            let nil = self.build_nil();
-            self.builder.build_return(Some(&nil)).unwrap();
+            match ret_abi {
+                None => {
+                    let nil = self.build_nil();
+                    self.builder.build_return(Some(&nil)).unwrap();
+                }
+                Some(abi) => match self.default_return_value_for_abi(abi)? {
+                    Some(value) => {
+                        self.builder.build_return(Some(&value)).unwrap();
+                    }
+                    None => {
+                        self.builder.build_return(None).unwrap();
+                    }
+                },
+            }
         }
 
         // Restore caller state
         self.locals = saved_locals;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
         self.classes = saved_classes;
         self.current_fn = saved_fn;
+        self.current_fn_return_type = saved_ret_type;
         self.loop_stack = saved_loops;
         self.imported_modules = saved_imports;
         self.imported_user_modules = saved_user_modules;
@@ -10378,7 +10621,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if !self.build_mode.is_freestanding() {
-            self.bind_top_level_function_closure(name, fn_val);
+            self.bind_top_level_function_closure(name, fn_val)?;
         } else if let Some(entry_symbol) = entry_symbol {
             self.compile_freestanding_entry_wrapper(name, fn_val, params, entry_symbol)?;
         }
@@ -10448,6 +10691,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
+        let saved_function_return_types = self.function_return_types.clone();
         let saved_classes = self.classes.clone();
         let saved_fn = self.current_fn.replace(wrapper_fn);
         let saved_loops = std::mem::take(&mut self.loop_stack);
@@ -10495,6 +10739,7 @@ impl<'ctx> Compiler<'ctx> {
         self.locals = saved_locals;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
         self.classes = saved_classes;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
@@ -10509,7 +10754,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         if !self.build_mode.is_freestanding() {
-            self.bind_top_level_function_closure(name, wrapper_fn);
+            self.bind_top_level_function_closure(name, wrapper_fn)?;
         }
         Ok(())
     }
@@ -10566,9 +10811,9 @@ impl<'ctx> Compiler<'ctx> {
                 } => {
                     if mname == "__init__" {
                         has_init = true;
-                        init_params = Some(params.clone());
+                        init_params = Some(self.erase_param_type_annotations(params));
                     }
-                    method_params.insert(mname.clone(), params.clone());
+                    method_params.insert(mname.clone(), self.erase_param_type_annotations(params));
                 }
                 Stmt::Assign { name: aname, value } => {
                     // Instance attribute assignment - strip "self." prefix for storage
@@ -10631,6 +10876,7 @@ impl<'ctx> Compiler<'ctx> {
                     let saved_locals = std::mem::take(&mut self.locals);
                     let saved_functions = self.functions.clone();
                     let saved_function_params = self.function_params.clone();
+                    let saved_function_return_types = self.function_return_types.clone();
                     let saved_classes = self.classes.clone();
                     let saved_fn = self.current_fn.replace(fn_val);
                     let saved_loops = std::mem::take(&mut self.loop_stack);
@@ -10673,6 +10919,7 @@ impl<'ctx> Compiler<'ctx> {
                     self.locals = saved_locals;
                     self.functions = saved_functions;
                     self.function_params = saved_function_params;
+                    self.function_return_types = saved_function_return_types;
                     self.classes = saved_classes;
                     self.current_fn = saved_fn;
                     self.loop_stack = saved_loops;
@@ -10875,7 +11122,7 @@ impl<'ctx> Compiler<'ctx> {
                         .into_struct_value();
                     init_args.push(arg_val);
                 }
-                self.call_fn_with_struct_args(init_fn, &init_args, "init_call");
+                self.call_fn_with_struct_args(init_fn, &params, None, &init_args, "init_call")?;
             }
         }
 
@@ -11210,6 +11457,7 @@ impl<'ctx> Compiler<'ctx> {
                         default: None,
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     })
                     .collect(),
             },
@@ -11804,6 +12052,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_functions = std::mem::take(&mut self.functions);
         let saved_function_params = std::mem::take(&mut self.function_params);
+        let saved_function_return_types = std::mem::take(&mut self.function_return_types);
         let saved_classes = std::mem::take(&mut self.classes);
         let saved_data_globals = std::mem::take(&mut self.data_globals);
         let saved_fn = self.current_fn.replace(init_fn);
@@ -11871,6 +12120,7 @@ impl<'ctx> Compiler<'ctx> {
                 exports,
                 functions: self.functions.clone(),
                 function_params: self.function_params.clone(),
+                function_return_types: self.function_return_types.clone(),
                 classes: self.classes.clone(),
             })
         })();
@@ -11878,6 +12128,7 @@ impl<'ctx> Compiler<'ctx> {
         self.locals = saved_locals;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
         self.classes = saved_classes;
         self.data_globals = saved_data_globals;
         self.current_fn = saved_fn;
@@ -12674,17 +12925,47 @@ impl<'ctx> Compiler<'ctx> {
     fn call_fn_with_struct_args(
         &mut self,
         fn_val: FunctionValue<'ctx>,
+        params: &[crate::ast::Param],
+        return_type: Option<ExternAbiType>,
         values: &[StructValue<'ctx>],
         name: &str,
-    ) -> StructValue<'ctx> {
-        let args: Vec<BasicMetadataValueEnum<'ctx>> = values.iter().map(|v| (*v).into()).collect();
-        self.builder
-            .build_call(fn_val, &args, name)
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value()
+    ) -> Result<StructValue<'ctx>, String> {
+        if params.len() != values.len() {
+            return Err(format!(
+                "call '{name}': expected {} arguments after binding, got {}",
+                params.len(),
+                values.len()
+            ));
+        }
+
+        let mut native_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(values.len());
+        for (i, (param, cv)) in params.iter().zip(values.iter()).enumerate() {
+            if let Some(type_name) = &param.type_name {
+                let abi =
+                    self.parse_extern_abi_type(type_name, &format!("call '{name}' parameter '{}'", param.name))?;
+                native_args.push(self.extern_arg_value(*cv, abi, &format!("{name}_arg{i}"))?);
+            } else {
+                native_args.push((*cv).into());
+            }
+        }
+
+        let call_result = self.builder.build_call(fn_val, &native_args, name).unwrap();
+
+        match return_type {
+            Some(ExternAbiType::Void) => Ok(self.build_nil()),
+            Some(ret_abi) => {
+                let raw = call_result
+                    .try_as_basic_value()
+                    .left()
+                    .ok_or_else(|| format!("typed call '{name}' expected a return value"))?;
+                self.extern_return_value(raw, ret_abi, &format!("{name}_ret"))
+            }
+            None => Ok(call_result
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| format!("call '{name}' expected a return value"))?
+                .into_struct_value()),
+        }
     }
 
     fn call_ffi_value(
@@ -12754,7 +13035,14 @@ impl<'ctx> Compiler<'ctx> {
                         if let Some(&fn_val) = module_info.functions.get(member) {
                             let params = module_info.function_params.get(member).cloned().unwrap_or_default();
                             let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
-                            return Ok(self.call_fn_with_struct_args(fn_val, &compiled, "module_fn_call"));
+                            let return_type = module_info.function_return_types.get(member).copied().flatten();
+                            return Ok(self.call_fn_with_struct_args(
+                                fn_val,
+                                &params,
+                                return_type,
+                                &compiled,
+                                "module_fn_call",
+                            )?);
                         }
                         if let Some(class_info) = module_info.classes.get(member) {
                             return self.call_constructor(
@@ -12791,14 +13079,18 @@ impl<'ctx> Compiler<'ctx> {
                         .get(&current_class)
                         .and_then(|c| c.parent.clone())
                         .ok_or("super(): class has no parent")?;
-                    let parent_info = self
-                        .classes
-                        .get(&parent_name)
-                        .ok_or("super(): missing parent metadata")?;
-                    let parent_method = *parent_info
-                        .methods
-                        .get(method_name)
-                        .ok_or_else(|| format!("super(): parent has no method '{method_name}'"))?;
+                    let (parent_method, parent_params) = {
+                        let parent_info = self
+                            .classes
+                            .get(&parent_name)
+                            .ok_or("super(): missing parent metadata")?;
+                        let parent_method = *parent_info
+                            .methods
+                            .get(method_name)
+                            .ok_or_else(|| format!("super(): parent has no method '{method_name}'"))?;
+                        let parent_params = parent_info.method_params.get(method_name).cloned().unwrap_or_default();
+                        (parent_method, parent_params)
+                    };
                     let self_ptr = self
                         .locals
                         .get("self")
@@ -12813,7 +13105,13 @@ impl<'ctx> Compiler<'ctx> {
                     for arg in args {
                         call_args.push(self.compile_expr(arg)?);
                     }
-                    return Ok(self.call_fn_with_struct_args(parent_method, &call_args, "super_call"));
+                    return Ok(self.call_fn_with_struct_args(
+                        parent_method,
+                        &parent_params,
+                        None,
+                        &call_args,
+                        "super_call",
+                    )?);
                 }
             }
 
@@ -12938,6 +13236,7 @@ impl<'ctx> Compiler<'ctx> {
                         default: None,
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     })
                     .collect();
                 let compiled = self.bind_call_args(&ctor_params, args, kwargs, 0)?;
@@ -12969,7 +13268,8 @@ impl<'ctx> Compiler<'ctx> {
                 if let Some(&fn_val) = self.functions.get(n) {
                     let params = self.function_params.get(n).cloned().unwrap_or_default();
                     let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
-                    return Ok(self.call_fn_with_struct_args(fn_val, &compiled, "call"));
+                    let return_type = self.function_return_types.get(n).copied().flatten();
+                    return Ok(self.call_fn_with_struct_args(fn_val, &params, return_type, &compiled, "call")?);
                 }
                 // Otherwise, load the variable (might be a closure stored in a local)
                 self.locals.get(n).copied().map(|ptr| {
@@ -13040,7 +13340,8 @@ impl<'ctx> Compiler<'ctx> {
                 if let Some(&fn_val) = self.functions.get(name) {
                     let params = self.function_params.get(name).cloned().unwrap_or_default();
                     let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
-                    self.call_fn_with_struct_args(fn_val, &compiled, "direct_call")
+                    let return_type = self.function_return_types.get(name).copied().flatten();
+                    self.call_fn_with_struct_args(fn_val, &params, return_type, &compiled, "direct_call")?
                 } else {
                     self.builder
                         .build_call(self.rt.cool_noncallable, &[cv.into()], "noncallable")
@@ -13139,6 +13440,7 @@ impl<'ctx> Compiler<'ctx> {
                         default: None,
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     })
                     .collect();
                 (ctor_fn, params)
@@ -13253,9 +13555,18 @@ impl<'ctx> Compiler<'ctx> {
             // AT&T: outb ${0:b}, ${1:w}  — byte of EAX ($0 via "a") to word of EDX ($1 via "d")
             // LLVM constraint allocation requires at least i32; template modifiers select AL/DX.
             let i32_type = self.context.i32_type();
-            let val_i32 = self.builder.build_int_z_extend(val_i8, i32_type, "outb_val_i32").unwrap();
-            let port_i32 = self.builder.build_int_z_extend(port_i16, i32_type, "outb_port_i32").unwrap();
-            let fn_type = self.context.void_type().fn_type(&[i32_type.into(), i32_type.into()], false);
+            let val_i32 = self
+                .builder
+                .build_int_z_extend(val_i8, i32_type, "outb_val_i32")
+                .unwrap();
+            let port_i32 = self
+                .builder
+                .build_int_z_extend(port_i16, i32_type, "outb_port_i32")
+                .unwrap();
+            let fn_type = self
+                .context
+                .void_type()
+                .fn_type(&[i32_type.into(), i32_type.into()], false);
             let asm_ptr = self.context.create_inline_asm(
                 fn_type,
                 "outb ${0:b}, ${1:w}".to_string(),
@@ -13284,7 +13595,10 @@ impl<'ctx> Compiler<'ctx> {
             // AT&T: inb ${1:w}, ${0:b}  — read from word of EDX ($1 via "d") into byte of EAX ($0 via "=a")
             // Result is i32; only AL is written, so mask to low byte before wrapping.
             let i32_type = self.context.i32_type();
-            let port_i32 = self.builder.build_int_z_extend(port_i16, i32_type, "inb_port_i32").unwrap();
+            let port_i32 = self
+                .builder
+                .build_int_z_extend(port_i16, i32_type, "inb_port_i32")
+                .unwrap();
             let fn_type = i32_type.fn_type(&[i32_type.into()], false);
             let asm_ptr = self.context.create_inline_asm(
                 fn_type,
@@ -13673,7 +13987,8 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or_else(|| format!("undefined function '{name}'"))?;
         let params = self.function_params.get(&name).cloned().unwrap_or_default();
         let compiled = self.bind_call_args(&params, args, kwargs, 0)?;
-        Ok(self.call_fn_with_struct_args(fn_val, &compiled, "call"))
+        let return_type = self.function_return_types.get(&name).copied().flatten();
+        Ok(self.call_fn_with_struct_args(fn_val, &params, return_type, &compiled, "call")?)
     }
 }
 

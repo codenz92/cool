@@ -850,6 +850,7 @@ impl Interpreter {
                     default: None,
                     is_vararg: false,
                     is_kwarg: false,
+                    type_name: None,
                 }];
                 for (field_name, type_name) in fields {
                     params.push(crate::ast::Param {
@@ -857,6 +858,7 @@ impl Interpreter {
                         default: None,
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     });
                     // self.field = type_fn(field) — coerce on construction
                     let coerce_name = match type_name.as_str() {
@@ -919,6 +921,7 @@ impl Interpreter {
                     default: None,
                     is_vararg: false,
                     is_kwarg: false,
+                    type_name: None,
                 }];
                 for (field_name, type_name) in fields {
                     let zero_default = match type_name.as_str() {
@@ -931,6 +934,7 @@ impl Interpreter {
                         default: Some(zero_default),
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     });
                     let coerce_name = match type_name.as_str() {
                         "f32" | "f64" => "float",

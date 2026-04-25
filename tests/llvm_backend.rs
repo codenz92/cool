@@ -641,6 +641,54 @@ print(f(-7))
 }
 
 #[test]
+fn test_llvm_typed_top_level_function_signatures() {
+    let result = compile_and_run_native(
+        r#"
+extern def c_strlen(text: str) -> usize:
+    symbol: "strlen"
+    cc: "c"
+
+def add(x: i32, y: i32) -> i32:
+    return x + y
+
+def halve(x: f32) -> f32:
+    return x / 2
+
+def len_plus(text: str, extra: i32) -> i32:
+    return c_strlen(text) + extra
+
+print(add(40, 2))
+print(halve(5.0))
+print(len_plus("cool", 3))
+f = add
+print(f(7, 8))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["42", "2.5", "7", "15"]);
+}
+
+#[test]
+fn test_llvm_typed_void_function() {
+    let result = compile_and_run_native(
+        r#"
+def log_value(value: i32) -> void:
+    print(value)
+    return
+
+log_value(11)
+print("done")
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["11", "done"]);
+}
+
+#[test]
 fn test_llvm_linker_section_placement_for_functions_and_data() {
     let fn_section = if cfg!(target_os = "macos") {
         "__TEXT,__coolfn"

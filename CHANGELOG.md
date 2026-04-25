@@ -22,6 +22,7 @@ All notable changes to the Cool language project.
 - Interpreter/VM: `union` lowered to a class with zero-defaulted fields; all fields independently accessible
 - LLVM: `[max_size x i8]` body, bitcast-based field access (all fields at offset 0), zero-arg ctor via `calloc`, kwarg construction emits inline stores
 - LLVM-native `extern def` declarations with typed params/returns, optional `symbol:` aliasing, optional `cc:` calling-convention metadata, optional `section:` placement, first-class function binding, and matching interpreter/VM diagnostics
+- LLVM-native ordinary `def` signatures with typed parameters and return types, native lowering for direct calls and first-class function values, `void` returns, and parser fixes so `lambda x: ...` stays unambiguous
 - LLVM-native raw `data` declarations with typed primitive/struct initializers, linker-visible globals, address binding in Cool code, and optional `section:` placement for custom text/data layouts
 
 #### Serial / Console Output Primitives

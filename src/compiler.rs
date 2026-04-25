@@ -685,6 +685,7 @@ impl Compiler {
                     default: None,
                     is_vararg: false,
                     is_kwarg: false,
+                    type_name: None,
                 }];
                 for (field_name, type_name) in fields {
                     params.push(Param {
@@ -692,6 +693,7 @@ impl Compiler {
                         default: None,
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     });
                     let coerce_name = match type_name.as_str() {
                         "f32" | "f64" => "float",
@@ -730,6 +732,7 @@ impl Compiler {
                 let class_body = vec![Stmt::FnDef {
                     name: "__init__".to_string(),
                     params,
+                    return_type: None,
                     section: None,
                     entry: None,
                     body: init_body,
@@ -750,6 +753,7 @@ impl Compiler {
                     default: None,
                     is_vararg: false,
                     is_kwarg: false,
+                    type_name: None,
                 }];
                 for (field_name, type_name) in fields {
                     let zero_default = match type_name.as_str() {
@@ -762,6 +766,7 @@ impl Compiler {
                         default: Some(zero_default),
                         is_vararg: false,
                         is_kwarg: false,
+                        type_name: None,
                     });
                     let coerce_name = match type_name.as_str() {
                         "f32" | "f64" => "float",
@@ -800,6 +805,7 @@ impl Compiler {
                 let class_body = vec![Stmt::FnDef {
                     name: "__init__".to_string(),
                     params,
+                    return_type: None,
                     section: None,
                     entry: None,
                     body: init_body,

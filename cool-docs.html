@@ -1388,6 +1388,31 @@ display(host="localhost", port=3000, secure=true)</code></pre>
 connect("localhost", port=3000, secure=true)</code></pre>
         </div>
 
+        <h3>Typed Function Signatures (LLVM backend)</h3>
+        <p>Top-level <code>def</code> can use ABI-style parameter and return annotations in native builds. The interpreter and bytecode VM parse this syntax too, but currently ignore the annotations and execute the function dynamically.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">extern def c_strlen(text: str) -&gt; usize:
+    symbol: "strlen"
+    cc: "c"
+
+def add(x: i32, y: i32) -&gt; i32:
+    return x + y
+
+def len_plus(text: str, extra: i32) -&gt; i32:
+    return c_strlen(text) + extra
+
+def log_value(value: i32) -&gt; void:
+    print(value)
+    return
+
+print(add(40, 2))
+print(len_plus("cool", 3))
+f = add
+print(f(7, 8))
+log_value(11)</code></pre>
+        </div>
+
         <h3>Closures</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
@@ -2454,6 +2479,7 @@ extern def c_strlen(text: str) -&gt; usize:
 print(abs(-42))
 print(c_strlen("hello"))</code></pre>
         </div>
+        <p><code>extern def</code> is only available in compiled programs (<code>cool build</code>). It uses the same ABI type names as <code>ffi.func</code>, with optional <code>symbol:</code> aliasing, <code>cc:</code> calling-convention metadata, and <code>section:</code> placement metadata.</p>
 
         <h4>Raw Data Declarations And Sections (LLVM backend)</h4>
         <div class="code-wrap">
@@ -3514,13 +3540,13 @@ echo Done.</code></pre>
           <li>✅ LLVM backend — compile a large native subset of Cool → LLVM IR → native binary</li>
           <li>✅ FFI — available in the interpreter and LLVM native builds via <code>import ffi</code></li>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
-          <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code>, <code>cc:</code>, and <code>section:</code> metadata, plus raw <code>data</code> declarations for typed linker-visible globals</li>
+          <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code>, <code>cc:</code>, and <code>section:</code> metadata, ordinary top-level <code>def</code> signatures with ABI-style parameter/return annotations, plus raw <code>data</code> declarations for typed linker-visible globals</li>
           <li>✅ Pointer-width helpers and raw memory access (<code>isize()</code>, <code>usize()</code>, <code>word_bits()</code>, <code>word_bytes()</code>, <code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>, plus volatile variants); all <code>read_*</code>/<code>write_*</code> builtins lower to pure LLVM IR in freestanding mode with no C runtime dependencies</li>
           <li>✅ x86 port I/O: <code>outb(port, byte)</code>, <code>inb(port)</code>, <code>write_serial_byte(byte)</code> — inline asm, freestanding-safe, x86/x86-64 only (clear error on other targets)</li>
           <li>✅ <code>cool build</code> for hosted native binaries, <code>cool build --freestanding</code> for object-file output, and <code>cool build --linker-script=&lt;ld&gt;</code> (or <code>linker_script</code> in <code>cool.toml</code>) to link a kernel image via LLD</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>platform.os()</code>/<code>arch()</code>/<code>runtime()</code> and capability helpers, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>platform.os()</code>/<code>arch()</code>/<code>runtime()</code> and capability helpers, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, typed top-level <code>def</code> signatures, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>

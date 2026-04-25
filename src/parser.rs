@@ -155,12 +155,19 @@ impl Parser {
         self.eat(&Token::LParen)?;
         let params = self.parse_param_list()?;
         self.eat(&Token::RParen)?;
+        let return_type = if self.check(&Token::Arrow) {
+            self.advance();
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
         self.eat(&Token::Colon)?;
         self.eat_newline();
         let (section, entry, body) = self.parse_fn_body_with_metadata()?;
         Ok(Stmt::FnDef {
             name,
             params,
+            return_type,
             section,
             entry,
             body,
@@ -389,6 +396,7 @@ impl Parser {
                 default: None,
                 is_vararg: false,
                 is_kwarg: true,
+                type_name: None,
             });
         }
         // *args
@@ -400,9 +408,20 @@ impl Parser {
                 default: None,
                 is_vararg: true,
                 is_kwarg: false,
+                type_name: None,
             });
         }
         let name = self.expect_ident()?;
+        // Optional type annotation: name: type
+        let type_name = if self.check(&Token::Colon)
+            && matches!(self.token_at(1), Token::Ident(_))
+            && matches!(self.token_at(2), Token::Comma | Token::RParen | Token::Eq)
+        {
+            self.advance();
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
         if self.check(&Token::Eq) {
             self.advance();
             let default = self.parse_expr()?;
@@ -411,6 +430,7 @@ impl Parser {
                 default: Some(default),
                 is_vararg: false,
                 is_kwarg: false,
+                type_name,
             })
         } else {
             Ok(Param {
@@ -418,6 +438,7 @@ impl Parser {
                 default: None,
                 is_vararg: false,
                 is_kwarg: false,
+                type_name,
             })
         }
     }

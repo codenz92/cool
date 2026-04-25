@@ -122,6 +122,7 @@ pub struct Param {
     pub default: Option<Expr>,
     pub is_vararg: bool, // *args
     pub is_kwarg: bool,  // **kwargs
+    pub type_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,6 +191,7 @@ pub enum Stmt {
     FnDef {
         name: String,
         params: Vec<Param>,
+        return_type: Option<String>,
         section: Option<String>,
         entry: Option<String>,
         body: Vec<Stmt>,
