@@ -30,6 +30,7 @@ All notable changes to the Cool language project.
 - Freestanding builds accept declaration-style top-level programs (`def`, `extern def`, `data`, `struct`, `union`) and reject top-level executable statements/imports/classes with explicit diagnostics
 - Freestanding codegen now constructs basic `CoolVal` literals (`nil`, ints, floats, bools, strings) directly in LLVM IR so simple exported functions and extern wrappers do not require the hosted runtime just to materialize return values
 - Freestanding LLVM `assert` failure paths now lower to a direct trap instead of importing libc `abort()` and hosted print helpers
+- Freestanding top-level functions now accept `entry: "symbol"` metadata to export an additional raw entry symbol for custom link flows
 
 ## [1.1.0] - 2026-04-24 - Phase 10 Complete
 

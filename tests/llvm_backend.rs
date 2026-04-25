@@ -757,6 +757,37 @@ def boot_entry():
 }
 
 #[test]
+fn test_llvm_freestanding_entry_metadata_exports_raw_symbol() {
+    let source = r#"
+def boot_entry():
+    entry: "cool_boot_raw"
+    return 7
+"#;
+
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let has_boot_entry = object_has_symbol(&object_path, "boot_entry").unwrap();
+    let has_raw_entry = object_has_symbol(&object_path, "cool_boot_raw").unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(has_boot_entry);
+    assert!(has_raw_entry);
+}
+
+#[test]
+fn test_llvm_freestanding_entry_metadata_requires_zero_argument_function() {
+    let source = r#"
+def boot_entry(arg):
+    entry: "cool_boot_raw"
+    return arg
+"#;
+
+    let err = compile_freestanding_object(source).unwrap_err();
+    assert!(err.contains("entry metadata requires a zero-argument function"));
+}
+
+#[test]
 fn test_llvm_volatile_memory_builtins() {
     let result = compile_and_run_native(
         r#"

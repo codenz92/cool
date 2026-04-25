@@ -272,6 +272,17 @@ fn object_has_section(path: &std::path::Path, section: &str) -> Result<bool, Str
     }
 }
 
+fn object_has_symbol(path: &std::path::Path, symbol: &str) -> Result<bool, String> {
+    let output = Command::new("nm")
+        .args(["-g", path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).contains(symbol))
+}
+
 fn run_git_in_dir(cwd: &std::path::Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -1977,6 +1988,7 @@ output = "demo-bin"
         r#"
 def boot_entry():
     section: "{fn_section}"
+    entry: "cool_boot_raw"
     return 7
 
 data BOOT_MAGIC: u32 = 464367618:
@@ -1998,6 +2010,8 @@ data BOOT_MAGIC: u32 = 464367618:
     assert!(!project_dir.join("demo-bin").exists());
     assert!(object_has_section(&object_path, fn_section).unwrap());
     assert!(object_has_section(&object_path, data_section).unwrap());
+    assert!(object_has_symbol(&object_path, "boot_entry").unwrap());
+    assert!(object_has_symbol(&object_path, "cool_boot_raw").unwrap());
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }

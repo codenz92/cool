@@ -468,7 +468,8 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [x] `cool build --freestanding`
 - [ ] Object / kernel image output without libc assumptions
-- [ ] Linker-script support and explicit entry points
+- [x] Explicit entry points for freestanding functions
+- [ ] Linker-script support
 - [x] Panic / abort strategy for no-host targets
 
 ### Core Systems Runtime

@@ -191,6 +191,7 @@ pub enum Stmt {
         name: String,
         params: Vec<Param>,
         section: Option<String>,
+        entry: Option<String>,
         body: Vec<Stmt>,
     },
     /// extern def name(arg: type, ...) -> ret

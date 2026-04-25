@@ -157,11 +157,12 @@ impl Parser {
         self.eat(&Token::RParen)?;
         self.eat(&Token::Colon)?;
         self.eat_newline();
-        let (section, body) = self.parse_fn_body_with_metadata()?;
+        let (section, entry, body) = self.parse_fn_body_with_metadata()?;
         Ok(Stmt::FnDef {
             name,
             params,
             section,
+            entry,
             body,
         })
     }
@@ -295,11 +296,12 @@ impl Parser {
         Ok(entries)
     }
 
-    fn parse_fn_body_with_metadata(&mut self) -> Result<(Option<String>, Vec<Stmt>), String> {
+    fn parse_fn_body_with_metadata(&mut self) -> Result<(Option<String>, Option<String>, Vec<Stmt>), String> {
         self.eat(&Token::Indent)?;
         self.skip_newlines();
 
         let mut section = None;
+        let mut entry = None;
         while self.function_metadata_key().is_some() {
             let key = self.expect_ident()?;
             self.eat(&Token::Colon)?;
@@ -315,6 +317,12 @@ impl Parser {
                     }
                     section = Some(value);
                 }
+                "entry" => {
+                    if entry.is_some() {
+                        return Err(format!("line {}: duplicate function metadata key 'entry'", self.line()));
+                    }
+                    entry = Some(value);
+                }
                 _ => unreachable!(),
             }
             self.skip_newlines();
@@ -327,12 +335,14 @@ impl Parser {
             self.skip_newlines();
         }
         self.eat(&Token::Dedent)?;
-        Ok((section, body))
+        Ok((section, entry, body))
     }
 
     fn function_metadata_key(&self) -> Option<&str> {
         match self.peek() {
-            Token::Ident(name) if self.token_at(1) == &Token::Colon && name == "section" => Some(name.as_str()),
+            Token::Ident(name) if self.token_at(1) == &Token::Colon && matches!(name.as_str(), "section" | "entry") => {
+                Some(name.as_str())
+            }
             _ => None,
         }
     }

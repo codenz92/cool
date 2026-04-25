@@ -731,6 +731,7 @@ impl Compiler {
                     name: "__init__".to_string(),
                     params,
                     section: None,
+                    entry: None,
                     body: init_body,
                 }];
                 let class_stmt = Stmt::Class {
@@ -800,6 +801,7 @@ impl Compiler {
                     name: "__init__".to_string(),
                     params,
                     section: None,
+                    entry: None,
                     body: init_body,
                 }];
                 let class_stmt = Stmt::Class {

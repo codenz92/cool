@@ -9780,6 +9780,7 @@ impl<'ctx> Compiler<'ctx> {
                 name,
                 params,
                 section,
+                entry,
                 body,
             } => {
                 if let Some(section_name) = section.as_deref() {
@@ -9787,7 +9788,7 @@ impl<'ctx> Compiler<'ctx> {
                         fn_val.set_section(Some(section_name));
                     }
                 }
-                self.compile_fndef(name, params, body)?;
+                self.compile_fndef(name, params, body, entry.as_deref())?;
             }
 
             Stmt::ExternFn {
@@ -10070,7 +10071,109 @@ impl<'ctx> Compiler<'ctx> {
 
     // ── function definition ───────────────────────────────────────────────────
 
-    fn compile_fndef(&mut self, name: &str, params: &[crate::ast::Param], body: &[Stmt]) -> Result<(), String> {
+    fn compile_freestanding_entry_wrapper(
+        &mut self,
+        name: &str,
+        fn_val: FunctionValue<'ctx>,
+        params: &[crate::ast::Param],
+        entry_symbol: &str,
+    ) -> Result<(), String> {
+        let wrapper_name = entry_symbol.trim();
+        if wrapper_name.is_empty() {
+            return Err(format!("function '{name}': entry metadata cannot be empty"));
+        }
+        if !params.is_empty() {
+            return Err(format!(
+                "function '{name}': entry metadata requires a zero-argument function"
+            ));
+        }
+        if self.module.get_global(wrapper_name).is_some() {
+            return Err(format!(
+                "function '{name}': entry symbol '{wrapper_name}' conflicts with an existing global"
+            ));
+        }
+
+        if let Some(existing) = self.module.get_function(wrapper_name) {
+            if existing == fn_val {
+                return Ok(());
+            }
+            return Err(format!(
+                "function '{name}': entry symbol '{wrapper_name}' conflicts with an existing function"
+            ));
+        }
+
+        let wrapper_fn = self.module.add_function(wrapper_name, fn_val.get_type(), None);
+        wrapper_fn.set_linkage(inkwell::module::Linkage::External);
+        if let Some(section_name) = fn_val.get_section() {
+            let section_text = section_name.to_str().unwrap_or("");
+            if !section_text.is_empty() {
+                wrapper_fn.set_section(Some(section_text));
+            }
+        }
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_functions = self.functions.clone();
+        let saved_function_params = self.function_params.clone();
+        let saved_classes = self.classes.clone();
+        let saved_fn = self.current_fn.replace(wrapper_fn);
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
+        self.imported_modules = saved_imports.clone();
+        self.imported_user_modules = saved_user_modules.clone();
+
+        let entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let mut args = Vec::with_capacity(params.len());
+        for i in 0..params.len() {
+            let arg = wrapper_fn
+                .get_nth_param(i as u32)
+                .ok_or_else(|| format!("entry wrapper '{wrapper_name}' missing parameter {i}"))?;
+            args.push(arg.into());
+        }
+        let result = self
+            .builder
+            .build_call(fn_val, &args, &format!("{name}_entry_call"))
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("entry wrapper '{wrapper_name}' expected a return value"))?
+            .into_struct_value();
+        self.builder.build_return(Some(&result)).unwrap();
+
+        self.locals = saved_locals;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.classes = saved_classes;
+        self.current_fn = saved_fn;
+        self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
+        self.var_struct_types = saved_var_struct_types;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(())
+    }
+
+    fn compile_fndef(
+        &mut self,
+        name: &str,
+        params: &[crate::ast::Param],
+        body: &[Stmt],
+        entry_symbol: Option<&str>,
+    ) -> Result<(), String> {
         if !self.allow_toplevel_defs {
             return Err("nested function definitions are not supported in the LLVM backend".into());
         }
@@ -10142,6 +10245,8 @@ impl<'ctx> Compiler<'ctx> {
 
         if !self.build_mode.is_freestanding() {
             self.bind_top_level_function_closure(name, fn_val);
+        } else if let Some(entry_symbol) = entry_symbol {
+            self.compile_freestanding_entry_wrapper(name, fn_val, params, entry_symbol)?;
         }
         Ok(())
     }
@@ -10380,6 +10485,7 @@ impl<'ctx> Compiler<'ctx> {
                 params,
                 section,
                 body: mbody,
+                ..
             } = stmt
             {
                 if let Some(&fn_val) = methods.get(mname) {

@@ -1401,11 +1401,13 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             name,
             params,
             section,
+            entry,
             body,
         } => Some(Stmt::FnDef {
             name: name.clone(),
             params: params.clone(),
             section: section.clone(),
+            entry: entry.clone(),
             body: strip_line_markers(body),
         }),
         Stmt::ExternFn {
