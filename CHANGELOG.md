@@ -35,6 +35,7 @@ All notable changes to the Cool language project.
 #### Self-Hosted Tooling
 
 - Bundled Cool programs are now split by role: end-user apps live under `apps/`, while CLI subcommand implementations like `cool task` and `cool bundle` live under `cmd/`
+- `cool install` now delegates to `cmd/install.cool`, moving dependency fetching and lockfile writing out of Rust and into Cool itself
 - `cool bundle` now delegates to `cmd/bundle.cool`, moving packaging logic out of Rust and into Cool itself
 - `cool release` now delegates to `cmd/release.cool`, moving version bumping, bundling, and git tagging out of Rust and into Cool itself
 

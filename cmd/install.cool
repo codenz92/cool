@@ -1,0 +1,501 @@
+import os
+import sys
+import toml
+import path
+import term
+import subprocess
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("install v1.0 — fetch git dependencies and write cool.lock")
+    print("  cool install")
+
+def read_text_file(file_path):
+    with open(file_path, "r") as f:
+        return f.read()
+
+def discover_project_root():
+    cur = os.getcwd()
+    while true:
+        manifest = path.join(cur, "cool.toml")
+        if path.exists(manifest):
+            return cur
+        parent = path.dirname(cur)
+        if parent == cur or parent == "":
+            raise "cool install: no cool.toml found in this directory or any parent"
+        cur = parent
+
+def read_manifest_at(manifest_path):
+    return toml.loads(read_text_file(manifest_path))
+
+def read_manifest(project_root):
+    return read_manifest_at(path.join(project_root, "cool.toml"))
+
+def project_table(manifest):
+    project = manifest.get("project", nil)
+    if project == nil:
+        return manifest
+    if not isinstance(project, "dict"):
+        raise "cool install: [project] must be a table"
+    return project
+
+def dependencies_value(manifest):
+    value = manifest.get("dependencies", nil)
+    if value != nil:
+        return value
+    project = manifest.get("project", nil)
+    if isinstance(project, "dict"):
+        return project.get("dependencies", nil)
+    return nil
+
+def optional_string(table, key, default_value, context):
+    value = table.get(key, nil)
+    if value == nil:
+        return default_value
+    if not isinstance(value, "str"):
+        raise context + ": key '" + key + "' must be a string"
+    return value
+
+def parse_optional_string(table, key, context):
+    value = table.get(key, nil)
+    if value == nil:
+        return nil
+    if not isinstance(value, "str"):
+        raise context + ": field '" + key + "' must be a string"
+    return value
+
+def validate_git_selector(context, name, branch, tag, rev):
+    count = 0
+    if branch != nil:
+        count += 1
+    if tag != nil:
+        count += 1
+    if rev != nil:
+        count += 1
+    if count > 1:
+        raise context + ": dependency '" + name + "' may specify at most one of 'branch', 'tag', or 'rev'"
+
+def parse_dependencies(manifest):
+    raw = dependencies_value(manifest)
+    if raw == nil:
+        return []
+    out = []
+    if isinstance(raw, "dict"):
+        for pair in raw.items():
+            name = str(pair[0])
+            spec = pair[1]
+            if isinstance(spec, "str"):
+                out.append({
+                    "name": name,
+                    "kind": "path",
+                    "path": spec,
+                    "version": nil,
+                })
+            elif isinstance(spec, "dict"):
+                version = parse_optional_string(spec, "version", "cool.toml")
+                git = parse_optional_string(spec, "git", "cool.toml")
+                branch = parse_optional_string(spec, "branch", "cool.toml")
+                tag = parse_optional_string(spec, "tag", "cool.toml")
+                rev = parse_optional_string(spec, "rev", "cool.toml")
+                if git != nil:
+                    if spec.get("path", nil) != nil:
+                        raise "cool.toml: dependency '" + name + "' may not specify both 'git' and 'path'"
+                    validate_git_selector("cool.toml", name, branch, tag, rev)
+                    out.append({
+                        "name": name,
+                        "kind": "git",
+                        "git": git,
+                        "branch": branch,
+                        "tag": tag,
+                        "rev": rev,
+                        "version": version,
+                    })
+                else:
+                    dep_path = spec.get("path", "deps/" + name)
+                    if not isinstance(dep_path, "str"):
+                        raise "cool.toml: dependency '" + name + "' field 'path' must be a string"
+                    out.append({
+                        "name": name,
+                        "kind": "path",
+                        "path": dep_path,
+                        "version": version,
+                    })
+            else:
+                raise "cool.toml: dependency '" + name + "' must be a string path or table"
+        return out
+    if isinstance(raw, "list"):
+        for item in raw:
+            if not isinstance(item, "str"):
+                raise "cool.toml: dependencies array must contain strings"
+            out.append({
+                "name": item,
+                "kind": "path",
+                "path": "deps/" + item,
+                "version": nil,
+            })
+        return out
+    raise "cool.toml: field 'dependencies' must be a table or array of strings"
+
+def project_info(project_root, manifest):
+    project = project_table(manifest)
+    return {
+        "root": project_root,
+        "manifest_path": path.join(project_root, "cool.toml"),
+        "name": optional_string(project, "name", "project", "cool.toml"),
+        "version": optional_string(project, "version", "0.1.0", "cool.toml"),
+        "dependencies": parse_dependencies(manifest),
+    }
+
+def managed_dir(project_root):
+    return path.join(project_root, ".cool")
+
+def lockfile_path(project_root):
+    return path.join(project_root, "cool.lock")
+
+def dep_resolved_root(project_root, dep):
+    if dep["kind"] == "path":
+        return path.normalize(path.join(project_root, dep["path"]))
+    return path.normalize(path.join(project_root, ".cool", "deps", dep["name"]))
+
+def dep_install_hint(project_root, dep):
+    if dep["kind"] == "git":
+        return "git dependency '" + dep["name"] + "' is not installed at '" + dep_resolved_root(project_root, dep) + "'. Run `cool install`."
+    return "dependency '" + dep["name"] + "' path '" + dep_resolved_root(project_root, dep) + "' does not exist"
+
+def is_remote_git_source(source):
+    return "://" in source or source.startswith("git@")
+
+def shell_join(args):
+    return " ".join(args)
+
+def git_command(cwd, args):
+    command = ""
+    if cwd != nil and cwd != "":
+        command = "cd " + shell_quote(cwd) + " && "
+    parts = ["git"]
+    for arg in args:
+        parts.append(shell_quote(arg))
+    command = command + " ".join(parts)
+    result = subprocess.run(command)
+    if result["timed_out"]:
+        raise "git " + shell_join(args) + ": timed out"
+    if result["code"] == 0:
+        return result["stdout"].strip()
+    details = result["stderr"].strip()
+    if details == "":
+        details = result["stdout"].strip()
+    if details == "":
+        details = "git command failed"
+    raise "git " + shell_join(args) + ": " + details
+
+def read_lockfile(lock_path):
+    if not os["exists"](lock_path):
+        return nil
+    parsed = toml.loads(read_text_file(lock_path))
+    if not isinstance(parsed, "dict"):
+        raise "cool.lock: root must be a table"
+    return parsed
+
+def locked_rev(existing_lockfile, name):
+    if existing_lockfile == nil:
+        return nil
+    deps = existing_lockfile.get("dependency", [])
+    if not isinstance(deps, "list"):
+        return nil
+    i = len(deps) - 1
+    while i >= 0:
+        dep = deps[i]
+        if isinstance(dep, "dict") and dep.get("name", nil) == name and dep.get("kind", nil) == "git":
+            rev = dep.get("rev", nil)
+            if isinstance(rev, "str"):
+                return rev
+        i -= 1
+    return nil
+
+def maybe_project_version(dep_root):
+    manifest_path = path.join(dep_root, "cool.toml")
+    if not os["exists"](manifest_path):
+        return nil
+    manifest = read_manifest_at(manifest_path)
+    project = project_table(manifest)
+    return optional_string(project, "version", "0.1.0", "cool.toml")
+
+def semver_parse(text):
+    s = str(text).strip()
+    if s.startswith("v"):
+        s = s[1:]
+    dash = s.find("-")
+    plus = s.find("+")
+    cut = len(s)
+    if dash >= 0 and dash < cut:
+        cut = dash
+    if plus >= 0 and plus < cut:
+        cut = plus
+    s = s[:cut]
+    parts = s.split(".")
+    if len(parts) == 0:
+        return nil
+    try:
+        major = int(parts[0])
+    except:
+        return nil
+    minor = 0
+    patch = 0
+    if len(parts) > 1:
+        try:
+            minor = int(parts[1])
+        except:
+            return nil
+    if len(parts) > 2:
+        try:
+            patch = int(parts[2])
+        except:
+            return nil
+    return {
+        "major": major,
+        "minor": minor,
+        "patch": patch,
+    }
+
+def semver_cmp(a, b):
+    if a["major"] < b["major"]:
+        return -1
+    if a["major"] > b["major"]:
+        return 1
+    if a["minor"] < b["minor"]:
+        return -1
+    if a["minor"] > b["minor"]:
+        return 1
+    if a["patch"] < b["patch"]:
+        return -1
+    if a["patch"] > b["patch"]:
+        return 1
+    return 0
+
+def version_req_parse(required):
+    s = str(required).strip()
+    if s == "" or s == "*":
+        return {"kind": "any"}
+    if s.startswith("^"):
+        ver = semver_parse(s[1:])
+        if ver == nil:
+            return nil
+        return {"kind": "caret", "ver": ver}
+    if s.startswith("~"):
+        ver = semver_parse(s[1:])
+        if ver == nil:
+            return nil
+        return {"kind": "tilde", "ver": ver}
+    if "," in s:
+        parts = s.split(",")
+        if len(parts) != 2:
+            return nil
+        lo_text = parts[0].strip()
+        hi_text = parts[1].strip()
+        if not lo_text.startswith(">=") or not hi_text.startswith("<"):
+            return nil
+        lo = semver_parse(lo_text[2:])
+        hi = semver_parse(hi_text[1:])
+        if lo == nil or hi == nil:
+            return nil
+        return {"kind": "range", "lo": lo, "hi": hi}
+    if s.startswith(">="):
+        ver = semver_parse(s[2:])
+        if ver == nil:
+            return nil
+        return {"kind": "gte", "ver": ver}
+    if s.startswith("="):
+        ver = semver_parse(s[1:])
+        if ver == nil:
+            return nil
+        return {"kind": "exact", "ver": ver}
+    ver = semver_parse(s)
+    if ver == nil:
+        return nil
+    return {"kind": "exact", "ver": ver}
+
+def version_req_matches(req, installed):
+    kind = req["kind"]
+    if kind == "any":
+        return true
+    if kind == "exact":
+        return semver_cmp(installed, req["ver"]) == 0
+    if kind == "caret":
+        return installed["major"] == req["ver"]["major"] and semver_cmp(installed, req["ver"]) >= 0
+    if kind == "tilde":
+        return installed["major"] == req["ver"]["major"] and installed["minor"] == req["ver"]["minor"] and semver_cmp(installed, req["ver"]) >= 0
+    if kind == "gte":
+        return semver_cmp(installed, req["ver"]) >= 0
+    if kind == "range":
+        return semver_cmp(installed, req["lo"]) >= 0 and semver_cmp(installed, req["hi"]) < 0
+    return false
+
+def check_version_constraint(name, required, installed):
+    req = version_req_parse(required)
+    if req == nil:
+        raise "cool install: dependency '" + name + "' has invalid version constraint '" + str(required) + "'"
+    ver = semver_parse(installed)
+    if ver == nil:
+        raise "cool install: dependency '" + name + "' has invalid installed version '" + str(installed) + "'"
+    if not version_req_matches(req, ver):
+        raise "cool install: dependency '" + name + "' requires version '" + str(required) + "' but found '" + str(installed) + "'"
+
+def desired_git_ref(dep, existing_lockfile):
+    if dep.get("rev", nil) != nil:
+        return dep["rev"]
+    if dep.get("tag", nil) != nil:
+        return "refs/tags/" + dep["tag"]
+    if dep.get("branch", nil) != nil:
+        return "origin/" + dep["branch"]
+    return locked_rev(existing_lockfile, dep["name"])
+
+def escape_toml_string(text):
+    text = str(text)
+    text = text.replace("\\", "\\\\")
+    text = text.replace("\"", "\\\"")
+    text = text.replace("\n", "\\n")
+    text = text.replace("\r", "\\r")
+    text = text.replace("\t", "\\t")
+    return "\"" + text + "\""
+
+def render_lockfile(project_name, project_version, deps):
+    lines = []
+    lines.append("version = 1")
+    lines.append("")
+    lines.append("[project]")
+    lines.append("name = " + escape_toml_string(project_name))
+    lines.append("version = " + escape_toml_string(project_version))
+    for dep in deps:
+        lines.append("")
+        lines.append("[[dependency]]")
+        lines.append("name = " + escape_toml_string(dep["name"]))
+        lines.append("kind = " + escape_toml_string(dep["kind"]))
+        lines.append("path = " + escape_toml_string(dep["path"]))
+        lines.append("resolved_path = " + escape_toml_string(dep["resolved_path"]))
+        if dep.get("version", nil) != nil:
+            lines.append("version = " + escape_toml_string(dep["version"]))
+        if dep.get("required_version", nil) != nil:
+            lines.append("required_version = " + escape_toml_string(dep["required_version"]))
+        if dep.get("git", nil) != nil:
+            lines.append("git = " + escape_toml_string(dep["git"]))
+        if dep.get("branch", nil) != nil:
+            lines.append("branch = " + escape_toml_string(dep["branch"]))
+        if dep.get("tag", nil) != nil:
+            lines.append("tag = " + escape_toml_string(dep["tag"]))
+        if dep.get("rev", nil) != nil:
+            lines.append("rev = " + escape_toml_string(dep["rev"]))
+    return "\n".join(lines) + "\n"
+
+def ensure_dir(dir_path):
+    if not os["exists"](dir_path):
+        os["mkdir"](dir_path)
+
+def materialize_dependency(project, dep, existing_lockfile, out):
+    dep_root = dep_resolved_root(project["root"], dep)
+    if dep["kind"] == "path":
+        if not os["exists"](dep_root):
+            raise "cool install: " + dep_install_hint(project["root"], dep)
+        installed_version = maybe_project_version(dep_root)
+        required_version = dep.get("version", nil)
+        if required_version != nil and installed_version != nil:
+            check_version_constraint(dep["name"], required_version, installed_version)
+        out.append({
+            "name": dep["name"],
+            "kind": "path",
+            "path": dep["path"],
+            "resolved_path": dep_root,
+            "version": installed_version,
+            "required_version": required_version,
+            "git": nil,
+            "branch": nil,
+            "tag": nil,
+            "rev": nil,
+        })
+        return dep_root
+
+    parent = path.dirname(dep_root)
+    ensure_dir(parent)
+
+    if not os["exists"](dep_root):
+        clone_source = dep["git"]
+        if not is_remote_git_source(clone_source):
+            if path.isabs(clone_source):
+                clone_source = clone_source
+            else:
+                clone_source = path.join(project["root"], clone_source)
+        git_command(nil, ["clone", clone_source, dep_root])
+    elif not os["exists"](path.join(dep_root, ".git")):
+        raise "cool install: managed dependency directory '" + dep_root + "' exists but is not a git checkout"
+
+    if dep.get("branch", nil) != nil or dep.get("tag", nil) != nil:
+        try:
+            git_command(dep_root, ["fetch", "--all", "--tags"])
+        except:
+            pass
+
+    target = desired_git_ref(dep, existing_lockfile)
+    if target != nil:
+        git_command(dep_root, ["checkout", "--detach", target])
+
+    resolved_rev = git_command(dep_root, ["rev-parse", "HEAD"])
+    installed_version = maybe_project_version(dep_root)
+    required_version = dep.get("version", nil)
+    if required_version != nil and installed_version != nil:
+        check_version_constraint(dep["name"], required_version, installed_version)
+
+    out.append({
+        "name": dep["name"],
+        "kind": "git",
+        "path": ".cool/deps/" + dep["name"],
+        "resolved_path": dep_root,
+        "version": installed_version,
+        "required_version": required_version,
+        "git": dep["git"],
+        "branch": dep.get("branch", nil),
+        "tag": dep.get("tag", nil),
+        "rev": resolved_rev,
+    })
+    return dep_root
+
+def install_project_dependencies(project_root, existing_lockfile, out, visited):
+    manifest = read_manifest(project_root)
+    project = project_info(project_root, manifest)
+    for dep in project["dependencies"]:
+        dep_root = materialize_dependency(project, dep, existing_lockfile, out)
+        if dep_root in visited:
+            continue
+        visited[dep_root] = true
+        dep_manifest_path = path.join(dep_root, "cool.toml")
+        if os["exists"](dep_manifest_path):
+            install_project_dependencies(dep_root, existing_lockfile, out, visited)
+
+def write_lockfile(project, deps):
+    ensure_dir(managed_dir(project["root"]))
+    with open(lockfile_path(project["root"]), "w") as f:
+        f.write(render_lockfile(project["name"], project["version"], deps))
+
+argv = sys.argv
+
+if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
+    usage()
+    exit(0)
+
+if len(argv) != 1:
+    usage()
+    exit(1)
+
+project_root = discover_project_root()
+manifest = read_manifest(project_root)
+project = project_info(project_root, manifest)
+existing_lockfile = read_lockfile(lockfile_path(project_root))
+deps = []
+visited = {}
+install_project_dependencies(project_root, existing_lockfile, deps, visited)
+write_lockfile(project, deps)
+
+count = len(deps)
+print("  Installed " + str(count) + " dependenc" + ("y" if count == 1 else "ies"))
+print("  Wrote " + lockfile_path(project_root))

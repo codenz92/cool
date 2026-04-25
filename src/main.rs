@@ -98,6 +98,10 @@ fn release_command_path() -> PathBuf {
     bundled_command_path("release.cool")
 }
 
+fn install_command_path() -> PathBuf {
+    bundled_command_path("install.cool")
+}
+
 fn run_bundled_app(
     command_name: &str,
     app_path: &Path,
@@ -864,19 +868,8 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
 // ── `cool task` ───────────────────────────────────────────────────────────────
 
 fn cmd_install(args: &[&String]) -> Result<(), String> {
-    if !args.is_empty() {
-        return Err("Usage: cool install".to_string());
-    }
-
-    let project = current_project("cool install")?;
-    let lockfile = install_dependencies(&project)?;
-    println!(
-        "  Installed {} dependenc{}",
-        lockfile.dependencies.len(),
-        if lockfile.dependencies.len() == 1 { "y" } else { "ies" }
-    );
-    println!("  Wrote {}", project.lockfile_path().display());
-    Ok(())
+    let install_app = install_command_path();
+    run_bundled_app("cool install", &install_app, args, &[])
 }
 
 fn cmd_add(args: &[&String]) -> Result<(), String> {

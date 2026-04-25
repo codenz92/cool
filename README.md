@@ -486,6 +486,7 @@ apps/
 
 cmd/
   task.cool         Manifest task runner used by `cool task`
+  install.cool      Dependency installer for `cool install`
   bundle.cool       Project bundler for `cool bundle`
   release.cool      Release manager for `cool release`
 
@@ -533,7 +534,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
 The self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
 
-Project tooling is starting to move over too: `cool task`, `cool bundle`, and `cool release` now delegate to `cmd/*.cool`, so packaged CLI workflows now run in Cool rather than Rust.
+Project tooling is starting to move over too: `cool task`, `cool install`, `cool bundle`, and `cool release` now delegate to `cmd/*.cool`, so packaged CLI workflows now run in Cool rather than Rust.
 
 It supports:
 
