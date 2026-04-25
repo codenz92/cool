@@ -577,6 +577,20 @@ fn test_vm_pointer_width_helpers() {
 }
 
 #[test]
+fn test_interpreter_extern_declaration_requires_llvm() {
+    let err = run_cool("extern def abs(x: i32) -> i32\nprint(abs(-1))").unwrap_err();
+    assert!(err.contains("only supported in the LLVM backend"));
+    assert!(err.contains("compile with `cool build`"));
+}
+
+#[test]
+fn test_vm_extern_declaration_requires_llvm() {
+    let err = run_cool_vm("extern def abs(x: i32) -> i32\nprint(abs(-1))").unwrap_err();
+    assert!(err.contains("only supported in the LLVM backend"));
+    assert!(err.contains("compile with `cool build`"));
+}
+
+#[test]
 fn test_interpreter_volatile_memory_builtin_requires_llvm() {
     let err = run_cool("ptr = 0\nprint(read_i32_volatile(ptr))").unwrap_err();
     assert!(err.contains("only supported in the LLVM backend"));

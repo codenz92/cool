@@ -5,16 +5,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description"
-      content="Official documentation for Cool — a Python-inspired scripting language and interactive OS shell implemented in Rust. Learn syntax, closures, classes, f-strings, and the Cool shell.">
+      content="Official documentation for Cool — a Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and an interactive shell, all implemented in Rust.">
     <meta name="robots" content="index, follow">
     <meta property="og:title" content="Cool Language — Documentation">
     <meta property="og:description"
-      content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
+      content="A Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and an interactive shell, implemented in Rust.">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary">
     <meta name="twitter:title" content="Cool Language — Documentation">
     <meta name="twitter:description"
-      content="A Python-inspired scripting language and interactive OS shell, implemented in Rust.">
+      content="A Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and an interactive shell, implemented in Rust.">
     <link rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>❄</text></svg>">
     <title>Cool Language — Documentation</title>
@@ -880,8 +880,8 @@
       <!-- HERO -->
       <div class="hero">
         <h1><span>Cool</span> Language<br>Documentation</h1>
-        <p class="hero-sub">A Python-inspired scripting language and interactive OS shell, implemented in Rust. Clean
-          syntax, closures, classes, f-strings, and a fully-featured shell — all in one.</p>
+        <p class="hero-sub">A Python-inspired scripting language with a bytecode VM, LLVM native compiler, FFI, and a
+          fully-featured shell — all implemented in Rust.</p>
         <div class="hero-actions">
           <a href="#getting-started" class="btn btn-primary">Get Started</a>
           <a href="https://github.com/codenz92/cool-lang" target="_blank" rel="noopener noreferrer"
@@ -892,8 +892,9 @@
       <!-- INTRODUCTION -->
       <section class="doc-section" id="introduction">
         <h2>Introduction</h2>
-        <p>Cool is a tree-walk interpreted language with Python-like syntax built on a clean Rust runtime. It ships with
-          <strong>Cool</strong> — a fully interactive OS shell written entirely in Cool itself.
+        <p>Cool is a tree-walk interpreted language with Python-like syntax built on a clean Rust runtime. It also
+          ships with a bytecode VM, an LLVM native compiler, an FFI layer, and <strong>Cool</strong> — a fully
+          interactive OS shell written entirely in Cool itself.
         </p>
 
         <div class="feature-grid">
@@ -915,15 +916,16 @@
           </div>
           <div class="feature-card">
             <div class="fc-title">Standard Library</div>
-            <div class="fc-desc">math, json, re, time, random, collections, path, csv, datetime, hashlib, toml, yaml, sqlite, http, subprocess, argparse, logging, test, term.</div>
+            <div class="fc-desc">math, os, sys, json, re, time, random, collections, path, csv, datetime, hashlib,
+              toml, yaml, sqlite, http, subprocess, argparse, logging, test, socket, term, ffi, and more.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Cool Shell</div>
             <div class="fc-desc">Full interactive shell. Pipes, env vars, tab complete.</div>
           </div>
           <div class="feature-card">
-            <div class="fc-title">Rust Runtime</div>
-            <div class="fc-desc">Fast, safe, no external dependencies.</div>
+            <div class="fc-title">Rust Implementation</div>
+            <div class="fc-desc">Interpreter, VM, native compiler, and tooling implemented in Rust.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">MIT Licensed</div>
@@ -938,14 +940,14 @@
 
         <h3>Prerequisites</h3>
         <p>You need <a href="https://rustup.rs" target="_blank" rel="noopener noreferrer">Rust</a> (stable, edition
-          2021) installed. No other
-          dependencies.</p>
+          2021) installed. LLVM 17 is only required for native compilation
+          (<code>cool build</code> or <code>cool --compile</code>).</p>
 
         <h3>Build from Source</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
           <pre><code class="language-bash">git clone https://github.com/codenz92/cool-lang
-cd cool
+cd cool-lang
 cargo build --release</code></pre>
         </div>
 
@@ -970,12 +972,47 @@ cargo build --release</code></pre>
                 <td>Run a Cool script</td>
               </tr>
               <tr>
+                <td><code>./target/release/cool --vm hello.cool</code></td>
+                <td>Run a script with the bytecode VM</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool build hello.cool</code></td>
+                <td>Compile a script to a native binary (requires LLVM 17)</td>
+              </tr>
+              <tr>
+                <td><code>./hello</code></td>
+                <td>Run the compiled native binary</td>
+              </tr>
+              <tr>
                 <td><code>./target/release/cool coolapps/shell.cool</code></td>
                 <td>Launch Cool shell</td>
+              </tr>
+              <tr>
+                <td><code>./target/release/cool help</code></td>
+                <td>Show the full CLI help</td>
               </tr>
             </tbody>
           </table>
         </div>
+
+        <h3>Project Workflow</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-bash">cool new myapp
+cd myapp
+
+cool test
+cool add toolkit --path ../toolkit
+cool add theme --git https://github.com/acme/theme.git
+cool install
+cool task list
+cool build</code></pre>
+        </div>
+        <p>Manifest-driven projects use <code>cool.toml</code> with <code>[project]</code>,
+          <code>[dependencies]</code>, and <code>[tasks]</code>. <code>cool add</code> updates the manifest,
+          <code>cool install</code> materializes git dependencies into <code>.cool/deps</code>,
+          <code>cool test</code> discovers <code>test_*.cool</code> / <code>*_test.cool</code>, and
+          <code>cool task</code> runs manifest-defined workflows.</p>
 
         <h3>Your First Program</h3>
         <div class="code-wrap">
@@ -1365,7 +1402,7 @@ add    = lambda a, b: a + b
 clamp  = lambda x, lo, hi: max(lo, min(hi, x))
 
 nums = [3, 1, 4, 1, 5, 9]
-sorted_nums = sorted(nums, key=lambda x: -x)  # descending</code></pre>
+doubled_nums = list(map(lambda x: x * 2, nums))</code></pre>
         </div>
 
         <h3>nonlocal / global</h3>
@@ -1647,7 +1684,7 @@ doubled  = list(map(lambda x: x * 2, nums))
 evens    = list(filter(lambda x: x % 2 == 0, nums))
 pairs    = list(zip([1,2,3], ["a","b","c"]))
 indexed  = list(enumerate(["x","y","z"]))
-desc     = sorted(nums, key=lambda x: -x)
+desc     = list(reversed(sorted(nums)))
 rev      = list(reversed(nums))</code></pre>
         </div>
 
@@ -1915,13 +1952,26 @@ except ValueError as e:
           <pre><code class="language-python">import math
 import os
 import sys
-import string
-import list
-import json
-import re
+import path
+import csv
+import datetime
+import hashlib
+import toml
+import yaml
+import sqlite
+import http
+import subprocess
+import argparse
+import logging
+import test
 import time
 import random
+import json
+import string
+import list
+import re
 import collections
+import socket
 import term
 import ffi</code></pre>
         </div>
@@ -2180,7 +2230,8 @@ print(posted)</code></pre>
 
 result = subprocess.run("ls -la")
 print(result["stdout"])
-print(result["exit_code"])
+print(result["code"])
+print(result["ok"])
 
 out = subprocess.check_output("echo hello")   # returns stdout string
 ok  = subprocess.call("true")                 # returns exit code as int</code></pre>
@@ -2282,10 +2333,11 @@ print(test.raises(boom, ["boom"], "boom"))</code></pre>
           <pre><code class="language-python">import term
 
 term.raw()          # enter raw terminal mode (no echo, immediate input)
-term.restore()      # restore normal terminal mode
-term.read_key()     # read a single keypress (returns key name string)
-term.move(x, y)     # move cursor to column x, row y
-term.clear()        # clear screen</code></pre>
+key = term.get_char()   # blocking single-key read
+term.move_cursor(5, 10) # move cursor to row 5, column 10
+term.write("hello")
+term.flush()
+term.normal()       # restore normal terminal mode</code></pre>
         </div>
 
         <div class="callout">
@@ -2334,15 +2386,41 @@ abs_fn(-42)     # 42</code></pre>
                 <td>Unsigned integers</td>
               </tr>
               <tr>
+                <td><code>"isize"</code>, <code>"usize"</code></td>
+                <td>Pointer-width signed and unsigned integers</td>
+              </tr>
+              <tr>
                 <td><code>"f32"</code>, <code>"f64"</code></td>
                 <td>Floating point</td>
               </tr>
               <tr>
+                <td><code>"str"</code></td>
+                <td>NUL-terminated C string pointer</td>
+              </tr>
+              <tr>
+                <td><code>"ptr"</code></td>
+                <td>Opaque raw pointer</td>
+              </tr>
+              <tr>
                 <td><code>"void"</code></td>
-                <td>Noreturn value</td>
+                <td>No return value</td>
               </tr>
             </tbody>
           </table>
+        </div>
+
+        <h4>Extern Declarations (LLVM backend)</h4>
+        <p>Compiled programs can also declare linked symbols directly in Cool with typed parameters and return values.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">extern def abs(x: i32) -&gt; i32
+
+extern def c_strlen(text: str) -&gt; usize:
+    symbol: "strlen"
+    cc: "c"
+
+print(abs(-42))
+print(c_strlen("hello"))</code></pre>
         </div>
 
         <h4>Memory Access</h4>
@@ -2361,11 +2439,23 @@ free(ptr)</code></pre>
 
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-python"># Fixed-width integer helpers work across runtimes
+          <pre><code class="language-python"># Integer width helpers work across runtimes
 print(i8(255))      # -1
 print(u8(-1))       # 255
 print(i16(65535))   # -1
-print(u32(-1))      # 4294967295</code></pre>
+print(u32(-1))      # 4294967295
+print(isize(-1))    # host pointer-width signed wrap
+print(word_bits())  # 32 or 64
+print(word_bytes()) # 4 or 8</code></pre>
+        </div>
+
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># For MMIO / device-register access, use volatile helpers in compiled programs
+ptr = malloc(4)
+write_u32_volatile(ptr, 0xDEADBEEF)
+print(read_u32_volatile(ptr))
+free(ptr)</code></pre>
         </div>
 
         <div class="callout">
@@ -2435,7 +2525,9 @@ eval("print('hello from eval')")</code></pre>
         <p>Use <code>with</code> for structured file cleanup. Both the tree-walk interpreter and the bytecode VM close files on normal exit and raised exceptions. LLVM native builds now support <code>open()</code> and file context managers on normal exit, control-flow exits, caught exceptions, and unhandled native raises too.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-python"># Read entire file
+          <pre><code class="language-python">import time
+
+# Read entire file
 with open("data.txt", "r") as f:
     content = f.read()
 
@@ -2542,6 +2634,14 @@ f.close()    # always close manually when not using `with`</code></pre>
                 <td>Sum all elements</td>
               </tr>
               <tr>
+                <td><code>any(iterable)</code></td>
+                <td>True if any item is truthy</td>
+              </tr>
+              <tr>
+                <td><code>all(iterable)</code></td>
+                <td>True if every item is truthy</td>
+              </tr>
+              <tr>
                 <td><code>round(x, n)</code></td>
                 <td>Round to n decimal places</td>
               </tr>
@@ -2550,7 +2650,7 @@ f.close()    # always close manually when not using `with`</code></pre>
                 <td>x raised to the power y</td>
               </tr>
               <tr>
-                <td><code>sorted(iterable, key=nil)</code></td>
+                <td><code>sorted(iterable)</code></td>
                 <td>Returns new sorted list</td>
               </tr>
               <tr>
@@ -2582,12 +2682,16 @@ f.close()    # always close manually when not using `with`</code></pre>
                 <td>Convert to tuple</td>
               </tr>
               <tr>
-                <td><code>dict(x)</code></td>
-                <td>Convert to dict</td>
+                <td><code>dict()</code></td>
+                <td>Create an empty dict</td>
               </tr>
               <tr>
                 <td><code>set(x)</code></td>
                 <td>Deduplicate iterable, returns list</td>
+              </tr>
+              <tr>
+                <td><code>open(path, mode="r")</code></td>
+                <td>Open a file for reading, writing, or appending</td>
               </tr>
               <tr>
                 <td><code>isinstance(x, t)</code></td>
@@ -2602,16 +2706,28 @@ f.close()    # always close manually when not using `with`</code></pre>
                 <td>Get attribute by name string</td>
               </tr>
               <tr>
-                <td><code>exit(code)</code></td>
-                <td>Exit interpreter with given status code</td>
+                <td><code>i8(x)</code>, <code>u8(x)</code>, <code>i16(x)</code>, <code>u16(x)</code>, <code>i32(x)</code>, <code>u32(x)</code>, <code>i64(x)</code></td>
+                <td>Wrap to fixed-width integer semantics</td>
               </tr>
               <tr>
-                <td><code>runfile(path)</code></td>
+                <td><code>isize(x)</code>, <code>usize(x)</code></td>
+                <td>Convert to pointer-width signed/unsigned integer</td>
+              </tr>
+              <tr>
+                <td><code>word_bits()</code>, <code>word_bytes()</code></td>
+                <td>Return the host target word size in bits / bytes</td>
+              </tr>
+              <tr>
+                <td><code>exit(code)</code></td>
+                <td>Exit the current program with the given status code</td>
+              </tr>
+              <tr>
+                <td><code>runfile(path, args=nil)</code></td>
                 <td>Execute another .cool file at runtime</td>
               </tr>
               <tr>
                 <td><code>eval(expr)</code></td>
-                <td>Evaluate a Cool expression string</td>
+                <td>Evaluate a Cool expression or statement string</td>
               </tr>
             </tbody>
           </table>
@@ -2752,8 +2868,8 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
                 <td>Search file for lines matching pattern.</td>
               </tr>
               <tr>
-                <td><span class="cmd">find &lt;pattern&gt;</span></td>
-                <td>Search for files by name pattern.</td>
+                <td><span class="cmd">find [pattern]</span></td>
+                <td>Search for files by name pattern. Defaults to everything.</td>
               </tr>
               <tr>
                 <td><span class="cmd">echo &lt;text&gt;</span></td>
@@ -2803,7 +2919,7 @@ list.unique([1, 2, 2, 3, 3, 3])                      # [1, 2, 3]</code></pre>
               </tr>
               <tr>
                 <td><span class="cmd">exit / quit</span></td>
-                <td>Exit Cool.</td>
+                <td>Exit the Cool shell.</td>
               </tr>
             </tbody>
           </table>
@@ -2864,7 +2980,7 @@ echo Done.</code></pre>
         <h3>calc — Calculator REPL</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolapps/calc.cool</code></pre>
+          <pre><code class="language-bash">cool coolapps/calc.cool</code></pre>
         </div>
         <p>Interactive calculator with persistent variables and full <code>math</code> library support.</p>
         <div class="code-wrap">
@@ -2881,7 +2997,7 @@ echo Done.</code></pre>
         <h3>notes — Note-taking App</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolapps/notes.cool</code></pre>
+          <pre><code class="language-bash">cool coolapps/notes.cool</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -2893,23 +3009,27 @@ echo Done.</code></pre>
             </thead>
             <tbody>
               <tr>
-                <td><span class="cmd">new &lt;title&gt;</span></td>
+                <td><span class="cmd">list</span></td>
+                <td>List all saved notes</td>
+              </tr>
+              <tr>
+                <td><span class="cmd">new &lt;name&gt;</span></td>
                 <td>Create a new note</td>
               </tr>
               <tr>
-                <td><span class="cmd">show &lt;id&gt;</span></td>
-                <td>Display a note by ID</td>
+                <td><span class="cmd">show &lt;name&gt;</span></td>
+                <td>Display a note by name</td>
               </tr>
               <tr>
-                <td><span class="cmd">append &lt;id&gt; &lt;text&gt;</span></td>
-                <td>Append text to an existing note</td>
+                <td><span class="cmd">append &lt;name&gt;</span></td>
+                <td>Append a new line to an existing note</td>
               </tr>
               <tr>
-                <td><span class="cmd">delete &lt;id&gt;</span></td>
+                <td><span class="cmd">delete &lt;name&gt;</span></td>
                 <td>Delete a note</td>
               </tr>
               <tr>
-                <td><span class="cmd">search &lt;query&gt;</span></td>
+                <td><span class="cmd">search &lt;pattern&gt;</span></td>
                 <td>Search notes by content</td>
               </tr>
             </tbody>
@@ -2919,7 +3039,7 @@ echo Done.</code></pre>
         <h3>top — Process Viewer</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolapps/top.cool</code></pre>
+          <pre><code class="language-bash">cool coolapps/top.cool</code></pre>
         </div>
         <p>Displays running processes and system statistics using <code>os.popen("ps aux")</code>. Updates in real time
           and expects an interactive TTY.</p>
@@ -2927,7 +3047,7 @@ echo Done.</code></pre>
         <h3>edit — Text Editor</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolapps/edit.cool filename.txt</code></pre>
+          <pre><code class="language-bash">cool coolapps/edit.cool filename.txt</code></pre>
         </div>
         <p>A nano-like terminal text editor powered by <code>import term</code>. It expects an interactive TTY.</p>
         <div class="table-wrap">
@@ -2958,7 +3078,7 @@ echo Done.</code></pre>
         <h3>snake — Snake Game</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolapps/snake.cool</code></pre>
+          <pre><code class="language-bash">cool coolapps/snake.cool</code></pre>
         </div>
         <p>ASCII Snake game with real-time arrow key input via <code>import term</code>. Runs entirely in the terminal
           and expects an interactive TTY.</p>
@@ -2969,13 +3089,13 @@ echo Done.</code></pre>
           <pre><code class="language-bash">cool coolapps/browse.cool</code></pre>
         </div>
         <p>A two-pane terminal file browser written entirely in Cool. Left pane shows directory contents; right pane
-          previews the selected file. Navigate with arrow keys, <code>Enter</code> to descend, <code>Backspace</code>
+          previews the selected file. Navigate with arrow keys, <code>Enter</code> to descend, <code>←</code>
           to go up, <code>q</code> to quit. Requires an interactive TTY.</p>
 
         <h3>http — HTTP Client</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">Cool</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">run coolapps/http.cool</code></pre>
+          <pre><code class="language-bash">cool coolapps/http.cool help</code></pre>
         </div>
         <div class="table-wrap">
           <table>
@@ -3013,7 +3133,8 @@ echo Done.</code></pre>
       <section class="doc-section" id="tooling">
         <h2>CLI Tooling</h2>
 
-        <p>Cool ships a suite of static-analysis and developer-tooling commands that output machine-readable JSON or human-readable diagnostics.</p>
+        <p>Cool ships project, packaging, test, and static-analysis commands, ranging from manifest-driven builds to
+          JSON-producing developer tooling and editor integration.</p>
 
         <div class="table-wrap">
           <table>
@@ -3024,6 +3145,34 @@ echo Done.</code></pre>
               </tr>
             </thead>
             <tbody>
+              <tr>
+                <td><code>cool build</code></td>
+                <td>Build the current project described by <code>cool.toml</code></td>
+              </tr>
+              <tr>
+                <td><code>cool build &lt;file.cool&gt;</code></td>
+                <td>Compile a single file to a native binary</td>
+              </tr>
+              <tr>
+                <td><code>cool install</code></td>
+                <td>Fetch git dependencies and write <code>cool.lock</code></td>
+              </tr>
+              <tr>
+                <td><code>cool add &lt;name&gt; ...</code></td>
+                <td>Add a path or git dependency to <code>cool.toml</code></td>
+              </tr>
+              <tr>
+                <td><code>cool test [path ...]</code></td>
+                <td>Discover and run Cool tests (supports <code>--vm</code> and <code>--compile</code>)</td>
+              </tr>
+              <tr>
+                <td><code>cool task [name|list ...]</code></td>
+                <td>List or run manifest-defined project tasks</td>
+              </tr>
+              <tr>
+                <td><code>cool new &lt;name&gt;</code></td>
+                <td>Scaffold a new project with <code>src/</code>, <code>tests/</code>, and starter tasks</td>
+              </tr>
               <tr>
                 <td><code>cool ast &lt;file.cool&gt;</code></td>
                 <td>Print the parsed AST as pretty JSON</td>
@@ -3053,8 +3202,12 @@ echo Done.</code></pre>
                 <td>Build the project and package it into a distributable tarball (uses <code>[bundle].include</code> in <code>cool.toml</code>)</td>
               </tr>
               <tr>
-                <td><code>cool release [--bump patch]</code></td>
+                <td><code>cool release [--bump patch|minor|major]</code></td>
                 <td>Bump version in <code>cool.toml</code>, run <code>cool bundle</code>, and create a git tag</td>
+              </tr>
+              <tr>
+                <td><code>cool help</code></td>
+                <td>Show the full command-line help and backend feature summary</td>
               </tr>
               <tr>
                 <td><code>cool lsp</code></td>
@@ -3063,6 +3216,9 @@ echo Done.</code></pre>
             </tbody>
           </table>
         </div>
+        <p><code>cool build</code> reads <code>cool.toml</code> manifests, <code>cool task</code> runs the
+          bundled <code>coolapps/task.cool</code> task runner, and <code>cool test</code> discovers
+          <code>test_*.cool</code> / <code>*_test.cool</code> by default under <code>tests/</code>.</p>
 
         <h3>Language Server (cool lsp)</h3>
         <p>Connect any LSP client using <code>cool lsp</code> as the server command. Capabilities:</p>
@@ -3102,7 +3258,19 @@ echo Done.</code></pre>
 │   ├── vm.rs             # Bytecode virtual machine
 │   ├── llvm_codegen.rs   # LLVM native compiler with embedded C runtime
 │   ├── tooling.rs        # Static analysis: AST dump, inspect, symbols, check, diff
-│   └── lsp.rs            # Language server (LSP) over stdin/stdout
+│   ├── lsp.rs            # Language server (LSP) over stdin/stdout
+│   ├── project.rs        # Manifest/project loading and dependency resolution
+│   ├── runtime.c         # Embedded runtime support for native builds
+│   ├── argparse_runtime.rs
+│   ├── csv_runtime.rs
+│   ├── datetime_runtime.rs
+│   ├── hashlib_runtime.rs
+│   ├── http_runtime.rs
+│   ├── logging_runtime.rs
+│   ├── sqlite_runtime.rs
+│   ├── subprocess_runtime.rs
+│   ├── toml_runtime.rs
+│   └── yaml_runtime.rs
 │
 ├── coolapps/
 │   ├── shell.cool        # Main Cool interactive shell
@@ -3112,7 +3280,8 @@ echo Done.</code></pre>
 │   ├── edit.cool         # Terminal text editor
 │   ├── snake.cool        # Snake game
 │   ├── browse.cool       # TUI file browser
-│   └── http.cool         # HTTP client
+│   ├── http.cool         # HTTP client
+│   └── task.cool         # Manifest task runner used by `cool task`
 │
 ├── examples/
 │   ├── hello.cool              # Variables, loops, functions — start here
@@ -3121,7 +3290,8 @@ echo Done.</code></pre>
 │   ├── functional.cool         # Closures, lambdas, map/filter, memoize
 │   ├── errors_and_files.cool   # try/except/finally, file I/O, JSON
 │   ├── stdlib.cool             # math, random, re, json, time, collections
-│   └── ffi_demo.cool           # FFI — call C functions from shared libraries
+│   ├── ffi_demo.cool           # FFI — call C functions from shared libraries
+│   └── fib_test.cool           # Example test file
 │
 ├── coolc/
 │   └── compiler_vm.cool   # Self-hosted compiler (written in Cool!)
@@ -3129,7 +3299,8 @@ echo Done.</code></pre>
 ├── Cargo.toml
 ├── Cargo.lock
 ├── README.md
-└── ROADMAP.md</code></pre>
+├── ROADMAP.md
+└── CHANGELOG.md</code></pre>
         </div>
 
         <h3>How the Interpreter Works</h3>
@@ -3217,7 +3388,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>11</td>
-                <td>Freestanding systems foundation — fixed-width numerics, raw memory, bare-metal path</td>
+                <td>Freestanding systems foundation — numeric/ABI groundwork, raw memory, bare-metal path</td>
                 <td><span class="badge badge-progress">In Progress</span></td>
               </tr>
             </tbody>
@@ -3233,11 +3404,12 @@ echo Done.</code></pre>
           <li>✅ LLVM backend — compile a large native subset of Cool → LLVM IR → native binary</li>
           <li>✅ FFI — available in the interpreter and LLVM native builds via <code>import ffi</code></li>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
-          <li>✅ Pointer types and raw memory access (<code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>)</li>
+          <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code> and <code>cc:</code> metadata</li>
+          <li>✅ Pointer-width helpers and raw memory access (<code>isize()</code>, <code>usize()</code>, <code>word_bits()</code>, <code>word_bytes()</code>, <code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>, plus volatile variants)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, fixed-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>
@@ -3274,6 +3446,13 @@ echo Done.</code></pre>
         <h2>Changelog</h2>
         <p>See <a href="https://github.com/codenz92/cool-lang/blob/master/CHANGELOG.md" target="_blank"
             rel="noopener noreferrer">CHANGELOG.md</a> for the complete history.</p>
+
+        <h3>Unreleased - Phase 11 In Progress</h3>
+        <ul>
+          <li>Phase 11: unions, volatile LLVM raw-memory helpers, pointer-width helpers
+            (<code>isize</code>, <code>usize</code>, <code>word_bits()</code>, <code>word_bytes()</code>), and
+            LLVM-native <code>extern def</code> declarations with <code>symbol:</code> / <code>cc:</code> metadata</li>
+        </ul>
 
         <h3>v1.1.0 - Phase 10 Complete</h3>
         <ul>

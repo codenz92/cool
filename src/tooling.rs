@@ -936,6 +936,11 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
                 name: name.clone(),
                 params: inspect_params(params),
             }),
+            Stmt::ExternFn { name, params, .. } => functions.push(InspectFunction {
+                line: current_line,
+                name: name.clone(),
+                params: inspect_extern_params(params),
+            }),
             Stmt::Class { name, parent, body } => {
                 let (methods, class_assignments) = inspect_class_body(body);
                 classes.push(InspectClass {
@@ -1288,6 +1293,18 @@ fn inspect_params(params: &[crate::ast::Param]) -> Vec<InspectParam> {
         .collect()
 }
 
+fn inspect_extern_params(params: &[crate::ast::ExternParam]) -> Vec<InspectParam> {
+    params
+        .iter()
+        .map(|param| InspectParam {
+            name: param.name.clone(),
+            has_default: false,
+            is_vararg: false,
+            is_kwarg: false,
+        })
+        .collect()
+}
+
 fn inspect_class_body(body: &[Stmt]) -> (Vec<InspectFunction>, Vec<InspectAssignment>) {
     let mut methods = Vec::new();
     let mut assignments = Vec::new();
@@ -1382,6 +1399,19 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             name: name.clone(),
             params: params.clone(),
             body: strip_line_markers(body),
+        }),
+        Stmt::ExternFn {
+            name,
+            params,
+            return_type,
+            symbol,
+            callconv,
+        } => Some(Stmt::ExternFn {
+            name: name.clone(),
+            params: params.clone(),
+            return_type: return_type.clone(),
+            symbol: symbol.clone(),
+            callconv: callconv.clone(),
         }),
         Stmt::Class { name, parent, body } => Some(Stmt::Class {
             name: name.clone(),

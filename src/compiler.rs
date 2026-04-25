@@ -607,6 +607,13 @@ impl Compiler {
                 self.emit(op);
             }
 
+            Stmt::ExternFn { .. } => {
+                return Err(
+                    "extern declarations are only supported in the LLVM backend — compile with `cool build`"
+                        .to_string(),
+                )
+            }
+
             Stmt::Class { name, parent, body } => {
                 // Collect methods from body.
                 let has_parent = parent.is_some();
@@ -641,6 +648,9 @@ impl Compiler {
                             self.compile_expr(value)?;
                             let attr_idx = self.add_name(var_name);
                             self.emit(Op::SetAttr(attr_idx));
+                        }
+                        Stmt::ExternFn { .. } => {
+                            return Err("extern declarations are only allowed at the top level".to_string())
                         }
                         Stmt::Pass => {}
                         Stmt::SetLine(n) => {

@@ -14,6 +14,7 @@ pub enum Token {
     // Identifiers & keywords
     Ident(String),
     Def,
+    Extern,
     Return,
     If,
     Elif,
@@ -46,6 +47,7 @@ pub enum Token {
     // Operators
     Plus,
     Minus,
+    Arrow,
     Star,
     Slash,
     Percent,
@@ -305,6 +307,7 @@ impl Lexer {
         }
         let token = match s.as_str() {
             "def" => Token::Def,
+            "extern" => Token::Extern,
             "return" => Token::Return,
             "if" => Token::If,
             "elif" => Token::Elif,
@@ -475,7 +478,10 @@ impl Lexer {
                 }
                 Some('-') => {
                     self.advance();
-                    if self.peek() == Some('=') {
+                    if self.peek() == Some('>') {
+                        self.advance();
+                        tokens.push(self.tok(Token::Arrow));
+                    } else if self.peek() == Some('=') {
                         self.advance();
                         tokens.push(self.tok(Token::MinusEq));
                     } else {

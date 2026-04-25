@@ -102,6 +102,7 @@ impl Parser {
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek().clone() {
             Token::Def => self.parse_fn_def(),
+            Token::Extern => self.parse_extern_fn(),
             Token::Class => self.parse_class(),
             Token::Struct => self.parse_struct(false),
             Token::Packed => {
@@ -158,6 +159,73 @@ impl Parser {
         Ok(Stmt::FnDef { name, params, body })
     }
 
+    fn parse_extern_fn(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Extern)?;
+        self.eat(&Token::Def)?;
+        let name = self.expect_ident()?;
+        self.eat(&Token::LParen)?;
+        let params = self.parse_extern_param_list()?;
+        self.eat(&Token::RParen)?;
+        self.eat(&Token::Arrow)?;
+        let return_type = self.expect_ident()?;
+
+        let mut symbol = None;
+        let mut callconv = None;
+
+        if self.check(&Token::Colon) {
+            self.advance();
+            self.eat_newline();
+            self.eat(&Token::Indent)?;
+            while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+                self.skip_newlines();
+                if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                    break;
+                }
+                if self.check(&Token::Pass) {
+                    self.advance();
+                    self.eat_newline();
+                    continue;
+                }
+                let key = self.expect_ident()?;
+                self.eat(&Token::Colon)?;
+                let value = self.expect_ident_or_string()?;
+                self.eat_newline();
+                match key.as_str() {
+                    "symbol" => {
+                        if symbol.is_some() {
+                            return Err(format!("line {}: duplicate extern metadata key 'symbol'", self.line()));
+                        }
+                        symbol = Some(value);
+                    }
+                    "cc" => {
+                        if callconv.is_some() {
+                            return Err(format!("line {}: duplicate extern metadata key 'cc'", self.line()));
+                        }
+                        callconv = Some(value);
+                    }
+                    other => {
+                        return Err(format!(
+                            "line {}: unsupported extern metadata key '{}'",
+                            self.line(),
+                            other
+                        ))
+                    }
+                }
+            }
+            self.eat(&Token::Dedent)?;
+        } else {
+            self.eat_newline();
+        }
+
+        Ok(Stmt::ExternFn {
+            name,
+            params,
+            return_type,
+            symbol,
+            callconv,
+        })
+    }
+
     fn parse_param_list(&mut self) -> Result<Vec<Param>, String> {
         let mut params = Vec::new();
         if self.check(&Token::RParen) {
@@ -170,6 +238,22 @@ impl Parser {
                 break;
             }
             params.push(self.parse_param()?);
+        }
+        Ok(params)
+    }
+
+    fn parse_extern_param_list(&mut self) -> Result<Vec<ExternParam>, String> {
+        let mut params = Vec::new();
+        if self.check(&Token::RParen) {
+            return Ok(params);
+        }
+        params.push(self.parse_extern_param()?);
+        while self.check(&Token::Comma) {
+            self.advance();
+            if self.check(&Token::RParen) {
+                break;
+            }
+            params.push(self.parse_extern_param()?);
         }
         Ok(params)
     }
@@ -215,6 +299,13 @@ impl Parser {
                 is_kwarg: false,
             })
         }
+    }
+
+    fn parse_extern_param(&mut self) -> Result<ExternParam, String> {
+        let name = self.expect_ident()?;
+        self.eat(&Token::Colon)?;
+        let type_name = self.expect_ident()?;
+        Ok(ExternParam { name, type_name })
     }
 
     fn parse_class(&mut self) -> Result<Stmt, String> {
@@ -1225,6 +1316,20 @@ impl Parser {
                 self.line(),
                 self.peek()
             ))
+        }
+    }
+
+    fn expect_ident_or_string(&mut self) -> Result<String, String> {
+        match self.peek().clone() {
+            Token::Ident(s) | Token::Str(s) => {
+                self.advance();
+                Ok(s)
+            }
+            _ => Err(format!(
+                "line {}: expected identifier or string, got {:?}",
+                self.line(),
+                self.peek()
+            )),
         }
     }
 

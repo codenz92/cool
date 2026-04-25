@@ -474,6 +474,28 @@ print(word_bytes())
 }
 
 #[test]
+fn test_llvm_extern_declarations() {
+    let result = compile_and_run_native(
+        r#"
+extern def abs(x: i32) -> i32
+
+extern def c_strlen(text: str) -> usize:
+    symbol: "strlen"
+    cc: "c"
+
+print(abs(-42))
+print(c_strlen("hello"))
+f = abs
+print(f(-7))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["42", "5", "7"]);
+}
+
+#[test]
 fn test_llvm_volatile_memory_builtins() {
     let result = compile_and_run_native(
         r#"

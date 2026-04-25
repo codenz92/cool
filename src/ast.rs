@@ -125,6 +125,12 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ExternParam {
+    pub name: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stmt {
     /// Pseudo-statement: records the source line for error messages.
@@ -185,6 +191,14 @@ pub enum Stmt {
         name: String,
         params: Vec<Param>,
         body: Vec<Stmt>,
+    },
+    /// extern def name(arg: type, ...) -> ret
+    ExternFn {
+        name: String,
+        params: Vec<ExternParam>,
+        return_type: String,
+        symbol: Option<String>,
+        callconv: Option<String>,
     },
     /// class Name(Parent): ...
     Class {

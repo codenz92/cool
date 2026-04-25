@@ -803,6 +803,10 @@ impl Interpreter {
                 Ok(Signal::None)
             }
 
+            Stmt::ExternFn { .. } => {
+                Err(self.err("extern declarations are only supported in the LLVM backend — compile with `cool build`"))
+            }
+
             Stmt::Class { name, parent, body } => {
                 let parent_class = if let Some(pname) = parent {
                     match env.get(pname) {

@@ -16,7 +16,9 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
 use inkwell::types::{BasicType, StructType};
-use inkwell::values::{BasicMetadataValueEnum, BasicValue, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
+};
 use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -7911,6 +7913,48 @@ struct TryContext {
     catches_exceptions: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternAbiType {
+    Void,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Isize,
+    Usize,
+    F32,
+    F64,
+    Ptr,
+    Str,
+}
+
+impl ExternAbiType {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "void" => Some(Self::Void),
+            "i8" => Some(Self::I8),
+            "i16" => Some(Self::I16),
+            "i32" => Some(Self::I32),
+            "i64" => Some(Self::I64),
+            "u8" => Some(Self::U8),
+            "u16" => Some(Self::U16),
+            "u32" => Some(Self::U32),
+            "u64" => Some(Self::U64),
+            "isize" => Some(Self::Isize),
+            "usize" => Some(Self::Usize),
+            "f32" => Some(Self::F32),
+            "f64" => Some(Self::F64),
+            "ptr" => Some(Self::Ptr),
+            "str" => Some(Self::Str),
+            _ => None,
+        }
+    }
+}
+
 // ── Constructor & runtime declarations ───────────────────────────────────────
 
 impl<'ctx> Compiler<'ctx> {
@@ -8150,24 +8194,365 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn mangle_extern_wrapper_name(&self, name: &str) -> String {
+        self.mangle_global_name(&format!("__extern_{}_wrapper", name))
+    }
+
+    fn pointer_int_type(&self) -> inkwell::types::IntType<'ctx> {
+        if std::mem::size_of::<usize>() == 8 {
+            self.context.i64_type()
+        } else {
+            self.context.i32_type()
+        }
+    }
+
+    fn extern_callconv_number(&self, cc: &str) -> Result<u32, String> {
+        match cc {
+            "c" => Ok(0),
+            "fast" => Ok(8),
+            "cold" => Ok(9),
+            "preserve_most" => Ok(14),
+            "preserve_all" => Ok(15),
+            "stdcall" | "x86_stdcall" => Ok(64),
+            "fastcall" | "x86_fastcall" => Ok(65),
+            "thiscall" | "x86_thiscall" => Ok(70),
+            "x86_64_sysv" | "sysv64" => Ok(78),
+            "win64" => Ok(79),
+            "vectorcall" | "x86_vectorcall" => Ok(80),
+            "regcall" | "x86_regcall" => Ok(92),
+            other => Err(format!("unsupported extern calling convention '{other}'")),
+        }
+    }
+
+    fn parse_extern_abi_type(&self, name: &str, context: &str) -> Result<ExternAbiType, String> {
+        ExternAbiType::parse(name).ok_or_else(|| {
+            format!(
+                "{context}: unsupported ABI type '{name}' (supported: void, i8/i16/i32/i64, u8/u16/u32/u64, isize, usize, f32, f64, ptr, str)"
+            )
+        })
+    }
+
+    fn extern_abi_basic_type(&self, ty: ExternAbiType) -> Option<inkwell::types::BasicTypeEnum<'ctx>> {
+        match ty {
+            ExternAbiType::Void => None,
+            ExternAbiType::I8 | ExternAbiType::U8 => Some(self.context.i8_type().into()),
+            ExternAbiType::I16 | ExternAbiType::U16 => Some(self.context.i16_type().into()),
+            ExternAbiType::I32 | ExternAbiType::U32 => Some(self.context.i32_type().into()),
+            ExternAbiType::I64 | ExternAbiType::U64 => Some(self.context.i64_type().into()),
+            ExternAbiType::Isize | ExternAbiType::Usize => Some(self.pointer_int_type().into()),
+            ExternAbiType::F32 => Some(self.context.f32_type().into()),
+            ExternAbiType::F64 => Some(self.context.f64_type().into()),
+            ExternAbiType::Ptr | ExternAbiType::Str => {
+                Some(self.context.i8_type().ptr_type(AddressSpace::default()).into())
+            }
+        }
+    }
+
+    fn extern_int_bits(&self, ty: ExternAbiType) -> Option<u32> {
+        match ty {
+            ExternAbiType::I8 | ExternAbiType::U8 => Some(8),
+            ExternAbiType::I16 | ExternAbiType::U16 => Some(16),
+            ExternAbiType::I32 | ExternAbiType::U32 => Some(32),
+            ExternAbiType::I64 | ExternAbiType::U64 => Some(64),
+            ExternAbiType::Isize | ExternAbiType::Usize => Some(self.pointer_int_type().get_bit_width()),
+            _ => None,
+        }
+    }
+
+    fn extern_int_signed(&self, ty: ExternAbiType) -> bool {
+        matches!(
+            ty,
+            ExternAbiType::I8 | ExternAbiType::I16 | ExternAbiType::I32 | ExternAbiType::I64 | ExternAbiType::Isize
+        )
+    }
+
+    fn coolval_payload_i64(&mut self, value: StructValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.builder
+            .build_extract_value(value, 1, name)
+            .unwrap()
+            .into_int_value()
+    }
+
+    fn coolval_to_f64_bits(&mut self, value: StructValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        let float_cv = self.call_unop_fn(self.rt.cool_to_float_val, value, &format!("{name}_to_float"));
+        self.coolval_payload_i64(float_cv, &format!("{name}_payload"))
+    }
+
+    fn build_cv_int_from_i64(&mut self, value: IntValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        self.builder
+            .build_call(self.rt.cv_int, &[value.into()], name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
+    fn extern_arg_value(
+        &mut self,
+        value: StructValue<'ctx>,
+        ty: ExternAbiType,
+        name: &str,
+    ) -> Result<BasicMetadataValueEnum<'ctx>, String> {
+        match ty {
+            ExternAbiType::Void => Err("void is not a valid extern parameter type".to_string()),
+            ExternAbiType::F32 => {
+                let bits = self.coolval_to_f64_bits(value, name);
+                let f64_val = self
+                    .builder
+                    .build_bitcast(bits, self.context.f64_type(), &format!("{name}_f64_bits"))
+                    .unwrap()
+                    .into_float_value();
+                let f32_val = self
+                    .builder
+                    .build_float_trunc(f64_val, self.context.f32_type(), &format!("{name}_f32"))
+                    .unwrap();
+                Ok(f32_val.into())
+            }
+            ExternAbiType::F64 => {
+                let bits = self.coolval_to_f64_bits(value, name);
+                let f64_val = self
+                    .builder
+                    .build_bitcast(bits, self.context.f64_type(), &format!("{name}_f64_bits"))
+                    .unwrap()
+                    .into_float_value();
+                Ok(f64_val.into())
+            }
+            ExternAbiType::Ptr => {
+                let int_cv = self.call_unop_fn(self.rt.cool_to_int, value, &format!("{name}_to_int"));
+                let payload = self.coolval_payload_i64(int_cv, &format!("{name}_payload"));
+                let ptr = self
+                    .builder
+                    .build_int_to_ptr(
+                        payload,
+                        self.context.i8_type().ptr_type(AddressSpace::default()),
+                        &format!("{name}_ptr"),
+                    )
+                    .unwrap();
+                Ok(ptr.into())
+            }
+            ExternAbiType::Str => {
+                let ptr = self
+                    .builder
+                    .build_call(self.rt.cool_to_str, &[value.into()], &format!("{name}_to_str"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_pointer_value();
+                Ok(ptr.into())
+            }
+            _ => {
+                let int_cv = self.call_unop_fn(self.rt.cool_to_int, value, &format!("{name}_to_int"));
+                let payload = self.coolval_payload_i64(int_cv, &format!("{name}_payload"));
+                let target = match self
+                    .extern_abi_basic_type(ty)
+                    .expect("integer extern types must lower to a basic type")
+                {
+                    inkwell::types::BasicTypeEnum::IntType(t) => t,
+                    _ => unreachable!(),
+                };
+                let int_value = if target.get_bit_width() == 64 {
+                    payload
+                } else {
+                    self.builder
+                        .build_int_truncate(payload, target, &format!("{name}_trunc"))
+                        .unwrap()
+                };
+                Ok(int_value.into())
+            }
+        }
+    }
+
+    fn extern_return_value(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+        ty: ExternAbiType,
+        name: &str,
+    ) -> Result<StructValue<'ctx>, String> {
+        match ty {
+            ExternAbiType::Void => Ok(self.build_nil()),
+            ExternAbiType::F32 => {
+                let f64_val = self
+                    .builder
+                    .build_float_ext(
+                        value.into_float_value(),
+                        self.context.f64_type(),
+                        &format!("{name}_f64"),
+                    )
+                    .unwrap();
+                Ok(self
+                    .builder
+                    .build_call(self.rt.cv_float, &[f64_val.into()], &format!("{name}_cv_float"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value())
+            }
+            ExternAbiType::F64 => Ok(self
+                .builder
+                .build_call(
+                    self.rt.cv_float,
+                    &[value.into_float_value().into()],
+                    &format!("{name}_cv_float"),
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()),
+            ExternAbiType::Ptr => {
+                let raw = self
+                    .builder
+                    .build_ptr_to_int(
+                        value.into_pointer_value(),
+                        self.context.i64_type(),
+                        &format!("{name}_ptr_i64"),
+                    )
+                    .unwrap();
+                Ok(self.build_cv_int_from_i64(raw, &format!("{name}_cv_int")))
+            }
+            ExternAbiType::Str => {
+                let ptr = value.into_pointer_value();
+                let null = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
+                let is_null = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, ptr, null, &format!("{name}_is_null"))
+                    .unwrap();
+                let fn_val = self.current_fn.unwrap();
+                let str_bb = self.context.append_basic_block(fn_val, &format!("{name}_str"));
+                let nil_bb = self.context.append_basic_block(fn_val, &format!("{name}_nil"));
+                let done_bb = self.context.append_basic_block(fn_val, &format!("{name}_done"));
+                self.builder.build_conditional_branch(is_null, nil_bb, str_bb).unwrap();
+
+                self.builder.position_at_end(str_bb);
+                let str_val = self
+                    .builder
+                    .build_call(self.rt.cv_str, &[ptr.into()], &format!("{name}_cv_str"))
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value();
+                let str_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(nil_bb);
+                let nil_val = self.build_nil();
+                let nil_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                self.builder.position_at_end(done_bb);
+                let phi = self.builder.build_phi(self.cv_type, &format!("{name}_phi")).unwrap();
+                phi.add_incoming(&[(&str_val, str_end), (&nil_val, nil_end)]);
+                Ok(phi.as_basic_value().into_struct_value())
+            }
+            _ => {
+                let raw = value.into_int_value();
+                let bits = self
+                    .extern_int_bits(ty)
+                    .expect("integer extern return must have a width");
+                let widened = if bits == 64 {
+                    if raw.get_type().get_bit_width() == 64 {
+                        raw
+                    } else if self.extern_int_signed(ty) {
+                        self.builder
+                            .build_int_s_extend(raw, self.context.i64_type(), &format!("{name}_sext"))
+                            .unwrap()
+                    } else {
+                        self.builder
+                            .build_int_z_extend(raw, self.context.i64_type(), &format!("{name}_zext"))
+                            .unwrap()
+                    }
+                } else if self.extern_int_signed(ty) {
+                    self.builder
+                        .build_int_s_extend(raw, self.context.i64_type(), &format!("{name}_sext"))
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_int_z_extend(raw, self.context.i64_type(), &format!("{name}_zext"))
+                        .unwrap()
+                };
+                Ok(self.build_cv_int_from_i64(widened, &format!("{name}_cv_int")))
+            }
+        }
+    }
+
+    fn bind_top_level_function_closure(&mut self, name: &str, fn_val: FunctionValue<'ctx>) {
+        let fn_ptr = fn_val.as_global_value().as_pointer_value();
+        let fn_ptr_int = self
+            .builder
+            .build_ptr_to_int(fn_ptr, self.context.i64_type(), &format!("{}_fn_ptr", name))
+            .unwrap();
+        let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
+        let zero_captures = self.context.i64_type().const_zero();
+        let closure = self
+            .builder
+            .build_call(
+                self.rt.cool_closure_new,
+                &[fn_ptr_int.into(), zero_captures.into(), null_ptr.into()],
+                &format!("{}_closure", name),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+        let ptr = if let Some(&p) = self.locals.get(name) {
+            p
+        } else {
+            let p = self.build_entry_alloca(name);
+            self.locals.insert(name.to_string(), p);
+            p
+        };
+        self.builder.build_store(ptr, closure).unwrap();
+    }
+
     fn declare_top_level_functions(&mut self, program: &Program) -> Result<(), String> {
         for stmt in program {
-            if let Stmt::FnDef { name, params, .. } = stmt {
-                if self.functions.contains_key(name) {
-                    continue;
+            match stmt {
+                Stmt::FnDef { name, params, .. } => {
+                    if self.functions.contains_key(name) {
+                        continue;
+                    }
+                    if params.iter().any(|p| p.is_vararg || p.is_kwarg) {
+                        return Err(format!(
+                            "function '{name}': *args / **kwargs are not supported in LLVM backend"
+                        ));
+                    }
+                    let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                        params.iter().map(|_| self.cv_type.into()).collect();
+                    let fn_type = self.cv_type.fn_type(&param_types, false);
+                    let fn_name = self.mangle_global_name(name);
+                    let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                    self.functions.insert(name.clone(), fn_val);
+                    self.function_params.insert(name.clone(), params.clone());
                 }
-                if params.iter().any(|p| p.is_vararg || p.is_kwarg) {
-                    return Err(format!(
-                        "function '{name}': *args / **kwargs are not supported in LLVM backend"
-                    ));
+                Stmt::ExternFn { name, params, .. } => {
+                    if self.functions.contains_key(name) {
+                        continue;
+                    }
+                    let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                        params.iter().map(|_| self.cv_type.into()).collect();
+                    let fn_type = self.cv_type.fn_type(&param_types, false);
+                    let fn_name = self.mangle_extern_wrapper_name(name);
+                    let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                    self.functions.insert(name.clone(), fn_val);
+                    self.function_params.insert(
+                        name.clone(),
+                        params
+                            .iter()
+                            .map(|param| crate::ast::Param {
+                                name: param.name.clone(),
+                                default: None,
+                                is_vararg: false,
+                                is_kwarg: false,
+                            })
+                            .collect(),
+                    );
                 }
-                let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
-                    params.iter().map(|_| self.cv_type.into()).collect();
-                let fn_type = self.cv_type.fn_type(&param_types, false);
-                let fn_name = self.mangle_global_name(name);
-                let fn_val = self.module.add_function(&fn_name, fn_type, None);
-                self.functions.insert(name.clone(), fn_val);
-                self.function_params.insert(name.clone(), params.clone());
+                _ => {}
             }
         }
         Ok(())
@@ -8720,6 +9105,16 @@ impl<'ctx> Compiler<'ctx> {
                 self.compile_fndef(name, params, body)?;
             }
 
+            Stmt::ExternFn {
+                name,
+                params,
+                return_type,
+                symbol,
+                callconv,
+            } => {
+                self.compile_extern_fndef(name, params, return_type, symbol.as_deref(), callconv.as_deref())?;
+            }
+
             // ── class definition ────────────────────────────────────────────
             Stmt::Class { name, parent, body } => {
                 self.compile_class(name, parent.as_deref(), body)?;
@@ -9043,35 +9438,129 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        // Bind the top-level function name as a first-class zero-capture closure
-        // so module helpers like list.map(fn, xs) can receive it as a value.
-        let fn_ptr = fn_val.as_global_value().as_pointer_value();
-        let fn_ptr_int = self
-            .builder
-            .build_ptr_to_int(fn_ptr, self.context.i64_type(), &format!("{}_fn_ptr", name))
-            .unwrap();
-        let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
-        let zero_captures = self.context.i64_type().const_zero();
-        let closure = self
-            .builder
-            .build_call(
-                self.rt.cool_closure_new,
-                &[fn_ptr_int.into(), zero_captures.into(), null_ptr.into()],
-                &format!("{}_closure", name),
-            )
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value();
-        let ptr = if let Some(&p) = self.locals.get(name) {
-            p
-        } else {
-            let p = self.build_entry_alloca(name);
-            self.locals.insert(name.to_string(), p);
-            p
+        self.bind_top_level_function_closure(name, fn_val);
+        Ok(())
+    }
+
+    fn compile_extern_fndef(
+        &mut self,
+        name: &str,
+        params: &[crate::ast::ExternParam],
+        return_type: &str,
+        symbol: Option<&str>,
+        callconv: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.allow_toplevel_defs {
+            return Err("extern declarations are only allowed at the top level".into());
+        }
+
+        let wrapper_fn = *self
+            .functions
+            .get(name)
+            .ok_or_else(|| format!("extern function '{name}' was not pre-declared"))?;
+
+        let raw_symbol = symbol.unwrap_or(name);
+        let cc_number = match callconv {
+            Some(cc) => self.extern_callconv_number(cc)?,
+            None => 0,
         };
-        self.builder.build_store(ptr, closure).unwrap();
+        let ret_ty = self.parse_extern_abi_type(return_type, &format!("extern '{name}' return"))?;
+        let mut raw_param_types = Vec::with_capacity(params.len());
+        let mut raw_arg_types = Vec::with_capacity(params.len());
+        for param in params {
+            let ty =
+                self.parse_extern_abi_type(&param.type_name, &format!("extern '{name}' parameter '{}'", param.name))?;
+            if ty == ExternAbiType::Void {
+                return Err(format!(
+                    "extern '{name}' parameter '{}' cannot have type 'void'",
+                    param.name
+                ));
+            }
+            raw_param_types.push(
+                self.extern_abi_basic_type(ty)
+                    .expect("non-void extern argument must lower to a basic type")
+                    .into(),
+            );
+            raw_arg_types.push(ty);
+        }
+        let raw_fn_type = match self.extern_abi_basic_type(ret_ty) {
+            Some(ret_basic) => ret_basic.fn_type(&raw_param_types, false),
+            None => self.context.void_type().fn_type(&raw_param_types, false),
+        };
+        let raw_fn = if let Some(existing) = self.module.get_function(raw_symbol) {
+            existing
+        } else {
+            self.module
+                .add_function(raw_symbol, raw_fn_type, Some(inkwell::module::Linkage::External))
+        };
+        raw_fn.set_linkage(inkwell::module::Linkage::External);
+        raw_fn.set_call_conventions(cc_number);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_functions = self.functions.clone();
+        let saved_function_params = self.function_params.clone();
+        let saved_classes = self.classes.clone();
+        let saved_fn = self.current_fn.replace(wrapper_fn);
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
+        self.imported_modules = saved_imports.clone();
+        self.imported_user_modules = saved_user_modules.clone();
+
+        let entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let mut native_args = Vec::with_capacity(params.len());
+        for (i, param) in params.iter().enumerate() {
+            let wrapper_param = wrapper_fn
+                .get_nth_param(i as u32)
+                .ok_or_else(|| format!("extern wrapper '{name}' missing parameter {}", param.name))?
+                .into_struct_value();
+            let alloca = self.build_entry_alloca(&param.name);
+            self.builder.build_store(alloca, wrapper_param).unwrap();
+            self.locals.insert(param.name.clone(), alloca);
+            native_args.push(self.extern_arg_value(wrapper_param, raw_arg_types[i], &format!("{name}_arg_{i}"))?);
+        }
+
+        let call = self
+            .builder
+            .build_call(raw_fn, &native_args, &format!("{name}_extern_call"))
+            .unwrap();
+        call.set_call_convention(cc_number);
+        let result = if ret_ty == ExternAbiType::Void {
+            self.build_nil()
+        } else {
+            let raw = call
+                .try_as_basic_value()
+                .left()
+                .ok_or_else(|| format!("extern '{name}' expected a return value"))?;
+            self.extern_return_value(raw, ret_ty, &format!("{name}_ret"))?
+        };
+        self.builder.build_return(Some(&result)).unwrap();
+
+        self.locals = saved_locals;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.classes = saved_classes;
+        self.current_fn = saved_fn;
+        self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
+        self.var_struct_types = saved_var_struct_types;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        self.bind_top_level_function_closure(name, wrapper_fn);
         Ok(())
     }
 
@@ -9117,6 +9606,7 @@ impl<'ctx> Compiler<'ctx> {
                     };
                     attributes.push((attr_name, value.clone()));
                 }
+                Stmt::ExternFn { .. } => return Err("extern declarations are only allowed at the top level".into()),
                 _ => {}
             }
         }
