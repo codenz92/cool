@@ -977,6 +977,10 @@ cargo build --release</code></pre>
                 <td>Emit a freestanding object file (<code>hello.o</code>)</td>
               </tr>
               <tr>
+                <td><code>./target/release/cool build --linker-script=link.ld hello.cool</code></td>
+                <td>Compile freestanding and link a kernel image (<code>hello.elf</code>) via LLD</td>
+              </tr>
+              <tr>
                 <td><code>./target/release/cool hello.cool</code></td>
                 <td>Run a source file with the tree-walk interpreter</td>
               </tr>
@@ -2474,12 +2478,23 @@ boot_entry()</code></pre>
         </div>
         <p>On Mach-O targets, use <code>segment,section</code> names such as <code>__TEXT,__boot</code> or <code>__DATA,__bootdata</code>.</p>
 
-        <h4>Freestanding Object Builds</h4>
-        <p><code>cool build --freestanding</code> emits a <code>.o</code> file instead of compiling and linking the hosted Cool runtime. Freestanding builds currently accept declaration-style top-level programs only: <code>def</code>, <code>extern def</code>, <code>data</code>, <code>struct</code>, and <code>union</code>. Top-level executable statements, imports, and classes are rejected.</p>
+        <h4>Freestanding Object Builds And Kernel Images</h4>
+        <p><code>cool build --freestanding</code> emits a <code>.o</code> file instead of compiling and linking the hosted Cool runtime. Freestanding builds accept declaration-style top-level programs only: <code>def</code>, <code>extern def</code>, <code>data</code>, <code>struct</code>, and <code>union</code>. Top-level executable statements, imports, and classes are rejected. Freestanding <code>assert</code> failure paths lower to a direct LLVM trap rather than depending on libc <code>abort()</code>.</p>
+        <p><code>--linker-script=&lt;path&gt;</code> (implies <code>--freestanding</code>) compiles to a <code>.o</code> then invokes LLD (<code>ld.lld</code>) to link a kernel image (<code>.elf</code>) using a GNU linker script. Set <code>linker_script = "link.ld"</code> in <code>cool.toml</code> to enable this for project builds. LLD is probed automatically; a clear error is shown if it is not installed.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
-          <pre><code class="language-bash">cool build --freestanding hello.cool   # writes ./hello.o
-cool build --freestanding              # writes ./&lt;project-output&gt;.o</code></pre>
+          <pre><code class="language-bash">cool build --freestanding hello.cool             # writes ./hello.o
+cool build --freestanding                        # writes ./&lt;project-output&gt;.o
+cool build --linker-script=link.ld hello.cool    # writes ./hello.o, then ./hello.elf
+cool build                                       # with linker_script in cool.toml → ./&lt;name&gt;.elf</code></pre>
+        </div>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python"># Example entry point for a freestanding kernel
+def _start():
+    section: ".text.boot"
+    entry: "_start"
+    return 0</code></pre>
         </div>
 
         <h4>Memory Access</h4>
@@ -3217,6 +3232,10 @@ echo Done.</code></pre>
                 <td>Emit a freestanding object file (<code>.o</code>) without linking the hosted runtime</td>
               </tr>
               <tr>
+                <td><code>cool build --linker-script=&lt;ld&gt; [file.cool]</code></td>
+                <td>Compile freestanding and link a kernel image (<code>.elf</code>) via LLD</td>
+              </tr>
+              <tr>
                 <td><code>cool install</code></td>
                 <td>Fetch git dependencies and write <code>cool.lock</code></td>
               </tr>
@@ -3488,7 +3507,7 @@ echo Done.</code></pre>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
           <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code>, <code>cc:</code>, and <code>section:</code> metadata, plus raw <code>data</code> declarations for typed linker-visible globals</li>
           <li>✅ Pointer-width helpers and raw memory access (<code>isize()</code>, <code>usize()</code>, <code>word_bits()</code>, <code>word_bytes()</code>, <code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>, plus volatile variants)</li>
-          <li>✅ <code>cool build</code> for hosted native binaries and <code>cool build --freestanding</code> for object-file output</li>
+          <li>✅ <code>cool build</code> for hosted native binaries, <code>cool build --freestanding</code> for object-file output, and <code>cool build --linker-script=&lt;ld&gt;</code> (or <code>linker_script</code> in <code>cool.toml</code>) to link a kernel image via LLD</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
           <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>platform.os()</code>/<code>arch()</code>/<code>runtime()</code> and capability helpers, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>

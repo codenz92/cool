@@ -31,6 +31,8 @@ All notable changes to the Cool language project.
 - Freestanding codegen now constructs basic `CoolVal` literals (`nil`, ints, floats, bools, strings) directly in LLVM IR so simple exported functions and extern wrappers do not require the hosted runtime just to materialize return values
 - Freestanding LLVM `assert` failure paths now lower to a direct trap instead of importing libc `abort()` and hosted print helpers
 - Freestanding top-level functions now accept `entry: "symbol"` metadata to export an additional raw entry symbol for custom link flows
+- `cool build --linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using a GNU linker script; linker is found by probing `ld.lld`, `lld`, and versioned variants; clear error when LLD is absent
+- `linker_script = "link.ld"` field in `cool.toml` enables the same kernel image workflow for project builds; path is resolved relative to the project root; CLI flag takes precedence over the manifest field
 
 #### Self-Hosted Tooling
 

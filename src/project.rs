@@ -35,6 +35,7 @@ pub struct CoolProject {
     pub output: Option<String>,
     pub sources: Vec<String>,
     pub dependencies: Vec<DependencySpec>,
+    pub linker_script: Option<String>,
 }
 
 fn canonical_or_path(path: PathBuf) -> PathBuf {
@@ -274,6 +275,7 @@ impl CoolProject {
             output: opt_string("output")?,
             sources: opt_string_list("sources")?,
             dependencies,
+            linker_script: opt_string("linker_script")?,
         })
     }
 

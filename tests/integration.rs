@@ -2152,6 +2152,145 @@ fn test_cool_build_freestanding_rejects_top_level_executable_statements() {
     assert!(stderr.contains("freestanding build only supports top-level declarations"));
 }
 
+fn find_lld_for_test() -> Option<String> {
+    let candidates = ["ld.lld", "lld", "ld.lld-19", "ld.lld-18", "ld.lld-17", "ld.lld-16"];
+    for name in candidates {
+        if std::process::Command::new(name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+#[test]
+fn test_cool_build_linker_script_flag_produces_elf() {
+    let Some(_lld) = find_lld_for_test() else {
+        eprintln!("skipping: no LLD linker found");
+        return;
+    };
+    let dir = unique_temp_dir("cool_freestanding_link_flag");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let fn_section = if cfg!(target_os = "macos") { "__TEXT,__boot" } else { ".text.boot" };
+    std::fs::write(
+        dir.join("kernel.cool"),
+        format!(
+            r#"def _start():
+    section: "{fn_section}"
+    entry: "_start"
+    return 0
+"#
+        ),
+    )
+    .unwrap();
+
+    // Minimal linker script — place .text at a fixed address
+    std::fs::write(
+        dir.join("link.ld"),
+        "ENTRY(_start)\nSECTIONS { . = 0x100000; .text : { *(.text*) } }\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&dir, &["build", "--linker-script=link.ld", "kernel.cool"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let elf = dir.join("kernel.elf");
+    assert!(elf.exists(), "expected kernel.elf at {}", elf.display());
+    // Object file should also exist as an intermediate artifact
+    assert!(dir.join("kernel.o").exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cool_build_linker_script_in_toml_produces_elf() {
+    let Some(_lld) = find_lld_for_test() else {
+        eprintln!("skipping: no LLD linker found");
+        return;
+    };
+    let dir = unique_temp_dir("cool_freestanding_link_toml");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+
+    std::fs::write(
+        dir.join("cool.toml"),
+        r#"[project]
+name = "mykernel"
+version = "0.1.0"
+main = "src/main.cool"
+linker_script = "link.ld"
+"#,
+    )
+    .unwrap();
+
+    let fn_section = if cfg!(target_os = "macos") { "__TEXT,__boot" } else { ".text.boot" };
+    std::fs::write(
+        dir.join("src").join("main.cool"),
+        format!(
+            r#"def _start():
+    section: "{fn_section}"
+    entry: "_start"
+    return 0
+"#
+        ),
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("link.ld"),
+        "ENTRY(_start)\nSECTIONS { . = 0x100000; .text : { *(.text*) } }\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let elf = dir.join("mykernel.elf");
+    assert!(elf.exists(), "expected mykernel.elf at {}", elf.display());
+    assert!(dir.join("mykernel.o").exists());
+    // No unlinked binary should exist
+    assert!(!dir.join("mykernel").exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cool_build_linker_script_missing_lld_gives_clear_error() {
+    // This test only runs when LLD is absent.
+    if find_lld_for_test().is_some() {
+        eprintln!("skipping: LLD is present");
+        return;
+    }
+    let dir = unique_temp_dir("cool_freestanding_no_lld");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    std::fs::write(dir.join("kernel.cool"), "def _start():\n    return 0\n").unwrap();
+    std::fs::write(
+        dir.join("link.ld"),
+        "ENTRY(_start)\nSECTIONS { . = 0x100000; .text : { *(.text*) } }\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&dir, &["build", "--linker-script=link.ld", "kernel.cool"]).unwrap();
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stderr.contains("no LLD linker found"),
+        "expected LLD error, got:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_cool_new_writes_project_table_manifest() {
     let workspace_dir = unique_temp_dir("cool_new_project_table");

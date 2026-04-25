@@ -10,7 +10,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 
 ### Language
 
-- Native-first toolchain: tree-walk interpreter, bytecode VM, LLVM native compiler, and freestanding object output
+- Native-first toolchain: tree-walk interpreter, bytecode VM, LLVM native compiler, freestanding object output, and kernel image linking via LLD
 - Systems reach: `extern def`, `data`, structs/unions, FFI, inline assembly, and raw memory operations
 - Indentation-based block syntax (Python-style)
 - Variables, arithmetic, comparisons, logical and bitwise operators
@@ -28,7 +28,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket` (`http` requires host `curl`)
 - `import ffi` — call C functions from shared libraries at runtime
 - LLVM-native `extern def` declarations with `symbol:` and `cc:` metadata
-- `cool build --freestanding` to emit object files for custom/freestanding link steps
+- `cool build --freestanding` to emit object files for custom/freestanding link steps; `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
 - `runfile()` to execute another `.cool` file at runtime
@@ -131,13 +131,16 @@ On Mach-O targets, use `segment,section` names such as `__TEXT,__boot` or `__DAT
 Compile Cool programs to native binaries via an LLVM backend backed by a C runtime:
 
 ```bash
-cool build hello.cool      # compiles → ./hello
-./hello                    # runs natively, no runtime needed
+cool build hello.cool                        # compiles → ./hello
+./hello                                      # runs natively, no runtime needed
 
-cool build --freestanding hello.cool   # emits → ./hello.o
+cool build --freestanding hello.cool         # emits → ./hello.o
+cool build --linker-script=link.ld hello.cool  # emits → ./hello.o, then links → ./hello.elf
 ```
 
-`cool build --freestanding` skips the hosted C runtime compile/link step and writes an object file instead. Freestanding builds currently accept declaration-style top-level programs only: `def`, `extern def`, `data`, `struct`, and `union`. Top-level executable statements, imports, and classes are rejected so the output stays suitable for custom link flows. Freestanding `assert` failure paths now lower to a direct LLVM trap instead of depending on libc `abort()` or hosted printing. Use function metadata like `entry: "cool_boot_raw"` on a zero-argument top-level `def` to export an additional raw entry symbol for custom link flows.
+`cool build --freestanding` skips the hosted C runtime compile/link step and writes an object file instead. Freestanding builds accept declaration-style top-level programs only: `def`, `extern def`, `data`, `struct`, and `union`. Top-level executable statements, imports, and classes are rejected. Freestanding `assert` failure paths lower to a direct LLVM trap instead of depending on libc `abort()`. Use `entry: "symbol_name"` metadata on a zero-argument `def` to export an additional raw entry symbol for custom link flows.
+
+`--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`.
 
 The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` metadata, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
@@ -324,9 +327,10 @@ cool task list
 cool task build
 
 # Compile for release
-cool build          # reads cool.toml, produces ./myapp
+cool build                   # reads cool.toml, produces ./myapp
 ./myapp
-cool build --freestanding   # reads cool.toml, produces ./myapp.o
+cool build --freestanding    # reads cool.toml, produces ./myapp.o
+# (or set linker_script in cool.toml to produce ./myapp.elf via LLD)
 ```
 
 `cool.toml` format:
@@ -336,8 +340,9 @@ cool build --freestanding   # reads cool.toml, produces ./myapp.o
 name = "myapp"
 version = "0.1.0"
 main = "src/main.cool"
-output = "myapp"    # optional, defaults to name
-sources = ["src", "lib"]   # optional additional module roots
+output = "myapp"              # optional, defaults to name
+sources = ["src", "lib"]      # optional additional module roots
+linker_script = "link.ld"     # optional; enables kernel image output via LLD (cool build → myapp.elf)
 
 [dependencies]
 toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
@@ -400,6 +405,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
+| `cool build --linker-script=<ld> [file.cool]` | Compile freestanding and link a kernel image (`.elf`) via LLD |
 | `cool bundle` | Build and package the project into a distributable tarball |
 | `cool release [--bump patch]` | Bump version, bundle, and git-tag a release |
 | `cool lsp` | Start the language server (LSP) on stdin/stdout |

@@ -83,6 +83,48 @@ fn bundled_command_path(file_name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cmd").join(file_name)
 }
 
+fn find_lld() -> Option<String> {
+    let candidates = ["ld.lld", "lld", "ld.lld-19", "ld.lld-18", "ld.lld-17", "ld.lld-16"];
+    for name in candidates {
+        if std::process::Command::new(name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn link_kernel_image(obj_path: &Path, script_path: &Path, output_path: &Path) -> Result<(), String> {
+    let lld = find_lld().ok_or_else(|| {
+        "cool build: no LLD linker found — install LLVM/LLD to enable kernel image linking\n  \
+         macOS: brew install llvm\n  \
+         Debian/Ubuntu: apt install lld"
+            .to_string()
+    })?;
+
+    let status = std::process::Command::new(&lld)
+        .arg("-T")
+        .arg(script_path)
+        .arg("-o")
+        .arg(output_path)
+        .arg(obj_path)
+        .status()
+        .map_err(|e| format!("cool build: failed to run '{lld}': {e}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "cool build: linker '{}' failed (check linker script and entry symbol)",
+            lld
+        ));
+    }
+    Ok(())
+}
+
 fn task_command_path() -> PathBuf {
     bundled_command_path("task.cool")
 }
@@ -441,6 +483,7 @@ Examples:
 ///   cool build --freestanding [file.cool]  # emits an object file (.o)
 fn cmd_build(args: &[&String]) -> Result<(), String> {
     let mut freestanding = false;
+    let mut linker_script_arg: Option<String> = None;
     let mut help = false;
     let mut file_arg = None::<&String>;
 
@@ -448,10 +491,15 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
         match arg.as_str() {
             "--freestanding" => freestanding = true,
             "--help" | "-h" => help = true,
+            other if other.starts_with("--linker-script=") => {
+                linker_script_arg = Some(other["--linker-script=".len()..].to_string());
+            }
             other if other.starts_with('-') => return Err(format!("cool build: unexpected flag '{other}'")),
             _ => {
                 if file_arg.is_some() {
-                    return Err("Usage: cool build [--freestanding] [file.cool]".to_string());
+                    return Err(
+                        "Usage: cool build [--freestanding] [--linker-script=<path>] [file.cool]".to_string(),
+                    );
                 }
                 file_arg = Some(arg);
             }
@@ -461,20 +509,28 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     if help {
         println!(
             "\
-Usage: cool build [--freestanding] [file.cool]
+Usage: cool build [--freestanding] [--linker-script=<path>] [file.cool]
 
 Build a Cool project from cool.toml or compile a single file.
 
 Options:
-  --freestanding    Emit an object file (.o) without linking the hosted Cool runtime
+  --freestanding          Emit an object file (.o) without linking the hosted Cool runtime
+  --linker-script=<path>  Link the object file into a kernel image (.elf) using LLD and the
+                          given GNU linker script; implies --freestanding
 
 Examples:
   cool build
   cool build hello.cool
   cool build --freestanding
-  cool build --freestanding hello.cool"
+  cool build --freestanding hello.cool
+  cool build --linker-script=link.ld hello.cool"
         );
         return Ok(());
+    }
+
+    // A linker script implies freestanding.
+    if linker_script_arg.is_some() {
+        freestanding = true;
     }
 
     let build_mode = if freestanding {
@@ -495,6 +551,24 @@ Examples:
 
             let project = CoolProject::from_manifest_path(manifest_path)?;
 
+            // CLI flag overrides cool.toml; cool.toml linker_script implies freestanding.
+            let effective_linker_script: Option<PathBuf> = match &linker_script_arg {
+                Some(path) => {
+                    freestanding = true;
+                    Some(PathBuf::from(path))
+                }
+                None => project.linker_script.as_ref().map(|s| project.root.join(s)),
+            };
+            if effective_linker_script.is_some() {
+                freestanding = true;
+            }
+
+            let build_mode = if freestanding {
+                llvm_codegen::NativeBuildMode::Freestanding
+            } else {
+                llvm_codegen::NativeBuildMode::Hosted
+            };
+
             let main_path = project.main_path();
             if !main_path.exists() {
                 return Err(format!(
@@ -505,30 +579,44 @@ Examples:
 
             let source = fs::read_to_string(&main_path).map_err(|e| format!("cool build: {e}"))?;
 
-            let output_path_buf = if freestanding {
+            let obj_path_buf = if freestanding {
                 PathBuf::from(project.output_name()).with_extension("o")
             } else {
                 PathBuf::from(project.output_name())
             };
-            let output_path = output_path_buf.as_path();
 
-            if freestanding {
-                println!(
-                    "  Compiling {} v{} ({}) [freestanding]",
-                    project.name, project.version, project.main
-                );
+            let label = if effective_linker_script.is_some() {
+                "[freestanding → kernel image]"
+            } else if freestanding {
+                "[freestanding]"
             } else {
+                ""
+            };
+            if label.is_empty() {
                 println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
+            } else {
+                println!(
+                    "  Compiling {} v{} ({}) {}",
+                    project.name, project.version, project.main, label
+                );
             }
 
             let t0 = std::time::Instant::now();
-            compile_to_native_with_mode(&source, output_path, &main_path, build_mode)?;
-            let elapsed = t0.elapsed();
+            compile_to_native_with_mode(&source, &obj_path_buf, &main_path, build_mode)?;
 
+            let final_path = if let Some(script) = &effective_linker_script {
+                let elf_path = PathBuf::from(project.output_name()).with_extension("elf");
+                link_kernel_image(&obj_path_buf, script, &elf_path)?;
+                elf_path
+            } else {
+                obj_path_buf
+            };
+
+            let elapsed = t0.elapsed();
             println!(
                 "   Finished in {:.2}s → {}",
                 elapsed.as_secs_f64(),
-                output_path.display()
+                final_path.display()
             );
             Ok(())
         }
@@ -545,26 +633,37 @@ Examples:
 
             let source = fs::read_to_string(file_path).map_err(|e| format!("cool build: {e}"))?;
 
+            let obj_path = file_path.with_extension("o");
             let output_path = if freestanding {
-                file_path.with_extension("o")
+                obj_path.clone()
             } else {
-                // Output binary = file stem (e.g., hello.cool → ./hello)
                 file_path.with_extension("")
             };
 
-            if freestanding {
+            if linker_script_arg.is_some() {
+                println!("  Compiling {} [freestanding → kernel image] ...", file_path.display());
+            } else if freestanding {
                 println!("  Compiling {} [freestanding] ...", file_path.display());
             } else {
                 println!("  Compiling {} ...", file_path.display());
             }
+
             let t0 = std::time::Instant::now();
             compile_to_native_with_mode(&source, &output_path, file_path, build_mode)?;
-            let elapsed = t0.elapsed();
 
+            let final_path = if let Some(script) = &linker_script_arg {
+                let elf_path = file_path.with_extension("elf");
+                link_kernel_image(&obj_path, Path::new(script), &elf_path)?;
+                elf_path
+            } else {
+                output_path
+            };
+
+            let elapsed = t0.elapsed();
             println!(
                 "   Finished in {:.2}s → {}",
                 elapsed.as_secs_f64(),
-                output_path.display()
+                final_path.display()
             );
             Ok(())
         }
@@ -875,6 +974,7 @@ USAGE:
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
     cool build --freestanding     Build a freestanding object file (.o)
+    cool build --linker-script=<ld>  Link a kernel image (.elf) via LLD
     cool --compile <file.cool>    Compile a file to a native binary (LLVM)
     cool <file.cool>              Run a file with the tree-walk interpreter
     cool --vm <file.cool>         Run a file with the bytecode VM
@@ -902,7 +1002,8 @@ FLAGS:
 EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
-    cool build --freestanding     # compile cool.toml project → ./name.o
+    cool build --freestanding            # compile cool.toml project → ./name.o
+    cool build --linker-script=link.ld   # compile + link → ./name.elf
     cool ast hello.cool           # dump the parsed AST as JSON
     cool inspect hello.cool       # summarize top-level symbols as JSON
     cool symbols hello.cool       # index resolved symbol locations as JSON

@@ -12,6 +12,11 @@ main = "src/main.cool"
 # Optional: additional source directories
 # sources = ["src", "lib"]
 
+# Optional: GNU linker script for kernel/freestanding builds.
+# When set, `cool build` compiles to an object file and then invokes LLD
+# (ld.lld) to link a kernel image: <output>.elf. Path is relative to this file.
+# linker_script = "link.ld"
+
 # Optional: dependencies, imported by dependency name
 #
 # [dependencies]
