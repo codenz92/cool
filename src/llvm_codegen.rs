@@ -9180,6 +9180,140 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    // Lower raw memory read/write builtins to direct LLVM IR in freestanding mode.
+    // Returns Some(CoolVal) if the name was a memory builtin, None otherwise.
+    // This keeps the object file free of undefined C runtime symbols (cool_*_volatile etc.).
+    fn compile_freestanding_raw_mem(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<Option<StructValue<'ctx>>, String> {
+        // (is_write, bit_width, is_float, is_signed, is_volatile)
+        let op: Option<(bool, u32, bool, bool, bool)> = match name {
+            "read_byte"           => Some((false, 8,  false, false, false)),
+            "read_i8"             => Some((false, 8,  false, true,  false)),
+            "read_u8"             => Some((false, 8,  false, false, false)),
+            "read_i16"            => Some((false, 16, false, true,  false)),
+            "read_u16"            => Some((false, 16, false, false, false)),
+            "read_i32"            => Some((false, 32, false, true,  false)),
+            "read_u32"            => Some((false, 32, false, false, false)),
+            "read_i64"            => Some((false, 64, false, true,  false)),
+            "read_f64"            => Some((false, 64, true,  false, false)),
+            "read_byte_volatile"  => Some((false, 8,  false, false, true)),
+            "read_i8_volatile"    => Some((false, 8,  false, true,  true)),
+            "read_u8_volatile"    => Some((false, 8,  false, false, true)),
+            "read_i16_volatile"   => Some((false, 16, false, true,  true)),
+            "read_u16_volatile"   => Some((false, 16, false, false, true)),
+            "read_i32_volatile"   => Some((false, 32, false, true,  true)),
+            "read_u32_volatile"   => Some((false, 32, false, false, true)),
+            "read_i64_volatile"   => Some((false, 64, false, true,  true)),
+            "read_f64_volatile"   => Some((false, 64, true,  false, true)),
+            "write_byte"          => Some((true,  8,  false, false, false)),
+            "write_i8"            => Some((true,  8,  false, false, false)),
+            "write_u8"            => Some((true,  8,  false, false, false)),
+            "write_i16"           => Some((true,  16, false, false, false)),
+            "write_u16"           => Some((true,  16, false, false, false)),
+            "write_i32"           => Some((true,  32, false, false, false)),
+            "write_u32"           => Some((true,  32, false, false, false)),
+            "write_i64"           => Some((true,  64, false, false, false)),
+            "write_f64"           => Some((true,  64, true,  false, false)),
+            "write_byte_volatile" => Some((true,  8,  false, false, true)),
+            "write_i8_volatile"   => Some((true,  8,  false, false, true)),
+            "write_u8_volatile"   => Some((true,  8,  false, false, true)),
+            "write_i16_volatile"  => Some((true,  16, false, false, true)),
+            "write_u16_volatile"  => Some((true,  16, false, false, true)),
+            "write_i32_volatile"  => Some((true,  32, false, false, true)),
+            "write_u32_volatile"  => Some((true,  32, false, false, true)),
+            "write_i64_volatile"  => Some((true,  64, false, false, true)),
+            "write_f64_volatile"  => Some((true,  64, true,  false, true)),
+            _ => None,
+        };
+
+        let Some((is_write, bit_width, is_float, is_signed, is_volatile)) = op else {
+            return Ok(None);
+        };
+
+        let expected_args = if is_write { 2 } else { 1 };
+        if args.len() != expected_args {
+            return Err(format!("{name}() takes exactly {expected_args} argument(s)"));
+        }
+
+        // Address comes from args[0] payload (stored as i64 in CoolVal).
+        let addr_cv = self.compile_expr(&args[0])?;
+        let addr_i64 = self.coolval_payload_i64(addr_cv, "mmio_addr");
+        let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+        let ptr = self
+            .builder
+            .build_int_to_ptr(addr_i64, ptr_type, "mmio_ptr")
+            .unwrap();
+
+        if is_write {
+            let val_cv = self.compile_expr(&args[1])?;
+            let val_payload = self.coolval_payload_i64(val_cv, "mmio_wval");
+
+            if is_float {
+                // CoolVal float payload holds raw f64 bits as i64 — reinterpret then store.
+                let f64_val = self
+                    .builder
+                    .build_bitcast(val_payload, self.context.f64_type(), "mmio_f64_bits")
+                    .unwrap()
+                    .into_float_value();
+                let store = self.builder.build_store(ptr, f64_val).unwrap();
+                if is_volatile {
+                    store.set_volatile(true).unwrap();
+                }
+            } else {
+                let int_type = self.context.custom_width_int_type(bit_width);
+                let val_trunc = if bit_width == 64 {
+                    val_payload
+                } else {
+                    self.builder
+                        .build_int_truncate(val_payload, int_type, "mmio_trunc")
+                        .unwrap()
+                };
+                let store = self.builder.build_store(ptr, val_trunc).unwrap();
+                if is_volatile {
+                    store.set_volatile(true).unwrap();
+                }
+            }
+            Ok(Some(self.build_nil()))
+        } else {
+            if is_float {
+                let load = self
+                    .builder
+                    .build_load(self.context.f64_type(), ptr, "mmio_f64_load")
+                    .unwrap()
+                    .into_float_value();
+                if is_volatile {
+                    load.as_instruction().unwrap().set_volatile(true).unwrap();
+                }
+                Ok(Some(self.build_cv_float_from_f64_value(load, "mmio_f64_cv")))
+            } else {
+                let int_type = self.context.custom_width_int_type(bit_width);
+                let load = self
+                    .builder
+                    .build_load(int_type, ptr, "mmio_int_load")
+                    .unwrap()
+                    .into_int_value();
+                if is_volatile {
+                    load.as_instruction().unwrap().set_volatile(true).unwrap();
+                }
+                let extended = if bit_width == 64 {
+                    load
+                } else if is_signed {
+                    self.builder
+                        .build_int_s_extend(load, self.context.i64_type(), "mmio_sext")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_int_z_extend(load, self.context.i64_type(), "mmio_zext")
+                        .unwrap()
+                };
+                Ok(Some(self.build_cv_int_from_i64(extended, "mmio_int_cv")))
+            }
+        }
+    }
+
     fn compile_freestanding_toplevel(&mut self, program: &Program) -> Result<(), String> {
         let mut current_line = 1usize;
         self.allow_toplevel_defs = true;
@@ -13108,6 +13242,13 @@ impl<'ctx> Compiler<'ctx> {
 
         // ── raw memory builtins ──
         {
+            // Freestanding: lower directly to LLVM IR so the .o has no undefined C symbols.
+            if self.build_mode.is_freestanding() {
+                if let Some(cv) = self.compile_freestanding_raw_mem(&name, args)? {
+                    return Ok(cv);
+                }
+            }
+
             let unary_mem_fn = match name.as_str() {
                 "malloc" => Some(self.rt.cool_malloc),
                 "free" => Some(self.rt.cool_free),

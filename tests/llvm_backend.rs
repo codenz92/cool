@@ -787,6 +787,92 @@ def boot_entry(arg):
     assert!(err.contains("entry metadata requires a zero-argument function"));
 }
 
+fn object_undefined_cool_symbols(object_path: &PathBuf) -> Result<Vec<String>, String> {
+    let output = Command::new("nm")
+        .args(["-u", object_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    let mut found = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some(sym) = line.split_whitespace().last() {
+            let bare = sym.trim_start_matches('_');
+            if bare.starts_with("cool_") {
+                found.push(bare.to_string());
+            }
+        }
+    }
+    Ok(found)
+}
+
+#[test]
+fn test_llvm_freestanding_volatile_builtins_have_no_undefined_runtime_symbols() {
+    // Use literal constant addresses so no cool_add/cool_neg symbols appear —
+    // we are testing that the memory access builtins themselves are self-contained.
+    let source = r#"
+def mmio_test():
+    entry: "mmio_test"
+    write_u8_volatile(4096, 65)
+    write_u8_volatile(4097, 200)
+    write_u16_volatile(4098, 511)
+    write_u16_volatile(4100, 1000)
+    write_u32_volatile(4102, 4294967295)
+    write_u32_volatile(4106, 1234)
+    write_i64_volatile(4110, 9000000000)
+    write_f64_volatile(4118, 3.14)
+    a = read_u8_volatile(4096)
+    b = read_u8_volatile(4097)
+    c = read_u16_volatile(4098)
+    d = read_u32_volatile(4102)
+    e = read_i64_volatile(4110)
+    f = read_f64_volatile(4118)
+    return 0
+"#;
+
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let undefined_cool = object_undefined_cool_symbols(&object_path).unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(
+        undefined_cool.is_empty(),
+        "freestanding volatile ops must not reference C runtime symbols, found: {undefined_cool:?}"
+    );
+}
+
+#[test]
+fn test_llvm_freestanding_nonvolatile_builtins_have_no_undefined_runtime_symbols() {
+    let source = r#"
+def mem_test():
+    entry: "mem_test"
+    write_byte(4096, 255)
+    write_u8(4097, 200)
+    write_u16(4098, 600)
+    write_u32(4100, 70000)
+    write_i64(4104, 999999999999)
+    write_f64(4112, 2.718)
+    x = read_byte(4096)
+    y = read_u8(4097)
+    z = read_u32(4100)
+    w = read_f64(4112)
+    return 0
+"#;
+
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let undefined_cool = object_undefined_cool_symbols(&object_path).unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(
+        undefined_cool.is_empty(),
+        "freestanding non-volatile ops must not reference C runtime symbols, found: {undefined_cool:?}"
+    );
+}
+
 #[test]
 fn test_llvm_volatile_memory_builtins() {
     let result = compile_and_run_native(
