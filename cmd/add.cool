@@ -1,0 +1,257 @@
+import os
+import sys
+import toml
+import path
+import term
+import subprocess
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("add v1.0 — add a dependency to cool.toml and install it")
+    print("  cool add <name> (--path <path> | --git <url>) [--branch <name> | --tag <name> | --rev <sha>] [--version <semver>]")
+
+def read_text_file(file_path):
+    with open(file_path, "r") as f:
+        return f.read()
+
+def discover_project_root():
+    cur = os.getcwd()
+    while true:
+        manifest = path.join(cur, "cool.toml")
+        if path.exists(manifest):
+            return cur
+        parent = path.dirname(cur)
+        if parent == cur or parent == "":
+            raise "cool add: no cool.toml found in this directory or any parent"
+        cur = parent
+
+def read_manifest(manifest_path):
+    parsed = toml.loads(read_text_file(manifest_path))
+    if not isinstance(parsed, "dict"):
+        raise "cool.toml: root must be a table"
+    return parsed
+
+def project_table(manifest):
+    project = manifest.get("project", nil)
+    if project == nil:
+        return manifest
+    if not isinstance(project, "dict"):
+        raise "cool add: [project] must be a table"
+    return project
+
+def dependency_manifest_entry(dep):
+    table = {}
+    if dep["kind"] == "path":
+        table["path"] = dep["path"]
+    else:
+        table["git"] = dep["git"]
+        if dep.get("branch", nil) != nil:
+            table["branch"] = dep["branch"]
+        if dep.get("tag", nil) != nil:
+            table["tag"] = dep["tag"]
+        if dep.get("rev", nil) != nil:
+            table["rev"] = dep["rev"]
+    if dep.get("version", nil) != nil:
+        table["version"] = dep["version"]
+    return table
+
+def write_manifest_dependency(manifest_path, dep):
+    manifest = read_manifest(manifest_path)
+    deps = manifest.get("dependencies", nil)
+    if deps == nil:
+        deps = {}
+    elif not isinstance(deps, "dict"):
+        raise "cool.toml: [dependencies] must be a table"
+    deps[dep["name"]] = dependency_manifest_entry(dep)
+    manifest["dependencies"] = deps
+    text = toml.dumps(manifest)
+    with open(manifest_path, "w") as f:
+        f.write(text)
+
+def is_remote_git_source(source):
+    return "://" in source or source.startswith("git@")
+
+def looks_like_git_source(source):
+    return not (path.exists(source) or source.startswith(".") or source.startswith("/"))
+
+def split_components(raw_path):
+    normalized = path.normalize(raw_path).replace("\\", "/")
+    absolute = normalized.startswith("/")
+    parts = []
+    for part in normalized.split("/"):
+        if part == "" or part == ".":
+            continue
+        parts.append(part)
+    return {
+        "absolute": absolute,
+        "parts": parts,
+    }
+
+def diff_paths(target, base):
+    target_info = split_components(target)
+    base_info = split_components(base)
+    if target_info["absolute"] != base_info["absolute"]:
+        return nil
+    target_parts = target_info["parts"]
+    base_parts = base_info["parts"]
+    common = 0
+    while common < len(target_parts) and common < len(base_parts) and target_parts[common] == base_parts[common]:
+        common += 1
+    out = []
+    i = common
+    while i < len(base_parts):
+        out.append("..")
+        i += 1
+    j = common
+    while j < len(target_parts):
+        out.append(target_parts[j])
+        j += 1
+    if len(out) == 0:
+        return "."
+    return "/".join(out)
+
+def normalize_dependency_source_arg(project_root, current_dir, source):
+    if is_remote_git_source(source):
+        return source
+    raw = source
+    if not path.isabs(raw):
+        raw = path.join(current_dir, raw)
+    absolute = path.normalize(raw).replace("\\", "/")
+    root = path.normalize(project_root).replace("\\", "/")
+    relative = diff_paths(absolute, root)
+    if relative == nil:
+        return absolute
+    return relative
+
+def shell_command(args):
+    parts = []
+    for arg in args:
+        parts.append(shell_quote(arg))
+    return " ".join(parts)
+
+def stream_result(result):
+    if result["stdout"] != "":
+        term.write(result["stdout"])
+    if result["stderr"] != "":
+        term.write(result["stderr"])
+
+def run_install(cool_exe, project_root):
+    command = "cd " + shell_quote(project_root) + " && " + shell_command([cool_exe, "install"])
+    result = subprocess.run(command)
+    if result["timed_out"]:
+        raise "cool add: install timed out"
+    if result["code"] != 0:
+        stream_result(result)
+        exit(result["code"])
+
+argv = sys.argv
+
+if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
+    usage()
+    exit(0)
+
+if len(argv) <= 2:
+    usage()
+    exit(1)
+
+project_root = discover_project_root()
+manifest_path = path.join(project_root, "cool.toml")
+manifest = read_manifest(manifest_path)
+cool_exe = os.getenv("COOL_EXE_PATH")
+if cool_exe == nil or cool_exe == "":
+    cool_exe = "cool"
+
+name = argv[1]
+source_kind = "auto"
+source = nil
+branch = nil
+tag = nil
+rev = nil
+version = nil
+i = 2
+while i < len(argv):
+    arg = argv[i]
+    if arg == "--path":
+        source_kind = "path"
+        i += 1
+        if i >= len(argv):
+            raise "cool add: missing value after --path"
+        source = argv[i]
+    elif arg == "--git":
+        source_kind = "git"
+        i += 1
+        if i >= len(argv):
+            raise "cool add: missing value after --git"
+        source = argv[i]
+    elif arg == "--branch":
+        i += 1
+        if i >= len(argv):
+            raise "cool add: missing value after --branch"
+        branch = argv[i]
+    elif arg == "--tag":
+        i += 1
+        if i >= len(argv):
+            raise "cool add: missing value after --tag"
+        tag = argv[i]
+    elif arg == "--rev":
+        i += 1
+        if i >= len(argv):
+            raise "cool add: missing value after --rev"
+        rev = argv[i]
+    elif arg == "--version":
+        i += 1
+        if i >= len(argv):
+            raise "cool add: missing value after --version"
+        version = argv[i]
+    else:
+        if source != nil:
+            raise "cool add: unexpected argument '" + str(arg) + "'"
+        source = arg
+    i += 1
+
+if source == nil:
+    usage()
+    exit(1)
+
+selector_count = 0
+if branch != nil:
+    selector_count += 1
+if tag != nil:
+    selector_count += 1
+if rev != nil:
+    selector_count += 1
+if selector_count > 1:
+    raise "cool add: specify at most one of --branch, --tag, or --rev"
+
+kind = source_kind
+if kind == "auto":
+    if looks_like_git_source(source):
+        kind = "git"
+    else:
+        kind = "path"
+
+normalized_source = normalize_dependency_source_arg(project_root, os.getcwd(), source)
+if kind == "path" and (branch != nil or tag != nil or rev != nil):
+    raise "cool add: --branch/--tag/--rev are only valid for git dependencies"
+
+dep = {
+    "name": name,
+    "kind": kind,
+    "version": version,
+}
+if kind == "path":
+    dep["path"] = normalized_source
+else:
+    dep["git"] = normalized_source
+    dep["branch"] = branch
+    dep["tag"] = tag
+    dep["rev"] = rev
+
+write_manifest_dependency(manifest_path, dep)
+run_install(cool_exe, project_root)
+
+print("  Added dependency '" + name + "' to " + manifest_path)
+print("  Installed dependencies and wrote " + path.join(project_root, "cool.lock"))
