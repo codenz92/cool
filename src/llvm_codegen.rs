@@ -5,8 +5,9 @@
 // Architecture:
 //   1. Embedded C runtime (RUNTIME_C const) defines CoolVal and all operations.
 //   2. The Compiler emits LLVM IR that calls those C functions.
-//   3. compile_program() writes the runtime to /tmp, compiles it with `cc`,
-//      emits the LLVM module to a .o file, then links both together.
+//   3. Hosted builds write the runtime to /tmp, compile it with `cc`,
+//      emit the LLVM module to a .o file, then link both together.
+//      Freestanding builds emit the LLVM module as an object file directly.
 
 use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
 use crate::project::ModuleResolver;
@@ -7818,6 +7819,7 @@ struct Compiler<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
+    build_mode: NativeBuildMode,
     /// %CoolVal = type { i32, i64 }
     cv_type: StructType<'ctx>,
     rt: RuntimeFns<'ctx>,
@@ -7957,10 +7959,22 @@ impl ExternAbiType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeBuildMode {
+    Hosted,
+    Freestanding,
+}
+
+impl NativeBuildMode {
+    fn is_freestanding(self) -> bool {
+        matches!(self, Self::Freestanding)
+    }
+}
+
 // ── Constructor & runtime declarations ───────────────────────────────────────
 
 impl<'ctx> Compiler<'ctx> {
-    fn new(context: &'ctx Context) -> Self {
+    fn new(context: &'ctx Context, build_mode: NativeBuildMode) -> Self {
         let module = context.create_module("cool_program");
         let builder = context.create_builder();
 
@@ -7999,6 +8013,7 @@ impl<'ctx> Compiler<'ctx> {
             try_stack: Vec::new(),
             structs: HashMap::new(),
             var_struct_types: HashMap::new(),
+            build_mode,
         }
     }
 
@@ -8316,14 +8331,77 @@ impl<'ctx> Compiler<'ctx> {
         self.coolval_payload_i64(float_cv, &format!("{name}_payload"))
     }
 
-    fn build_cv_int_from_i64(&mut self, value: IntValue<'ctx>, name: &str) -> StructValue<'ctx> {
-        self.builder
-            .build_call(self.rt.cv_int, &[value.into()], name)
+    fn build_coolval_from_payload(&mut self, tag: u64, payload: IntValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        let value = self.cv_type.get_undef();
+        let with_tag = self
+            .builder
+            .build_insert_value(
+                value,
+                self.context.i32_type().const_int(tag, false),
+                0,
+                &format!("{name}_tag"),
+            )
             .unwrap()
-            .try_as_basic_value()
-            .left()
+            .into_struct_value();
+        self.builder
+            .build_insert_value(with_tag, payload, 1, &format!("{name}_payload"))
             .unwrap()
             .into_struct_value()
+    }
+
+    fn build_cv_float_from_f64_value(
+        &mut self,
+        value: inkwell::values::FloatValue<'ctx>,
+        name: &str,
+    ) -> StructValue<'ctx> {
+        if self.build_mode.is_freestanding() {
+            let bits = self
+                .builder
+                .build_bitcast(value, self.context.i64_type(), &format!("{name}_bits"))
+                .unwrap()
+                .into_int_value();
+            self.build_coolval_from_payload(2, bits, name)
+        } else {
+            self.builder
+                .build_call(self.rt.cv_float, &[value.into()], name)
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
+    }
+
+    fn build_cv_str_from_ptr(&mut self, ptr: PointerValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        if self.build_mode.is_freestanding() {
+            let payload = self
+                .builder
+                .build_ptr_to_int(ptr, self.context.i64_type(), &format!("{name}_ptr_i64"))
+                .unwrap();
+            self.build_coolval_from_payload(4, payload, name)
+        } else {
+            self.builder
+                .build_call(self.rt.cv_str, &[ptr.into()], name)
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
+    }
+
+    fn build_cv_int_from_i64(&mut self, value: IntValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        if self.build_mode.is_freestanding() {
+            self.build_coolval_from_payload(1, value, name)
+        } else {
+            self.builder
+                .build_call(self.rt.cv_int, &[value.into()], name)
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
     }
 
     fn const_wrap_int_bits(value: i128, bits: u32) -> u64 {
@@ -8754,27 +8832,11 @@ impl<'ctx> Compiler<'ctx> {
                         &format!("{name}_f64"),
                     )
                     .unwrap();
-                Ok(self
-                    .builder
-                    .build_call(self.rt.cv_float, &[f64_val.into()], &format!("{name}_cv_float"))
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_struct_value())
+                Ok(self.build_cv_float_from_f64_value(f64_val, &format!("{name}_cv_float")))
             }
-            ExternAbiType::F64 => Ok(self
-                .builder
-                .build_call(
-                    self.rt.cv_float,
-                    &[value.into_float_value().into()],
-                    &format!("{name}_cv_float"),
-                )
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_struct_value()),
+            ExternAbiType::F64 => {
+                Ok(self.build_cv_float_from_f64_value(value.into_float_value(), &format!("{name}_cv_float")))
+            }
             ExternAbiType::Ptr => {
                 let raw = self
                     .builder
@@ -8800,14 +8862,7 @@ impl<'ctx> Compiler<'ctx> {
                 self.builder.build_conditional_branch(is_null, nil_bb, str_bb).unwrap();
 
                 self.builder.position_at_end(str_bb);
-                let str_val = self
-                    .builder
-                    .build_call(self.rt.cv_str, &[ptr.into()], &format!("{name}_cv_str"))
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_struct_value();
+                let str_val = self.build_cv_str_from_ptr(ptr, &format!("{name}_cv_str"));
                 let str_end = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(done_bb).unwrap();
 
@@ -8997,6 +9052,38 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    fn compile_freestanding_toplevel(&mut self, program: &Program) -> Result<(), String> {
+        let mut current_line = 1usize;
+        self.allow_toplevel_defs = true;
+        for stmt in program {
+            match stmt {
+                Stmt::SetLine(line) => current_line = *line,
+                Stmt::Pass => {}
+                Stmt::FnDef { .. }
+                | Stmt::ExternFn { .. }
+                | Stmt::Data { .. }
+                | Stmt::Struct { .. }
+                | Stmt::Union { .. } => self.compile_stmt(stmt)?,
+                Stmt::Import(_) | Stmt::ImportModule(_) => {
+                    return Err(format!(
+                        "line {current_line}: freestanding build does not allow top-level imports; export functions/data instead or use hosted `cool build`"
+                    ))
+                }
+                Stmt::Class { .. } => {
+                    return Err(format!(
+                        "line {current_line}: freestanding build does not allow top-level class definitions"
+                    ))
+                }
+                _ => {
+                    return Err(format!(
+                        "line {current_line}: freestanding build only supports top-level declarations (`def`, `extern def`, `data`, `struct`, `union`)"
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn resolve_import_file_path(&self, path: &str) -> Result<PathBuf, String> {
         let full_path = if Path::new(path).is_absolute() {
             PathBuf::from(path)
@@ -9169,59 +9256,61 @@ impl<'ctx> Compiler<'ctx> {
     // ── CoolVal constructors ──────────────────────────────────────────────────
 
     fn build_nil(&mut self) -> StructValue<'ctx> {
-        self.builder
-            .build_call(self.rt.cv_nil, &[], "nil")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value()
+        if self.build_mode.is_freestanding() {
+            self.build_coolval_from_payload(0, self.context.i64_type().const_zero(), "nil")
+        } else {
+            self.builder
+                .build_call(self.rt.cv_nil, &[], "nil")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
     }
 
     fn build_int(&mut self, n: i64) -> StructValue<'ctx> {
         let v = self.context.i64_type().const_int(n as u64, true);
-        self.builder
-            .build_call(self.rt.cv_int, &[v.into()], "int")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value()
+        self.build_cv_int_from_i64(v, "int")
     }
 
     fn build_float(&mut self, f: f64) -> StructValue<'ctx> {
-        let v = self.context.f64_type().const_float(f);
-        self.builder
-            .build_call(self.rt.cv_float, &[v.into()], "float")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value()
+        if self.build_mode.is_freestanding() {
+            let bits = self.context.i64_type().const_int(f.to_bits(), false);
+            self.build_coolval_from_payload(2, bits, "float")
+        } else {
+            let v = self.context.f64_type().const_float(f);
+            self.builder
+                .build_call(self.rt.cv_float, &[v.into()], "float")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
     }
 
     fn build_bool(&mut self, b: bool) -> StructValue<'ctx> {
-        let v = self.context.i32_type().const_int(u64::from(b), false);
-        self.builder
-            .build_call(self.rt.cv_bool, &[v.into()], "bool")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value()
+        if self.build_mode.is_freestanding() {
+            let payload = self.context.i64_type().const_int(u64::from(b), false);
+            self.build_coolval_from_payload(3, payload, "bool")
+        } else {
+            let v = self.context.i32_type().const_int(u64::from(b), false);
+            self.builder
+                .build_call(self.rt.cv_bool, &[v.into()], "bool")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
     }
 
     fn build_str(&mut self, s: &str) -> StructValue<'ctx> {
         let name = self.fresh_name();
         let gbl = self.builder.build_global_string_ptr(s, &name).unwrap();
         let ptr = gbl.as_pointer_value();
-        self.builder
-            .build_call(self.rt.cv_str, &[ptr.into()], "str")
-            .unwrap()
-            .try_as_basic_value()
-            .left()
-            .unwrap()
-            .into_struct_value()
+        self.build_cv_str_from_ptr(ptr, "str")
     }
 
     // Returns an i32 (0 or 1).
@@ -9923,7 +10012,9 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        self.bind_top_level_function_closure(name, fn_val);
+        if !self.build_mode.is_freestanding() {
+            self.bind_top_level_function_closure(name, fn_val);
+        }
         Ok(())
     }
 
@@ -10050,7 +10141,9 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        self.bind_top_level_function_closure(name, wrapper_fn);
+        if !self.build_mode.is_freestanding() {
+            self.bind_top_level_function_closure(name, wrapper_fn);
+        }
         Ok(())
     }
 
@@ -13112,11 +13205,20 @@ fn c_string_literal(s: &str) -> String {
 }
 
 pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path) -> Result<(), String> {
+    compile_program_with_mode(program, output_path, script_path, NativeBuildMode::Hosted)
+}
+
+pub fn compile_program_with_mode(
+    program: &Program,
+    output_path: &Path,
+    script_path: &Path,
+    build_mode: NativeBuildMode,
+) -> Result<(), String> {
     // Initialise LLVM for the host machine
     Target::initialize_native(&InitializationConfig::default()).map_err(|e| format!("LLVM init error: {e}"))?;
 
     let context = Context::create();
-    let mut compiler = Compiler::new(&context);
+    let mut compiler = Compiler::new(&context, build_mode);
     compiler.current_source_dir = script_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     compiler.module_resolver = ModuleResolver::discover_for_script(&compiler.current_source_dir)?;
 
@@ -13125,20 +13227,24 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
     compiler.declare_top_level_data(program)?;
     compiler.declare_top_level_functions(program)?;
 
-    // ── Pass 2: build main() and compile all top-level statements ────────────
-    let i32_type = context.i32_type();
-    let main_fn = compiler.module.add_function("main", i32_type.fn_type(&[], false), None);
-    let entry = context.append_basic_block(main_fn, "entry");
-    compiler.builder.position_at_end(entry);
-    compiler.current_fn = Some(main_fn);
-    compiler.allow_toplevel_defs = true;
+    // ── Pass 2: build the selected top-level shape ───────────────────────────
+    if build_mode.is_freestanding() {
+        compiler.compile_freestanding_toplevel(program)?;
+    } else {
+        let i32_type = context.i32_type();
+        let main_fn = compiler.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let entry = context.append_basic_block(main_fn, "entry");
+        compiler.builder.position_at_end(entry);
+        compiler.current_fn = Some(main_fn);
+        compiler.allow_toplevel_defs = true;
 
-    compiler.compile_stmts(program)?;
+        compiler.compile_stmts(program)?;
 
-    // Ensure main is properly terminated
-    if !compiler.current_block_terminated() {
-        let zero = i32_type.const_int(0, false);
-        compiler.builder.build_return(Some(&zero)).unwrap();
+        // Ensure main is properly terminated
+        if !compiler.current_block_terminated() {
+            let zero = i32_type.const_int(0, false);
+            compiler.builder.build_return(Some(&zero)).unwrap();
+        }
     }
 
     compiler
@@ -13160,10 +13266,18 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
         )
         .ok_or("Failed to create target machine")?;
 
-    let obj_path = output_path.with_extension("o");
+    let obj_path = if build_mode.is_freestanding() {
+        output_path.to_path_buf()
+    } else {
+        output_path.with_extension("o")
+    };
     machine
         .write_to_file(&compiler.module, FileType::Object, &obj_path)
         .map_err(|e| format!("Write object file error: {e}"))?;
+
+    if build_mode.is_freestanding() {
+        return Ok(());
+    }
 
     // ── Compile C runtime ─────────────────────────────────────────────────────
     let nonce = std::time::SystemTime::now()

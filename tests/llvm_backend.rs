@@ -206,6 +206,30 @@ fn compile_native_binary(source: &str) -> Result<(PathBuf, PathBuf), String> {
     Ok((source_path, binary_path))
 }
 
+fn compile_freestanding_object(source: &str) -> Result<(PathBuf, PathBuf), String> {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let source_path = cwd.join(unique_test_path("temp_llvm_freestanding", "cool"));
+    let object_path = source_path.with_extension("o");
+
+    fs::write(&source_path, source).map_err(|e| e.to_string())?;
+
+    let build_output = Command::new(cool_bin())
+        .args(["build", "--freestanding", source_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
+        let _ = fs::remove_file(&source_path);
+        let _ = fs::remove_file(&object_path);
+        return Err(format!("{stdout}{stderr}"));
+    }
+
+    Ok((source_path, object_path))
+}
+
 fn binary_has_section(binary_path: &PathBuf, section: &str) -> Result<bool, String> {
     if cfg!(target_os = "macos") {
         let (segment, section_name) = section
@@ -230,6 +254,17 @@ fn binary_has_section(binary_path: &PathBuf, section: &str) -> Result<bool, Stri
         }
         Ok(String::from_utf8_lossy(&output.stdout).contains(section))
     }
+}
+
+fn object_has_symbol(object_path: &PathBuf, symbol: &str) -> Result<bool, String> {
+    let output = Command::new("nm")
+        .args(["-g", object_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).contains(symbol))
 }
 
 fn assert_logging_file_output(contents: &str) {
@@ -599,6 +634,44 @@ boot_entry()
     assert_eq!(lines, ["464367618", "0", "-464367618"]);
     assert!(has_fn_section);
     assert!(has_data_section);
+}
+
+#[test]
+fn test_llvm_freestanding_build_emits_object_file() {
+    let fn_section = if cfg!(target_os = "macos") {
+        "__TEXT,__coolboot"
+    } else {
+        ".text.coolboot"
+    };
+    let data_section = if cfg!(target_os = "macos") {
+        "__DATA,__coolro"
+    } else {
+        ".rodata.coolro"
+    };
+
+    let source = format!(
+        r#"
+def boot_entry():
+    section: "{fn_section}"
+    return 7
+
+data BOOT_MAGIC: u32 = 464367618:
+    section: "{data_section}"
+"#
+    );
+
+    let (source_path, object_path) = compile_freestanding_object(&source).unwrap();
+    let has_fn_section = binary_has_section(&object_path, fn_section).unwrap();
+    let has_data_section = binary_has_section(&object_path, data_section).unwrap();
+    let has_boot_entry = object_has_symbol(&object_path, "boot_entry").unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(has_fn_section);
+    assert!(has_data_section);
+    assert!(has_boot_entry);
+    assert!(!binary_path.exists());
 }
 
 #[test]

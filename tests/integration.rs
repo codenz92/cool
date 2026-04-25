@@ -203,6 +203,32 @@ fn run_cool_subcommand_in_dir(cwd: &std::path::Path, args: &[&str]) -> Result<(S
     ))
 }
 
+fn object_has_section(path: &std::path::Path, section: &str) -> Result<bool, String> {
+    if cfg!(target_os = "macos") {
+        let (segment, section_name) = section
+            .split_once(',')
+            .ok_or_else(|| format!("invalid Mach-O section specifier '{section}'"))?;
+        let output = Command::new("otool")
+            .args(["-l", path.to_str().unwrap()])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.contains(&format!("segname {segment}")) && stdout.contains(&format!("sectname {section_name}")))
+    } else {
+        let output = Command::new("objdump")
+            .args(["-h", path.to_str().unwrap()])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).contains(section))
+    }
+}
+
 fn run_git_in_dir(cwd: &std::path::Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .current_dir(cwd)
@@ -1876,6 +1902,76 @@ output = "demo-bin"
     assert!(binary_stdout.contains("project table"));
 
     let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_freestanding_emits_project_object_file() {
+    let project_dir = unique_temp_dir("cool_project_freestanding");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+"#,
+    )
+    .unwrap();
+
+    let fn_section = if cfg!(target_os = "macos") {
+        "__TEXT,__coolboot"
+    } else {
+        ".text.coolboot"
+    };
+    let data_section = if cfg!(target_os = "macos") {
+        "__DATA,__coolro"
+    } else {
+        ".rodata.coolro"
+    };
+    let source = format!(
+        r#"
+def boot_entry():
+    section: "{fn_section}"
+    return 7
+
+data BOOT_MAGIC: u32 = 464367618:
+    section: "{data_section}"
+"#
+    );
+    std::fs::write(project_dir.join("src").join("main.cool"), source).unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build", "--freestanding"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let object_path = project_dir.join("demo-bin.o");
+    assert!(
+        object_path.exists(),
+        "expected object file at {}",
+        object_path.display()
+    );
+    assert!(!project_dir.join("demo-bin").exists());
+    assert!(object_has_section(&object_path, fn_section).unwrap());
+    assert!(object_has_section(&object_path, data_section).unwrap());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_freestanding_rejects_top_level_executable_statements() {
+    let temp = unique_temp_path("cool_freestanding_reject", "cool");
+    std::fs::write(&temp, "print(1)\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["build", "--freestanding", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(temp.with_extension("o"));
+
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("freestanding build only supports top-level declarations"));
 }
 
 #[test]

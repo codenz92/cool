@@ -20,6 +20,12 @@ All notable changes to the Cool language project.
 - LLVM-native `extern def` declarations with typed params/returns, optional `symbol:` aliasing, optional `cc:` calling-convention metadata, optional `section:` placement, first-class function binding, and matching interpreter/VM diagnostics
 - LLVM-native raw `data` declarations with typed primitive/struct initializers, linker-visible globals, address binding in Cool code, and optional `section:` placement for custom text/data layouts
 
+#### Freestanding Build Mode
+
+- `cool build --freestanding` now emits `.o` object files for single files or manifest-driven projects without compiling/linking the hosted Cool runtime
+- Freestanding builds accept declaration-style top-level programs (`def`, `extern def`, `data`, `struct`, `union`) and reject top-level executable statements/imports/classes with explicit diagnostics
+- Freestanding codegen now constructs basic `CoolVal` literals (`nil`, ints, floats, bools, strings) directly in LLVM IR so simple exported functions and extern wrappers do not require the hosted runtime just to materialize return values
+
 ## [1.1.0] - 2026-04-24 - Phase 10 Complete
 
 ### Phase 10 — Production Readiness And Ecosystem (Complete)

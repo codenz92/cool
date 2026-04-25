@@ -59,13 +59,27 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
 }
 
 fn compile_to_native(source: &str, output_path: &Path, script_path: &Path) -> Result<(), String> {
+    compile_to_native_with_mode(source, output_path, script_path, llvm_codegen::NativeBuildMode::Hosted)
+}
+
+fn compile_to_native_with_mode(
+    source: &str,
+    output_path: &Path,
+    script_path: &Path,
+    build_mode: llvm_codegen::NativeBuildMode,
+) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
 
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    llvm_codegen::compile_program(&program, output_path, script_path)
+    match build_mode {
+        llvm_codegen::NativeBuildMode::Hosted => llvm_codegen::compile_program(&program, output_path, script_path),
+        llvm_codegen::NativeBuildMode::Freestanding => {
+            llvm_codegen::compile_program_with_mode(&program, output_path, script_path, build_mode)
+        }
+    }
 }
 
 fn task_app_path() -> PathBuf {
@@ -375,10 +389,54 @@ Examples:
 /// Usage:
 ///   cool build                 # reads cool.toml in the current directory
 ///   cool build <file.cool>     # compiles the given file (output = file stem)
+///   cool build --freestanding [file.cool]  # emits an object file (.o)
 fn cmd_build(args: &[&String]) -> Result<(), String> {
-    match args {
+    let mut freestanding = false;
+    let mut help = false;
+    let mut file_arg = None::<&String>;
+
+    for arg in args {
+        match arg.as_str() {
+            "--freestanding" => freestanding = true,
+            "--help" | "-h" => help = true,
+            other if other.starts_with('-') => return Err(format!("cool build: unexpected flag '{other}'")),
+            _ => {
+                if file_arg.is_some() {
+                    return Err("Usage: cool build [--freestanding] [file.cool]".to_string());
+                }
+                file_arg = Some(arg);
+            }
+        }
+    }
+
+    if help {
+        println!(
+            "\
+Usage: cool build [--freestanding] [file.cool]
+
+Build a Cool project from cool.toml or compile a single file.
+
+Options:
+  --freestanding    Emit an object file (.o) without linking the hosted Cool runtime
+
+Examples:
+  cool build
+  cool build hello.cool
+  cool build --freestanding
+  cool build --freestanding hello.cool"
+        );
+        return Ok(());
+    }
+
+    let build_mode = if freestanding {
+        llvm_codegen::NativeBuildMode::Freestanding
+    } else {
+        llvm_codegen::NativeBuildMode::Hosted
+    };
+
+    match file_arg {
         // ── cool build  (no extra args) ───────────────────────────────────
-        [] => {
+        None => {
             let manifest_path = Path::new("cool.toml");
             if !manifest_path.exists() {
                 return Err("cool build: no cool.toml found in current directory.\n\
@@ -398,12 +456,24 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
 
             let source = fs::read_to_string(&main_path).map_err(|e| format!("cool build: {e}"))?;
 
-            let output_path = Path::new(project.output_name());
+            let output_path_buf = if freestanding {
+                PathBuf::from(project.output_name()).with_extension("o")
+            } else {
+                PathBuf::from(project.output_name())
+            };
+            let output_path = output_path_buf.as_path();
 
-            println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
+            if freestanding {
+                println!(
+                    "  Compiling {} v{} ({}) [freestanding]",
+                    project.name, project.version, project.main
+                );
+            } else {
+                println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
+            }
 
             let t0 = std::time::Instant::now();
-            compile_to_native(&source, output_path, &main_path)?;
+            compile_to_native_with_mode(&source, output_path, &main_path, build_mode)?;
             let elapsed = t0.elapsed();
 
             println!(
@@ -415,7 +485,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
         }
 
         // ── cool build <file.cool>  ───────────────────────────────────────
-        [file_arg] => {
+        Some(file_arg) => {
             let file_path = Path::new(file_arg.as_str());
             if !file_path.exists() {
                 return Err(format!("cool build: file not found: {}", file_arg));
@@ -426,12 +496,20 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
 
             let source = fs::read_to_string(file_path).map_err(|e| format!("cool build: {e}"))?;
 
-            // Output binary = file stem (e.g., hello.cool → ./hello)
-            let output_path = file_path.with_extension("");
+            let output_path = if freestanding {
+                file_path.with_extension("o")
+            } else {
+                // Output binary = file stem (e.g., hello.cool → ./hello)
+                file_path.with_extension("")
+            };
 
-            println!("  Compiling {} ...", file_path.display());
+            if freestanding {
+                println!("  Compiling {} [freestanding] ...", file_path.display());
+            } else {
+                println!("  Compiling {} ...", file_path.display());
+            }
             let t0 = std::time::Instant::now();
-            compile_to_native(&source, &output_path, file_path)?;
+            compile_to_native_with_mode(&source, &output_path, file_path, build_mode)?;
             let elapsed = t0.elapsed();
 
             println!(
@@ -441,8 +519,6 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             );
             Ok(())
         }
-
-        _ => Err("Usage: cool build [file.cool]".to_string()),
     }
 }
 
@@ -732,6 +808,7 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
     println!("    cd {name}");
     println!("    cool src/main.cool          # interpret");
     println!("    cool build                  # compile to native");
+    println!("    cool build --freestanding   # emit a freestanding object file");
     println!("    cool bundle                 # package distributable tarball");
     println!("    cool release                # bump version, bundle, and tag");
     println!("    cool install                # fetch git dependencies");
@@ -1279,6 +1356,7 @@ USAGE:
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool build                    Build the project described by cool.toml
     cool build <file.cool>        Compile a single file to a native binary
+    cool build --freestanding     Build a freestanding object file (.o)
     cool bundle                   Build and package the project into a distributable tarball
     cool release [--bump patch]   Bump version, bundle, and git-tag a release
     cool install                  Fetch and lock project dependencies
@@ -1296,6 +1374,7 @@ FLAGS:
 EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
+    cool build --freestanding     # compile cool.toml project → ./name.o
     cool ast hello.cool           # dump the parsed AST as JSON
     cool inspect hello.cool       # summarize top-level symbols as JSON
     cool symbols hello.cool       # index resolved symbol locations as JSON
