@@ -2532,6 +2532,15 @@ print(read_u32_volatile(ptr))
 free(ptr)</code></pre>
         </div>
 
+        <h4>x86 Port I/O And Serial Output</h4>
+        <p>Emit x86 <code>IN</code>/<code>OUT</code> instructions for direct device access — the building block for 16550 UART serial in bare-metal kernels. All three are LLVM-only and freestanding-safe (no C runtime symbols). For MMIO-based serial on ARM or RISC-V, use <code>write_u8_volatile()</code> instead.</p>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">outb(0x3F8, 65)           # write byte 'A' to COM1 data register
+write_serial_byte(72)     # convenience: outb hardwired to 0x3F8
+status = inb(0x3FD)       # read COM1 line-status register</code></pre>
+        </div>
+
         <div class="callout">
           <strong>Example:</strong> See <code>examples/ffi_demo.cool</code> for a complete example calling
           <code>sin</code>, <code>cos</code>, <code>sqrt</code>, <code>pow</code>, <code>atan2</code>, and
@@ -3507,6 +3516,7 @@ echo Done.</code></pre>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
           <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code>, <code>cc:</code>, and <code>section:</code> metadata, plus raw <code>data</code> declarations for typed linker-visible globals</li>
           <li>✅ Pointer-width helpers and raw memory access (<code>isize()</code>, <code>usize()</code>, <code>word_bits()</code>, <code>word_bytes()</code>, <code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>, plus volatile variants); all <code>read_*</code>/<code>write_*</code> builtins lower to pure LLVM IR in freestanding mode with no C runtime dependencies</li>
+          <li>✅ x86 port I/O: <code>outb(port, byte)</code>, <code>inb(port)</code>, <code>write_serial_byte(byte)</code> — inline asm, freestanding-safe, x86/x86-64 only (clear error on other targets)</li>
           <li>✅ <code>cool build</code> for hosted native binaries, <code>cool build --freestanding</code> for object-file output, and <code>cool build --linker-script=&lt;ld&gt;</code> (or <code>linker_script</code> in <code>cool.toml</code>) to link a kernel image via LLD</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>

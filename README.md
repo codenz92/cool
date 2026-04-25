@@ -29,6 +29,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import ffi` — call C functions from shared libraries at runtime
 - LLVM-native `extern def` declarations with `symbol:` and `cc:` metadata
 - `cool build --freestanding` to emit object files for custom/freestanding link steps; `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
+- x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
 - `runfile()` to execute another `.cool` file at runtime
@@ -193,6 +194,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `extern def` / `data` declarations (`symbol:`, `cc:`, `section:`) | ❌ | ❌ | ✅ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory access (`malloc`, `free`, `read_i8/u8/i16/u16/i32/u32/i64`, `write_i8/u8/i16/u16/i32/u32/i64`, plus volatile variants) | ❌ | ❌ | ✅ |
+| x86 port I/O (`outb`, `inb`, `write_serial_byte`) | ❌ | ❌ | ✅ |
 
 ### Inline Assembly (LLVM backend)
 
@@ -244,6 +246,24 @@ status = read_u32_volatile(buf)
 ```
 
 Volatile variants exist for `byte`, `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, and `f64`.
+
+### x86 Port I/O And Serial Output (LLVM backend)
+
+Emit x86 `IN`/`OUT` instructions for direct device access — the building block for 16550 UART serial output in bare-metal kernels:
+
+```python
+# Write a byte to an I/O port (e.g. COM1 data register at 0x3F8)
+outb(0x3F8, 65)           # sends 'A' to COM1
+
+# Convenience: write_serial_byte hardwires port 0x3F8
+write_serial_byte(72)     # sends 'H'
+write_serial_byte(105)    # sends 'i'
+
+# Read a byte from a port (e.g. COM1 line status at 0x3FD)
+status = inb(0x3FD)
+```
+
+`outb`, `inb`, and `write_serial_byte` are x86/x86-64 only; a clear error is raised on other targets. For MMIO-based serial (ARM, RISC-V), use `write_u8_volatile(uart_base_addr, byte)` instead. All three are LLVM-only and freestanding-safe — no C runtime symbols in the output object file.
 
 ### Bundled Shell (`apps/shell.cool`)
 

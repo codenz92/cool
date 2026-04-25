@@ -874,6 +874,33 @@ def mem_test():
 }
 
 #[test]
+fn test_llvm_freestanding_port_io_builtins_have_no_undefined_runtime_symbols() {
+    // outb / inb / write_serial_byte are x86-only; skip on other architectures.
+    if !cfg!(target_arch = "x86_64") && !cfg!(target_arch = "x86") {
+        eprintln!("skipping: port I/O builtins require an x86/x86-64 host");
+        return;
+    }
+    let source = r#"
+def port_test():
+    entry: "port_test"
+    outb(0x3F8, 65)
+    write_serial_byte(72)
+    x = inb(0x3FD)
+    return 0
+"#;
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let undefined_cool = object_undefined_cool_symbols(&object_path).unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(
+        undefined_cool.is_empty(),
+        "port I/O builtins must not reference C runtime symbols, found: {undefined_cool:?}"
+    );
+}
+
+#[test]
 fn test_llvm_volatile_memory_builtins() {
     let result = compile_and_run_native(
         r#"

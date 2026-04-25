@@ -13204,6 +13204,114 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(self.build_nil());
         }
 
+        // ── x86 port I/O: outb / inb / write_serial_byte ─────────────────────────
+        // These lower to x86 IN/OUT instructions via inline asm. They are only valid on
+        // x86/x86-64 targets; other architectures use MMIO (write_u8_volatile etc.).
+        if name == "outb" || name == "inb" || name == "write_serial_byte" {
+            let triple = TargetMachine::get_default_triple();
+            let triple_str = triple.as_str().to_string_lossy();
+            if !triple_str.contains("x86") && !triple_str.contains("i686") && !triple_str.contains("i386") {
+                return Err(format!(
+                    "'{}' uses x86 port I/O and is not supported on target '{}'; \
+                     use write_u8_volatile() for MMIO-based serial on non-x86 targets",
+                    name, triple_str
+                ));
+            }
+        }
+        if name == "outb" || name == "write_serial_byte" {
+            let (port_i16, val_i8) = if name == "outb" {
+                if args.len() != 2 {
+                    return Err("outb() takes exactly 2 arguments: outb(port, byte)".into());
+                }
+                let port_cv = self.compile_expr(&args[0])?;
+                let port_i64 = self.coolval_payload_i64(port_cv, "outb_port");
+                let port = self
+                    .builder
+                    .build_int_truncate(port_i64, self.context.i16_type(), "outb_port_i16")
+                    .unwrap();
+                let val_cv = self.compile_expr(&args[1])?;
+                let val_i64 = self.coolval_payload_i64(val_cv, "outb_val");
+                let val = self
+                    .builder
+                    .build_int_truncate(val_i64, self.context.i8_type(), "outb_val_i8")
+                    .unwrap();
+                (port, val)
+            } else {
+                // write_serial_byte(byte) — hardwired to COM1 data register (0x3F8)
+                if args.len() != 1 {
+                    return Err("write_serial_byte() takes exactly 1 argument".into());
+                }
+                let val_cv = self.compile_expr(&args[0])?;
+                let val_i64 = self.coolval_payload_i64(val_cv, "serial_val");
+                let val = self
+                    .builder
+                    .build_int_truncate(val_i64, self.context.i8_type(), "serial_val_i8")
+                    .unwrap();
+                let port = self.context.i16_type().const_int(0x3F8, false);
+                (port, val)
+            };
+            // AT&T: outb ${0:b}, ${1:w}  — byte of EAX ($0 via "a") to word of EDX ($1 via "d")
+            // LLVM constraint allocation requires at least i32; template modifiers select AL/DX.
+            let i32_type = self.context.i32_type();
+            let val_i32 = self.builder.build_int_z_extend(val_i8, i32_type, "outb_val_i32").unwrap();
+            let port_i32 = self.builder.build_int_z_extend(port_i16, i32_type, "outb_port_i32").unwrap();
+            let fn_type = self.context.void_type().fn_type(&[i32_type.into(), i32_type.into()], false);
+            let asm_ptr = self.context.create_inline_asm(
+                fn_type,
+                "outb ${0:b}, ${1:w}".to_string(),
+                "a,d".to_string(),
+                true,
+                false,
+                Some(InlineAsmDialect::ATT),
+                false,
+            );
+            self.builder
+                .build_indirect_call(fn_type, asm_ptr, &[val_i32.into(), port_i32.into()], "outb")
+                .unwrap();
+            return Ok(self.build_nil());
+        }
+
+        if name == "inb" {
+            if args.len() != 1 {
+                return Err("inb() takes exactly 1 argument: inb(port)".into());
+            }
+            let port_cv = self.compile_expr(&args[0])?;
+            let port_i64 = self.coolval_payload_i64(port_cv, "inb_port");
+            let port_i16 = self
+                .builder
+                .build_int_truncate(port_i64, self.context.i16_type(), "inb_port_i16")
+                .unwrap();
+            // AT&T: inb ${1:w}, ${0:b}  — read from word of EDX ($1 via "d") into byte of EAX ($0 via "=a")
+            // Result is i32; only AL is written, so mask to low byte before wrapping.
+            let i32_type = self.context.i32_type();
+            let port_i32 = self.builder.build_int_z_extend(port_i16, i32_type, "inb_port_i32").unwrap();
+            let fn_type = i32_type.fn_type(&[i32_type.into()], false);
+            let asm_ptr = self.context.create_inline_asm(
+                fn_type,
+                "inb ${1:w}, ${0:b}".to_string(),
+                "=a,d".to_string(),
+                true,
+                false,
+                Some(InlineAsmDialect::ATT),
+                false,
+            );
+            let result_i32 = self
+                .builder
+                .build_indirect_call(fn_type, asm_ptr, &[port_i32.into()], "inb")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value();
+            let result_i64 = self
+                .builder
+                .build_int_z_extend(result_i32, self.context.i64_type(), "inb_zext")
+                .unwrap();
+            let byte_mask = self.context.i64_type().const_int(0xFF, false);
+            let result_byte = self.builder.build_and(result_i64, byte_mask, "inb_byte").unwrap();
+            return Ok(self.build_cv_int_from_i64(result_byte, "inb_cv"));
+        }
+
         // ── print(...) ──
         if name == "print" {
             let n = args.len() as u64;

@@ -713,6 +713,28 @@ fn test_vm_volatile_memory_builtin_requires_llvm() {
 }
 
 #[test]
+fn test_interpreter_port_io_builtins_require_llvm() {
+    for src in &["outb(0x3F8, 65)", "inb(0x3F8)", "write_serial_byte(65)"] {
+        let err = run_cool(src).unwrap_err();
+        assert!(
+            err.contains("only supported in the LLVM backend"),
+            "{src}: expected LLVM-only error, got: {err}"
+        );
+    }
+}
+
+#[test]
+fn test_vm_port_io_builtins_require_llvm() {
+    for src in &["outb(0x3F8, 65)", "inb(0x3F8)", "write_serial_byte(65)"] {
+        let err = run_cool_vm(src).unwrap_err();
+        assert!(
+            err.contains("only supported in the LLVM backend"),
+            "{src}: expected LLVM-only error, got: {err}"
+        );
+    }
+}
+
+#[test]
 fn test_if_statement() {
     // Single-line ternary
     let result = run_cool("x = 5\nprint(\"big\" if x > 3 else \"small\")").unwrap();

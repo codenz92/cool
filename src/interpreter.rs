@@ -172,6 +172,9 @@ impl Env {
             "write_f64_volatile",
             "read_str",
             "write_str",
+            "outb",
+            "inb",
+            "write_serial_byte",
         ] {
             data.vars.insert(name.to_string(), Value::BuiltinFn(name.to_string()));
         }
@@ -3414,7 +3417,10 @@ class Stack:
             | "read_f64_volatile"
             | "write_f64_volatile"
             | "read_str"
-            | "write_str" => Err(self.err(&format!(
+            | "write_str"
+            | "outb"
+            | "inb"
+            | "write_serial_byte" => Err(self.err(&format!(
                 "'{}' is only supported in the LLVM backend — compile with `cool build`",
                 name
             ))),

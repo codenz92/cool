@@ -177,6 +177,9 @@ impl VM {
             "write_f64_volatile",
             "read_str",
             "write_str",
+            "outb",
+            "inb",
+            "write_serial_byte",
             "__import_module__",
             "__exc_matches__",
         ] {
@@ -1690,7 +1693,10 @@ impl VM {
             | "read_f64_volatile"
             | "write_f64_volatile"
             | "read_str"
-            | "write_str" => Err(self.err(&format!(
+            | "write_str"
+            | "outb"
+            | "inb"
+            | "write_serial_byte" => Err(self.err(&format!(
                 "'{}' is only supported in the LLVM backend — compile with `cool build`",
                 name
             ))),

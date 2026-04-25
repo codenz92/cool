@@ -24,6 +24,13 @@ All notable changes to the Cool language project.
 - LLVM-native `extern def` declarations with typed params/returns, optional `symbol:` aliasing, optional `cc:` calling-convention metadata, optional `section:` placement, first-class function binding, and matching interpreter/VM diagnostics
 - LLVM-native raw `data` declarations with typed primitive/struct initializers, linker-visible globals, address binding in Cool code, and optional `section:` placement for custom text/data layouts
 
+#### Serial / Console Output Primitives
+
+- `outb(port, byte)` — emit an x86 `OUT` instruction (write byte to I/O port); lowers to inline asm with no C runtime dependency; x86/x86-64 only with a clear error on other targets
+- `inb(port)` — emit an x86 `IN` instruction (read byte from I/O port); returns the byte as an integer; same constraints as `outb`
+- `write_serial_byte(byte)` — convenience wrapper for `outb(0x3F8, byte)`, hardwired to the COM1 UART data register; zero-dep freestanding-safe serial output for x86 bare-metal debugging
+- All three are LLVM-only; interpreter and VM give the standard `compile with cool build` guidance; for MMIO-based serial (ARM, RISC-V) use the existing `write_u8_volatile()` primitives
+
 #### Freestanding Build Mode
 
 - `cool build --freestanding` now emits `.o` object files for single files or manifest-driven projects without compiling/linking the hosted Cool runtime

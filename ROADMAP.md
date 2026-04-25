@@ -475,7 +475,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### Core Systems Runtime
 
 - [ ] `core` subset that avoids host OS facilities
-- [ ] Serial / console output primitives
+- [x] Serial / console output primitives (`outb`, `inb`, `write_serial_byte` — x86 port I/O via inline asm, freestanding-safe)
 - [ ] Memory-map and paging helpers
 - [ ] Pluggable allocator hooks for kernels and runtimes
 

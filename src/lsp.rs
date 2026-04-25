@@ -100,6 +100,9 @@ const COOL_BUILTINS: &[&str] = &[
     "write_i64_volatile",
     "read_f64_volatile",
     "write_f64_volatile",
+    "outb",
+    "inb",
+    "write_serial_byte",
 ];
 
 const COOL_MODULES: &[&str] = &[
