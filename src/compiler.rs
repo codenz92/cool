@@ -583,7 +583,7 @@ impl Compiler {
                 }
             }
 
-            Stmt::FnDef { name, params, body } => {
+            Stmt::FnDef { name, params, body, .. } => {
                 let proto = self.compile_fn(name, params, body)?;
                 let upvalue_count = proto.upvalue_count;
                 let upvalues: Vec<UpvalueRef> = {
@@ -614,6 +614,12 @@ impl Compiler {
                 )
             }
 
+            Stmt::Data { .. } => {
+                return Err(
+                    "data declarations are only supported in the LLVM backend — compile with `cool build`".to_string(),
+                )
+            }
+
             Stmt::Class { name, parent, body } => {
                 // Collect methods from body.
                 let has_parent = parent.is_some();
@@ -634,6 +640,7 @@ impl Compiler {
                             name: method_name,
                             params,
                             body: method_body,
+                            ..
                         } => {
                             self.emit(Op::DupTop); // duplicate the class so we can SetAttr on it
                             let (proto, refs) = self.compile_fn_with_refs(method_name, params, method_body)?;
@@ -651,6 +658,9 @@ impl Compiler {
                         }
                         Stmt::ExternFn { .. } => {
                             return Err("extern declarations are only allowed at the top level".to_string())
+                        }
+                        Stmt::Data { .. } => {
+                            return Err("data declarations are only allowed at the top level".to_string())
                         }
                         Stmt::Pass => {}
                         Stmt::SetLine(n) => {
@@ -720,6 +730,7 @@ impl Compiler {
                 let class_body = vec![Stmt::FnDef {
                     name: "__init__".to_string(),
                     params,
+                    section: None,
                     body: init_body,
                 }];
                 let class_stmt = Stmt::Class {
@@ -788,6 +799,7 @@ impl Compiler {
                 let class_body = vec![Stmt::FnDef {
                     name: "__init__".to_string(),
                     params,
+                    section: None,
                     body: init_body,
                 }];
                 let class_stmt = Stmt::Class {

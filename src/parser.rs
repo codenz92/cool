@@ -102,6 +102,7 @@ impl Parser {
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek().clone() {
             Token::Def => self.parse_fn_def(),
+            Token::Data => self.parse_data_def(),
             Token::Extern => self.parse_extern_fn(),
             Token::Class => self.parse_class(),
             Token::Struct => self.parse_struct(false),
@@ -155,8 +156,46 @@ impl Parser {
         self.eat(&Token::RParen)?;
         self.eat(&Token::Colon)?;
         self.eat_newline();
-        let body = self.parse_block()?;
-        Ok(Stmt::FnDef { name, params, body })
+        let (section, body) = self.parse_fn_body_with_metadata()?;
+        Ok(Stmt::FnDef {
+            name,
+            params,
+            section,
+            body,
+        })
+    }
+
+    fn parse_data_def(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Data)?;
+        let name = self.expect_ident()?;
+        self.eat(&Token::Colon)?;
+        let type_name = self.expect_ident()?;
+        self.eat(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        let mut section = None;
+        for (key, value) in self.parse_metadata_block("data declaration")? {
+            match key.as_str() {
+                "section" => {
+                    if section.is_some() {
+                        return Err(format!("line {}: duplicate data metadata key 'section'", self.line()));
+                    }
+                    section = Some(value);
+                }
+                other => {
+                    return Err(format!(
+                        "line {}: unsupported data metadata key '{}'",
+                        self.line(),
+                        other
+                    ))
+                }
+            }
+        }
+        Ok(Stmt::Data {
+            name,
+            type_name,
+            value,
+            section,
+        })
     }
 
     fn parse_extern_fn(&mut self) -> Result<Stmt, String> {
@@ -171,50 +210,35 @@ impl Parser {
 
         let mut symbol = None;
         let mut callconv = None;
-
-        if self.check(&Token::Colon) {
-            self.advance();
-            self.eat_newline();
-            self.eat(&Token::Indent)?;
-            while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
-                self.skip_newlines();
-                if self.check(&Token::Dedent) || self.check(&Token::Eof) {
-                    break;
+        let mut section = None;
+        for (key, value) in self.parse_metadata_block("extern declaration")? {
+            match key.as_str() {
+                "symbol" => {
+                    if symbol.is_some() {
+                        return Err(format!("line {}: duplicate extern metadata key 'symbol'", self.line()));
+                    }
+                    symbol = Some(value);
                 }
-                if self.check(&Token::Pass) {
-                    self.advance();
-                    self.eat_newline();
-                    continue;
+                "cc" => {
+                    if callconv.is_some() {
+                        return Err(format!("line {}: duplicate extern metadata key 'cc'", self.line()));
+                    }
+                    callconv = Some(value);
                 }
-                let key = self.expect_ident()?;
-                self.eat(&Token::Colon)?;
-                let value = self.expect_ident_or_string()?;
-                self.eat_newline();
-                match key.as_str() {
-                    "symbol" => {
-                        if symbol.is_some() {
-                            return Err(format!("line {}: duplicate extern metadata key 'symbol'", self.line()));
-                        }
-                        symbol = Some(value);
+                "section" => {
+                    if section.is_some() {
+                        return Err(format!("line {}: duplicate extern metadata key 'section'", self.line()));
                     }
-                    "cc" => {
-                        if callconv.is_some() {
-                            return Err(format!("line {}: duplicate extern metadata key 'cc'", self.line()));
-                        }
-                        callconv = Some(value);
-                    }
-                    other => {
-                        return Err(format!(
-                            "line {}: unsupported extern metadata key '{}'",
-                            self.line(),
-                            other
-                        ))
-                    }
+                    section = Some(value);
+                }
+                other => {
+                    return Err(format!(
+                        "line {}: unsupported extern metadata key '{}'",
+                        self.line(),
+                        other
+                    ))
                 }
             }
-            self.eat(&Token::Dedent)?;
-        } else {
-            self.eat_newline();
         }
 
         Ok(Stmt::ExternFn {
@@ -223,7 +247,79 @@ impl Parser {
             return_type,
             symbol,
             callconv,
+            section,
         })
+    }
+
+    fn parse_metadata_block(&mut self, _context: &str) -> Result<Vec<(String, String)>, String> {
+        if !self.check(&Token::Colon) {
+            self.eat_newline();
+            return Ok(Vec::new());
+        }
+        self.advance();
+        self.eat_newline();
+        self.eat(&Token::Indent)?;
+        let mut entries = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            self.skip_newlines();
+            if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                break;
+            }
+            if self.check(&Token::Pass) {
+                self.advance();
+                self.eat_newline();
+                continue;
+            }
+            let key = self.expect_ident()?;
+            self.eat(&Token::Colon)?;
+            let value = self.expect_ident_or_string()?;
+            self.eat_newline();
+            entries.push((key, value));
+        }
+        self.eat(&Token::Dedent)?;
+        Ok(entries)
+    }
+
+    fn parse_fn_body_with_metadata(&mut self) -> Result<(Option<String>, Vec<Stmt>), String> {
+        self.eat(&Token::Indent)?;
+        self.skip_newlines();
+
+        let mut section = None;
+        while self.function_metadata_key().is_some() {
+            let key = self.expect_ident()?;
+            self.eat(&Token::Colon)?;
+            let value = self.expect_ident_or_string()?;
+            self.eat_newline();
+            match key.as_str() {
+                "section" => {
+                    if section.is_some() {
+                        return Err(format!(
+                            "line {}: duplicate function metadata key 'section'",
+                            self.line()
+                        ));
+                    }
+                    section = Some(value);
+                }
+                _ => unreachable!(),
+            }
+            self.skip_newlines();
+        }
+
+        let mut body = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            body.push(Stmt::SetLine(self.line()));
+            body.push(self.parse_stmt()?);
+            self.skip_newlines();
+        }
+        self.eat(&Token::Dedent)?;
+        Ok((section, body))
+    }
+
+    fn function_metadata_key(&self) -> Option<&str> {
+        match self.peek() {
+            Token::Ident(name) if self.token_at(1) == &Token::Colon && name == "section" => Some(name.as_str()),
+            _ => None,
+        }
     }
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, String> {

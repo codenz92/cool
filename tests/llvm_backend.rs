@@ -183,6 +183,55 @@ fn compile_and_run_native_manual(source: &str, envs: &[(&str, &str)]) -> Result<
     }
 }
 
+fn compile_native_binary(source: &str) -> Result<(PathBuf, PathBuf), String> {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let source_path = cwd.join(unique_test_path("temp_llvm_test", "cool"));
+    let binary_path = source_path.with_extension("");
+
+    fs::write(&source_path, source).map_err(|e| e.to_string())?;
+
+    let build_output = Command::new(cool_bin())
+        .args(["build", source_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&build_output.stdout).to_string();
+        cleanup_native_artifacts(&source_path, &binary_path);
+        return Err(format!("{stdout}{stderr}"));
+    }
+
+    Ok((source_path, binary_path))
+}
+
+fn binary_has_section(binary_path: &PathBuf, section: &str) -> Result<bool, String> {
+    if cfg!(target_os = "macos") {
+        let (segment, section_name) = section
+            .split_once(',')
+            .ok_or_else(|| format!("invalid Mach-O section specifier '{section}'"))?;
+        let output = Command::new("otool")
+            .args(["-l", binary_path.to_str().unwrap()])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.contains(&format!("segname {segment}")) && stdout.contains(&format!("sectname {section_name}")))
+    } else {
+        let output = Command::new("objdump")
+            .args(["-h", binary_path.to_str().unwrap()])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).contains(section))
+    }
+}
+
 fn assert_logging_file_output(contents: &str) {
     let lines: Vec<&str> = contents.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines.len(), 3);
@@ -493,6 +542,63 @@ print(f(-7))
 
     let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
     assert_eq!(lines, ["42", "5", "7"]);
+}
+
+#[test]
+fn test_llvm_linker_section_placement_for_functions_and_data() {
+    let fn_section = if cfg!(target_os = "macos") {
+        "__TEXT,__coolfn"
+    } else {
+        ".text.coolfn"
+    };
+    let data_section = if cfg!(target_os = "macos") {
+        "__DATA,__cooldat"
+    } else {
+        ".data.cooldat"
+    };
+
+    let source = format!(
+        r#"
+struct BootHeader:
+    magic: u32
+    flags: u32
+    checksum: i32
+
+def boot_entry():
+    section: "{fn_section}"
+    print(read_u32(BOOT_HEADER))
+    print(read_u32(BOOT_HEADER + 4))
+    print(read_i32(BOOT_HEADER + 8))
+
+data BOOT_HEADER: BootHeader = BootHeader(
+    magic=464367618,
+    flags=0,
+    checksum=-464367618,
+):
+    section: "{data_section}"
+
+boot_entry()
+"#,
+        fn_section = fn_section,
+        data_section = data_section,
+    );
+
+    let (source_path, binary_path) = compile_native_binary(&source).unwrap();
+    let run_output = Command::new(&binary_path).output().unwrap();
+    let stdout = String::from_utf8_lossy(&run_output.stdout).to_string();
+    let has_fn_section = binary_has_section(&binary_path, fn_section).unwrap();
+    let has_data_section = binary_has_section(&binary_path, data_section).unwrap();
+    cleanup_native_artifacts(&source_path, &binary_path);
+
+    assert!(
+        run_output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    let lines: Vec<_> = stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["464367618", "0", "-464367618"]);
+    assert!(has_fn_section);
+    assert!(has_data_section);
 }
 
 #[test]

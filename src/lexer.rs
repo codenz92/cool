@@ -14,6 +14,7 @@ pub enum Token {
     // Identifiers & keywords
     Ident(String),
     Def,
+    Data,
     Extern,
     Return,
     If,
@@ -307,6 +308,7 @@ impl Lexer {
         }
         let token = match s.as_str() {
             "def" => Token::Def,
+            "data" => Token::Data,
             "extern" => Token::Extern,
             "return" => Token::Return,
             "if" => Token::If,

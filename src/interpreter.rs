@@ -792,7 +792,7 @@ impl Interpreter {
                 Ok(Signal::Raise(v))
             }
 
-            Stmt::FnDef { name, params, body } => {
+            Stmt::FnDef { name, params, body, .. } => {
                 let func = Value::Function {
                     name: name.clone(),
                     params: params.clone(),
@@ -805,6 +805,10 @@ impl Interpreter {
 
             Stmt::ExternFn { .. } => {
                 Err(self.err("extern declarations are only supported in the LLVM backend — compile with `cool build`"))
+            }
+
+            Stmt::Data { .. } => {
+                Err(self.err("data declarations are only supported in the LLVM backend — compile with `cool build`"))
             }
 
             Stmt::Class { name, parent, body } => {

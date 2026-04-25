@@ -190,6 +190,7 @@ pub enum Stmt {
     FnDef {
         name: String,
         params: Vec<Param>,
+        section: Option<String>,
         body: Vec<Stmt>,
     },
     /// extern def name(arg: type, ...) -> ret
@@ -199,6 +200,14 @@ pub enum Stmt {
         return_type: String,
         symbol: Option<String>,
         callconv: Option<String>,
+        section: Option<String>,
+    },
+    /// data NAME: type = expr
+    Data {
+        name: String,
+        type_name: String,
+        value: Expr,
+        section: Option<String>,
     },
     /// class Name(Parent): ...
     Class {

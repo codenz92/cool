@@ -73,12 +73,39 @@ extern def abs(x: i32) -> i32
 extern def c_strlen(text: str) -> usize:
     symbol: "strlen"
     cc: "c"
+    section: ".text.host"
 
 print(abs(-42))
 print(c_strlen("hello"))
 ```
 
-`extern def` is only available in compiled programs (`cool build`). It uses the same ABI type names as `ffi.func`, with optional `symbol:` aliasing and `cc:` calling-convention metadata.
+`extern def` is only available in compiled programs (`cool build`). It uses the same ABI type names as `ffi.func`, with optional `symbol:` aliasing, `cc:` calling-convention metadata, and `section:` placement metadata.
+
+### Raw Data Declarations And Sections (LLVM backend)
+
+Emit typed raw globals and bind the symbol name to its address:
+
+```python
+struct BootHeader:
+    magic: u32
+    flags: u32
+    checksum: i32
+
+def boot_entry():
+    section: ".text.boot"
+    print(read_u32(BOOT_HEADER))
+
+data BOOT_HEADER: BootHeader = BootHeader(
+    magic=464367618,
+    flags=0,
+    checksum=-464367618,
+):
+    section: ".data.boot"
+
+boot_entry()
+```
+
+On Mach-O targets, use `segment,section` names such as `__TEXT,__boot` or `__DATA,__bootdata`. `data` declarations are LLVM-only.
 
 ### Native Compiler (LLVM)
 
@@ -89,7 +116,7 @@ cool build hello.cool      # compiles → ./hello
 ./hello                    # runs natively, no runtime needed
 ```
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` and `cc:` metadata, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, and keyword arguments), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` metadata, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** closures/lambdas.
 
@@ -136,7 +163,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | General `import` | ✅ | ✅ | ✅ |
 | `try` / `except` / `finally` / `raise` | ✅ | ✅ | ✅ |
 | `import ffi` | ✅ | ❌ | ✅ |
-| `extern def` declarations (`symbol:`, `cc:`) | ❌ | ❌ | ✅ |
+| `extern def` / `data` declarations (`symbol:`, `cc:`, `section:`) | ❌ | ❌ | ✅ |
 | Inline assembly | ❌ | ❌ | ✅ |
 | Raw memory access (`malloc`, `free`, `read_i8/u8/i16/u16/i32/u32/i64`, `write_i8/u8/i16/u16/i32/u32/i64`, plus volatile variants) | ❌ | ❌ | ✅ |
 

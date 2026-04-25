@@ -7829,6 +7829,8 @@ struct Compiler<'ctx> {
     function_params: HashMap<String, Vec<crate::ast::Param>>,
     /// Top-level user-defined classes (name → ClassInfo).
     classes: HashMap<String, ClassInfo<'ctx>>,
+    /// Top-level raw data symbols (name → linker-visible global).
+    data_globals: HashMap<String, inkwell::values::GlobalValue<'ctx>>,
     str_counter: usize,
     /// (continue_target, break_target) for each enclosing loop.
     loop_stack: Vec<LoopFrame<'ctx>>,
@@ -7978,6 +7980,7 @@ impl<'ctx> Compiler<'ctx> {
             functions: HashMap::new(),
             function_params: HashMap::new(),
             classes: HashMap::new(),
+            data_globals: HashMap::new(),
             str_counter: 0,
             loop_stack: Vec::new(),
             current_fn: None,
@@ -8248,6 +8251,41 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn primitive_data_llvm_type(&self, name: &str) -> Option<inkwell::types::BasicTypeEnum<'ctx>> {
+        match name {
+            "bool" => Some(self.context.i8_type().into()),
+            _ => match ExternAbiType::parse(name)? {
+                ExternAbiType::I8 | ExternAbiType::U8 => Some(self.context.i8_type().into()),
+                ExternAbiType::I16 | ExternAbiType::U16 => Some(self.context.i16_type().into()),
+                ExternAbiType::I32 | ExternAbiType::U32 => Some(self.context.i32_type().into()),
+                ExternAbiType::I64 | ExternAbiType::U64 => Some(self.context.i64_type().into()),
+                ExternAbiType::Isize | ExternAbiType::Usize => Some(self.pointer_int_type().into()),
+                ExternAbiType::F32 => Some(self.context.f32_type().into()),
+                ExternAbiType::F64 => Some(self.context.f64_type().into()),
+                ExternAbiType::Void | ExternAbiType::Ptr | ExternAbiType::Str => None,
+            },
+        }
+    }
+
+    fn raw_data_llvm_type(
+        &self,
+        type_name: &str,
+        context: &str,
+    ) -> Result<inkwell::types::BasicTypeEnum<'ctx>, String> {
+        if let Some(ty) = self.primitive_data_llvm_type(type_name) {
+            return Ok(ty);
+        }
+        if let Some(sinfo) = self.structs.get(type_name) {
+            if sinfo.is_union {
+                return Err(format!("{context}: union data declarations are not supported yet"));
+            }
+            return Ok(sinfo.llvm_type.into());
+        }
+        Err(format!(
+            "{context}: unsupported data type '{type_name}' (supported: bool, i8/i16/i32/i64, u8/u16/u32/u64, isize, usize, f32, f64, and struct types)"
+        ))
+    }
+
     fn extern_int_bits(&self, ty: ExternAbiType) -> Option<u32> {
         match ty {
             ExternAbiType::I8 | ExternAbiType::U8 => Some(8),
@@ -8286,6 +8324,341 @@ impl<'ctx> Compiler<'ctx> {
             .left()
             .unwrap()
             .into_struct_value()
+    }
+
+    fn const_wrap_int_bits(value: i128, bits: u32) -> u64 {
+        if bits >= 64 {
+            value as u64
+        } else {
+            let mask = (1i128 << bits) - 1;
+            (value & mask) as u64
+        }
+    }
+
+    fn const_eval_truthy(&self, expr: &Expr, context: &str) -> Result<bool, String> {
+        match expr {
+            Expr::Bool(b) => Ok(*b),
+            Expr::Int(n) => Ok(*n != 0),
+            Expr::Float(f) => Ok(*f != 0.0),
+            Expr::Ident(_) | Expr::UnaryOp { .. } | Expr::BinOp { .. } | Expr::Call { .. } => {
+                if let Ok(value) = self.const_eval_int(expr, context) {
+                    return Ok(value != 0);
+                }
+                Ok(self.const_eval_float(expr, context)? != 0.0)
+            }
+            other => Err(format!(
+                "{context}: unsupported constant boolean expression '{other:?}'"
+            )),
+        }
+    }
+
+    fn const_eval_int(&self, expr: &Expr, context: &str) -> Result<i128, String> {
+        match expr {
+            Expr::Int(n) => Ok(*n as i128),
+            Expr::Bool(b) => Ok(if *b { 1 } else { 0 }),
+            Expr::Ident(name) => {
+                let global = self
+                    .data_globals
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("{context}: unknown constant data symbol '{name}'"))?;
+                let addr = global
+                    .as_pointer_value()
+                    .const_to_int(self.pointer_int_type())
+                    .get_zero_extended_constant()
+                    .ok_or_else(|| format!("{context}: failed to materialize address for data symbol '{name}'"))?;
+                Ok(addr as i128)
+            }
+            Expr::UnaryOp { op, expr } => match op {
+                UnaryOp::Neg => Ok(-self.const_eval_int(expr, context)?),
+                UnaryOp::BitNot => Ok(!self.const_eval_int(expr, context)?),
+                UnaryOp::Not => Ok(if !self.const_eval_truthy(expr, context)? { 1 } else { 0 }),
+            },
+            Expr::BinOp { op, left, right } => {
+                let lhs = self.const_eval_int(left, context)?;
+                let rhs = self.const_eval_int(right, context)?;
+                match op {
+                    BinOp::Add => Ok(lhs + rhs),
+                    BinOp::Sub => Ok(lhs - rhs),
+                    BinOp::Mul => Ok(lhs * rhs),
+                    BinOp::Div => {
+                        if rhs == 0 {
+                            Err(format!("{context}: division by zero in constant expression"))
+                        } else {
+                            Ok(lhs / rhs)
+                        }
+                    }
+                    BinOp::Mod => {
+                        if rhs == 0 {
+                            Err(format!("{context}: modulo by zero in constant expression"))
+                        } else {
+                            Ok(lhs % rhs)
+                        }
+                    }
+                    BinOp::BitAnd => Ok(lhs & rhs),
+                    BinOp::BitOr => Ok(lhs | rhs),
+                    BinOp::BitXor => Ok(lhs ^ rhs),
+                    BinOp::LShift => {
+                        let shift = u32::try_from(rhs)
+                            .map_err(|_| format!("{context}: negative shift in constant expression"))?;
+                        Ok(lhs << shift)
+                    }
+                    BinOp::RShift => {
+                        let shift = u32::try_from(rhs)
+                            .map_err(|_| format!("{context}: negative shift in constant expression"))?;
+                        Ok(lhs >> shift)
+                    }
+                    other => Err(format!("{context}: unsupported integer constant operator '{other:?}'")),
+                }
+            }
+            Expr::Call { callee, args, kwargs } => {
+                if !kwargs.is_empty() {
+                    return Err(format!(
+                        "{context}: keyword arguments are not supported in constant integer expressions"
+                    ));
+                }
+                let name = match callee.as_ref() {
+                    Expr::Ident(name) => name.as_str(),
+                    _ => return Err(format!("{context}: unsupported constant integer callee '{callee:?}'")),
+                };
+                match name {
+                    "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "isize" | "usize" => {
+                        if args.len() != 1 {
+                            return Err(format!("{context}: {name}() takes exactly 1 argument"));
+                        }
+                        self.const_eval_int(&args[0], context)
+                    }
+                    "word_bits" => {
+                        if !args.is_empty() {
+                            return Err(format!("{context}: word_bits() takes no arguments"));
+                        }
+                        Ok(self.pointer_int_type().get_bit_width() as i128)
+                    }
+                    "word_bytes" => {
+                        if !args.is_empty() {
+                            return Err(format!("{context}: word_bytes() takes no arguments"));
+                        }
+                        Ok((self.pointer_int_type().get_bit_width() / 8) as i128)
+                    }
+                    "bool" => {
+                        if args.len() != 1 {
+                            return Err(format!("{context}: bool() takes exactly 1 argument"));
+                        }
+                        Ok(if self.const_eval_truthy(&args[0], context)? {
+                            1
+                        } else {
+                            0
+                        })
+                    }
+                    other => Err(format!("{context}: unsupported constant integer function '{other}'")),
+                }
+            }
+            other => Err(format!(
+                "{context}: unsupported constant integer expression '{other:?}'"
+            )),
+        }
+    }
+
+    fn const_eval_float(&self, expr: &Expr, context: &str) -> Result<f64, String> {
+        match expr {
+            Expr::Float(f) => Ok(*f),
+            Expr::Int(n) => Ok(*n as f64),
+            Expr::Bool(b) => Ok(if *b { 1.0 } else { 0.0 }),
+            Expr::UnaryOp { op, expr } => match op {
+                UnaryOp::Neg => Ok(-self.const_eval_float(expr, context)?),
+                other => Err(format!(
+                    "{context}: unsupported float constant unary operator '{other:?}'"
+                )),
+            },
+            Expr::BinOp { op, left, right } => {
+                let lhs = self.const_eval_float(left, context)?;
+                let rhs = self.const_eval_float(right, context)?;
+                match op {
+                    BinOp::Add => Ok(lhs + rhs),
+                    BinOp::Sub => Ok(lhs - rhs),
+                    BinOp::Mul => Ok(lhs * rhs),
+                    BinOp::Div => Ok(lhs / rhs),
+                    other => Err(format!("{context}: unsupported float constant operator '{other:?}'")),
+                }
+            }
+            Expr::Call { callee, args, kwargs } => {
+                if !kwargs.is_empty() {
+                    return Err(format!(
+                        "{context}: keyword arguments are not supported in constant float expressions"
+                    ));
+                }
+                let name = match callee.as_ref() {
+                    Expr::Ident(name) => name.as_str(),
+                    _ => return Err(format!("{context}: unsupported constant float callee '{callee:?}'")),
+                };
+                match name {
+                    "float" => {
+                        if args.len() != 1 {
+                            return Err(format!("{context}: float() takes exactly 1 argument"));
+                        }
+                        self.const_eval_float(&args[0], context)
+                    }
+                    "bool" => {
+                        if args.len() != 1 {
+                            return Err(format!("{context}: bool() takes exactly 1 argument"));
+                        }
+                        Ok(if self.const_eval_truthy(&args[0], context)? {
+                            1.0
+                        } else {
+                            0.0
+                        })
+                    }
+                    other => Err(format!("{context}: unsupported constant float function '{other}'")),
+                }
+            }
+            other => Err(format!("{context}: unsupported constant float expression '{other:?}'")),
+        }
+    }
+
+    fn const_int_initializer(
+        &self,
+        int_type: inkwell::types::IntType<'ctx>,
+        expr: &Expr,
+        context: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let value = self.const_eval_int(expr, context)?;
+        Ok(int_type
+            .const_int(Self::const_wrap_int_bits(value, int_type.get_bit_width()), false)
+            .into())
+    }
+
+    fn const_float_initializer(
+        &self,
+        float_type: inkwell::types::FloatType<'ctx>,
+        expr: &Expr,
+        context: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        Ok(float_type.const_float(self.const_eval_float(expr, context)?).into())
+    }
+
+    fn const_bool_initializer(&self, expr: &Expr, context: &str) -> Result<BasicValueEnum<'ctx>, String> {
+        Ok(self
+            .context
+            .i8_type()
+            .const_int(if self.const_eval_truthy(expr, context)? { 1 } else { 0 }, false)
+            .into())
+    }
+
+    fn const_struct_initializer(
+        &self,
+        type_name: &str,
+        expr: &Expr,
+        context: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let sinfo = self
+            .structs
+            .get(type_name)
+            .ok_or_else(|| format!("{context}: unknown struct type '{type_name}'"))?;
+        if sinfo.is_union {
+            return Err(format!("{context}: union data declarations are not supported yet"));
+        }
+        let Expr::Call { callee, args, kwargs } = expr else {
+            return Err(format!(
+                "{context}: struct data initializer for '{type_name}' must call {type_name}(...)"
+            ));
+        };
+        match callee.as_ref() {
+            Expr::Ident(name) if name == type_name => {}
+            _ => {
+                return Err(format!(
+                    "{context}: struct data initializer for '{type_name}' must call {type_name}(...)"
+                ))
+            }
+        }
+
+        let mut field_values: Vec<Option<&Expr>> = vec![None; sinfo.field_names.len()];
+        if args.len() > sinfo.field_names.len() {
+            return Err(format!(
+                "{context}: struct '{type_name}' expected at most {} positional arguments, got {}",
+                sinfo.field_names.len(),
+                args.len()
+            ));
+        }
+        for (idx, arg) in args.iter().enumerate() {
+            field_values[idx] = Some(arg);
+        }
+        for (field_name, value) in kwargs {
+            let idx = sinfo
+                .field_names
+                .iter()
+                .position(|name| name == field_name)
+                .ok_or_else(|| format!("{context}: struct '{type_name}' has no field '{field_name}'"))?;
+            if field_values[idx].is_some() {
+                return Err(format!(
+                    "{context}: struct '{type_name}' field '{field_name}' initialized more than once"
+                ));
+            }
+            field_values[idx] = Some(value);
+        }
+
+        let mut field_consts = Vec::with_capacity(sinfo.field_names.len());
+        for idx in 0..sinfo.field_names.len() {
+            let field_expr = field_values[idx].ok_or_else(|| {
+                format!(
+                    "{context}: struct '{type_name}' field '{}' requires an initializer",
+                    sinfo.field_names[idx]
+                )
+            })?;
+            let field_context = format!("{context}: struct '{type_name}' field '{}'", sinfo.field_names[idx]);
+            let field_const = match sinfo.field_type_codes[idx] {
+                0 | 1 => self.const_int_initializer(self.context.i8_type(), field_expr, &field_context)?,
+                2 | 3 => self.const_int_initializer(self.context.i16_type(), field_expr, &field_context)?,
+                4 | 5 => self.const_int_initializer(self.context.i32_type(), field_expr, &field_context)?,
+                6 | 7 => self.const_int_initializer(self.context.i64_type(), field_expr, &field_context)?,
+                8 => self.const_float_initializer(self.context.f32_type(), field_expr, &field_context)?,
+                9 => self.const_float_initializer(self.context.f64_type(), field_expr, &field_context)?,
+                10 => self.const_bool_initializer(field_expr, &field_context)?,
+                other => {
+                    return Err(format!(
+                        "{context}: unsupported struct field type code {other} for '{}'",
+                        sinfo.field_names[idx]
+                    ))
+                }
+            };
+            field_consts.push(field_const);
+        }
+        Ok(sinfo.llvm_type.const_named_struct(&field_consts).into())
+    }
+
+    fn const_data_initializer(
+        &self,
+        type_name: &str,
+        expr: &Expr,
+        context: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if type_name == "bool" {
+            return self.const_bool_initializer(expr, context);
+        }
+        if let Some(ty) = ExternAbiType::parse(type_name) {
+            return match ty {
+                ExternAbiType::I8 | ExternAbiType::U8 => {
+                    self.const_int_initializer(self.context.i8_type(), expr, context)
+                }
+                ExternAbiType::I16 | ExternAbiType::U16 => {
+                    self.const_int_initializer(self.context.i16_type(), expr, context)
+                }
+                ExternAbiType::I32 | ExternAbiType::U32 => {
+                    self.const_int_initializer(self.context.i32_type(), expr, context)
+                }
+                ExternAbiType::I64 | ExternAbiType::U64 => {
+                    self.const_int_initializer(self.context.i64_type(), expr, context)
+                }
+                ExternAbiType::Isize | ExternAbiType::Usize => {
+                    self.const_int_initializer(self.pointer_int_type(), expr, context)
+                }
+                ExternAbiType::F32 => self.const_float_initializer(self.context.f32_type(), expr, context),
+                ExternAbiType::F64 => self.const_float_initializer(self.context.f64_type(), expr, context),
+                ExternAbiType::Void | ExternAbiType::Ptr | ExternAbiType::Str => {
+                    Err(format!("{context}: unsupported raw data type '{type_name}'"))
+                }
+            };
+        }
+        self.const_struct_initializer(type_name, expr, context)
     }
 
     fn extern_arg_value(
@@ -8509,10 +8882,68 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_store(ptr, closure).unwrap();
     }
 
+    fn declare_top_level_types(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in program {
+            match stmt {
+                Stmt::Struct {
+                    name,
+                    fields,
+                    is_packed,
+                } => {
+                    if self.structs.contains_key(name) {
+                        continue;
+                    }
+                    self.compile_struct_def(name, fields, *is_packed)?;
+                }
+                Stmt::Union { name, fields } => {
+                    if self.structs.contains_key(name) {
+                        continue;
+                    }
+                    self.compile_union_def(name, fields)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn declare_top_level_data(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in program {
+            if let Stmt::Data {
+                name,
+                type_name,
+                section,
+                ..
+            } = stmt
+            {
+                if self.data_globals.contains_key(name) {
+                    continue;
+                }
+                let global_name = self.mangle_global_name(name);
+                let llvm_type = self.raw_data_llvm_type(type_name, &format!("data '{name}'"))?;
+                let global = if let Some(existing) = self.module.get_global(&global_name) {
+                    existing
+                } else {
+                    self.module.add_global(llvm_type, None, &global_name)
+                };
+                global.set_linkage(inkwell::module::Linkage::External);
+                global.set_constant(false);
+                global.set_initializer(&llvm_type.const_zero());
+                if let Some(section_name) = section.as_deref() {
+                    global.set_section(Some(section_name));
+                }
+                self.data_globals.insert(name.clone(), global);
+            }
+        }
+        Ok(())
+    }
+
     fn declare_top_level_functions(&mut self, program: &Program) -> Result<(), String> {
         for stmt in program {
             match stmt {
-                Stmt::FnDef { name, params, .. } => {
+                Stmt::FnDef {
+                    name, params, section, ..
+                } => {
                     if self.functions.contains_key(name) {
                         continue;
                     }
@@ -8526,10 +8957,15 @@ impl<'ctx> Compiler<'ctx> {
                     let fn_type = self.cv_type.fn_type(&param_types, false);
                     let fn_name = self.mangle_global_name(name);
                     let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                    if let Some(section_name) = section.as_deref() {
+                        fn_val.set_section(Some(section_name));
+                    }
                     self.functions.insert(name.clone(), fn_val);
                     self.function_params.insert(name.clone(), params.clone());
                 }
-                Stmt::ExternFn { name, params, .. } => {
+                Stmt::ExternFn {
+                    name, params, section, ..
+                } => {
                     if self.functions.contains_key(name) {
                         continue;
                     }
@@ -8538,6 +8974,9 @@ impl<'ctx> Compiler<'ctx> {
                     let fn_type = self.cv_type.fn_type(&param_types, false);
                     let fn_name = self.mangle_extern_wrapper_name(name);
                     let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                    if let Some(section_name) = section.as_deref() {
+                        fn_val.set_section(Some(section_name));
+                    }
                     self.functions.insert(name.clone(), fn_val);
                     self.function_params.insert(
                         name.clone(),
@@ -8579,6 +9018,25 @@ impl<'ctx> Compiler<'ctx> {
         let n = self.str_counter;
         self.str_counter += 1;
         format!("s{n}")
+    }
+
+    fn const_global_string_ptr(&self, text: &str, global_name: &str) -> PointerValue<'ctx> {
+        let value = self.context.const_string(text.as_bytes(), true);
+        let global = if let Some(existing) = self.module.get_global(global_name) {
+            existing
+        } else {
+            let global = self.module.add_global(value.get_type(), None, global_name);
+            global.set_linkage(inkwell::module::Linkage::Private);
+            global.set_constant(true);
+            global.set_initializer(&value);
+            global
+        };
+        let zero = self.context.i32_type().const_zero();
+        unsafe {
+            global
+                .as_pointer_value()
+                .const_in_bounds_gep(value.get_type(), &[zero, zero])
+        }
     }
 
     fn build_entry_alloca(&self, name: &str) -> PointerValue<'ctx> {
@@ -9101,7 +9559,17 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             // ── function definition ───────────────────────────────────────────
-            Stmt::FnDef { name, params, body } => {
+            Stmt::FnDef {
+                name,
+                params,
+                section,
+                body,
+            } => {
+                if let Some(section_name) = section.as_deref() {
+                    if let Some(fn_val) = self.functions.get(name).copied() {
+                        fn_val.set_section(Some(section_name));
+                    }
+                }
                 self.compile_fndef(name, params, body)?;
             }
 
@@ -9111,8 +9579,25 @@ impl<'ctx> Compiler<'ctx> {
                 return_type,
                 symbol,
                 callconv,
+                section,
             } => {
-                self.compile_extern_fndef(name, params, return_type, symbol.as_deref(), callconv.as_deref())?;
+                self.compile_extern_fndef(
+                    name,
+                    params,
+                    return_type,
+                    symbol.as_deref(),
+                    callconv.as_deref(),
+                    section.as_deref(),
+                )?;
+            }
+
+            Stmt::Data {
+                name,
+                type_name,
+                value,
+                section,
+            } => {
+                self.compile_data_def(name, type_name, value, section.as_deref())?;
             }
 
             // ── class definition ────────────────────────────────────────────
@@ -9449,6 +9934,7 @@ impl<'ctx> Compiler<'ctx> {
         return_type: &str,
         symbol: Option<&str>,
         callconv: Option<&str>,
+        section: Option<&str>,
     ) -> Result<(), String> {
         if !self.allow_toplevel_defs {
             return Err("extern declarations are only allowed at the top level".into());
@@ -9495,6 +9981,10 @@ impl<'ctx> Compiler<'ctx> {
         };
         raw_fn.set_linkage(inkwell::module::Linkage::External);
         raw_fn.set_call_conventions(cc_number);
+        if let Some(section_name) = section {
+            raw_fn.set_section(Some(section_name));
+            wrapper_fn.set_section(Some(section_name));
+        }
 
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
@@ -9564,6 +10054,29 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
+    fn compile_data_def(
+        &mut self,
+        name: &str,
+        type_name: &str,
+        value: &Expr,
+        section: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.allow_toplevel_defs {
+            return Err("data declarations are only allowed at the top level".into());
+        }
+        let global = self
+            .data_globals
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("data symbol '{name}' was not pre-declared"))?;
+        let initializer = self.const_data_initializer(type_name, value, &format!("data '{name}'"))?;
+        global.set_initializer(&initializer);
+        if let Some(section_name) = section {
+            global.set_section(Some(section_name));
+        }
+        Ok(())
+    }
+
     // ── class definition ─────────────────────────────────────────────────────
 
     fn compile_class(&mut self, name: &str, parent: Option<&str>, body: &[Stmt]) -> Result<(), String> {
@@ -9606,6 +10119,7 @@ impl<'ctx> Compiler<'ctx> {
                     };
                     attributes.push((attr_name, value.clone()));
                 }
+                Stmt::Data { .. } => return Err("data declarations are only allowed at the top level".into()),
                 Stmt::ExternFn { .. } => return Err("extern declarations are only allowed at the top level".into()),
                 _ => {}
             }
@@ -9620,7 +10134,10 @@ impl<'ctx> Compiler<'ctx> {
         // First, declare stub functions for all methods
         for stmt in body {
             if let Stmt::FnDef {
-                name: mname, params, ..
+                name: mname,
+                params,
+                section,
+                ..
             } = stmt
             {
                 let fn_name = self.mangle_global_name(&format!("{}#{}.{}", name, mname, name));
@@ -9628,6 +10145,9 @@ impl<'ctx> Compiler<'ctx> {
                     params.iter().map(|_| self.cv_type.into()).collect();
                 let fn_type = self.cv_type.fn_type(&param_types, false);
                 let fn_val = self.module.add_function(&fn_name, fn_type, None);
+                if let Some(section_name) = section.as_deref() {
+                    fn_val.set_section(Some(section_name));
+                }
                 methods.insert(mname.clone(), fn_val);
             }
         }
@@ -9637,10 +10157,14 @@ impl<'ctx> Compiler<'ctx> {
             if let Stmt::FnDef {
                 name: mname,
                 params,
+                section,
                 body: mbody,
             } = stmt
             {
                 if let Some(&fn_val) = methods.get(mname) {
+                    if let Some(section_name) = section.as_deref() {
+                        fn_val.set_section(Some(section_name));
+                    }
                     // Save state
                     let saved_bb = self.builder.get_insert_block();
                     let saved_locals = std::mem::take(&mut self.locals);
@@ -9979,6 +10503,9 @@ impl<'ctx> Compiler<'ctx> {
     // ── struct definition ─────────────────────────────────────────────────────
 
     fn compile_struct_def(&mut self, name: &str, fields: &[(String, String)], is_packed: bool) -> Result<(), String> {
+        if self.structs.contains_key(name) {
+            return Ok(());
+        }
         // Map type string → (LLVM basic type, SFIELD_* code, byte size, is_float, is_signed)
         let field_meta: Vec<_> = fields.iter().map(|(fname, tname)| {
             let (llvm_ty, type_code, byte_size, is_float, is_signed): (inkwell::types::BasicTypeEnum<'ctx>, u32, u32, bool, bool) = match tname.as_str() {
@@ -10055,12 +10582,9 @@ impl<'ctx> Compiler<'ctx> {
             .iter()
             .zip(offsets.iter())
             .map(|((fname, _, type_code, byte_size, _, _), offset)| {
-                let name_gptr = self
-                    .builder
-                    .build_global_string_ptr(fname, &format!("sf_{name}_{fname}_name"))
-                    .unwrap();
+                let name_gptr = self.const_global_string_ptr(fname, &format!("sf_{name}_{fname}_name"));
                 cool_struct_field_llvm.const_named_struct(&[
-                    name_gptr.as_pointer_value().as_basic_value_enum(),
+                    name_gptr.as_basic_value_enum(),
                     i32_type.const_int(*type_code as u64, false).into(),
                     i32_type.const_int(*offset as u64, false).into(),
                     i32_type.const_int(*byte_size as u64, false).into(),
@@ -10082,12 +10606,9 @@ impl<'ctx> Compiler<'ctx> {
         let cool_struct_layout_llvm = self
             .context
             .struct_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
-        let struct_name_gptr = self
-            .builder
-            .build_global_string_ptr(name, &format!("sf_{name}_struct_name"))
-            .unwrap();
+        let struct_name_gptr = self.const_global_string_ptr(name, &format!("sf_{name}_struct_name"));
         let layout_const = cool_struct_layout_llvm.const_named_struct(&[
-            struct_name_gptr.as_pointer_value().as_basic_value_enum(),
+            struct_name_gptr.as_basic_value_enum(),
             i32_type.const_int(num_fields as u64, false).into(),
             fields_global.as_pointer_value().as_basic_value_enum(),
         ]);
@@ -10255,6 +10776,9 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn compile_union_def(&mut self, name: &str, fields: &[(String, String)]) -> Result<(), String> {
+        if self.structs.contains_key(name) {
+            return Ok(());
+        }
         // Same field metadata extraction as compile_struct_def.
         let field_meta: Vec<_> = fields.iter().map(|(fname, tname)| {
             let (llvm_ty, type_code, byte_size, is_float, is_signed): (inkwell::types::BasicTypeEnum<'ctx>, u32, u32, bool, bool) = match tname.as_str() {
@@ -10310,12 +10834,9 @@ impl<'ctx> Compiler<'ctx> {
         let field_consts: Vec<_> = field_meta
             .iter()
             .map(|(fname, _, type_code, byte_size, _, _)| {
-                let name_gptr = self
-                    .builder
-                    .build_global_string_ptr(fname, &format!("uf_{name}_{fname}_name"))
-                    .unwrap();
+                let name_gptr = self.const_global_string_ptr(fname, &format!("uf_{name}_{fname}_name"));
                 cool_struct_field_llvm.const_named_struct(&[
-                    name_gptr.as_pointer_value().as_basic_value_enum(),
+                    name_gptr.as_basic_value_enum(),
                     i32_type.const_int(*type_code as u64, false).into(),
                     i32_type.const_int(0, false).into(), // all offsets = 0
                     i32_type.const_int(*byte_size as u64, false).into(),
@@ -10336,12 +10857,9 @@ impl<'ctx> Compiler<'ctx> {
         let cool_struct_layout_llvm = self
             .context
             .struct_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
-        let union_name_gptr = self
-            .builder
-            .build_global_string_ptr(name, &format!("uf_{name}_name"))
-            .unwrap();
+        let union_name_gptr = self.const_global_string_ptr(name, &format!("uf_{name}_name"));
         let layout_const = cool_struct_layout_llvm.const_named_struct(&[
-            union_name_gptr.as_pointer_value().as_basic_value_enum(),
+            union_name_gptr.as_basic_value_enum(),
             i32_type.const_int(num_fields as u64, false).into(),
             fields_global.as_pointer_value().as_basic_value_enum(),
         ]);
@@ -10818,6 +11336,7 @@ impl<'ctx> Compiler<'ctx> {
         let saved_functions = std::mem::take(&mut self.functions);
         let saved_function_params = std::mem::take(&mut self.function_params);
         let saved_classes = std::mem::take(&mut self.classes);
+        let saved_data_globals = std::mem::take(&mut self.data_globals);
         let saved_fn = self.current_fn.replace(init_fn);
         let saved_loops = std::mem::take(&mut self.loop_stack);
         let saved_imports = std::mem::take(&mut self.imported_modules);
@@ -10836,6 +11355,8 @@ impl<'ctx> Compiler<'ctx> {
         self.allow_toplevel_defs = true;
 
         let compile_result = (|| -> Result<ModuleInfo<'ctx>, String> {
+            self.declare_top_level_types(&program)?;
+            self.declare_top_level_data(&program)?;
             self.declare_top_level_functions(&program)?;
             self.compile_stmts(&program)?;
 
@@ -10889,6 +11410,7 @@ impl<'ctx> Compiler<'ctx> {
         self.functions = saved_functions;
         self.function_params = saved_function_params;
         self.classes = saved_classes;
+        self.data_globals = saved_data_globals;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
         self.imported_modules = saved_imports;
@@ -11013,16 +11535,25 @@ impl<'ctx> Compiler<'ctx> {
             Expr::Str(s) => Ok(self.build_str(s)),
 
             Expr::Ident(name) => {
-                let ptr = self
-                    .locals
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| format!("undefined variable '{name}'"))?;
-                Ok(self
-                    .builder
-                    .build_load(self.cv_type, ptr, name)
-                    .unwrap()
-                    .into_struct_value())
+                if let Some(ptr) = self.locals.get(name).copied() {
+                    return Ok(self
+                        .builder
+                        .build_load(self.cv_type, ptr, name)
+                        .unwrap()
+                        .into_struct_value());
+                }
+                if let Some(global) = self.data_globals.get(name).copied() {
+                    let addr = self
+                        .builder
+                        .build_ptr_to_int(
+                            global.as_pointer_value(),
+                            self.context.i64_type(),
+                            &format!("{name}_addr"),
+                        )
+                        .unwrap();
+                    return Ok(self.build_cv_int_from_i64(addr, &format!("{name}_data_addr")));
+                }
+                Err(format!("undefined variable '{name}'"))
             }
 
             Expr::BinOp { op, left, right } => self.compile_binop_expr(op, left, right),
@@ -12589,7 +13120,9 @@ pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path
     compiler.current_source_dir = script_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     compiler.module_resolver = ModuleResolver::discover_for_script(&compiler.current_source_dir)?;
 
-    // ── Pass 1: forward-declare all top-level functions ──────────────────────
+    // ── Pass 1: predeclare top-level types, data, and functions ─────────────
+    compiler.declare_top_level_types(program)?;
+    compiler.declare_top_level_data(program)?;
     compiler.declare_top_level_functions(program)?;
 
     // ── Pass 2: build main() and compile all top-level statements ────────────

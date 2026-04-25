@@ -1274,7 +1274,7 @@ fn assignment_identity_key(item: &InspectAssignment) -> String {
 }
 
 fn assignment_defines_symbol(item: &InspectAssignment) -> bool {
-    matches!(item.kind, "assign" | "aug_assign" | "unpack")
+    matches!(item.kind, "assign" | "data" | "aug_assign" | "unpack")
 }
 
 fn import_binding_name(specifier: &str) -> String {
@@ -1332,6 +1332,7 @@ fn inspect_class_body(body: &[Stmt]) -> (Vec<InspectFunction>, Vec<InspectAssign
 fn inspect_assignment(stmt: &Stmt, line: Option<usize>) -> Option<InspectAssignment> {
     let (kind, names) = match stmt {
         Stmt::Assign { name, .. } => ("assign", vec![name.clone()]),
+        Stmt::Data { name, .. } => ("data", vec![name.clone()]),
         Stmt::AugAssign { name, .. } => ("aug_assign", vec![name.clone()]),
         Stmt::Unpack { names, .. } => ("unpack", names.clone()),
         Stmt::Global(names) => ("global", names.clone()),
@@ -1395,9 +1396,15 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             iter: iter.clone(),
             body: strip_line_markers(body),
         }),
-        Stmt::FnDef { name, params, body } => Some(Stmt::FnDef {
+        Stmt::FnDef {
+            name,
+            params,
+            section,
+            body,
+        } => Some(Stmt::FnDef {
             name: name.clone(),
             params: params.clone(),
+            section: section.clone(),
             body: strip_line_markers(body),
         }),
         Stmt::ExternFn {
@@ -1406,12 +1413,25 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             return_type,
             symbol,
             callconv,
+            section,
         } => Some(Stmt::ExternFn {
             name: name.clone(),
             params: params.clone(),
             return_type: return_type.clone(),
             symbol: symbol.clone(),
             callconv: callconv.clone(),
+            section: section.clone(),
+        }),
+        Stmt::Data {
+            name,
+            type_name,
+            value,
+            section,
+        } => Some(Stmt::Data {
+            name: name.clone(),
+            type_name: type_name.clone(),
+            value: value.clone(),
+            section: section.clone(),
         }),
         Stmt::Class { name, parent, body } => Some(Stmt::Class {
             name: name.clone(),

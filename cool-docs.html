@@ -2418,10 +2418,34 @@ abs_fn(-42)     # 42</code></pre>
 extern def c_strlen(text: str) -&gt; usize:
     symbol: "strlen"
     cc: "c"
+    section: ".text.host"
 
 print(abs(-42))
 print(c_strlen("hello"))</code></pre>
         </div>
+
+        <h4>Raw Data Declarations And Sections (LLVM backend)</h4>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">struct BootHeader:
+    magic: u32
+    flags: u32
+    checksum: i32
+
+def boot_entry():
+    section: ".text.boot"
+    print(read_u32(BOOT_HEADER))
+
+data BOOT_HEADER: BootHeader = BootHeader(
+    magic=464367618,
+    flags=0,
+    checksum=-464367618,
+):
+    section: ".data.boot"
+
+boot_entry()</code></pre>
+        </div>
+        <p>On Mach-O targets, use <code>segment,section</code> names such as <code>__TEXT,__boot</code> or <code>__DATA,__bootdata</code>.</p>
 
         <h4>Memory Access</h4>
         <div class="code-wrap">
@@ -3404,12 +3428,12 @@ echo Done.</code></pre>
           <li>✅ LLVM backend — compile a large native subset of Cool → LLVM IR → native binary</li>
           <li>✅ FFI — available in the interpreter and LLVM native builds via <code>import ffi</code></li>
           <li>✅ Inline assembly — <code>asm("template")</code> blocks</li>
-          <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code> and <code>cc:</code> metadata</li>
+          <li>✅ Native <code>extern def</code> declarations with optional <code>symbol:</code>, <code>cc:</code>, and <code>section:</code> metadata, plus raw <code>data</code> declarations for typed linker-visible globals</li>
           <li>✅ Pointer-width helpers and raw memory access (<code>isize()</code>, <code>usize()</code>, <code>word_bits()</code>, <code>word_bytes()</code>, <code>malloc</code>, <code>free</code>, <code>read_i8/u8/i16/u16/i32/u32/i64</code>, <code>write_i8/u8/i16/u16/i32/u32/i64</code>, plus volatile variants)</li>
           <li>✅ <code>cool build</code> command for compiling projects</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>
@@ -3450,8 +3474,9 @@ echo Done.</code></pre>
         <h3>Unreleased - Phase 11 In Progress</h3>
         <ul>
           <li>Phase 11: unions, volatile LLVM raw-memory helpers, pointer-width helpers
-            (<code>isize</code>, <code>usize</code>, <code>word_bits()</code>, <code>word_bytes()</code>), and
-            LLVM-native <code>extern def</code> declarations with <code>symbol:</code> / <code>cc:</code> metadata</li>
+            (<code>isize</code>, <code>usize</code>, <code>word_bits()</code>, <code>word_bytes()</code>),
+            LLVM-native <code>extern def</code> declarations with <code>symbol:</code> / <code>cc:</code> / <code>section:</code> metadata,
+            and raw <code>data</code> declarations for linker-visible typed globals</li>
         </ul>
 
         <h3>v1.1.0 - Phase 10 Complete</h3>
