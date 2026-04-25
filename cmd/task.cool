@@ -1,9 +1,9 @@
 import os
 import sys
-import toml
 import path
 import subprocess
 import term
+import lib.projectlib
 
 def shell_quote(text):
     text = str(text)
@@ -14,22 +14,6 @@ def usage():
     print("  cool task list")
     print("  cool task <name> [args...]")
     print("  cool task run <name> [args...]")
-
-def discover_project_root():
-    cur = os.getcwd()
-    while true:
-        manifest = path.join(cur, "cool.toml")
-        if path.exists(manifest):
-            return cur
-        parent = path.dirname(cur)
-        if parent == cur or parent == "":
-            raise "cool task: no cool.toml found in this directory or any parent"
-        cur = parent
-
-def read_manifest(project_root):
-    manifest_path = path.join(project_root, "cool.toml")
-    with open(manifest_path, "r") as f:
-        return toml.loads(f.read())
 
 def ensure_tasks_table(manifest):
     tasks = manifest.get("tasks", {})
@@ -182,8 +166,8 @@ def list_tasks(tasks):
             print("  " + str(name) + " - " + task["description"])
 
 argv = sys.argv
-project_root = discover_project_root()
-manifest = read_manifest(project_root)
+project_root = projectlib.discover_project_root("cool task")
+manifest = projectlib.read_manifest(project_root)
 tasks = ensure_tasks_table(manifest)
 
 if len(argv) <= 1:

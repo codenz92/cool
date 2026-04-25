@@ -41,6 +41,7 @@ All notable changes to the Cool language project.
 - `cool bundle` now delegates to `cmd/bundle.cool`, moving packaging logic out of Rust and into Cool itself
 - `cool release` now delegates to `cmd/release.cool`, moving version bumping, bundling, and git tagging out of Rust and into Cool itself
 - `src/project.rs` now only keeps manifest parsing and module resolution; the old Rust-side add/install/lockfile helpers were removed after those flows moved into Cool
+- Shared manifest/project helpers for bundled commands now live in `cmd/lib/projectlib.cool`, so the Cool-side CLI no longer copy-pastes root discovery and dependency parsing across commands
 
 #### Editor Tooling
 

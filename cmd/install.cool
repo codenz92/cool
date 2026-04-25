@@ -4,6 +4,7 @@ import toml
 import path
 import term
 import subprocess
+import lib.projectlib
 
 def shell_quote(text):
     text = str(text)
@@ -12,142 +13,6 @@ def shell_quote(text):
 def usage():
     print("install v1.0 — fetch git dependencies and write cool.lock")
     print("  cool install")
-
-def read_text_file(file_path):
-    with open(file_path, "r") as f:
-        return f.read()
-
-def discover_project_root():
-    cur = os.getcwd()
-    while true:
-        manifest = path.join(cur, "cool.toml")
-        if path.exists(manifest):
-            return cur
-        parent = path.dirname(cur)
-        if parent == cur or parent == "":
-            raise "cool install: no cool.toml found in this directory or any parent"
-        cur = parent
-
-def read_manifest_at(manifest_path):
-    return toml.loads(read_text_file(manifest_path))
-
-def read_manifest(project_root):
-    return read_manifest_at(path.join(project_root, "cool.toml"))
-
-def project_table(manifest):
-    project = manifest.get("project", nil)
-    if project == nil:
-        return manifest
-    if not isinstance(project, "dict"):
-        raise "cool install: [project] must be a table"
-    return project
-
-def dependencies_value(manifest):
-    value = manifest.get("dependencies", nil)
-    if value != nil:
-        return value
-    project = manifest.get("project", nil)
-    if isinstance(project, "dict"):
-        return project.get("dependencies", nil)
-    return nil
-
-def optional_string(table, key, default_value, context):
-    value = table.get(key, nil)
-    if value == nil:
-        return default_value
-    if not isinstance(value, "str"):
-        raise context + ": key '" + key + "' must be a string"
-    return value
-
-def parse_optional_string(table, key, context):
-    value = table.get(key, nil)
-    if value == nil:
-        return nil
-    if not isinstance(value, "str"):
-        raise context + ": field '" + key + "' must be a string"
-    return value
-
-def validate_git_selector(context, name, branch, tag, rev):
-    count = 0
-    if branch != nil:
-        count += 1
-    if tag != nil:
-        count += 1
-    if rev != nil:
-        count += 1
-    if count > 1:
-        raise context + ": dependency '" + name + "' may specify at most one of 'branch', 'tag', or 'rev'"
-
-def parse_dependencies(manifest):
-    raw = dependencies_value(manifest)
-    if raw == nil:
-        return []
-    out = []
-    if isinstance(raw, "dict"):
-        for pair in raw.items():
-            name = str(pair[0])
-            spec = pair[1]
-            if isinstance(spec, "str"):
-                out.append({
-                    "name": name,
-                    "kind": "path",
-                    "path": spec,
-                    "version": nil,
-                })
-            elif isinstance(spec, "dict"):
-                version = parse_optional_string(spec, "version", "cool.toml")
-                git = parse_optional_string(spec, "git", "cool.toml")
-                branch = parse_optional_string(spec, "branch", "cool.toml")
-                tag = parse_optional_string(spec, "tag", "cool.toml")
-                rev = parse_optional_string(spec, "rev", "cool.toml")
-                if git != nil:
-                    if spec.get("path", nil) != nil:
-                        raise "cool.toml: dependency '" + name + "' may not specify both 'git' and 'path'"
-                    validate_git_selector("cool.toml", name, branch, tag, rev)
-                    out.append({
-                        "name": name,
-                        "kind": "git",
-                        "git": git,
-                        "branch": branch,
-                        "tag": tag,
-                        "rev": rev,
-                        "version": version,
-                    })
-                else:
-                    dep_path = spec.get("path", "deps/" + name)
-                    if not isinstance(dep_path, "str"):
-                        raise "cool.toml: dependency '" + name + "' field 'path' must be a string"
-                    out.append({
-                        "name": name,
-                        "kind": "path",
-                        "path": dep_path,
-                        "version": version,
-                    })
-            else:
-                raise "cool.toml: dependency '" + name + "' must be a string path or table"
-        return out
-    if isinstance(raw, "list"):
-        for item in raw:
-            if not isinstance(item, "str"):
-                raise "cool.toml: dependencies array must contain strings"
-            out.append({
-                "name": item,
-                "kind": "path",
-                "path": "deps/" + item,
-                "version": nil,
-            })
-        return out
-    raise "cool.toml: field 'dependencies' must be a table or array of strings"
-
-def project_info(project_root, manifest):
-    project = project_table(manifest)
-    return {
-        "root": project_root,
-        "manifest_path": path.join(project_root, "cool.toml"),
-        "name": optional_string(project, "name", "project", "cool.toml"),
-        "version": optional_string(project, "version", "0.1.0", "cool.toml"),
-        "dependencies": parse_dependencies(manifest),
-    }
 
 def managed_dir(project_root):
     return path.join(project_root, ".cool")
@@ -194,7 +59,7 @@ def git_command(cwd, args):
 def read_lockfile(lock_path):
     if not os["exists"](lock_path):
         return nil
-    parsed = toml.loads(read_text_file(lock_path))
+    parsed = toml.loads(projectlib.read_text_file(lock_path))
     if not isinstance(parsed, "dict"):
         raise "cool.lock: root must be a table"
     return parsed
@@ -219,9 +84,9 @@ def maybe_project_version(dep_root):
     manifest_path = path.join(dep_root, "cool.toml")
     if not os["exists"](manifest_path):
         return nil
-    manifest = read_manifest_at(manifest_path)
-    project = project_table(manifest)
-    return optional_string(project, "version", "0.1.0", "cool.toml")
+    manifest = projectlib.read_manifest_at(manifest_path)
+    project = projectlib.project_table(manifest, "cool install")
+    return projectlib.optional_string(project, "version", "0.1.0", "cool.toml")
 
 def semver_parse(text):
     s = str(text).strip()
@@ -461,8 +326,8 @@ def materialize_dependency(project, dep, existing_lockfile, out):
     return dep_root
 
 def install_project_dependencies(project_root, existing_lockfile, out, visited):
-    manifest = read_manifest(project_root)
-    project = project_info(project_root, manifest)
+    manifest = projectlib.read_manifest(project_root)
+    project = projectlib.project_info(project_root, manifest, "cool install")
     for dep in project["dependencies"]:
         dep_root = materialize_dependency(project, dep, existing_lockfile, out)
         if dep_root in visited:
@@ -474,8 +339,7 @@ def install_project_dependencies(project_root, existing_lockfile, out, visited):
 
 def write_lockfile(project, deps):
     ensure_dir(managed_dir(project["root"]))
-    with open(lockfile_path(project["root"]), "w") as f:
-        f.write(render_lockfile(project["name"], project["version"], deps))
+    projectlib.write_text_file(lockfile_path(project["root"]), render_lockfile(project["name"], project["version"], deps))
 
 argv = sys.argv
 
@@ -487,9 +351,9 @@ if len(argv) != 1:
     usage()
     exit(1)
 
-project_root = discover_project_root()
-manifest = read_manifest(project_root)
-project = project_info(project_root, manifest)
+project_root = projectlib.discover_project_root("cool install")
+manifest = projectlib.read_manifest(project_root)
+project = projectlib.project_info(project_root, manifest, "cool install")
 existing_lockfile = read_lockfile(lockfile_path(project_root))
 deps = []
 visited = {}

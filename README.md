@@ -485,6 +485,7 @@ apps/
   browse.cool       TUI file browser (two-pane layout, file preview)
 
 cmd/
+  lib/projectlib.cool Shared manifest/project helpers for bundled commands
   new.cool          Project scaffolder for `cool new`
   task.cool         Manifest task runner used by `cool task`
   add.cool          Dependency manifest updater for `cool add`
@@ -536,7 +537,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
 The self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
 
-Project tooling is starting to move over too: `cool new`, `cool task`, `cool add`, `cool install`, `cool bundle`, and `cool release` now delegate to `cmd/*.cool`, so packaged CLI workflows now run in Cool rather than Rust.
+Project tooling is starting to move over too: `cool new`, `cool task`, `cool add`, `cool install`, `cool bundle`, and `cool release` now delegate to `cmd/*.cool`, and shared manifest helpers now live in `cmd/lib/projectlib.cool`, so packaged CLI workflows now run in Cool rather than Rust.
 
 It supports:
 

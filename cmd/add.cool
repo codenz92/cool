@@ -4,6 +4,7 @@ import toml
 import path
 import term
 import subprocess
+import lib.projectlib
 
 def shell_quote(text):
     text = str(text)
@@ -12,35 +13,6 @@ def shell_quote(text):
 def usage():
     print("add v1.0 — add a dependency to cool.toml and install it")
     print("  cool add <name> (--path <path> | --git <url>) [--branch <name> | --tag <name> | --rev <sha>] [--version <semver>]")
-
-def read_text_file(file_path):
-    with open(file_path, "r") as f:
-        return f.read()
-
-def discover_project_root():
-    cur = os.getcwd()
-    while true:
-        manifest = path.join(cur, "cool.toml")
-        if path.exists(manifest):
-            return cur
-        parent = path.dirname(cur)
-        if parent == cur or parent == "":
-            raise "cool add: no cool.toml found in this directory or any parent"
-        cur = parent
-
-def read_manifest(manifest_path):
-    parsed = toml.loads(read_text_file(manifest_path))
-    if not isinstance(parsed, "dict"):
-        raise "cool.toml: root must be a table"
-    return parsed
-
-def project_table(manifest):
-    project = manifest.get("project", nil)
-    if project == nil:
-        return manifest
-    if not isinstance(project, "dict"):
-        raise "cool add: [project] must be a table"
-    return project
 
 def dependency_manifest_entry(dep):
     table = {}
@@ -59,7 +31,7 @@ def dependency_manifest_entry(dep):
     return table
 
 def write_manifest_dependency(manifest_path, dep):
-    manifest = read_manifest(manifest_path)
+    manifest = projectlib.read_manifest_at(manifest_path)
     deps = manifest.get("dependencies", nil)
     if deps == nil:
         deps = {}
@@ -68,8 +40,7 @@ def write_manifest_dependency(manifest_path, dep):
     deps[dep["name"]] = dependency_manifest_entry(dep)
     manifest["dependencies"] = deps
     text = toml.dumps(manifest)
-    with open(manifest_path, "w") as f:
-        f.write(text)
+    projectlib.write_text_file(manifest_path, text)
 
 def is_remote_git_source(source):
     return "://" in source or source.startswith("git@")
@@ -157,9 +128,9 @@ if len(argv) <= 2:
     usage()
     exit(1)
 
-project_root = discover_project_root()
+project_root = projectlib.discover_project_root("cool add")
 manifest_path = path.join(project_root, "cool.toml")
-manifest = read_manifest(manifest_path)
+manifest = projectlib.read_manifest_at(manifest_path)
 cool_exe = os.getenv("COOL_EXE_PATH")
 if cool_exe == nil or cool_exe == "":
     cool_exe = "cool"

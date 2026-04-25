@@ -1,10 +1,10 @@
 import os
 import sys
-import toml
 import path
 import term
 import platform
 import subprocess
+import lib.projectlib
 
 def shell_quote(text):
     text = str(text)
@@ -14,42 +14,6 @@ def usage():
     print("release v1.0 — bump version, bundle, and tag a release")
     print("  cool release [--bump patch|minor|major]")
     print("  cool release [--version X.Y.Z] [--no-tag]")
-
-def discover_project_root():
-    cur = os.getcwd()
-    while true:
-        manifest = path.join(cur, "cool.toml")
-        if path.exists(manifest):
-            return cur
-        parent = path.dirname(cur)
-        if parent == cur or parent == "":
-            raise "cool release: no cool.toml found in this directory or any parent"
-        cur = parent
-
-def read_manifest(project_root):
-    manifest_path = path.join(project_root, "cool.toml")
-    with open(manifest_path, "r") as f:
-        return toml.loads(f.read())
-
-def project_table(manifest):
-    project = manifest.get("project", nil)
-    if project == nil:
-        return manifest
-    if not isinstance(project, "dict"):
-        raise "cool release: [project] must be a table"
-    return project
-
-def read_text_file(file_path):
-    with open(file_path, "r") as f:
-        return f.read()
-
-def optional_string(table, key, default_value, context):
-    value = table.get(key, nil)
-    if value == nil:
-        return default_value
-    if not isinstance(value, "str"):
-        raise context + ": key '" + key + "' must be a string"
-    return value
 
 def target_triple():
     os_name = platform.os()
@@ -103,7 +67,7 @@ def bump_version(version, bump):
     return str(bump)
 
 def set_manifest_version(manifest_path, new_version):
-    src = read_text_file(manifest_path)
+    src = projectlib.read_text_file(manifest_path)
 
     found = false
     new_lines = []
@@ -124,8 +88,7 @@ def set_manifest_version(manifest_path, new_version):
     if not found:
         raise "cool release: could not find 'version = ...' in cool.toml"
 
-    with open(manifest_path, "w") as f:
-        f.write("\n".join(new_lines))
+    projectlib.write_text_file(manifest_path, "\n".join(new_lines))
 
 def maybe_warn_dirty(project_root):
     result = subprocess.run("cd " + shell_quote(project_root) + " && git status --porcelain")
@@ -155,13 +118,13 @@ if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-
     usage()
     exit(0)
 
-project_root = discover_project_root()
+project_root = projectlib.discover_project_root("cool release")
 manifest_path = path.join(project_root, "cool.toml")
-manifest = read_manifest(project_root)
-project = project_table(manifest)
+manifest = projectlib.read_manifest(project_root)
+project = projectlib.project_table(manifest, "cool release")
 
-name = optional_string(project, "name", "project", "cool.toml")
-current_version = optional_string(project, "version", "0.1.0", "cool.toml")
+name = projectlib.optional_string(project, "name", "project", "cool.toml")
+current_version = projectlib.optional_string(project, "version", "0.1.0", "cool.toml")
 cool_exe = os.getenv("COOL_EXE_PATH")
 if cool_exe == nil or cool_exe == "":
     cool_exe = "cool"

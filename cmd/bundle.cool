@@ -1,10 +1,10 @@
 import os
 import sys
-import toml
 import path
 import term
 import platform
 import subprocess
+import lib.projectlib
 
 def shell_quote(text):
     text = str(text)
@@ -13,46 +13,6 @@ def shell_quote(text):
 def usage():
     print("bundle v1.0 — package a Cool project")
     print("  cool bundle")
-
-def discover_project_root():
-    cur = os.getcwd()
-    while true:
-        manifest = path.join(cur, "cool.toml")
-        if path.exists(manifest):
-            return cur
-        parent = path.dirname(cur)
-        if parent == cur or parent == "":
-            raise "cool bundle: no cool.toml found in this directory or any parent"
-        cur = parent
-
-def read_manifest(project_root):
-    manifest_path = path.join(project_root, "cool.toml")
-    with open(manifest_path, "r") as f:
-        return toml.loads(f.read())
-
-def project_table(manifest):
-    project = manifest.get("project", nil)
-    if project == nil:
-        return manifest
-    if not isinstance(project, "dict"):
-        raise "cool bundle: [project] must be a table"
-    return project
-
-def require_string(table, key, context):
-    value = table.get(key, nil)
-    if value == nil:
-        raise context + ": missing required key '" + key + "'"
-    if not isinstance(value, "str"):
-        raise context + ": key '" + key + "' must be a string"
-    return value
-
-def optional_string(table, key, default_value, context):
-    value = table.get(key, nil)
-    if value == nil:
-        return default_value
-    if not isinstance(value, "str"):
-        raise context + ": key '" + key + "' must be a string"
-    return value
 
 def bundle_include(manifest):
     bundle = manifest.get("bundle", nil)
@@ -132,14 +92,14 @@ if len(argv) == 2:
     usage()
     exit(0)
 
-project_root = discover_project_root()
-manifest = read_manifest(project_root)
-project = project_table(manifest)
+project_root = projectlib.discover_project_root("cool bundle")
+manifest = projectlib.read_manifest(project_root)
+project = projectlib.project_table(manifest, "cool bundle")
 
-name = optional_string(project, "name", "project", "cool.toml")
-version = optional_string(project, "version", "0.1.0", "cool.toml")
-main = require_string(project, "main", "cool.toml")
-output = optional_string(project, "output", name, "cool.toml")
+name = projectlib.optional_string(project, "name", "project", "cool.toml")
+version = projectlib.optional_string(project, "version", "0.1.0", "cool.toml")
+main = projectlib.require_string(project, "main", "cool.toml")
+output = projectlib.optional_string(project, "output", name, "cool.toml")
 include = bundle_include(manifest)
 
 main_path = path.join(project_root, main)
