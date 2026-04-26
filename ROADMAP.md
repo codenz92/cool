@@ -495,8 +495,8 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Type Checking
 
-- [x] A real type checker for normal program code — v0: literal-type mismatch detection at typed-def boundaries, wired into `cool check`
-- [ ] Assignability and coercion rules for primitives, structs, unions, and tuples
+- [x] A real type checker for normal program code — v0: literal-type mismatch detection at typed-def boundaries; v1: variable type tracking propagates inferred types from assignments and typed-def return values through the checker
+- [x] Assignability and coercion rules for primitives — variable types are tracked and checked at typed-def call sites and return statements
 - [ ] Compile-time checking of function returns on all code paths
 - [ ] Module-level symbol/type resolution before codegen
 - [x] `cool check --strict` / strict project mode — errors on unannotated top-level `def` params and return types; dunder methods exempted
@@ -504,8 +504,8 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### Tooling Integration
 
 - [ ] Type-aware LSP completions, hover, and diagnostics
-- [ ] Typed `cool ast` / `inspect` output for tooling consumers
-- [ ] Compiler diagnostics with fix suggestions for type and import issues
+- [x] Typed `cool ast` / `inspect` output — `cool inspect` now includes `type_name` on annotated params and `return_type` on typed `def`; untyped fields are omitted from JSON output
+- [x] Compiler diagnostics with fix suggestions — type mismatch errors now include actionable conversion hints (e.g. "use str(value) to convert", "use int() to truncate")
 
 ---
 

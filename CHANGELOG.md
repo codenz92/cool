@@ -20,6 +20,9 @@ All notable changes to the Cool language project.
 - Leaves untyped functions and non-literal expressions (variables, calls, arithmetic) unchecked — no false positives on existing code
 - Runs automatically as part of `cool check`; exits non-zero on type errors
 - `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type; dunder methods (`__init__`, `__str__`, etc.) are exempted; violations are errors
+- Type checker v1: variable type tracking — inferred types from literal assignments (`x = "hello"` → `x: str`) and typed-def return values (`x = add(1, 2)` → `x: i32`) are recorded in a per-scope environment and checked at subsequent typed-def call sites and `return` statements; catches `add(bad_str, 2)` and `return str_var` in an `-> i32` function
+- `cool inspect` output now includes `type_name` on annotated parameters and `return_type` on typed `def` and `extern def`; untyped fields are omitted so existing tooling JSON consumers are not broken
+- Type mismatch error messages now include actionable fix suggestions: "use str(value) to convert", "use int(value) to convert", "use int() to truncate (precision may be lost)"
 
 ---
 

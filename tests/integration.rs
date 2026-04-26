@@ -3127,6 +3127,121 @@ fn test_cool_check_type_checker_flags_return_type_mismatch() {
 }
 
 #[test]
+fn test_cool_check_type_checker_catches_variable_type_mismatch() {
+    let temp = unique_temp_path("cool_check_var_type", "cool");
+    std::fs::write(
+        &temp,
+        r#"def add(x: i32, y: i32) -> i32:
+    return x
+
+bad = "hello"
+add(bad, 2)
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "expected error, got:\n{stderr}");
+    assert!(
+        stderr.contains("argument 1 to 'add'") && stderr.contains("str"),
+        "expected str mismatch for 'add' in:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_cool_check_type_checker_passes_variable_of_compatible_type() {
+    let temp = unique_temp_path("cool_check_var_compat", "cool");
+    std::fs::write(
+        &temp,
+        r#"def add(x: i32, y: i32) -> i32:
+    return x
+
+a = 1
+b = 2
+add(a, b)
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok"));
+}
+
+#[test]
+fn test_cool_check_type_checker_catches_return_variable_mismatch() {
+    let temp = unique_temp_path("cool_check_return_var", "cool");
+    std::fs::write(
+        &temp,
+        r#"def get_count() -> i32:
+    msg = "oops"
+    return msg
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "expected error, got:\n{stderr}");
+    assert!(stderr.contains("return type mismatch"), "expected return type error in:\n{stderr}");
+}
+
+#[test]
+fn test_cool_inspect_includes_param_types_and_return_type() {
+    let temp = unique_temp_path("cool_inspect_typed", "cool");
+    std::fs::write(
+        &temp,
+        "def add(x: i32, y: i32) -> i32:\n    return x\n\ndef greet(name):\n    return name\n",
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["inspect", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("inspect output must be JSON");
+    let fns = json["functions"].as_array().unwrap();
+
+    let add_fn = fns.iter().find(|f| f["name"] == "add").expect("add must be in functions");
+    assert_eq!(add_fn["return_type"], "i32", "add must have return_type i32");
+    let x_param = &add_fn["params"][0];
+    assert_eq!(x_param["type_name"], "i32", "x param must have type_name i32");
+
+    let greet_fn = fns.iter().find(|f| f["name"] == "greet").expect("greet must be in functions");
+    assert!(greet_fn["return_type"].is_null(), "untyped greet must have no return_type");
+    assert!(greet_fn["params"][0]["type_name"].is_null(), "untyped param must have no type_name");
+}
+
+#[test]
+fn test_cool_check_type_checker_fix_suggestions_mention_conversion() {
+    let temp = unique_temp_path("cool_check_fix_hint", "cool");
+    std::fs::write(
+        &temp,
+        "def process(n: i32) -> i32:\n    return n\n\nprocess(\"bad\")\n",
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("int(") || stderr.contains("convert"),
+        "error should include a fix suggestion, got:\n{stderr}"
+    );
+}
+
+#[test]
 fn test_cool_check_type_checker_ignores_untyped_functions() {
     let temp = unique_temp_path("cool_check_untyped", "cool");
     std::fs::write(

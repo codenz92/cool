@@ -164,6 +164,8 @@ pub struct InspectFunction {
     pub line: Option<usize>,
     pub name: String,
     pub params: Vec<InspectParam>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -202,6 +204,8 @@ pub struct InspectParam {
     pub has_default: bool,
     pub is_vararg: bool,
     pub is_kwarg: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -934,15 +938,17 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
     for stmt in program {
         match stmt {
             Stmt::SetLine(line) => current_line = Some(*line),
-            Stmt::FnDef { name, params, .. } => functions.push(InspectFunction {
+            Stmt::FnDef { name, params, return_type, .. } => functions.push(InspectFunction {
                 line: current_line,
                 name: name.clone(),
                 params: inspect_params(params),
+                return_type: return_type.clone(),
             }),
-            Stmt::ExternFn { name, params, .. } => functions.push(InspectFunction {
+            Stmt::ExternFn { name, params, return_type, .. } => functions.push(InspectFunction {
                 line: current_line,
                 name: name.clone(),
                 params: inspect_extern_params(params),
+                return_type: Some(return_type.clone()),
             }),
             Stmt::Class { name, parent, body } => {
                 let (methods, class_assignments) = inspect_class_body(body);
@@ -1292,6 +1298,7 @@ fn inspect_params(params: &[crate::ast::Param]) -> Vec<InspectParam> {
             has_default: param.default.is_some(),
             is_vararg: param.is_vararg,
             is_kwarg: param.is_kwarg,
+            type_name: param.type_name.clone(),
         })
         .collect()
 }
@@ -1304,6 +1311,7 @@ fn inspect_extern_params(params: &[crate::ast::ExternParam]) -> Vec<InspectParam
             has_default: false,
             is_vararg: false,
             is_kwarg: false,
+            type_name: Some(param.type_name.clone()),
         })
         .collect()
 }
@@ -1316,10 +1324,11 @@ fn inspect_class_body(body: &[Stmt]) -> (Vec<InspectFunction>, Vec<InspectAssign
     for stmt in body {
         match stmt {
             Stmt::SetLine(line) => current_line = Some(*line),
-            Stmt::FnDef { name, params, .. } => methods.push(InspectFunction {
+            Stmt::FnDef { name, params, return_type, .. } => methods.push(InspectFunction {
                 line: current_line,
                 name: name.clone(),
                 params: inspect_params(params),
+                return_type: return_type.clone(),
             }),
             _ => {
                 if let Some(assignment) = inspect_assignment(stmt, current_line) {
@@ -1483,6 +1492,7 @@ pub fn type_check_program(program: &[Stmt], path: &str, strict: bool) -> Vec<Too
     let mut checker = TypeChecker {
         path: path.to_string(),
         typed_fns: HashMap::new(),
+        type_env: HashMap::new(),
         current_return_type: None,
         current_line: 1,
         diagnostics: Vec::new(),
@@ -1499,6 +1509,8 @@ struct TypeChecker {
     path: String,
     // fn name → (param types per position, return type)
     typed_fns: HashMap<String, (Vec<Option<String>>, Option<String>)>,
+    // Local variable → inferred type (e.g. "int", "str", "f64", "i32")
+    type_env: HashMap<String, String>,
     current_return_type: Option<String>,
     current_line: usize,
     diagnostics: Vec<ToolingDiagnostic>,
@@ -1570,29 +1582,51 @@ impl TypeChecker {
         match stmt {
             Stmt::SetLine(n) => self.current_line = *n,
 
-            Stmt::FnDef { name, params: _, body, return_type, .. } => {
-                let saved = self.current_return_type.clone();
-                // Only set return type context for typed functions.
-                if self.typed_fns.contains_key(name) {
-                    self.current_return_type = return_type.clone();
-                } else {
-                    self.current_return_type = None;
+            Stmt::FnDef { name, params, body, return_type, .. } => {
+                let saved_ret = self.current_return_type.clone();
+                let saved_env = self.type_env.clone();
+                // Seed the env with typed parameters so the body can track their types.
+                for param in params {
+                    if let Some(type_name) = &param.type_name {
+                        self.type_env.insert(param.name.clone(), type_name.clone());
+                    }
                 }
+                self.current_return_type = if self.typed_fns.contains_key(name) {
+                    return_type.clone()
+                } else {
+                    None
+                };
                 self.check_stmts(body);
-                self.current_return_type = saved;
+                self.current_return_type = saved_ret;
+                self.type_env = saved_env;
             }
 
             Stmt::Return(opt_expr) => {
                 if let (Some(ret_type), Some(expr)) = (&self.current_return_type.clone(), opt_expr) {
-                    if let Some(actual) = literal_kind(expr) {
-                        if let Some(msg) = type_mismatch_msg(actual, ret_type) {
+                    let actual = literal_kind(expr)
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            if let Expr::Ident(v) = expr {
+                                self.type_env.get(v).cloned()
+                            } else {
+                                self.infer_type(expr)
+                            }
+                        });
+                    if let Some(actual) = actual {
+                        if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), ret_type) {
                             self.emit("type_error", &format!("return type mismatch: {msg}"));
                         }
                     }
                 }
             }
 
-            Stmt::Expr(e) | Stmt::Assign { value: e, .. } => self.check_expr(e),
+            Stmt::Expr(e) => self.check_expr(e),
+            Stmt::Assign { name, value } => {
+                self.check_expr(value);
+                if let Some(inferred) = self.infer_type(value) {
+                    self.type_env.insert(name.clone(), inferred);
+                }
+            }
             Stmt::AugAssign { value: e, .. } => self.check_expr(e),
             Stmt::SetItem { object, index, value } => {
                 self.check_expr(object);
@@ -1651,22 +1685,25 @@ impl TypeChecker {
     fn check_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Call { callee, args, kwargs } => {
-                // Check typed-def call sites.
+                // Check typed-def call sites: literal args and variable args with known types.
                 if let Expr::Ident(fn_name) = callee.as_ref() {
                     if let Some((param_types, _)) = self.typed_fns.get(fn_name).cloned() {
                         for (i, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
                             if let Some(type_name) = param_type {
-                                if let Some(actual) = literal_kind(arg) {
-                                    if let Some(msg) = type_mismatch_msg(actual, &type_name) {
-                                        self.emit(
-                                            "type_error",
-                                            &format!(
-                                                "argument {} to '{}': {msg}",
-                                                i + 1,
-                                                fn_name
-                                            ),
-                                        );
-                                    }
+                                let mismatch = if let Some(actual) = literal_kind(arg) {
+                                    type_mismatch_msg(actual, &type_name)
+                                } else if let Expr::Ident(var) = arg {
+                                    self.type_env.get(var).and_then(|vt| {
+                                        type_mismatch_msg(normalize_to_kind(vt), &type_name)
+                                    })
+                                } else {
+                                    None
+                                };
+                                if let Some(msg) = mismatch {
+                                    self.emit(
+                                        "type_error",
+                                        &format!("argument {} to '{}': {msg}", i + 1, fn_name),
+                                    );
                                 }
                             }
                         }
@@ -1714,6 +1751,27 @@ impl TypeChecker {
         }
     }
 
+    /// Infer the type of an expression, returning a type string or None if unknown.
+    fn infer_type(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Int(_) => Some("int".to_string()),
+            Expr::Float(_) => Some("float".to_string()),
+            Expr::Str(_) => Some("str".to_string()),
+            Expr::Bool(_) => Some("bool".to_string()),
+            Expr::Nil => Some("nil".to_string()),
+            Expr::Ident(name) => self.type_env.get(name).cloned(),
+            Expr::Call { callee, .. } => {
+                if let Expr::Ident(fn_name) = callee.as_ref() {
+                    if let Some((_, Some(ret))) = self.typed_fns.get(fn_name) {
+                        return Some(ret.clone());
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     fn emit(&mut self, code: &'static str, message: &str) {
         self.diagnostics.push(ToolingDiagnostic {
             severity: DiagnosticSeverity::Error,
@@ -1737,7 +1795,19 @@ fn literal_kind(expr: &Expr) -> Option<&'static str> {
     }
 }
 
-/// Returns Some(error message) when `actual` literal kind clearly conflicts with `expected` type.
+/// Normalize an exact type name or kind string to the coarse kind used by type_mismatch_msg.
+fn normalize_to_kind(type_str: &str) -> &str {
+    match type_str {
+        "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "isize" | "usize" | "int" => "int",
+        "f32" | "f64" | "float" => "float",
+        "str" => "str",
+        "bool" => "bool",
+        "nil" => "nil",
+        other => other,
+    }
+}
+
+/// Returns Some(error message with fix suggestion) when `actual` kind clearly conflicts with `expected` type.
 /// Returns None when the combination is compatible or ambiguous.
 fn type_mismatch_msg(actual: &str, expected: &str) -> Option<String> {
     let is_int_type = matches!(
@@ -1749,20 +1819,17 @@ fn type_mismatch_msg(actual: &str, expected: &str) -> Option<String> {
     match actual {
         "int" => {
             if expected == "str" {
-                Some(format!("expected '{expected}', got integer literal"))
-            } else if expected == "bool" {
-                // int passed as bool is a common pattern — allow with a warning? skip for now.
-                None
+                Some(format!("expected '{expected}', got integer — use str(value) to convert"))
             } else {
-                None // int is compatible with all numeric types (may truncate, but not a type error)
+                None // int is compatible with all numeric types (may truncate, but not flagged here)
             }
         }
         "float" => {
             if expected == "str" || expected == "bool" {
-                Some(format!("expected '{expected}', got float literal"))
+                Some(format!("expected '{expected}', got float — use str(value) to convert"))
             } else if is_int_type {
                 Some(format!(
-                    "expected integer type '{expected}', got float literal (precision may be lost; use int() to truncate)"
+                    "expected integer type '{expected}', got float — use int() to truncate (precision may be lost)"
                 ))
             } else {
                 None // float → f32/f64 is fine
@@ -1771,22 +1838,26 @@ fn type_mismatch_msg(actual: &str, expected: &str) -> Option<String> {
         "str" => {
             if expected == "str" {
                 None
-            } else if is_int_type || is_float_type || expected == "bool" {
-                Some(format!("expected '{expected}', got string literal"))
+            } else if is_int_type {
+                Some(format!("expected integer type '{expected}', got str — use int(value) to convert"))
+            } else if is_float_type {
+                Some(format!("expected float type '{expected}', got str — use float(value) to convert"))
+            } else if expected == "bool" {
+                Some(format!("expected '{expected}', got str — use bool(value) to convert"))
             } else {
                 None
             }
         }
         "bool" => {
             if expected == "str" {
-                Some(format!("expected '{expected}', got bool literal"))
+                Some(format!("expected '{expected}', got bool — use str(value) to convert"))
             } else {
                 None // bool coerces to 0/1 for numeric types
             }
         }
         "nil" => {
             if expected == "str" || is_int_type || is_float_type || expected == "bool" {
-                Some(format!("expected '{expected}', got nil"))
+                Some(format!("expected '{expected}', got nil — check for a missing value"))
             } else {
                 None
             }
