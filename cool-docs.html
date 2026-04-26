@@ -917,8 +917,8 @@
           </div>
           <div class="feature-card">
             <div class="fc-title">Standard Library</div>
-            <div class="fc-desc">math, os, sys, json, re, time, random, collections, path, csv, datetime, hashlib,
-              platform, toml, yaml, sqlite, http, subprocess, argparse, logging, test, socket, term, ffi, and more.</div>
+            <div class="fc-desc">math, os, sys, json, re, time, random, collections, path, platform, core, csv,
+              datetime, hashlib, toml, yaml, sqlite, http, subprocess, argparse, logging, test, socket, term, ffi, and more.</div>
           </div>
           <div class="feature-card">
             <div class="fc-title">Native Builds</div>
@@ -2328,6 +2328,30 @@ print(platform.has_extern())
 print(platform.has_inline_asm())</code></pre>
         </div>
 
+        <h3>core</h3>
+        <div class="code-wrap">
+          <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
+          <pre><code class="language-python">import core
+
+addr = 74565
+print(core.word_bits())
+print(core.word_bytes())
+print(core.page_size())        # 4096
+print(core.page_align_down(addr))
+print(core.page_align_up(addr))
+print(core.page_offset(addr))
+print(core.page_count(8193))   # 3
+print(core.pt_index(addr))
+print(core.pd_index(addr))
+print(core.pdpt_index(addr))
+print(core.pml4_index(addr))
+
+# LLVM builds only:
+# core.set_allocator(my_alloc, my_free)
+# ptr = core.alloc(128)
+# core.free(ptr)</code></pre>
+        </div>
+
         <h3>argparse</h3>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">cool</span><button class="copy-btn">copy</button></div>
@@ -2505,7 +2529,7 @@ boot_entry()</code></pre>
         <p>On Mach-O targets, use <code>segment,section</code> names such as <code>__TEXT,__boot</code> or <code>__DATA,__bootdata</code>.</p>
 
         <h4>Freestanding Object Builds And Kernel Images</h4>
-        <p><code>cool build --freestanding</code> emits a <code>.o</code> file instead of compiling and linking the hosted Cool runtime. Freestanding builds accept declaration-style top-level programs only: <code>def</code>, <code>extern def</code>, <code>data</code>, <code>struct</code>, and <code>union</code>. Top-level executable statements, imports, and classes are rejected. Freestanding <code>assert</code> failure paths lower to a direct LLVM trap rather than depending on libc <code>abort()</code>. All raw memory builtins (<code>read_*</code>, <code>write_*</code>, and <code>_volatile</code> variants) are lowered directly to LLVM IR in freestanding mode — the resulting <code>.o</code> carries no undefined C runtime symbols.</p>
+        <p><code>cool build --freestanding</code> emits a <code>.o</code> file instead of compiling and linking the hosted Cool runtime. Freestanding builds accept declaration-style top-level programs: <code>def</code>, <code>extern def</code>, <code>data</code>, <code>struct</code>, <code>union</code>, plus top-level <code>import core</code> for host-free systems helpers. Other top-level executable statements, imports, and classes are rejected. Freestanding <code>assert</code> failure paths lower to a direct LLVM trap rather than depending on libc <code>abort()</code>. All raw memory builtins (<code>read_*</code>, <code>write_*</code>, and <code>_volatile</code> variants) are lowered directly to LLVM IR in freestanding mode — the resulting <code>.o</code> carries no undefined C runtime symbols.</p>
         <p><code>--linker-script=&lt;path&gt;</code> (implies <code>--freestanding</code>) compiles to a <code>.o</code> then invokes LLD (<code>ld.lld</code>) to link a kernel image (<code>.elf</code>) using a GNU linker script. Set <code>linker_script = "link.ld"</code> in <code>cool.toml</code> to enable this for project builds. LLD is probed automatically; a clear error is shown if it is not installed.</p>
         <div class="code-wrap">
           <div class="code-header"><span class="code-lang">bash</span><button class="copy-btn">copy</button></div>
@@ -3499,7 +3523,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td>6</td>
-                <td>Standard library — json, re, time, random, collections, string, list, path, platform, csv, datetime, hashlib, toml, yaml, sqlite, http, subprocess, argparse, logging, test</td>
+                <td>Standard library — json, re, time, random, collections, string, list, path, platform, core, csv, datetime, hashlib, toml, yaml, sqlite, http, subprocess, argparse, logging, test</td>
                 <td><span class="badge badge-done">Complete</span></td>
               </tr>
               <tr>
@@ -3525,7 +3549,7 @@ echo Done.</code></pre>
               <tr>
                 <td>11</td>
                 <td>Freestanding systems foundation — numeric/ABI groundwork, raw memory, bare-metal path</td>
-                <td><span class="badge badge-progress">In Progress</span></td>
+                <td><span class="badge badge-done">Complete</span></td>
               </tr>
             </tbody>
           </table>
@@ -3546,7 +3570,7 @@ echo Done.</code></pre>
           <li>✅ <code>cool build</code> for hosted native binaries, <code>cool build --freestanding</code> for object-file output, and <code>cool build --linker-script=&lt;ld&gt;</code> (or <code>linker_script</code> in <code>cool.toml</code>) to link a kernel image via LLD</li>
           <li>✅ <code>cool test</code> command for discovering and running <code>test_*.cool</code> / <code>*_test.cool</code> files</li>
           <li>✅ Classes in LLVM — <code>class</code>, inheritance, <code>__init__</code>, methods, attribute access, <code>super()</code></li>
-          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>platform.os()</code>/<code>arch()</code>/<code>runtime()</code> and capability helpers, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, typed top-level <code>def</code> signatures, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
+          <li>⚠️ LLVM supports custom <code>with</code> / context managers and <code>with open(...)</code> on normal exit, <code>return</code>/<code>break</code>/<code>continue</code>, caught exceptions, and unhandled native raises, plus native <code>try</code>/<code>except</code>/<code>finally</code>/<code>raise</code>, regular project/module imports including dotted package imports, built-in <code>csv.rows()</code>/<code>dicts()</code>/<code>write()</code>, <code>datetime.now()</code>/<code>format()</code>/<code>parse()</code>, <code>hashlib.sha256()</code>/<code>digest()</code>, <code>toml.loads()</code>/<code>dumps()</code>, <code>yaml.loads()</code>/<code>dumps()</code> for a config-oriented YAML subset, <code>sqlite.execute()</code>/<code>query()</code>/<code>scalar()</code>, <code>http.get()</code>/<code>post()</code>/<code>head()</code>/<code>getjson()</code> (via host <code>curl</code>), <code>subprocess.run()</code>/<code>call()</code>/<code>check_output()</code>, <code>argparse.parse()</code>/<code>help()</code>, <code>logging.basic_config()</code>/<code>info()</code>/<code>warning()</code>/<code>error()</code>, <code>platform.os()</code>/<code>arch()</code>/<code>runtime()</code> and capability helpers, <code>core.word_bits()</code>/<code>page_align_up()</code>/<code>pt_index()</code> and allocator hooks, <code>test.equal()</code>/<code>truthy()</code>/<code>raises()</code>, integer-width helpers <code>i8()</code>/<code>u8()</code>/<code>i16()</code>/<code>u16()</code>/<code>i32()</code>/<code>u32()</code>/<code>i64()</code>/<code>isize()</code>/<code>usize()</code>/<code>word_bits()</code>/<code>word_bytes()</code>, native <code>extern def</code>, typed top-level <code>def</code> signatures, native raw <code>data</code> declarations, and <code>import ffi</code>, but still excludes closures/lambdas</li>
         </ul>
 
         <h3>Phase 9 — Self-Hosted Compiler</h3>
@@ -3584,11 +3608,12 @@ echo Done.</code></pre>
         <p>See <a href="https://github.com/codenz92/cool-lang/blob/master/CHANGELOG.md" target="_blank"
             rel="noopener noreferrer">CHANGELOG.md</a> for the complete history.</p>
 
-        <h3>Unreleased - Phase 11 In Progress</h3>
+        <h3>Unreleased - Phase 11 Complete</h3>
         <ul>
           <li>Phase 11: unions, volatile LLVM raw-memory helpers, pointer-width helpers
             (<code>isize</code>, <code>usize</code>, <code>word_bits()</code>, <code>word_bytes()</code>),
-            LLVM-native <code>extern def</code> declarations with <code>symbol:</code> / <code>cc:</code> / <code>section:</code> metadata,
+            host-free <code>import core</code> page helpers and allocator hooks, LLVM-native <code>extern def</code>
+            declarations with <code>symbol:</code> / <code>cc:</code> / <code>section:</code> metadata,
             and raw <code>data</code> declarations for linker-visible typed globals</li>
         </ul>
 

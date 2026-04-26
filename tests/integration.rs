@@ -180,6 +180,25 @@ fn expected_platform_lines(
     ]
 }
 
+fn expected_core_lines() -> Vec<String> {
+    vec![
+        (std::mem::size_of::<usize>() * 8).to_string(),
+        std::mem::size_of::<usize>().to_string(),
+        "4096".to_string(),
+        "73728".to_string(),
+        "77824".to_string(),
+        "837".to_string(),
+        "0".to_string(),
+        "1".to_string(),
+        "3".to_string(),
+        "18".to_string(),
+        "18".to_string(),
+        "0".to_string(),
+        "0".to_string(),
+        "0".to_string(),
+    ]
+}
+
 fn wrap_unsigned_host(n: i64) -> i64 {
     let mask = (1i128 << usize::BITS) - 1;
     ((n as i128) & mask) as i64
@@ -2200,7 +2219,11 @@ fn test_cool_build_linker_script_flag_produces_elf() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let fn_section = if cfg!(target_os = "macos") { "__TEXT,__boot" } else { ".text.boot" };
+    let fn_section = if cfg!(target_os = "macos") {
+        "__TEXT,__boot"
+    } else {
+        ".text.boot"
+    };
     std::fs::write(
         dir.join("kernel.cool"),
         format!(
@@ -2253,7 +2276,11 @@ linker_script = "link.ld"
     )
     .unwrap();
 
-    let fn_section = if cfg!(target_os = "macos") { "__TEXT,__boot" } else { ".text.boot" };
+    let fn_section = if cfg!(target_os = "macos") {
+        "__TEXT,__boot"
+    } else {
+        ".text.boot"
+    };
     std::fs::write(
         dir.join("src").join("main.cool"),
         format!(
@@ -2923,6 +2950,25 @@ fn test_cool_check_subcommand_accepts_platform_builtin_module() {
 }
 
 #[test]
+fn test_cool_check_subcommand_accepts_core_builtin_module() {
+    let temp_dir = unique_temp_dir("cool_check_core_builtin");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        "import core\nprint(core.page_size())\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check", "app/main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok: 1 module(s) checked, 0 issue(s)"));
+    assert!(stderr.trim().is_empty());
+}
+
+#[test]
 fn test_cool_check_subcommand_reports_unresolved_imports() {
     let temp_dir = unique_temp_dir("cool_check_command_missing");
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -3226,6 +3272,68 @@ print(platform.has_inline_asm())
         .map(str::to_string)
         .collect();
     assert_eq!(lines, expected_platform_lines("vm", false, false, false, false));
+}
+
+#[test]
+fn test_import_core_module() {
+    let result = run_cool(
+        r#"import core
+addr = 74565
+print(core.word_bits())
+print(core.word_bytes())
+print(core.page_size())
+print(core.page_align_down(addr))
+print(core.page_align_up(addr))
+print(core.page_offset(addr))
+print(core.page_count(0))
+print(core.page_count(1))
+print(core.page_count(8193))
+print(core.page_index(addr))
+print(core.pt_index(addr))
+print(core.pd_index(addr))
+print(core.pdpt_index(addr))
+print(core.pml4_index(addr))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_core_lines());
+}
+
+#[test]
+fn test_vm_import_core_module() {
+    let result = run_cool_vm(
+        r#"import core
+addr = 74565
+print(core.word_bits())
+print(core.word_bytes())
+print(core.page_size())
+print(core.page_align_down(addr))
+print(core.page_align_up(addr))
+print(core.page_offset(addr))
+print(core.page_count(0))
+print(core.page_count(1))
+print(core.page_count(8193))
+print(core.page_index(addr))
+print(core.pt_index(addr))
+print(core.pd_index(addr))
+print(core.pdpt_index(addr))
+print(core.pml4_index(addr))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_core_lines());
 }
 
 #[test]

@@ -71,6 +71,25 @@ fn expected_platform_lines(
     ]
 }
 
+fn expected_core_lines() -> Vec<String> {
+    vec![
+        (std::mem::size_of::<usize>() * 8).to_string(),
+        std::mem::size_of::<usize>().to_string(),
+        "4096".to_string(),
+        "73728".to_string(),
+        "77824".to_string(),
+        "837".to_string(),
+        "0".to_string(),
+        "1".to_string(),
+        "3".to_string(),
+        "18".to_string(),
+        "18".to_string(),
+        "0".to_string(),
+        "0".to_string(),
+        "0".to_string(),
+    ]
+}
+
 fn compile_and_run_native(source: &str) -> Result<String, String> {
     compile_and_run_native_with_env(source, &[])
 }
@@ -853,6 +872,43 @@ fn object_undefined_cool_symbols(object_path: &PathBuf) -> Result<Vec<String>, S
         }
     }
     Ok(found)
+}
+
+#[test]
+fn test_llvm_freestanding_core_allocator_hooks_have_no_undefined_runtime_symbols() {
+    let source = r#"
+import core
+
+data LAST_PTR: i64 = 0
+
+def kernel_alloc(size: i64) -> i64:
+    aligned = core.page_align_up(size)
+    write_i64(LAST_PTR, aligned)
+    return aligned
+
+def kernel_free(ptr: i64) -> void:
+    write_i64(LAST_PTR, ptr)
+    return
+
+def boot_entry():
+    entry: "boot_entry"
+    core.set_allocator(kernel_alloc, kernel_free)
+    ptr = core.alloc(33)
+    core.free(ptr)
+    core.clear_allocator()
+    return core.page_offset(read_i64(LAST_PTR))
+"#;
+
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let undefined_cool = object_undefined_cool_symbols(&object_path).unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(
+        undefined_cool.is_empty(),
+        "freestanding core hooks must not reference hosted runtime symbols, found: {undefined_cool:?}"
+    );
 }
 
 #[test]
@@ -1804,6 +1860,69 @@ print(platform.has_inline_asm())
         .map(str::to_string)
         .collect();
     assert_eq!(lines, expected_platform_lines("native", true, true, true, true));
+}
+
+#[test]
+fn test_llvm_import_core_module() {
+    let result = compile_and_run_native(
+        r#"
+import core
+addr = 74565
+print(core.word_bits())
+print(core.word_bytes())
+print(core.page_size())
+print(core.page_align_down(addr))
+print(core.page_align_up(addr))
+print(core.page_offset(addr))
+print(core.page_count(0))
+print(core.page_count(1))
+print(core.page_count(8193))
+print(core.page_index(addr))
+print(core.pt_index(addr))
+print(core.pd_index(addr))
+print(core.pdpt_index(addr))
+print(core.pml4_index(addr))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_core_lines());
+}
+
+#[test]
+fn test_llvm_core_allocator_hooks_override_malloc_and_free() {
+    let result = compile_and_run_native(
+        r#"
+import core
+
+data LAST_PTR: i64 = 0
+
+def kernel_alloc(size: i64) -> i64:
+    aligned = core.page_align_up(size)
+    write_i64(LAST_PTR, aligned)
+    return aligned
+
+def kernel_free(ptr: i64) -> void:
+    write_i64(LAST_PTR, ptr)
+    return
+
+core.set_allocator(kernel_alloc, kernel_free)
+ptr = malloc(33)
+print(ptr)
+core.free(ptr)
+print(read_i64(LAST_PTR))
+core.clear_allocator()
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["4096", "4096"]);
 }
 
 #[test]

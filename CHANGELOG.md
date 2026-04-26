@@ -2,9 +2,9 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 11 In Progress
+## [Unreleased] - Phase 11 Complete
 
-### Phase 11 — Freestanding Systems Foundation (In Progress)
+### Phase 11 — Freestanding Systems Foundation (Complete)
 
 #### Cross-Runtime Platform Introspection
 
@@ -15,6 +15,12 @@ All notable changes to the Cool language project.
 - Volatile LLVM raw-memory helpers for MMIO/device-style access: `read_*_volatile` / `write_*_volatile` across byte, `i8`/`u8`, `i16`/`u16`, `i32`/`u32`, `i64`, and `f64`
 - Pointer-width aliases and host-word helpers across all runtimes: `isize`, `usize`, `word_bits()`, and `word_bytes()`, plus `isize`/`usize` support in native FFI signatures and struct/union field types
 - Interpreter and bytecode VM now reserve LLVM-only raw-memory builtins and raise the same backend-specific guidance (`compile with cool build`) instead of a missing-name error
+
+#### Core Systems Runtime
+
+- New host-free `core` module across the interpreter, bytecode VM, and LLVM backend: `word_bits()`, `word_bytes()`, `page_size()`, `page_align_down()`, `page_align_up()`, `page_offset()`, `page_index()`, `page_count()`, `pt_index()`, `pd_index()`, `pdpt_index()`, and `pml4_index()`
+- LLVM-native allocator hooks via `core.set_allocator()`, `core.clear_allocator()`, `core.alloc()`, and `core.free()`, plus `malloc()` / `free()` lowering that honors those hooks in hosted and freestanding native builds
+- Freestanding builds now allow top-level `import core` so kernel-style entry points can use page helpers and allocator hooks without pulling in host OS modules
 
 #### Data Layout And ABI
 

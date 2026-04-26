@@ -444,7 +444,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 11 — Freestanding Systems Foundation 🚧 In Progress
+## Phase 11 — Freestanding Systems Foundation ✅ Complete
 
 > Goal: move Cool toward bare-metal and kernel work with a deliberate systems subset, instead of treating OS support as just “more LLVM features”
 
@@ -474,10 +474,10 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Core Systems Runtime
 
-- [ ] `core` subset that avoids host OS facilities
+- [x] `core` subset that avoids host OS facilities
 - [x] Serial / console output primitives (`outb`, `inb`, `write_serial_byte` — x86 port I/O via inline asm, freestanding-safe)
-- [ ] Memory-map and paging helpers
-- [ ] Pluggable allocator hooks for kernels and runtimes
+- [x] Memory-map and paging helpers
+- [x] Pluggable allocator hooks for kernels and runtimes
 
 ---
 
@@ -649,7 +649,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 8 — Compiler (bytecode VM + LLVM + FFI) | ✅ Complete |
 | 9 — Self-Hosted Compiler | ✅ Complete |
 | 10 — Production Readiness And Ecosystem | ✅ Complete |
-| 11 — Freestanding Systems Foundation | 🚧 In Progress |
+| 11 — Freestanding Systems Foundation | ✅ Complete |
 | 12 — Static Semantic Core | ⏳ Planned |
 | 13 — Typed Language Features | ⏳ Planned |
 | 14 — Runtime And Memory Model | ⏳ Planned |

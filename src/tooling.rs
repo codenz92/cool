@@ -84,6 +84,7 @@ fn extract_error_line(msg: &str) -> Option<usize> {
 const BUILTIN_MODULES: &[&str] = &[
     "argparse",
     "collections",
+    "core",
     "csv",
     "datetime",
     "ffi",

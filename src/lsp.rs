@@ -108,6 +108,7 @@ const COOL_BUILTINS: &[&str] = &[
 const COOL_MODULES: &[&str] = &[
     "argparse",
     "collections",
+    "core",
     "csv",
     "datetime",
     "ffi",

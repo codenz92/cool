@@ -1,5 +1,6 @@
 /// Stack-based bytecode VM for Cool.
 use crate::argparse_runtime::{self, ArgData};
+use crate::core_runtime;
 use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
@@ -1629,6 +1630,9 @@ impl VM {
         }
         if let Some(rest) = name.strip_prefix("platform.") {
             return self.call_platform_module(rest, args);
+        }
+        if let Some(rest) = name.strip_prefix("core.") {
+            return self.call_core_module(rest, args);
         }
         if let Some(rest) = name.strip_prefix("listmod.") {
             return self.call_list_module(rest, args, kwargs);
@@ -4242,6 +4246,100 @@ impl VM {
         Ok(value)
     }
 
+    fn call_core_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        let req_int = |idx: usize, context: &str| -> Result<i64, String> {
+            let value = args
+                .get(idx)
+                .ok_or_else(|| self.err(&format!("{context}() missing argument")))?;
+            self.coerce_to_int(value)
+        };
+
+        match name {
+            "word_bits" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.word_bits() takes no arguments"));
+                }
+                Ok(VmValue::Int(core_runtime::word_bits()))
+            }
+            "word_bytes" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.word_bytes() takes no arguments"));
+                }
+                Ok(VmValue::Int(core_runtime::word_bytes()))
+            }
+            "page_size" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.page_size() takes no arguments"));
+                }
+                Ok(VmValue::Int(core_runtime::page_size()))
+            }
+            "page_align_down" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_align_down() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::page_align_down(req_int(
+                    0,
+                    "core.page_align_down",
+                )?)))
+            }
+            "page_align_up" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_align_up() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::page_align_up(req_int(
+                    0,
+                    "core.page_align_up",
+                )?)))
+            }
+            "page_offset" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_offset() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::page_offset(req_int(0, "core.page_offset")?)))
+            }
+            "page_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_index() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::page_index(req_int(0, "core.page_index")?)))
+            }
+            "page_count" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_count() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::page_count(req_int(0, "core.page_count")?)))
+            }
+            "pt_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pt_index() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::pt_index(req_int(0, "core.pt_index")?)))
+            }
+            "pd_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pd_index() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::pd_index(req_int(0, "core.pd_index")?)))
+            }
+            "pdpt_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pdpt_index() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::pdpt_index(req_int(0, "core.pdpt_index")?)))
+            }
+            "pml4_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pml4_index() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::pml4_index(req_int(0, "core.pml4_index")?)))
+            }
+            "alloc" | "free" | "set_allocator" | "clear_allocator" => Err(self.err(&format!(
+                "core.{name}() is only supported in the LLVM backend — compile with `cool build`"
+            ))),
+            _ => Err(self.err(&format!("unknown core function '{}'", name))),
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     fn vm_len(&self, v: &VmValue) -> Result<usize, String> {
@@ -5137,6 +5235,28 @@ impl VM {
                     "has_inline_asm",
                 ] {
                     set(&mut d, fname, bf(&format!("platform.{}", fname)));
+                }
+            }
+            "core" => {
+                for fname in &[
+                    "word_bits",
+                    "word_bytes",
+                    "page_size",
+                    "page_align_down",
+                    "page_align_up",
+                    "page_offset",
+                    "page_index",
+                    "page_count",
+                    "pt_index",
+                    "pd_index",
+                    "pdpt_index",
+                    "pml4_index",
+                    "alloc",
+                    "free",
+                    "set_allocator",
+                    "clear_allocator",
+                ] {
+                    set(&mut d, fname, bf(&format!("core.{}", fname)));
                 }
             }
             "subprocess" => {

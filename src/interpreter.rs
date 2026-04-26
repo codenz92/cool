@@ -1,5 +1,6 @@
 use crate::argparse_runtime::{self, ArgData};
 use crate::ast::*;
+use crate::core_runtime;
 use crate::csv_runtime;
 use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
@@ -1338,6 +1339,33 @@ impl Interpreter {
                     );
                 }
                 env.set_local("platform".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
+            }
+            "core" => {
+                let mut map = IndexedMap::new();
+                for fn_name in &[
+                    "word_bits",
+                    "word_bytes",
+                    "page_size",
+                    "page_align_down",
+                    "page_align_up",
+                    "page_offset",
+                    "page_index",
+                    "page_count",
+                    "pt_index",
+                    "pd_index",
+                    "pdpt_index",
+                    "pml4_index",
+                    "alloc",
+                    "free",
+                    "set_allocator",
+                    "clear_allocator",
+                ] {
+                    map.set(
+                        Value::Str(fn_name.to_string()),
+                        Value::BuiltinFn(format!("core.{}", fn_name)),
+                    );
+                }
+                env.set_local("core".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "string" => {
                 let mut map = IndexedMap::new();
@@ -2686,6 +2714,9 @@ class Stack:
         }
         if let Some(f) = name.strip_prefix("platform.") {
             return self.call_platform_fn(f, args);
+        }
+        if let Some(f) = name.strip_prefix("core.") {
+            return self.call_core_fn(f, args);
         }
         if let Some(f) = name.strip_prefix("ffi.") {
             return self.call_ffi_builtin(f, args);
@@ -4561,6 +4592,100 @@ class Stack:
             _ => return Err(self.err(&format!("platform has no function '{}'", name))),
         };
         Ok(value)
+    }
+
+    fn call_core_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        let req_int = |idx: usize, context: &str| -> Result<i64, String> {
+            let value = args
+                .get(idx)
+                .ok_or_else(|| self.err(&format!("{context}() missing argument")))?;
+            self.coerce_to_int(value)
+        };
+
+        match name {
+            "word_bits" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.word_bits() takes no arguments"));
+                }
+                Ok(Value::Int(core_runtime::word_bits()))
+            }
+            "word_bytes" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.word_bytes() takes no arguments"));
+                }
+                Ok(Value::Int(core_runtime::word_bytes()))
+            }
+            "page_size" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.page_size() takes no arguments"));
+                }
+                Ok(Value::Int(core_runtime::page_size()))
+            }
+            "page_align_down" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_align_down() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::page_align_down(req_int(
+                    0,
+                    "core.page_align_down",
+                )?)))
+            }
+            "page_align_up" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_align_up() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::page_align_up(req_int(
+                    0,
+                    "core.page_align_up",
+                )?)))
+            }
+            "page_offset" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_offset() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::page_offset(req_int(0, "core.page_offset")?)))
+            }
+            "page_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_index() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::page_index(req_int(0, "core.page_index")?)))
+            }
+            "page_count" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.page_count() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::page_count(req_int(0, "core.page_count")?)))
+            }
+            "pt_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pt_index() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::pt_index(req_int(0, "core.pt_index")?)))
+            }
+            "pd_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pd_index() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::pd_index(req_int(0, "core.pd_index")?)))
+            }
+            "pdpt_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pdpt_index() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::pdpt_index(req_int(0, "core.pdpt_index")?)))
+            }
+            "pml4_index" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.pml4_index() takes exactly one argument"));
+                }
+                Ok(Value::Int(core_runtime::pml4_index(req_int(0, "core.pml4_index")?)))
+            }
+            "alloc" | "free" | "set_allocator" | "clear_allocator" => Err(self.err(&format!(
+                "core.{name}() is only supported in the LLVM backend — compile with `cool build`"
+            ))),
+            _ => Err(self.err(&format!("core has no function '{}'", name))),
+        }
     }
 
     // ── string module ─────────────────────────────────────────────────────

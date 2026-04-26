@@ -10,6 +10,7 @@
 //      Freestanding builds emit the LLVM module as an object file directly.
 
 use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
+use crate::core_runtime;
 use crate::project::ModuleResolver;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -7999,6 +8000,9 @@ struct Compiler<'ctx> {
     structs: HashMap<String, StructInfo<'ctx>>,
     /// Local variable → struct type name, for GEP fast-path field access.
     var_struct_types: HashMap<String, String>,
+    /// Optional allocator hook globals for native/freestanding malloc/free override.
+    alloc_hook_global: Option<inkwell::values::GlobalValue<'ctx>>,
+    free_hook_global: Option<inkwell::values::GlobalValue<'ctx>>,
 }
 
 /// Information about a compiled class
@@ -8147,6 +8151,8 @@ impl<'ctx> Compiler<'ctx> {
             try_stack: Vec::new(),
             structs: HashMap::new(),
             var_struct_types: HashMap::new(),
+            alloc_hook_global: None,
+            free_hook_global: None,
             build_mode,
         }
     }
@@ -8883,7 +8889,11 @@ impl<'ctx> Compiler<'ctx> {
         match ty {
             ExternAbiType::Void => Err("void is not a valid extern parameter type".to_string()),
             ExternAbiType::F32 => {
-                let bits = self.coolval_to_f64_bits(value, name);
+                let bits = if self.build_mode.is_freestanding() {
+                    self.coolval_payload_i64(value, &format!("{name}_payload"))
+                } else {
+                    self.coolval_to_f64_bits(value, name)
+                };
                 let f64_val = self
                     .builder
                     .build_bitcast(bits, self.context.f64_type(), &format!("{name}_f64_bits"))
@@ -8896,7 +8906,11 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(f32_val.into())
             }
             ExternAbiType::F64 => {
-                let bits = self.coolval_to_f64_bits(value, name);
+                let bits = if self.build_mode.is_freestanding() {
+                    self.coolval_payload_i64(value, &format!("{name}_payload"))
+                } else {
+                    self.coolval_to_f64_bits(value, name)
+                };
                 let f64_val = self
                     .builder
                     .build_bitcast(bits, self.context.f64_type(), &format!("{name}_f64_bits"))
@@ -8905,8 +8919,12 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(f64_val.into())
             }
             ExternAbiType::Ptr => {
-                let int_cv = self.call_unop_fn(self.rt.cool_to_int, value, &format!("{name}_to_int"));
-                let payload = self.coolval_payload_i64(int_cv, &format!("{name}_payload"));
+                let payload = if self.build_mode.is_freestanding() {
+                    self.coolval_payload_i64(value, &format!("{name}_payload"))
+                } else {
+                    let int_cv = self.call_unop_fn(self.rt.cool_to_int, value, &format!("{name}_to_int"));
+                    self.coolval_payload_i64(int_cv, &format!("{name}_payload"))
+                };
                 let ptr = self
                     .builder
                     .build_int_to_ptr(
@@ -8918,19 +8936,33 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(ptr.into())
             }
             ExternAbiType::Str => {
-                let ptr = self
-                    .builder
-                    .build_call(self.rt.cool_to_str, &[value.into()], &format!("{name}_to_str"))
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_pointer_value();
+                let ptr = if self.build_mode.is_freestanding() {
+                    let payload = self.coolval_payload_i64(value, &format!("{name}_payload"));
+                    self.builder
+                        .build_int_to_ptr(
+                            payload,
+                            self.context.i8_type().ptr_type(AddressSpace::default()),
+                            &format!("{name}_str_ptr"),
+                        )
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_call(self.rt.cool_to_str, &[value.into()], &format!("{name}_to_str"))
+                        .unwrap()
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_pointer_value()
+                };
                 Ok(ptr.into())
             }
             _ => {
-                let int_cv = self.call_unop_fn(self.rt.cool_to_int, value, &format!("{name}_to_int"));
-                let payload = self.coolval_payload_i64(int_cv, &format!("{name}_payload"));
+                let payload = if self.build_mode.is_freestanding() {
+                    self.coolval_payload_i64(value, &format!("{name}_payload"))
+                } else {
+                    let int_cv = self.call_unop_fn(self.rt.cool_to_int, value, &format!("{name}_to_int"));
+                    self.coolval_payload_i64(int_cv, &format!("{name}_payload"))
+                };
                 let target = match self
                     .extern_abi_basic_type(ty)
                     .expect("integer extern types must lower to a basic type")
@@ -9089,6 +9121,101 @@ impl<'ctx> Compiler<'ctx> {
                 param
             })
             .collect()
+    }
+
+    fn allocator_hook_globals(&mut self) -> (inkwell::values::GlobalValue<'ctx>, inkwell::values::GlobalValue<'ctx>) {
+        let int_ty = self.pointer_int_type();
+        let alloc = if let Some(existing) = self.alloc_hook_global {
+            existing
+        } else {
+            let global = self.module.add_global(int_ty, None, "__cool_alloc_hook");
+            global.set_linkage(inkwell::module::Linkage::Internal);
+            global.set_constant(false);
+            global.set_initializer(&int_ty.const_zero());
+            self.alloc_hook_global = Some(global);
+            global
+        };
+        let free = if let Some(existing) = self.free_hook_global {
+            existing
+        } else {
+            let global = self.module.add_global(int_ty, None, "__cool_free_hook");
+            global.set_linkage(inkwell::module::Linkage::Internal);
+            global.set_constant(false);
+            global.set_initializer(&int_ty.const_zero());
+            self.free_hook_global = Some(global);
+            global
+        };
+        (alloc, free)
+    }
+
+    fn callable_target_for_function_name(&mut self, name: &str) -> Result<FunctionValue<'ctx>, String> {
+        let fn_val = *self
+            .functions
+            .get(name)
+            .ok_or_else(|| format!("core allocator hook: unknown function '{name}'"))?;
+        let params = self.function_params.get(name).cloned().unwrap_or_default();
+        let return_type = self.function_return_types.get(name).copied().flatten();
+        if params.iter().any(|param| param.type_name.is_some()) || return_type.is_some() {
+            self.compile_typed_closure_wrapper(name, fn_val, &params, return_type)
+        } else {
+            Ok(fn_val)
+        }
+    }
+
+    fn resolve_allocator_callable_ptr(&mut self, expr: &Expr, hook_name: &str) -> Result<IntValue<'ctx>, String> {
+        let fn_val = match expr {
+            Expr::Ident(name) => self.callable_target_for_function_name(name)?,
+            _ => {
+                return Err(format!(
+                    "core.{hook_name} expects top-level function names, not {expr:?}"
+                ))
+            }
+        };
+        let expected_arity = self
+            .function_params
+            .get(match expr {
+                Expr::Ident(name) => name.as_str(),
+                _ => unreachable!(),
+            })
+            .map(|params| params.len())
+            .unwrap_or(0);
+        if expected_arity != 1 {
+            return Err(format!(
+                "core.{hook_name} hook must take exactly one parameter, got {expected_arity}"
+            ));
+        }
+        self.builder
+            .build_ptr_to_int(
+                fn_val.as_global_value().as_pointer_value(),
+                self.pointer_int_type(),
+                &format!("{hook_name}_fn_ptr"),
+            )
+            .map_err(|e| e.to_string())
+    }
+
+    fn call_allocator_hook(
+        &mut self,
+        fn_ptr_int: IntValue<'ctx>,
+        arg: StructValue<'ctx>,
+        name: &str,
+    ) -> Result<StructValue<'ctx>, String> {
+        let hook_type = self.cv_type.fn_type(&[self.cv_type.into()], false);
+        let hook_ptr = self
+            .builder
+            .build_int_to_ptr(
+                fn_ptr_int,
+                hook_type.ptr_type(AddressSpace::default()),
+                &format!("{name}_hook_ptr"),
+            )
+            .unwrap();
+        Ok(self
+            .builder
+            .build_indirect_call(hook_type, hook_ptr, &[arg.into()], name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .ok_or_else(|| format!("allocator hook '{name}' expected a return value"))?
+            .into_struct_value())
     }
 
     fn compile_typed_closure_wrapper(
@@ -9499,9 +9626,12 @@ impl<'ctx> Compiler<'ctx> {
                 | Stmt::Data { .. }
                 | Stmt::Struct { .. }
                 | Stmt::Union { .. } => self.compile_stmt(stmt)?,
+                Stmt::ImportModule(name) if name == "core" => {
+                    self.imported_modules.insert(name.to_string());
+                }
                 Stmt::Import(_) | Stmt::ImportModule(_) => {
                     return Err(format!(
-                        "line {current_line}: freestanding build does not allow top-level imports; export functions/data instead or use hosted `cool build`"
+                        "line {current_line}: freestanding build only allows top-level `import core`; use hosted `cool build` for other imports"
                     ))
                 }
                 Stmt::Class { .. } => {
@@ -12208,7 +12338,7 @@ impl<'ctx> Compiler<'ctx> {
         match name {
             "math" | "os" | "sys" | "subprocess" | "argparse" | "logging" | "csv" | "datetime" | "hashlib" | "test"
             | "time" | "random" | "json" | "toml" | "yaml" | "sqlite" | "http" | "term" | "string" | "list" | "re"
-            | "collections" | "path" | "platform" | "ffi" | "socket" => {
+            | "collections" | "path" | "platform" | "core" | "ffi" | "socket" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
                 let ptr = self.build_entry_alloca(name);
@@ -12968,6 +13098,361 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn compile_malloc_builtin(&mut self, size_expr: &Expr) -> Result<StructValue<'ctx>, String> {
+        let size_cv = self.compile_expr(size_expr)?;
+        let (alloc_hook_global, _) = self.allocator_hook_globals();
+        let hook_val = self
+            .builder
+            .build_load(
+                self.pointer_int_type(),
+                alloc_hook_global.as_pointer_value(),
+                "alloc_hook",
+            )
+            .unwrap()
+            .into_int_value();
+        let zero = self.pointer_int_type().const_zero();
+        let fn_val = self.current_fn.expect("malloc requires an active function");
+        let hook_bb = self.context.append_basic_block(fn_val, "malloc_hook");
+        let fallback_bb = self.context.append_basic_block(fn_val, "malloc_fallback");
+        let after_bb = self.context.append_basic_block(fn_val, "malloc_after");
+        let has_hook = self
+            .builder
+            .build_int_compare(IntPredicate::NE, hook_val, zero, "malloc_has_hook")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(has_hook, hook_bb, fallback_bb)
+            .unwrap();
+
+        self.builder.position_at_end(hook_bb);
+        let hooked = self.call_allocator_hook(hook_val, size_cv, "malloc_hook_call")?;
+        let hook_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(after_bb).unwrap();
+
+        self.builder.position_at_end(fallback_bb);
+        let fallback_result = if self.build_mode.is_freestanding() {
+            self.builder
+                .build_call(self.rt.trap_fn, &[], "malloc_missing_hook")
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
+            None
+        } else {
+            let result = self.call_unop_fn(self.rt.cool_malloc, size_cv, "malloc");
+            let fallback_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(after_bb).unwrap();
+            Some((result, fallback_end))
+        };
+
+        self.builder.position_at_end(after_bb);
+        let phi = self.builder.build_phi(self.cv_type, "malloc_result").unwrap();
+        phi.add_incoming(&[(&hooked, hook_end)]);
+        if let Some((fallback, fallback_end)) = fallback_result {
+            phi.add_incoming(&[(&fallback, fallback_end)]);
+        }
+        Ok(phi.as_basic_value().into_struct_value())
+    }
+
+    fn compile_free_builtin(&mut self, ptr_expr: &Expr) -> Result<StructValue<'ctx>, String> {
+        let ptr_cv = self.compile_expr(ptr_expr)?;
+        let (_, free_hook_global) = self.allocator_hook_globals();
+        let hook_val = self
+            .builder
+            .build_load(
+                self.pointer_int_type(),
+                free_hook_global.as_pointer_value(),
+                "free_hook",
+            )
+            .unwrap()
+            .into_int_value();
+        let zero = self.pointer_int_type().const_zero();
+        let fn_val = self.current_fn.expect("free requires an active function");
+        let hook_bb = self.context.append_basic_block(fn_val, "free_hook");
+        let fallback_bb = self.context.append_basic_block(fn_val, "free_fallback");
+        let after_bb = self.context.append_basic_block(fn_val, "free_after");
+        let has_hook = self
+            .builder
+            .build_int_compare(IntPredicate::NE, hook_val, zero, "free_has_hook")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(has_hook, hook_bb, fallback_bb)
+            .unwrap();
+
+        self.builder.position_at_end(hook_bb);
+        let _ = self.call_allocator_hook(hook_val, ptr_cv, "free_hook_call")?;
+        let hook_nil = self.build_nil();
+        let hook_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(after_bb).unwrap();
+
+        self.builder.position_at_end(fallback_bb);
+        let fallback_result = if self.build_mode.is_freestanding() {
+            self.builder
+                .build_call(self.rt.trap_fn, &[], "free_missing_hook")
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
+            None
+        } else {
+            let _ = self.call_unop_fn(self.rt.cool_free, ptr_cv, "free");
+            let fallback_nil = self.build_nil();
+            let end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(after_bb).unwrap();
+            Some((fallback_nil, end))
+        };
+
+        self.builder.position_at_end(after_bb);
+        let phi = self.builder.build_phi(self.cv_type, "free_result").unwrap();
+        phi.add_incoming(&[(&hook_nil, hook_end)]);
+        if let Some((fallback_nil, end)) = fallback_result {
+            phi.add_incoming(&[(&fallback_nil, end)]);
+        }
+        Ok(phi.as_basic_value().into_struct_value())
+    }
+
+    fn compile_core_module_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> Result<StructValue<'ctx>, String> {
+        if !kwargs.is_empty() {
+            return Err(format!("core.{name}() does not support keyword arguments"));
+        }
+
+        let require_one = |expected: &str, actual: usize| -> Result<(), String> {
+            if actual != 1 {
+                Err(format!("{expected} takes exactly one argument"))
+            } else {
+                Ok(())
+            }
+        };
+
+        match name {
+            "word_bits" => {
+                if !args.is_empty() {
+                    return Err("core.word_bits() takes no arguments".into());
+                }
+                Ok(self.build_int(core_runtime::word_bits()))
+            }
+            "word_bytes" => {
+                if !args.is_empty() {
+                    return Err("core.word_bytes() takes no arguments".into());
+                }
+                Ok(self.build_int(core_runtime::word_bytes()))
+            }
+            "page_size" => {
+                if !args.is_empty() {
+                    return Err("core.page_size() takes no arguments".into());
+                }
+                Ok(self.build_int(core_runtime::page_size()))
+            }
+            "page_align_down" | "page_align_up" | "page_offset" | "page_index" | "page_count" | "pt_index"
+            | "pd_index" | "pdpt_index" | "pml4_index" => {
+                require_one(&format!("core.{name}()"), args.len())?;
+                let value_cv = self.compile_expr(&args[0])?;
+                let value = self.coolval_payload_i64(value_cv, &format!("core_{name}_arg"));
+                let aligned = match name {
+                    "page_align_down" => self
+                        .builder
+                        .build_and(
+                            value,
+                            self.context
+                                .i64_type()
+                                .const_int(!(core_runtime::PAGE_SIZE as u64 - 1), true),
+                            "page_align_down",
+                        )
+                        .unwrap(),
+                    "page_align_up" => {
+                        let plus = self
+                            .builder
+                            .build_int_add(
+                                value,
+                                self.context
+                                    .i64_type()
+                                    .const_int((core_runtime::PAGE_SIZE - 1) as u64, false),
+                                "page_align_up_plus",
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_and(
+                                plus,
+                                self.context
+                                    .i64_type()
+                                    .const_int(!(core_runtime::PAGE_SIZE as u64 - 1), true),
+                                "page_align_up",
+                            )
+                            .unwrap()
+                    }
+                    "page_offset" => self
+                        .builder
+                        .build_and(
+                            value,
+                            self.context
+                                .i64_type()
+                                .const_int((core_runtime::PAGE_SIZE - 1) as u64, false),
+                            "page_offset",
+                        )
+                        .unwrap(),
+                    "page_index" => self
+                        .builder
+                        .build_right_shift(value, self.context.i64_type().const_int(12, false), false, "page_index")
+                        .unwrap(),
+                    "page_count" => {
+                        let is_non_positive = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::SLE,
+                                value,
+                                self.context.i64_type().const_zero(),
+                                "page_count_non_positive",
+                            )
+                            .unwrap();
+                        let fn_val = self.current_fn.expect("page_count requires active function");
+                        let zero_bb = self.context.append_basic_block(fn_val, "page_count_zero");
+                        let calc_bb = self.context.append_basic_block(fn_val, "page_count_calc");
+                        let done_bb = self.context.append_basic_block(fn_val, "page_count_done");
+                        self.builder
+                            .build_conditional_branch(is_non_positive, zero_bb, calc_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(zero_bb);
+                        let zero_val = self.context.i64_type().const_zero();
+                        let zero_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                        self.builder.position_at_end(calc_bb);
+                        let plus = self
+                            .builder
+                            .build_int_add(
+                                value,
+                                self.context
+                                    .i64_type()
+                                    .const_int((core_runtime::PAGE_SIZE - 1) as u64, false),
+                                "page_count_plus",
+                            )
+                            .unwrap();
+                        let calc_val = self
+                            .builder
+                            .build_right_shift(
+                                plus,
+                                self.context.i64_type().const_int(12, false),
+                                false,
+                                "page_count_calc",
+                            )
+                            .unwrap();
+                        let calc_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                        self.builder.position_at_end(done_bb);
+                        let phi = self
+                            .builder
+                            .build_phi(self.context.i64_type(), "page_count_phi")
+                            .unwrap();
+                        phi.add_incoming(&[(&zero_val, zero_end), (&calc_val, calc_end)]);
+                        phi.as_basic_value().into_int_value()
+                    }
+                    "pt_index" => self
+                        .builder
+                        .build_and(
+                            self.builder
+                                .build_right_shift(
+                                    value,
+                                    self.context.i64_type().const_int(12, false),
+                                    false,
+                                    "pt_shift",
+                                )
+                                .unwrap(),
+                            self.context.i64_type().const_int(0x1ff, false),
+                            "pt_index",
+                        )
+                        .unwrap(),
+                    "pd_index" => self
+                        .builder
+                        .build_and(
+                            self.builder
+                                .build_right_shift(
+                                    value,
+                                    self.context.i64_type().const_int(21, false),
+                                    false,
+                                    "pd_shift",
+                                )
+                                .unwrap(),
+                            self.context.i64_type().const_int(0x1ff, false),
+                            "pd_index",
+                        )
+                        .unwrap(),
+                    "pdpt_index" => self
+                        .builder
+                        .build_and(
+                            self.builder
+                                .build_right_shift(
+                                    value,
+                                    self.context.i64_type().const_int(30, false),
+                                    false,
+                                    "pdpt_shift",
+                                )
+                                .unwrap(),
+                            self.context.i64_type().const_int(0x1ff, false),
+                            "pdpt_index",
+                        )
+                        .unwrap(),
+                    "pml4_index" => self
+                        .builder
+                        .build_and(
+                            self.builder
+                                .build_right_shift(
+                                    value,
+                                    self.context.i64_type().const_int(39, false),
+                                    false,
+                                    "pml4_shift",
+                                )
+                                .unwrap(),
+                            self.context.i64_type().const_int(0x1ff, false),
+                            "pml4_index",
+                        )
+                        .unwrap(),
+                    _ => unreachable!(),
+                };
+                Ok(self.build_cv_int_from_i64(aligned, &format!("core_{name}_cv")))
+            }
+            "alloc" => {
+                require_one("core.alloc()", args.len())?;
+                self.compile_malloc_builtin(&args[0])
+            }
+            "free" => {
+                require_one("core.free()", args.len())?;
+                self.compile_free_builtin(&args[0])
+            }
+            "set_allocator" => {
+                if args.len() != 2 {
+                    return Err("core.set_allocator() takes exactly two arguments".into());
+                }
+                let (alloc_hook_global, free_hook_global) = self.allocator_hook_globals();
+                let alloc_ptr = self.resolve_allocator_callable_ptr(&args[0], "set_allocator")?;
+                let free_ptr = self.resolve_allocator_callable_ptr(&args[1], "set_allocator")?;
+                self.builder
+                    .build_store(alloc_hook_global.as_pointer_value(), alloc_ptr)
+                    .unwrap();
+                self.builder
+                    .build_store(free_hook_global.as_pointer_value(), free_ptr)
+                    .unwrap();
+                Ok(self.build_nil())
+            }
+            "clear_allocator" => {
+                if !args.is_empty() {
+                    return Err("core.clear_allocator() takes no arguments".into());
+                }
+                let (alloc_hook_global, free_hook_global) = self.allocator_hook_globals();
+                let zero = self.pointer_int_type().const_zero();
+                self.builder
+                    .build_store(alloc_hook_global.as_pointer_value(), zero)
+                    .unwrap();
+                self.builder
+                    .build_store(free_hook_global.as_pointer_value(), zero)
+                    .unwrap();
+                Ok(self.build_nil())
+            }
+            _ => Err(format!("unknown core function '{name}'")),
+        }
+    }
+
     fn call_ffi_value(
         &mut self,
         callable: StructValue<'ctx>,
@@ -13003,6 +13488,9 @@ impl<'ctx> Compiler<'ctx> {
     ) -> Result<StructValue<'ctx>, String> {
         if let Expr::Attr { object, name: member } = callee {
             if let Expr::Ident(module_name) = object.as_ref() {
+                if self.imported_modules.contains(module_name) && module_name == "core" {
+                    return self.compile_core_module_call(member, args, kwargs);
+                }
                 if self.imported_modules.contains(module_name) {
                     let module_ptr = self
                         .builder
@@ -13664,6 +14152,19 @@ impl<'ctx> Compiler<'ctx> {
 
         // ── raw memory builtins ──
         {
+            if name == "malloc" {
+                if args.len() != 1 {
+                    return Err("malloc() takes exactly 1 argument".into());
+                }
+                return self.compile_malloc_builtin(&args[0]);
+            }
+            if name == "free" {
+                if args.len() != 1 {
+                    return Err("free() takes exactly 1 argument".into());
+                }
+                return self.compile_free_builtin(&args[0]);
+            }
+
             // Freestanding: lower directly to LLVM IR so the .o has no undefined C symbols.
             if self.build_mode.is_freestanding() {
                 if let Some(cv) = self.compile_freestanding_raw_mem(&name, args)? {
@@ -13672,8 +14173,6 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             let unary_mem_fn = match name.as_str() {
-                "malloc" => Some(self.rt.cool_malloc),
-                "free" => Some(self.rt.cool_free),
                 "read_byte" => Some(self.rt.cool_read_byte),
                 "read_i8" => Some(self.rt.cool_read_i8),
                 "read_u8" => Some(self.rt.cool_read_u8),

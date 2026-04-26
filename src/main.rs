@@ -1,6 +1,7 @@
 mod argparse_runtime;
 mod ast;
 mod compiler;
+mod core_runtime;
 mod csv_runtime;
 mod datetime_runtime;
 mod hashlib_runtime;
@@ -497,9 +498,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             other if other.starts_with('-') => return Err(format!("cool build: unexpected flag '{other}'")),
             _ => {
                 if file_arg.is_some() {
-                    return Err(
-                        "Usage: cool build [--freestanding] [--linker-script=<path>] [file.cool]".to_string(),
-                    );
+                    return Err("Usage: cool build [--freestanding] [--linker-script=<path>] [file.cool]".to_string());
                 }
                 file_arg = Some(arg);
             }
@@ -1031,7 +1030,7 @@ NOTES:
     source-relative file imports and project/package imports,
     LLVM-native extern def/data declarations with symbol/cc/section metadata,
     native import ffi (ffi.open/ffi.func),
-    built-in import math/os/sys/path/platform/csv/datetime/hashlib/toml/yaml/sqlite/http/subprocess/argparse/logging/test/time and import random
+    built-in import math/os/sys/path/platform/core/csv/datetime/hashlib/toml/yaml/sqlite/http/subprocess/argparse/logging/test/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
     (loads/dumps), plus string
     (split/join/strip/lstrip/rstrip/upper/lower/replace/find/count/
