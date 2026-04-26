@@ -3336,7 +3336,7 @@ echo Done.</code></pre>
               </tr>
               <tr>
                 <td><code>cool check [--json] [file.cool]</code></td>
-                <td>Static checks: unresolved imports, import cycles, duplicate symbols. <code>--json</code> for machine-readable output</td>
+                <td>Static checks: unresolved imports, import cycles, duplicate symbols, and literal-type mismatches at typed <code>def</code> boundaries. <code>--json</code> for machine-readable output</td>
               </tr>
               <tr>
                 <td><code>cool bundle</code></td>
@@ -3590,7 +3590,7 @@ echo Done.</code></pre>
           <li>✅ <strong>Structs</strong> — <code>struct</code> and <code>packed struct</code> with typed fields and stable binary layout across all runtimes</li>
           <li>✅ <strong>Socket module</strong> — TCP client and server via <code>import socket</code></li>
           <li>✅ <strong>Packaging</strong> — <code>cool bundle</code>, <code>cool release</code>, semver constraint checking in <code>cool install</code></li>
-          <li>✅ <strong>Developer tooling</strong> — <code>cool ast</code>, <code>cool inspect</code>, <code>cool symbols</code>, <code>cool diff</code>, <code>cool modulegraph</code>, <code>cool check</code></li>
+          <li>✅ <strong>Developer tooling</strong> — <code>cool ast</code>, <code>cool inspect</code>, <code>cool symbols</code>, <code>cool diff</code>, <code>cool modulegraph</code>, <code>cool check</code> (import/cycle/duplicate-symbol checks + v0 type checker for typed <code>def</code> boundaries)</li>
           <li>✅ <strong>Browse app</strong> — TUI file browser written entirely in Cool</li>
         </ul>
 

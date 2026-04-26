@@ -803,8 +803,12 @@ fn cmd_check(args: &[&String]) -> Result<(), String> {
                     "\
 Usage: cool check [--json] [file.cool]
 
-Statically parse a Cool entry file, resolve reachable imports, and report unresolved imports
-or import cycles. With no file argument inside a project, `cool check` uses the manifest main file."
+Statically parse a Cool entry file, resolve reachable imports, and report:
+  - Unresolved imports and import cycles
+  - Duplicate top-level symbols and class members
+  - Literal-type mismatches at typed def boundaries (type checker v0)
+
+With no file argument inside a project, `cool check` uses the manifest main file."
                 );
                 return Ok(());
             }
@@ -982,7 +986,7 @@ USAGE:
     cool inspect <file.cool>      Print a JSON summary of top-level symbols
     cool symbols [file.cool]      Print a resolved JSON symbol index
     cool diff <before> <after>    Print a JSON summary of top-level changes
-    cool check [file.cool]        Statically check imports and cycles
+    cool check [file.cool]        Statically check imports, cycles, symbols, and types
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool bundle                   Build and package the project into a distributable tarball
     cool release [--bump patch]   Bump version, bundle, and git-tag a release
@@ -1007,7 +1011,7 @@ EXAMPLES:
     cool inspect hello.cool       # summarize top-level symbols as JSON
     cool symbols hello.cool       # index resolved symbol locations as JSON
     cool diff old.cool new.cool   # compare top-level imports and symbols
-    cool check hello.cool         # statically check imports and cycles
+    cool check hello.cool         # statically check imports, cycles, symbols, and types
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git

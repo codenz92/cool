@@ -439,7 +439,7 @@ run = "cool test"
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static import, cycle, and duplicate-symbol checks. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, and **type checking** — literal-type mismatches at typed `def` boundaries (string passed to `i32` param, float literal to integer type, return type mismatches, etc.). `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
 
 ## VS Code
 
@@ -477,7 +477,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool symbols [file.cool]` | Print a resolved JSON symbol index for reachable modules |
 | `cool diff <before.cool> <after.cool>` | Print a JSON summary of top-level changes |
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
-| `cool check [file.cool]` | Statically check imports, cycles, and duplicate symbols |
+| `cool check [file.cool]` | Statically check imports, cycles, duplicate symbols, and literal-type mismatches at typed `def` boundaries |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
