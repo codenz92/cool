@@ -2,6 +2,26 @@
 
 All notable changes to the Cool language project.
 
+## [Unreleased] - Phase 12 In Progress
+
+### Phase 12 — Static Semantic Core (In Progress)
+
+#### Typed Function Signatures
+
+- Ordinary `def` now accepts optional typed parameters (`x: i32`) and return types (`-> i32`) using the same ABI type names as `extern def`
+- LLVM backend emits native-typed function signatures (`i32 @foo(i32)`) for annotated defs; unboxes typed params at function entry for the body, re-boxes at return; call sites detect native-typed callees and convert automatically
+- Interpreter and VM accept the annotation syntax and execute functions dynamically (annotations ignored at runtime)
+- Parser fix: `->` return type is parsed after `)` and before `:`, keeping `lambda x: expr` syntax unambiguous
+
+#### Type Checker (v0)
+
+- New type-checking pass in `cool check`: collects typed `def` signatures across all reachable modules, then checks call sites and return statements for obvious literal-type mismatches
+- Flags: string literal passed to an integer param, integer literal passed to a `str` param, float literal passed to an integer type (precision loss), nil passed to typed params, return type mismatches with literal returns
+- Leaves untyped functions and non-literal expressions (variables, calls, arithmetic) unchecked — no false positives on existing code
+- Runs automatically as part of `cool check`; exits non-zero on type errors
+
+---
+
 ## [Unreleased] - Phase 11 Complete
 
 ### Phase 11 — Freestanding Systems Foundation (Complete)

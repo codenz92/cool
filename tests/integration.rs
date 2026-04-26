@@ -3056,6 +3056,100 @@ class Person:
 }
 
 #[test]
+fn test_cool_check_type_checker_catches_literal_mismatches() {
+    let temp = unique_temp_path("cool_check_type_errors", "cool");
+    std::fs::write(
+        &temp,
+        r#"def add(x: i32, y: i32) -> i32:
+    return x
+
+def greet(msg: str) -> str:
+    return msg
+
+add("hello", 2)
+greet(99)
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("type_error"), "expected type_error in:\n{stderr}");
+    assert!(stderr.contains("argument 1 to 'add'"), "expected add error in:\n{stderr}");
+    assert!(stderr.contains("argument 1 to 'greet'"), "expected greet error in:\n{stderr}");
+}
+
+#[test]
+fn test_cool_check_type_checker_passes_compatible_literals() {
+    let temp = unique_temp_path("cool_check_type_ok", "cool");
+    std::fs::write(
+        &temp,
+        r#"def add(x: i32, y: i32) -> i32:
+    return x
+
+def scale(v: f64) -> f64:
+    return v
+
+add(1, 2)
+scale(3.14)
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok"));
+}
+
+#[test]
+fn test_cool_check_type_checker_flags_return_type_mismatch() {
+    let temp = unique_temp_path("cool_check_return_type", "cool");
+    std::fs::write(
+        &temp,
+        r#"def get_name() -> i32:
+    return "oops"
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("return type mismatch"), "expected return type error in:\n{stderr}");
+}
+
+#[test]
+fn test_cool_check_type_checker_ignores_untyped_functions() {
+    let temp = unique_temp_path("cool_check_untyped", "cool");
+    std::fs::write(
+        &temp,
+        r#"def add(x, y):
+    return x
+
+add("a", "b")
+add(1, 2)
+add(3.14, "mixed")
+"#,
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok"));
+}
+
+#[test]
 fn test_cool_modulegraph_subcommand_resolves_project_imports() {
     let temp_dir = unique_temp_dir("cool_modulegraph_command");
     let _ = std::fs::remove_dir_all(&temp_dir);

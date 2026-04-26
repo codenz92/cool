@@ -495,7 +495,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Type Checking
 
-- [ ] A real type checker for normal program code, not just FFI/data-layout declarations
+- [x] A real type checker for normal program code — v0: literal-type mismatch detection at typed-def boundaries, wired into `cool check`
 - [ ] Assignability and coercion rules for primitives, structs, unions, and tuples
 - [ ] Compile-time checking of function returns on all code paths
 - [ ] Module-level symbol/type resolution before codegen

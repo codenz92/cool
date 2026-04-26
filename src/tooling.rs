@@ -1,9 +1,9 @@
-use crate::ast::{ExceptHandler, Program, Stmt};
+use crate::ast::{Expr, ExceptHandler, Program, Stmt};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 use crate::project::ModuleResolver;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -396,6 +396,7 @@ pub fn build_check_report(path: &Path) -> Result<CheckReport, String> {
         let program = parse_file(Path::new(&module.path))?;
         let report = inspect_program(module.path.clone(), &program, module.imports.clone());
         diagnostics.extend(check_report_warnings(&report));
+        diagnostics.extend(type_check_program(&program, &module.path));
     }
     diagnostics.sort_by_key(diagnostic_sort_key);
     Ok(CheckReport {
@@ -1468,5 +1469,289 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             body: strip_line_markers(body),
         }),
         _ => Some(stmt.clone()),
+    }
+}
+
+// ── Type checker (v0) ────────────────────────────────────────────────────────
+//
+// Catches obvious literal-type mismatches at typed-def boundaries.
+// Only fires when functions carry explicit type annotations — untyped code
+// is unchanged. Does not attempt full type inference; non-literal expressions
+// (variables, calls, arithmetic) are considered unknown and not flagged.
+
+pub fn type_check_program(program: &[Stmt], path: &str) -> Vec<ToolingDiagnostic> {
+    let mut checker = TypeChecker {
+        path: path.to_string(),
+        typed_fns: HashMap::new(),
+        current_return_type: None,
+        current_line: 1,
+        diagnostics: Vec::new(),
+    };
+    checker.collect_fn_signatures(program);
+    checker.check_stmts(program);
+    checker.diagnostics
+}
+
+struct TypeChecker {
+    path: String,
+    // fn name → (param types per position, return type)
+    typed_fns: HashMap<String, (Vec<Option<String>>, Option<String>)>,
+    current_return_type: Option<String>,
+    current_line: usize,
+    diagnostics: Vec<ToolingDiagnostic>,
+}
+
+impl TypeChecker {
+    // Pass 1: collect all typed FnDef signatures visible at the top level and inside classes.
+    fn collect_fn_signatures(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::FnDef { name, params, return_type, .. } => {
+                    let param_types: Vec<Option<String>> =
+                        params.iter().map(|p| p.type_name.clone()).collect();
+                    let has_types = param_types.iter().any(|t| t.is_some()) || return_type.is_some();
+                    if has_types {
+                        self.typed_fns.insert(name.clone(), (param_types, return_type.clone()));
+                    }
+                }
+                Stmt::Class { body, .. } => self.collect_fn_signatures(body),
+                _ => {}
+            }
+        }
+    }
+
+    // Pass 2: walk statements, checking calls and returns.
+    fn check_stmts(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            self.check_stmt(stmt);
+        }
+    }
+
+    fn check_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::SetLine(n) => self.current_line = *n,
+
+            Stmt::FnDef { name, params: _, body, return_type, .. } => {
+                let saved = self.current_return_type.clone();
+                // Only set return type context for typed functions.
+                if self.typed_fns.contains_key(name) {
+                    self.current_return_type = return_type.clone();
+                } else {
+                    self.current_return_type = None;
+                }
+                self.check_stmts(body);
+                self.current_return_type = saved;
+            }
+
+            Stmt::Return(opt_expr) => {
+                if let (Some(ret_type), Some(expr)) = (&self.current_return_type.clone(), opt_expr) {
+                    if let Some(actual) = literal_kind(expr) {
+                        if let Some(msg) = type_mismatch_msg(actual, ret_type) {
+                            self.emit("type_error", &format!("return type mismatch: {msg}"));
+                        }
+                    }
+                }
+            }
+
+            Stmt::Expr(e) | Stmt::Assign { value: e, .. } => self.check_expr(e),
+            Stmt::AugAssign { value: e, .. } => self.check_expr(e),
+            Stmt::SetItem { object, index, value } => {
+                self.check_expr(object);
+                self.check_expr(index);
+                self.check_expr(value);
+            }
+            Stmt::SetAttr { object, value, .. } => {
+                self.check_expr(object);
+                self.check_expr(value);
+            }
+            Stmt::Unpack { value, .. } => self.check_expr(value),
+            Stmt::UnpackTargets { targets, value } => {
+                for t in targets {
+                    self.check_expr(t);
+                }
+                self.check_expr(value);
+            }
+
+            Stmt::If { condition, then_body, elif_clauses, else_body } => {
+                self.check_expr(condition);
+                self.check_stmts(then_body);
+                for (cond, blk) in elif_clauses {
+                    self.check_expr(cond);
+                    self.check_stmts(blk);
+                }
+                if let Some(blk) = else_body {
+                    self.check_stmts(blk);
+                }
+            }
+            Stmt::While { condition, body } => {
+                self.check_expr(condition);
+                self.check_stmts(body);
+            }
+            Stmt::For { iter, body, .. } => {
+                self.check_expr(iter);
+                self.check_stmts(body);
+            }
+            Stmt::Class { body, .. } => self.check_stmts(body),
+            Stmt::Try { body, handlers, else_body, finally_body } => {
+                self.check_stmts(body);
+                for h in handlers {
+                    self.check_stmts(&h.body);
+                }
+                if let Some(b) = else_body { self.check_stmts(b); }
+                if let Some(b) = finally_body { self.check_stmts(b); }
+            }
+            Stmt::With { expr, body, .. } => {
+                self.check_expr(expr);
+                self.check_stmts(body);
+            }
+            Stmt::Raise(Some(e)) => self.check_expr(e),
+            _ => {}
+        }
+    }
+
+    fn check_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Call { callee, args, kwargs } => {
+                // Check typed-def call sites.
+                if let Expr::Ident(fn_name) = callee.as_ref() {
+                    if let Some((param_types, _)) = self.typed_fns.get(fn_name).cloned() {
+                        for (i, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
+                            if let Some(type_name) = param_type {
+                                if let Some(actual) = literal_kind(arg) {
+                                    if let Some(msg) = type_mismatch_msg(actual, &type_name) {
+                                        self.emit(
+                                            "type_error",
+                                            &format!(
+                                                "argument {} to '{}': {msg}",
+                                                i + 1,
+                                                fn_name
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.check_expr(callee);
+                for a in args { self.check_expr(a); }
+                for (_, v) in kwargs { self.check_expr(v); }
+            }
+            Expr::BinOp { left, right, .. } => {
+                self.check_expr(left);
+                self.check_expr(right);
+            }
+            Expr::UnaryOp { expr, .. } => self.check_expr(expr),
+            Expr::Index { object, index } => {
+                self.check_expr(object);
+                self.check_expr(index);
+            }
+            Expr::Slice { object, start, stop } => {
+                self.check_expr(object);
+                if let Some(e) = start { self.check_expr(e); }
+                if let Some(e) = stop { self.check_expr(e); }
+            }
+            Expr::Attr { object, .. } => self.check_expr(object),
+            Expr::List(items) | Expr::Tuple(items) => {
+                for e in items { self.check_expr(e); }
+            }
+            Expr::Dict(pairs) => {
+                for (k, v) in pairs {
+                    self.check_expr(k);
+                    self.check_expr(v);
+                }
+            }
+            Expr::Ternary { condition, then_expr, else_expr } => {
+                self.check_expr(condition);
+                self.check_expr(then_expr);
+                self.check_expr(else_expr);
+            }
+            Expr::ListComp { expr, iter, condition, .. } => {
+                self.check_expr(expr);
+                self.check_expr(iter);
+                if let Some(c) = condition { self.check_expr(c); }
+            }
+            _ => {}
+        }
+    }
+
+    fn emit(&mut self, code: &'static str, message: &str) {
+        self.diagnostics.push(ToolingDiagnostic {
+            severity: DiagnosticSeverity::Error,
+            code,
+            path: self.path.clone(),
+            line: Some(self.current_line),
+            message: message.to_string(),
+        });
+    }
+}
+
+/// Classify a literal expression. Returns a short kind string, or None for non-literals.
+fn literal_kind(expr: &Expr) -> Option<&'static str> {
+    match expr {
+        Expr::Int(_) => Some("int"),
+        Expr::Float(_) => Some("float"),
+        Expr::Str(_) => Some("str"),
+        Expr::Bool(_) => Some("bool"),
+        Expr::Nil => Some("nil"),
+        _ => None,
+    }
+}
+
+/// Returns Some(error message) when `actual` literal kind clearly conflicts with `expected` type.
+/// Returns None when the combination is compatible or ambiguous.
+fn type_mismatch_msg(actual: &str, expected: &str) -> Option<String> {
+    let is_int_type = matches!(
+        expected,
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "isize" | "usize"
+    );
+    let is_float_type = matches!(expected, "f32" | "f64");
+
+    match actual {
+        "int" => {
+            if expected == "str" {
+                Some(format!("expected '{expected}', got integer literal"))
+            } else if expected == "bool" {
+                // int passed as bool is a common pattern — allow with a warning? skip for now.
+                None
+            } else {
+                None // int is compatible with all numeric types (may truncate, but not a type error)
+            }
+        }
+        "float" => {
+            if expected == "str" || expected == "bool" {
+                Some(format!("expected '{expected}', got float literal"))
+            } else if is_int_type {
+                Some(format!(
+                    "expected integer type '{expected}', got float literal (precision may be lost; use int() to truncate)"
+                ))
+            } else {
+                None // float → f32/f64 is fine
+            }
+        }
+        "str" => {
+            if expected == "str" {
+                None
+            } else if is_int_type || is_float_type || expected == "bool" {
+                Some(format!("expected '{expected}', got string literal"))
+            } else {
+                None
+            }
+        }
+        "bool" => {
+            if expected == "str" {
+                Some(format!("expected '{expected}', got bool literal"))
+            } else {
+                None // bool coerces to 0/1 for numeric types
+            }
+        }
+        "nil" => {
+            if expected == "str" || is_int_type || is_float_type || expected == "bool" {
+                Some(format!("expected '{expected}', got nil"))
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
