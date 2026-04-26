@@ -389,14 +389,14 @@ pub fn build_symbol_index(path: &Path) -> Result<SymbolIndexReport, String> {
     })
 }
 
-pub fn build_check_report(path: &Path) -> Result<CheckReport, String> {
+pub fn build_check_report(path: &Path, strict: bool) -> Result<CheckReport, String> {
     let graph = build_module_graph(path)?;
     let mut diagnostics = graph.diagnostics.clone();
     for module in &graph.modules {
         let program = parse_file(Path::new(&module.path))?;
         let report = inspect_program(module.path.clone(), &program, module.imports.clone());
         diagnostics.extend(check_report_warnings(&report));
-        diagnostics.extend(type_check_program(&program, &module.path));
+        diagnostics.extend(type_check_program(&program, &module.path, strict));
     }
     diagnostics.sort_by_key(diagnostic_sort_key);
     Ok(CheckReport {
@@ -1479,7 +1479,7 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
 // is unchanged. Does not attempt full type inference; non-literal expressions
 // (variables, calls, arithmetic) are considered unknown and not flagged.
 
-pub fn type_check_program(program: &[Stmt], path: &str) -> Vec<ToolingDiagnostic> {
+pub fn type_check_program(program: &[Stmt], path: &str, strict: bool) -> Vec<ToolingDiagnostic> {
     let mut checker = TypeChecker {
         path: path.to_string(),
         typed_fns: HashMap::new(),
@@ -1488,6 +1488,9 @@ pub fn type_check_program(program: &[Stmt], path: &str) -> Vec<ToolingDiagnostic
         diagnostics: Vec::new(),
     };
     checker.collect_fn_signatures(program);
+    if strict {
+        checker.check_annotation_coverage(program);
+    }
     checker.check_stmts(program);
     checker.diagnostics
 }
@@ -1515,6 +1518,42 @@ impl TypeChecker {
                     }
                 }
                 Stmt::Class { body, .. } => self.collect_fn_signatures(body),
+                _ => {}
+            }
+        }
+    }
+
+    // Strict mode: flag top-level def params/returns without type annotations.
+    fn check_annotation_coverage(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::SetLine(n) => self.current_line = *n,
+                Stmt::FnDef { name, params, return_type, .. } => {
+                    // Skip special methods and private-style names that are implementation detail.
+                    if name.starts_with("__") && name.ends_with("__") {
+                        continue;
+                    }
+                    for param in params {
+                        if param.is_vararg || param.is_kwarg || param.name == "self" {
+                            continue;
+                        }
+                        if param.type_name.is_none() {
+                            self.emit(
+                                "unannotated_param",
+                                &format!(
+                                    "strict: parameter '{}' of '{}' has no type annotation",
+                                    param.name, name
+                                ),
+                            );
+                        }
+                    }
+                    if return_type.is_none() {
+                        self.emit(
+                            "unannotated_return",
+                            &format!("strict: function '{}' has no return type annotation", name),
+                        );
+                    }
+                }
                 _ => {}
             }
         }

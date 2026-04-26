@@ -3150,6 +3150,67 @@ add(3.14, "mixed")
 }
 
 #[test]
+fn test_cool_check_strict_passes_fully_typed_program() {
+    let temp = unique_temp_path("cool_check_strict_ok", "cool");
+    std::fs::write(
+        &temp,
+        "def add(x: i32, y: i32) -> i32:\n    return x\n\nprint(add(1, 2))\n",
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok"));
+}
+
+#[test]
+fn test_cool_check_strict_flags_unannotated_params_and_returns() {
+    let temp = unique_temp_path("cool_check_strict_missing", "cool");
+    std::fs::write(
+        &temp,
+        "def greet(name):\n    return name\n\ndef process(data, count: i32):\n    return data\n",
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("unannotated_param"), "expected unannotated_param in:\n{stderr}");
+    assert!(stderr.contains("unannotated_return"), "expected unannotated_return in:\n{stderr}");
+    assert!(stderr.contains("'name' of 'greet'"), "expected name/greet in:\n{stderr}");
+}
+
+#[test]
+fn test_cool_check_strict_ignores_dunder_methods() {
+    let temp = unique_temp_path("cool_check_strict_dunder", "cool");
+    std::fs::write(&temp, "def __init__(self):\n    pass\n").unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("check ok"));
+}
+
+#[test]
+fn test_cool_check_nonstrict_passes_untyped_functions() {
+    let temp = unique_temp_path("cool_check_nonstrict", "cool");
+    std::fs::write(&temp, "def foo(x, y):\n    return x\n").unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, _, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("check ok"));
+}
+
+#[test]
 fn test_cool_modulegraph_subcommand_resolves_project_imports() {
     let temp_dir = unique_temp_dir("cool_modulegraph_command");
     let _ = std::fs::remove_dir_all(&temp_dir);

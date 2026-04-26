@@ -499,7 +499,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [ ] Assignability and coercion rules for primitives, structs, unions, and tuples
 - [ ] Compile-time checking of function returns on all code paths
 - [ ] Module-level symbol/type resolution before codegen
-- [ ] `cool check --strict` / strict project mode
+- [x] `cool check --strict` / strict project mode — errors on unannotated top-level `def` params and return types; dunder methods exempted
 
 ### Tooling Integration
 

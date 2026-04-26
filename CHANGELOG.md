@@ -19,6 +19,7 @@ All notable changes to the Cool language project.
 - Flags: string literal passed to an integer param, integer literal passed to a `str` param, float literal passed to an integer type (precision loss), nil passed to typed params, return type mismatches with literal returns
 - Leaves untyped functions and non-literal expressions (variables, calls, arithmetic) unchecked — no false positives on existing code
 - Runs automatically as part of `cool check`; exits non-zero on type errors
+- `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type; dunder methods (`__init__`, `__str__`, etc.) are exempted; violations are errors
 
 ---
 

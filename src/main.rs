@@ -793,20 +793,26 @@ top-level imports and symbols."
 
 fn cmd_check(args: &[&String]) -> Result<(), String> {
     let mut json = false;
+    let mut strict = false;
     let mut file = None::<&str>;
 
     for arg in args {
         match arg.as_str() {
             "--json" => json = true,
+            "--strict" => strict = true,
             "--help" | "-h" => {
                 println!(
                     "\
-Usage: cool check [--json] [file.cool]
+Usage: cool check [--json] [--strict] [file.cool]
 
 Statically parse a Cool entry file, resolve reachable imports, and report:
   - Unresolved imports and import cycles
   - Duplicate top-level symbols and class members
   - Literal-type mismatches at typed def boundaries (type checker v0)
+
+Options:
+  --strict   Also require every top-level def to have fully annotated parameters
+             and a return type; errors on any missing annotation
 
 With no file argument inside a project, `cool check` uses the manifest main file."
                 );
@@ -815,7 +821,7 @@ With no file argument inside a project, `cool check` uses the manifest main file
             other if other.starts_with('-') => return Err(format!("cool check: unexpected flag '{other}'")),
             other => {
                 if file.is_some() {
-                    return Err("Usage: cool check [--json] [file.cool]".to_string());
+                    return Err("Usage: cool check [--json] [--strict] [file.cool]".to_string());
                 }
                 file = Some(other);
             }
@@ -827,7 +833,7 @@ With no file argument inside a project, `cool check` uses the manifest main file
         None => current_project("cool check")?.main_path(),
     };
 
-    let report = tooling::build_check_report(&target)?;
+    let report = tooling::build_check_report(&target, strict)?;
     let error_count = report
         .diagnostics
         .iter()
