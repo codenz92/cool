@@ -38,6 +38,7 @@ pub struct CoolProject {
     pub linker_script: Option<String>,
     pub build_profile: Option<String>,
     pub build_emit: Option<String>,
+    pub build_target: Option<String>,
 }
 
 fn canonical_or_path(path: PathBuf) -> PathBuf {
@@ -180,12 +181,13 @@ impl CoolProject {
             .ok_or_else(|| format!("cool.toml: invalid manifest path '{}'", manifest_path.display()))?;
         let manifest_dir = canonical_or_path(manifest_dir.to_path_buf());
 
-        let (build_profile, build_emit) = match root.get("build") {
-            None => (None, None),
+        let (build_profile, build_emit, build_target) = match root.get("build") {
+            None => (None, None, None),
             Some(toml::Value::Table(table)) => {
                 let profile = parse_string_field(table.get("profile"), "profile", "cool.toml [build]")?;
                 let emit = parse_string_field(table.get("emit"), "emit", "cool.toml [build]")?;
-                (profile, emit)
+                let target = parse_string_field(table.get("target"), "target", "cool.toml [build]")?;
+                (profile, emit, target)
             }
             Some(other) => {
                 return Err(format!(
@@ -295,6 +297,7 @@ impl CoolProject {
             linker_script: opt_string("linker_script")?,
             build_profile,
             build_emit,
+            build_target,
         })
     }
 

@@ -65,6 +65,7 @@ fn compile_to_native(source: &str, output_path: &Path, script_path: &Path) -> Re
         script_path,
         llvm_codegen::NativeBuildMode::Hosted,
         llvm_codegen::NativeArtifactKind::Binary,
+        None,
     )
 }
 
@@ -74,6 +75,7 @@ fn compile_to_native_with_output(
     script_path: &Path,
     build_mode: llvm_codegen::NativeBuildMode,
     artifact_kind: llvm_codegen::NativeArtifactKind,
+    target_triple: Option<&str>,
 ) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
@@ -81,7 +83,14 @@ fn compile_to_native_with_output(
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    llvm_codegen::compile_program_with_output(&program, output_path, script_path, build_mode, artifact_kind)
+    llvm_codegen::compile_program_with_output(
+        &program,
+        output_path,
+        script_path,
+        build_mode,
+        artifact_kind,
+        target_triple,
+    )
 }
 
 fn bundled_command_path(file_name: &str) -> PathBuf {
@@ -872,10 +881,25 @@ fn resolve_build_emit(cli_emit: Option<&str>, manifest_emit: Option<&str>) -> Re
     }
 }
 
+fn resolve_build_target(cli_target: Option<&str>, manifest_target: Option<&str>) -> Result<Option<String>, String> {
+    match cli_target.or(manifest_target) {
+        Some(raw) => {
+            let target = raw.trim();
+            if target.is_empty() {
+                Err("cool build: target triple must not be empty".to_string())
+            } else {
+                Ok(Some(target.to_string()))
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 fn build_label(
     profile: BuildProfile,
     build_mode: llvm_codegen::NativeBuildMode,
     artifact: BuildFinalArtifact,
+    target_triple: Option<&str>,
 ) -> String {
     let mut parts = Vec::new();
     if profile != BuildProfile::Release {
@@ -886,6 +910,9 @@ fn build_label(
     }
     if artifact != BuildFinalArtifact::Emit(BuildEmitKind::Binary) {
         parts.push(artifact.label().to_string());
+    }
+    if let Some(target) = target_triple {
+        parts.push(format!("target={target}"));
     }
 
     if parts.is_empty() {
@@ -950,6 +977,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     let mut linker_script_arg: Option<String> = None;
     let mut profile_arg: Option<String> = None;
     let mut emit_arg: Option<String> = None;
+    let mut target_arg: Option<String> = None;
     let mut help = false;
     let mut file_arg = None::<&String>;
 
@@ -976,6 +1004,15 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             other if other.starts_with("--emit=") => {
                 emit_arg = Some(other["--emit=".len()..].to_string());
             }
+            "--target" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool build: --target requires a value".to_string())?;
+                target_arg = Some(value.clone());
+            }
+            other if other.starts_with("--target=") => {
+                target_arg = Some(other["--target=".len()..].to_string());
+            }
             other if other.starts_with("--linker-script=") => {
                 linker_script_arg = Some(other["--linker-script=".len()..].to_string());
             }
@@ -983,7 +1020,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             _ => {
                 if file_arg.is_some() {
                     return Err(
-                        "Usage: cool build [--profile <name>] [--emit <kind>] [--freestanding] [--linker-script=<path>] [file.cool]"
+                        "Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--freestanding] [--linker-script=<path>] [file.cool]"
                             .to_string(),
                     );
                 }
@@ -995,13 +1032,15 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     if help {
         println!(
             "\
-Usage: cool build [--profile <name>] [--emit <kind>] [--freestanding] [--linker-script=<path>] [file.cool]
+Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--freestanding] [--linker-script=<path>] [file.cool]
 
 Build a Cool project from cool.toml or compile a single file.
 
 Options:
   --profile <name>      Select a named build profile: dev, release, freestanding, or strict
   --emit <kind>         Select the final artifact: binary, object, assembly, llvm-ir, or staticlib
+  --target <triple>     Emit code for an explicit LLVM target triple (for example
+                        x86_64-unknown-linux-gnu or i386-unknown-linux-gnu)
   --freestanding        Compile in freestanding mode without the hosted Cool runtime
   --linker-script=<path>  Link the object file into a kernel image (.elf) using LLD and the
                           given GNU linker script; implies --freestanding unless --emit overrides
@@ -1011,6 +1050,7 @@ Examples:
   cool build
   cool build --profile dev
   cool build hello.cool
+  cool build --target x86_64-unknown-linux-gnu --emit object hello.cool
   cool build --emit object hello.cool
   cool build --emit staticlib
   cool build --profile strict hello.cool
@@ -1034,6 +1074,7 @@ Examples:
             let project = CoolProject::from_manifest_path(manifest_path)?;
             let profile = resolve_build_profile(profile_arg.as_deref(), project.build_profile.as_deref())?;
             let requested_emit = resolve_build_emit(emit_arg.as_deref(), project.build_emit.as_deref())?;
+            let requested_target = resolve_build_target(target_arg.as_deref(), project.build_target.as_deref())?;
             let effective_linker_script: Option<PathBuf> = match &linker_script_arg {
                 Some(path) => Some(PathBuf::from(path)),
                 None => project.linker_script.as_ref().map(|s| project.root.join(s)),
@@ -1084,7 +1125,7 @@ Examples:
                 final_path.clone()
             };
 
-            let label = build_label(profile, build_mode, final_artifact);
+            let label = build_label(profile, build_mode, final_artifact, requested_target.as_deref());
             println!("  Compiling {display}{label}");
 
             let t0 = std::time::Instant::now();
@@ -1099,6 +1140,7 @@ Examples:
                         &main_path,
                         build_mode,
                         llvm_codegen::NativeArtifactKind::Object,
+                        requested_target.as_deref(),
                     )?;
                     link_kernel_image(&compile_output, script, &final_path)?;
                 }
@@ -1109,6 +1151,7 @@ Examples:
                         &main_path,
                         build_mode,
                         kind.native_artifact(),
+                        requested_target.as_deref(),
                     )?;
                 }
             }
@@ -1126,6 +1169,7 @@ Examples:
         Some(file_arg) => {
             let profile = resolve_build_profile(profile_arg.as_deref(), None)?;
             let requested_emit = resolve_build_emit(emit_arg.as_deref(), None)?;
+            let requested_target = resolve_build_target(target_arg.as_deref(), None)?;
             let effective_linker_script = linker_script_arg.as_deref();
             let freestanding_requested = freestanding
                 || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding
@@ -1172,7 +1216,7 @@ Examples:
                 final_path.clone()
             };
 
-            let label = build_label(profile, build_mode, final_artifact);
+            let label = build_label(profile, build_mode, final_artifact, requested_target.as_deref());
             println!("  Compiling {}{} ...", file_path.display(), label);
 
             let t0 = std::time::Instant::now();
@@ -1186,6 +1230,7 @@ Examples:
                         file_path,
                         build_mode,
                         llvm_codegen::NativeArtifactKind::Object,
+                        requested_target.as_deref(),
                     )?;
                     link_kernel_image(&compile_output, Path::new(script), &final_path)?;
                 }
@@ -1196,6 +1241,7 @@ Examples:
                         file_path,
                         build_mode,
                         kind.native_artifact(),
+                        requested_target.as_deref(),
                     )?;
                 }
             }
@@ -1627,6 +1673,7 @@ USAGE:
     cool build                    Build the project described by cool.toml
     cool build --profile <name>   Build with dev/release/freestanding/strict profile rules
     cool build --emit <kind>      Emit binary/object/assembly/llvm-ir/staticlib artifacts
+    cool build --target <triple>  Emit native code for an explicit LLVM target triple
     cool build <file.cool>        Compile a single file to a native binary
     cool build --freestanding     Build a freestanding object file (.o)
     cool build --linker-script=<ld>  Link a kernel image (.elf) via LLD
@@ -1641,8 +1688,8 @@ USAGE:
     cool doc [file.cool]          Generate API docs for modules, types, and functions
     cool check [file.cool]        Statically check imports, cycles, symbols, and types
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
-    cool bundle                   Build and package the project into a distributable tarball
-    cool release [--bump patch]   Bump version, bundle, and git-tag a release
+    cool bundle [--target <triple>]  Build and package the project into a distributable tarball
+    cool release [--bump patch] [--target <triple>]  Bump version, bundle, and git-tag a release
     cool install                  Fetch and lock project dependencies
     cool add <name> ...           Add a path or git dependency to cool.toml
     cool test [path ...]          Run discovered or explicit Cool tests
@@ -1662,6 +1709,7 @@ EXAMPLES:
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool build --profile dev      # checked build using cool.toml or a file
     cool build --emit object      # compile to .o without linking
+    cool build --target i386-unknown-linux-gnu --emit llvm-ir
     cool build --emit staticlib   # compile to lib<name>.a
     cool build --profile strict hello.cool
     cool build --freestanding            # compile cool.toml project → ./name.o

@@ -22,6 +22,7 @@ main = "src/main.cool"
 # [build]
 # profile = "dev"          # dev, release, freestanding, or strict
 # emit = "binary"          # binary, object, assembly, llvm-ir, or staticlib
+# target = "x86_64-unknown-linux-gnu"  # optional explicit LLVM target triple
 
 # Optional: dependencies, imported by dependency name
 #

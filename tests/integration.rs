@@ -9,6 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const TEST_TARGET_I386: &str = "i386-unknown-linux-gnu";
+const TEST_TARGET_X86_64: &str = "x86_64-unknown-linux-gnu";
 
 fn unique_temp_path(stem: &str, ext: &str) -> std::path::PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -2315,6 +2317,95 @@ fn test_cool_build_emit_binary_rejects_freestanding_mode() {
 }
 
 #[test]
+fn test_cool_build_target_flag_sets_llvm_ir_triple_and_pointer_width() {
+    let temp = unique_temp_path("cool_build_target_i386", "cool");
+    std::fs::write(
+        &temp,
+        "data PTR_BITS: usize = 32\n\ndef _start():\n    entry: \"_start\"\n    return 0\n",
+    )
+    .unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        cwd,
+        &[
+            "build",
+            "--freestanding",
+            "--emit",
+            "llvm-ir",
+            "--target",
+            TEST_TARGET_I386,
+            file_name,
+        ],
+    )
+    .unwrap();
+
+    let ir_path = temp.with_extension("ll");
+    let ir = std::fs::read_to_string(&ir_path).unwrap();
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(&ir_path);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains(&format!("[freestanding, llvm-ir, target={}]", TEST_TARGET_I386)));
+    assert!(ir.contains(&format!("target triple = \"{}\"", TEST_TARGET_I386)));
+    assert!(ir.contains("@PTR_BITS"), "expected PTR_BITS global in LLVM IR:\n{ir}");
+    assert!(
+        ir.contains("@PTR_BITS = global i32 32") || ir.contains("@PTR_BITS = dso_local global i32 32"),
+        "expected usize global to lower to i32 for 32-bit target:\n{ir}"
+    );
+}
+
+#[test]
+fn test_cool_build_target_flag_overrides_manifest_target() {
+    let project_dir = unique_temp_dir("cool_build_target_override");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        format!(
+            r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+profile = "freestanding"
+emit = "llvm-ir"
+target = "{manifest_target}"
+"#,
+            manifest_target = TEST_TARGET_I386,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "data PTR_BITS: usize = 64\n\ndef _start():\n    entry: \"_start\"\n    return 0\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&project_dir, &["build", "--target", TEST_TARGET_X86_64]).unwrap();
+    let ir_path = project_dir.join("demo-bin.ll");
+    let ir = std::fs::read_to_string(&ir_path).unwrap();
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains(&format!("[freestanding, llvm-ir, target={}]", TEST_TARGET_X86_64)));
+    assert!(ir.contains(&format!("target triple = \"{}\"", TEST_TARGET_X86_64)));
+    assert!(ir.contains("@PTR_BITS"), "expected PTR_BITS global in LLVM IR:\n{ir}");
+    assert!(
+        ir.contains("@PTR_BITS = global i64 64") || ir.contains("@PTR_BITS = dso_local global i64 64"),
+        "expected usize global to lower to i64 for 64-bit target:\n{ir}"
+    );
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
 fn test_cool_bundle_packages_project_via_cool_app() {
     let project_dir = unique_temp_dir("cool_project_bundle");
     let _ = std::fs::remove_dir_all(&project_dir);
@@ -2479,6 +2570,61 @@ emit = "staticlib"
 }
 
 #[test]
+fn test_cool_bundle_manifest_target_names_cross_target_archive() {
+    let project_dir = unique_temp_dir("cool_project_bundle_target");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        format!(
+            r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+profile = "freestanding"
+target = "{target}"
+"#,
+            target = TEST_TARGET_I386,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def _start():\n    entry: \"_start\"\n    return 0\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["bundle"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Bundled"));
+
+    let artifact_name = format!("demo-0.2.0-{TEST_TARGET_I386}");
+    let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    let metadata_path = project_dir.join("dist").join(format!("{artifact_name}.metadata.json"));
+    assert!(
+        archive_path.exists(),
+        "expected bundle archive at {}",
+        archive_path.display()
+    );
+    assert!(
+        metadata_path.exists(),
+        "expected metadata sidecar at {}",
+        metadata_path.display()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["target"].as_str().unwrap(), TEST_TARGET_I386);
+    assert_eq!(metadata["build"]["target"].as_str().unwrap(), TEST_TARGET_I386);
+    assert_eq!(metadata["build"]["artifact_kind"].as_str().unwrap(), "object");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
 fn test_cool_release_bumps_version_bundles_and_tags_via_cool_app() {
     let project_dir = unique_temp_dir("cool_project_release");
     let _ = std::fs::remove_dir_all(&project_dir);
@@ -2545,6 +2691,74 @@ include = ["README.txt"]
 
     let tags = run_git_in_dir(&project_dir, &["tag", "--list", "v0.3.0"]);
     assert_eq!(tags.trim(), "v0.3.0");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_release_target_flag_names_cross_target_archive() {
+    let project_dir = unique_temp_dir("cool_project_release_target");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+profile = "freestanding"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def _start():\n    entry: \"_start\"\n    return 0\n",
+    )
+    .unwrap();
+
+    run_git_in_dir(&project_dir, &["init"]);
+    run_git_in_dir(&project_dir, &["config", "user.name", "Cool Test"]);
+    run_git_in_dir(&project_dir, &["config", "user.email", "cool-test@example.com"]);
+    run_git_in_dir(&project_dir, &["add", "."]);
+    run_git_in_dir(&project_dir, &["commit", "-m", "init"]);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        &project_dir,
+        &[
+            "release",
+            "--version",
+            "0.2.1",
+            "--no-tag",
+            "--target",
+            TEST_TARGET_I386,
+        ],
+    )
+    .unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Released demo v0.2.1"));
+
+    let artifact_name = format!("demo-0.2.1-{TEST_TARGET_I386}");
+    let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    let metadata_path = project_dir.join("dist").join(format!("{artifact_name}.metadata.json"));
+    assert!(
+        archive_path.exists(),
+        "expected release archive at {}",
+        archive_path.display()
+    );
+    assert!(
+        metadata_path.exists(),
+        "expected metadata sidecar at {}",
+        metadata_path.display()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["project"]["version"].as_str().unwrap(), "0.2.1");
+    assert_eq!(metadata["target"].as_str().unwrap(), TEST_TARGET_I386);
+    assert_eq!(metadata["build"]["target"].as_str().unwrap(), TEST_TARGET_I386);
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }

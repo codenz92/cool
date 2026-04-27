@@ -12,8 +12,8 @@ def shell_quote(text):
 
 def usage():
     print("release v1.0 — bump version, bundle, and tag a release")
-    print("  cool release [--bump patch|minor|major]")
-    print("  cool release [--version X.Y.Z] [--no-tag]")
+    print("  cool release [--bump patch|minor|major] [--target <triple>]")
+    print("  cool release [--version X.Y.Z] [--no-tag] [--target <triple>]")
 
 def target_triple():
     os_name = platform.os()
@@ -23,6 +23,30 @@ def target_triple():
     if arch == "aarch64":
         arch = "arm64"
     return os_name + "-" + arch
+
+def build_target(manifest):
+    build = manifest.get("build", nil)
+    if build == nil:
+        return nil
+    if not isinstance(build, "dict"):
+        raise "cool release: [build] must be a table"
+    target = build.get("target", nil)
+    if target == nil:
+        return nil
+    if not isinstance(target, "str"):
+        raise "cool release: [build].target must be a string"
+    target = target.strip()
+    if target == "":
+        raise "cool release: [build].target must not be empty"
+    return target
+
+def resolved_target_label(cli_target, manifest):
+    if cli_target != nil:
+        return cli_target
+    target = build_target(manifest)
+    if target != nil:
+        return target
+    return target_triple()
 
 def stream_result(result):
     if result["stdout"] != "":
@@ -95,9 +119,11 @@ def maybe_warn_dirty(project_root):
     if result["code"] == 0 and result["stdout"].strip() != "":
         print("  warning: working tree has uncommitted changes")
 
-def bundle_project(project_root, cool_exe):
+def bundle_project(project_root, cool_exe, target):
     cmd = "cd " + shell_quote(project_root) + " && COOL_EXE_PATH=" + shell_quote(cool_exe)
     cmd = cmd + " " + shell_quote(cool_exe) + " bundle"
+    if target != nil:
+        cmd = cmd + " --target " + shell_quote(target)
     run_shell_checked("bundle project", cmd)
 
 def tag_release(project_root, tag):
@@ -132,6 +158,7 @@ if cool_exe == nil or cool_exe == "":
 bump = "patch"
 explicit_version = nil
 no_tag = false
+target_arg = nil
 i = 1
 while i < len(argv):
     arg = argv[i]
@@ -147,6 +174,17 @@ while i < len(argv):
         if i >= len(argv):
             raise "cool release: --version requires an argument"
         explicit_version = argv[i]
+    elif arg == "--target":
+        i += 1
+        if i >= len(argv):
+            raise "cool release: --target requires an argument"
+        target_arg = str(argv[i]).strip()
+        if target_arg == "":
+            raise "cool release: --target must not be empty"
+    elif arg.startswith("--target="):
+        target_arg = str(arg[len("--target="):]).strip()
+        if target_arg == "":
+            raise "cool release: --target must not be empty"
     elif arg == "--no-tag":
         no_tag = true
     else:
@@ -163,11 +201,12 @@ print("  Releasing " + name + " v" + str(current_version) + " -> v" + str(new_ve
 set_manifest_version(manifest_path, new_version)
 print("  Updated  cool.toml version -> " + str(new_version))
 
-bundle_project(project_root, cool_exe)
+target = resolved_target_label(target_arg, manifest)
+bundle_project(project_root, cool_exe, target_arg)
 
-archive = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".tar.gz")
-metadata = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".metadata.json")
-symbols = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".symbols.txt")
+archive = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target + ".tar.gz")
+metadata = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target + ".metadata.json")
+symbols = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target + ".symbols.txt")
 if not no_tag:
     tag_release(project_root, "v" + str(new_version))
 

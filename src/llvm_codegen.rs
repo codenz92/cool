@@ -17,7 +17,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
 use inkwell::types::{BasicType, StructType};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
@@ -26,6 +26,12 @@ use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+struct NativeTargetConfig {
+    triple: String,
+    is_host: bool,
+}
 
 // ── Embedded C runtime ────────────────────────────────────────────────────────
 
@@ -8005,6 +8011,8 @@ struct Compiler<'ctx> {
     /// Optional allocator hook globals for native/freestanding malloc/free override.
     alloc_hook_global: Option<inkwell::values::GlobalValue<'ctx>>,
     free_hook_global: Option<inkwell::values::GlobalValue<'ctx>>,
+    target_triple: String,
+    pointer_bytes: u32,
 }
 
 /// Information about a compiled class
@@ -8130,7 +8138,7 @@ impl NativeArtifactKind {
 // ── Constructor & runtime declarations ───────────────────────────────────────
 
 impl<'ctx> Compiler<'ctx> {
-    fn new(context: &'ctx Context, build_mode: NativeBuildMode) -> Self {
+    fn new(context: &'ctx Context, build_mode: NativeBuildMode, target_triple: String, pointer_bytes: u32) -> Self {
         let module = context.create_module("cool_program");
         let builder = context.create_builder();
 
@@ -8173,6 +8181,8 @@ impl<'ctx> Compiler<'ctx> {
             var_struct_types: HashMap::new(),
             alloc_hook_global: None,
             free_hook_global: None,
+            target_triple,
+            pointer_bytes,
             build_mode,
         }
     }
@@ -8377,11 +8387,19 @@ impl<'ctx> Compiler<'ctx> {
         self.mangle_global_name(&format!("__extern_{}_wrapper", name))
     }
 
+    fn pointer_bit_width(&self) -> u32 {
+        self.pointer_bytes * 8
+    }
+
+    fn pointer_byte_size(&self) -> u32 {
+        self.pointer_bytes
+    }
+
     fn pointer_int_type(&self) -> inkwell::types::IntType<'ctx> {
-        if std::mem::size_of::<usize>() == 8 {
-            self.context.i64_type()
-        } else {
-            self.context.i32_type()
+        match self.pointer_bit_width() {
+            32 => self.context.i32_type(),
+            64 => self.context.i64_type(),
+            bits => self.context.custom_width_int_type(bits),
         }
     }
 
@@ -11380,14 +11398,14 @@ impl<'ctx> Compiler<'ctx> {
                 "i64"         => (self.context.i64_type().into(), 6,  8, false, true),
                 "u64"         => (self.context.i64_type().into(), 7,  8, false, false),
                 "isize"       => {
-                    if std::mem::size_of::<usize>() == 8 {
+                    if self.pointer_byte_size() == 8 {
                         (self.context.i64_type().into(), 6, 8, false, true)
                     } else {
                         (self.context.i32_type().into(), 4, 4, false, true)
                     }
                 }
                 "usize"       => {
-                    if std::mem::size_of::<usize>() == 8 {
+                    if self.pointer_byte_size() == 8 {
                         (self.context.i64_type().into(), 7, 8, false, false)
                     } else {
                         (self.context.i32_type().into(), 5, 4, false, false)
@@ -11654,14 +11672,14 @@ impl<'ctx> Compiler<'ctx> {
                 "i64"         => (self.context.i64_type().into(), 6,  8, false, true),
                 "u64"         => (self.context.i64_type().into(), 7,  8, false, false),
                 "isize"       => {
-                    if std::mem::size_of::<usize>() == 8 {
+                    if self.pointer_byte_size() == 8 {
                         (self.context.i64_type().into(), 6, 8, false, true)
                     } else {
                         (self.context.i32_type().into(), 4, 4, false, true)
                     }
                 }
                 "usize"       => {
-                    if std::mem::size_of::<usize>() == 8 {
+                    if self.pointer_byte_size() == 8 {
                         (self.context.i64_type().into(), 7, 8, false, false)
                     } else {
                         (self.context.i32_type().into(), 5, 4, false, false)
@@ -13252,13 +13270,13 @@ impl<'ctx> Compiler<'ctx> {
                 if !args.is_empty() {
                     return Err("core.word_bits() takes no arguments".into());
                 }
-                Ok(self.build_int(core_runtime::word_bits()))
+                Ok(self.build_int(self.pointer_bit_width() as i64))
             }
             "word_bytes" => {
                 if !args.is_empty() {
                     return Err("core.word_bytes() takes no arguments".into());
                 }
-                Ok(self.build_int(core_runtime::word_bytes()))
+                Ok(self.build_int(self.pointer_byte_size() as i64))
             }
             "page_size" => {
                 if !args.is_empty() {
@@ -14021,8 +14039,7 @@ impl<'ctx> Compiler<'ctx> {
         // These lower to x86 IN/OUT instructions via inline asm. They are only valid on
         // x86/x86-64 targets; other architectures use MMIO (write_u8_volatile etc.).
         if name == "outb" || name == "inb" || name == "write_serial_byte" {
-            let triple = TargetMachine::get_default_triple();
-            let triple_str = triple.as_str().to_string_lossy();
+            let triple_str = self.target_triple.as_str();
             if !triple_str.contains("x86") && !triple_str.contains("i686") && !triple_str.contains("i386") {
                 return Err(format!(
                     "'{}' uses x86 port I/O and is not supported on target '{}'; \
@@ -14347,9 +14364,9 @@ impl<'ctx> Compiler<'ctx> {
                 return Err(format!("{name}() takes no arguments"));
             }
             let value = if name == "word_bits" {
-                (std::mem::size_of::<usize>() * 8) as i64
+                self.pointer_bit_width() as i64
             } else {
-                std::mem::size_of::<usize>() as i64
+                self.pointer_byte_size() as i64
             };
             return Ok(self.build_int(value));
         }
@@ -14541,10 +14558,23 @@ fn unique_temp_dir(stem: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{stem}_{pid}_{nonce}"))
 }
 
-fn create_target_machine() -> Result<TargetMachine, String> {
-    let triple = TargetMachine::get_default_triple();
+fn host_target_triple() -> String {
+    TargetMachine::get_default_triple()
+        .as_str()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn create_target_machine(requested_triple: Option<&str>) -> Result<(TargetMachine, NativeTargetConfig), String> {
+    let host_triple = host_target_triple();
+    let triple_text = requested_triple.unwrap_or(host_triple.as_str()).trim().to_string();
+    let triple = if requested_triple.is_some() {
+        TargetTriple::create(&triple_text)
+    } else {
+        TargetMachine::get_default_triple()
+    };
     let target = Target::from_triple(&triple).map_err(|e| format!("Target error: {e}"))?;
-    target
+    let machine = target
         .create_target_machine(
             &triple,
             "generic",
@@ -14553,10 +14583,83 @@ fn create_target_machine() -> Result<TargetMachine, String> {
             RelocMode::Default,
             CodeModel::Default,
         )
-        .ok_or_else(|| "Failed to create target machine".to_string())
+        .ok_or_else(|| format!("Failed to create target machine for target '{}'", triple_text))?;
+    Ok((
+        machine,
+        NativeTargetConfig {
+            is_host: triple_text == host_triple,
+            triple: triple_text,
+        },
+    ))
 }
 
-fn compile_runtime_object(script_path: &Path, staging_dir: &Path) -> Result<PathBuf, String> {
+fn find_command_on_path(candidates: &[&str]) -> Option<String> {
+    for name in candidates {
+        if std::process::Command::new(name)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some((*name).to_string());
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+struct HostedToolchain {
+    compiler: String,
+    target_flag: Option<String>,
+}
+
+impl HostedToolchain {
+    fn apply_to(&self, cmd: &mut std::process::Command) {
+        if let Some(flag) = &self.target_flag {
+            cmd.arg(flag);
+        }
+    }
+}
+
+fn configured_c_compiler() -> Option<String> {
+    std::env::var("COOL_CC")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("CC").ok().filter(|value| !value.trim().is_empty()))
+}
+
+fn resolve_hosted_toolchain(target: &NativeTargetConfig) -> Result<HostedToolchain, String> {
+    if let Some(compiler) = configured_c_compiler() {
+        return Ok(HostedToolchain {
+            compiler,
+            target_flag: (!target.is_host).then(|| format!("--target={}", target.triple)),
+        });
+    }
+
+    if target.is_host {
+        return Ok(HostedToolchain {
+            compiler: "cc".to_string(),
+            target_flag: None,
+        });
+    }
+
+    let compiler = find_command_on_path(&["clang"]).ok_or_else(|| {
+        format!(
+            "cross-target hosted builds for '{}' require clang or an explicit COOL_CC/CC toolchain",
+            target.triple
+        )
+    })?;
+    Ok(HostedToolchain {
+        compiler,
+        target_flag: Some(format!("--target={}", target.triple)),
+    })
+}
+
+fn compile_runtime_object(
+    script_path: &Path,
+    staging_dir: &Path,
+    target: &NativeTargetConfig,
+) -> Result<PathBuf, String> {
     fs::create_dir_all(staging_dir).map_err(|e| format!("Failed to create runtime staging dir: {e}"))?;
     let rt_c_path = staging_dir.join("cool_runtime.c");
     let rt_o_path = staging_dir.join("cool_runtime.o");
@@ -14567,34 +14670,35 @@ fn compile_runtime_object(script_path: &Path, staging_dir: &Path) -> Result<Path
     );
     fs::write(&rt_c_path, runtime_source).map_err(|e| format!("Failed to write runtime source: {e}"))?;
 
-    let cc_status = std::process::Command::new("cc")
+    let toolchain = resolve_hosted_toolchain(target)?;
+    let mut cc_cmd = std::process::Command::new(&toolchain.compiler);
+    toolchain.apply_to(&mut cc_cmd);
+    let cc_status = cc_cmd
         .args(["-O2", "-c"])
         .arg(&rt_c_path)
         .arg("-o")
         .arg(&rt_o_path)
         .status()
-        .map_err(|e| format!("Failed to invoke cc for runtime: {e}"))?;
+        .map_err(|e| format!("Failed to invoke '{}' for runtime: {e}", toolchain.compiler))?;
 
     if !cc_status.success() {
-        return Err("Failed to compile Cool runtime (cc exited with error)".into());
+        if target.is_host {
+            return Err(format!(
+                "Failed to compile Cool runtime (compiler '{}' exited with error)",
+                toolchain.compiler
+            ));
+        }
+        return Err(format!(
+            "Failed to compile Cool runtime for target '{}' (compiler '{}' exited with error)",
+            target.triple, toolchain.compiler
+        ));
     }
 
     Ok(rt_o_path)
 }
 
 fn find_archiver() -> Option<String> {
-    let candidates = ["llvm-ar", "ar"];
-    for name in candidates {
-        if std::process::Command::new(name)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok()
-        {
-            return Some(name.to_string());
-        }
-    }
-    None
+    find_command_on_path(&["llvm-ar", "ar"])
 }
 
 fn write_static_library(output_path: &Path, members: &[PathBuf]) -> Result<(), String> {
@@ -14612,12 +14716,47 @@ fn write_static_library(output_path: &Path, members: &[PathBuf]) -> Result<(), S
     Ok(())
 }
 
+fn link_hosted_binary(
+    runtime_obj: &Path,
+    object_path: &Path,
+    output_path: &Path,
+    target: &NativeTargetConfig,
+) -> Result<(), String> {
+    let toolchain = resolve_hosted_toolchain(target)?;
+    let mut link_cmd = std::process::Command::new(&toolchain.compiler);
+    toolchain.apply_to(&mut link_cmd);
+    link_cmd
+        .arg(runtime_obj)
+        .arg(object_path)
+        .arg("-o")
+        .arg(output_path)
+        .arg("-lm")
+        .arg("-lsqlite3");
+    #[cfg(target_os = "linux")]
+    link_cmd.arg("-ldl");
+
+    let link_status = link_cmd
+        .status()
+        .map_err(|e| format!("Linker error from '{}': {e}", toolchain.compiler))?;
+    if !link_status.success() {
+        if target.is_host {
+            return Err("Linking failed".into());
+        }
+        return Err(format!(
+            "Linking failed for target '{}'; ensure the requested C toolchain and target libraries are installed",
+            target.triple
+        ));
+    }
+    Ok(())
+}
+
 pub fn compile_program_with_output(
     program: &Program,
     output_path: &Path,
     script_path: &Path,
     build_mode: NativeBuildMode,
     artifact_kind: NativeArtifactKind,
+    target_triple: Option<&str>,
 ) -> Result<(), String> {
     if build_mode.is_freestanding() && artifact_kind == NativeArtifactKind::Binary {
         return Err(
@@ -14626,11 +14765,24 @@ pub fn compile_program_with_output(
         );
     }
 
-    // Initialise LLVM for the host machine
-    Target::initialize_native(&InitializationConfig::default()).map_err(|e| format!("LLVM init error: {e}"))?;
+    // Initialise LLVM target info so explicit target triples can be resolved.
+    Target::initialize_all(&InitializationConfig::default());
+
+    let (machine, target) = create_target_machine(target_triple)?;
+    let target_data = machine.get_target_data();
+    let pointer_bytes = target_data.get_pointer_byte_size(None);
+    if pointer_bytes != 4 && pointer_bytes != 8 {
+        return Err(format!(
+            "target '{}' uses unsupported pointer width {} bits (Cool native builds currently support 32-bit and 64-bit pointer targets)",
+            target.triple,
+            pointer_bytes * 8
+        ));
+    }
 
     let context = Context::create();
-    let mut compiler = Compiler::new(&context, build_mode);
+    let mut compiler = Compiler::new(&context, build_mode, target.triple.clone(), pointer_bytes);
+    compiler.module.set_triple(&machine.get_triple());
+    compiler.module.set_data_layout(&target_data.get_data_layout());
     compiler.current_source_dir = script_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     compiler.module_resolver = ModuleResolver::discover_for_script(&compiler.current_source_dir)?;
 
@@ -14664,8 +14816,6 @@ pub fn compile_program_with_output(
         .verify()
         .map_err(|e| format!("LLVM module verification failed: {e}"))?;
 
-    let machine = create_target_machine()?;
-
     match artifact_kind {
         NativeArtifactKind::Object => machine
             .write_to_file(&compiler.module, FileType::Object, output_path)
@@ -14682,25 +14832,9 @@ pub fn compile_program_with_output(
                 .map_err(|e| format!("Write object file error: {e}"))?;
 
             let runtime_dir = unique_temp_dir("cool_runtime_binary");
-            let runtime_obj = compile_runtime_object(script_path, &runtime_dir)?;
+            let runtime_obj = compile_runtime_object(script_path, &runtime_dir, &target)?;
 
-            let link_result = (|| {
-                let mut link_cmd = std::process::Command::new("cc");
-                link_cmd
-                    .arg(&runtime_obj)
-                    .arg(&obj_path)
-                    .arg("-o")
-                    .arg(output_path)
-                    .arg("-lm")
-                    .arg("-lsqlite3");
-                #[cfg(target_os = "linux")]
-                link_cmd.arg("-ldl");
-                let link_status = link_cmd.status().map_err(|e| format!("Linker error: {e}"))?;
-                if !link_status.success() {
-                    return Err("Linking failed".into());
-                }
-                Ok(())
-            })();
+            let link_result = link_hosted_binary(&runtime_obj, &obj_path, output_path, &target);
 
             fs::remove_file(&obj_path).ok();
             fs::remove_dir_all(&runtime_dir).ok();
@@ -14724,7 +14858,7 @@ pub fn compile_program_with_output(
             let archive_result = (|| {
                 let mut members = vec![program_obj.clone()];
                 if !build_mode.is_freestanding() {
-                    let runtime_obj = compile_runtime_object(script_path, &staging_dir)?;
+                    let runtime_obj = compile_runtime_object(script_path, &staging_dir, &target)?;
                     members.push(runtime_obj);
                 }
                 write_static_library(output_path, &members)

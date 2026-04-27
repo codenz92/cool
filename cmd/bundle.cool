@@ -13,7 +13,7 @@ def shell_quote(text):
 
 def usage():
     print("bundle v1.0 — package a Cool project")
-    print("  cool bundle")
+    print("  cool bundle [--target <triple>]")
 
 def bundle_include(manifest):
     bundle = manifest.get("bundle", nil)
@@ -59,6 +59,18 @@ def build_emit(manifest):
         raise "cool bundle: [build].emit must be a string"
     return emit
 
+def build_target(manifest):
+    build = build_table(manifest)
+    target = build.get("target", nil)
+    if target == nil:
+        return nil
+    if not isinstance(target, "str"):
+        raise "cool bundle: [build].target must be a string"
+    target = target.strip()
+    if target == "":
+        raise "cool bundle: [build].target must not be empty"
+    return target
+
 def linker_script_value(manifest, project):
     linker_script = project.get("linker_script", manifest.get("linker_script", nil))
     if linker_script == nil:
@@ -93,6 +105,14 @@ def target_triple():
         arch = "arm64"
     return os_name + "-" + arch
 
+def resolved_target_label(cli_target, manifest):
+    if cli_target != nil:
+        return cli_target
+    target = build_target(manifest)
+    if target != nil:
+        return target
+    return target_triple()
+
 def stream_result(result):
     if result["stdout"] != "":
         term.write(result["stdout"])
@@ -118,8 +138,10 @@ def remove_tree(target):
     if os["exists"](target):
         run_shell_checked("remove " + target, "rm -rf " + shell_quote(target))
 
-def build_project(project_root, cool_exe):
+def build_project(project_root, cool_exe, cli_target):
     cmd = "cd " + shell_quote(project_root) + " && " + shell_quote(cool_exe) + " build"
+    if cli_target != nil:
+        cmd = cmd + " --target " + shell_quote(cli_target)
     run_shell_checked("build project", cmd)
 
 def chmod_executable(target):
@@ -234,6 +256,7 @@ def metadata_json(name, version, main, output, manifest, artifact_name, archive_
         },
         "build": {
             "profile": build_profile(manifest),
+            "target": target,
             "artifact_kind": artifact["kind"],
             "artifact_path": artifact["package_name"],
             "linker_script": linker_script_value(manifest, projectlib.project_table(manifest, "cool bundle")),
@@ -261,18 +284,30 @@ def create_archive(project_root, dist_dir, artifact_name, archive):
     run_shell_checked("create archive", cmd)
 
 argv = sys.argv
+target_arg = nil
+arg_index = 1
 
-if len(argv) > 2:
-    usage()
-    exit(1)
-
-if len(argv) == 2 and not (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
-    usage()
-    exit(1)
-
-if len(argv) == 2:
+if len(argv) == 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
     usage()
     exit(0)
+
+while arg_index < len(argv):
+    arg = argv[arg_index]
+    if arg == "--target":
+        arg_index += 1
+        if arg_index >= len(argv):
+            raise "cool bundle: --target requires an argument"
+        target_arg = str(argv[arg_index]).strip()
+        if target_arg == "":
+            raise "cool bundle: --target must not be empty"
+    elif arg.startswith("--target="):
+        target_arg = str(arg[len("--target="):]).strip()
+        if target_arg == "":
+            raise "cool bundle: --target must not be empty"
+    else:
+        usage()
+        exit(1)
+    arg_index += 1
 
 project_root = projectlib.discover_project_root("cool bundle")
 manifest = projectlib.read_manifest(project_root)
@@ -292,9 +327,9 @@ cool_exe = os.getenv("COOL_EXE_PATH")
 if cool_exe == nil or cool_exe == "":
     cool_exe = "cool"
 
-build_project(project_root, cool_exe)
+build_project(project_root, cool_exe, target_arg)
 
-target = target_triple()
+target = resolved_target_label(target_arg, manifest)
 artifact_name = name + "-" + version + "-" + target
 dist_dir = path.join(project_root, "dist")
 staging = path.join(dist_dir, artifact_name)

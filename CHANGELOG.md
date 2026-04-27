@@ -18,6 +18,7 @@ All notable changes to the Cool language project.
 - `freestanding` profile makes manifest-driven `cool build` emit `.o` output by default without needing `--freestanding`
 - `cool new` now supports `--template app|lib|service|freestanding`, with template-specific manifests, starter source layouts, tasks, tests, and benchmarks
 - `cool build` now supports explicit artifact selection via `--emit` and `[build].emit`, covering hosted/freestanding object output, assembly (`.s`), LLVM IR (`.ll`), static libraries (`.a`), and the existing binary path
+- `cool build` now supports explicit LLVM target triples via `--target` and `[build].target`, and native pointer-width lowering (`isize`/`usize`, `word_bits`, `word_bytes`) now follows the selected target instead of the host
 - Hosted `staticlib` output archives both the generated Cool object and the hosted runtime object, so downstream native link steps can consume a single `lib*.a`
 - `--linker-script` / `linker_script` still produce kernel images by default, but `--emit` can now override that final artifact choice when you want intermediate object/assembly/IR output instead
 
@@ -33,6 +34,7 @@ All notable changes to the Cool language project.
 - `cool bundle` now emits `dist/<artifact>.metadata.json` plus `dist/<artifact>.symbols.txt` alongside the `.tar.gz` archive
 - Bundled archives embed the same metadata and symbol map as `metadata.json` and `symbols/<artifact>.symbols.txt`, so packaged releases carry their own inspection data
 - Metadata records project identity, build profile, artifact kind/path, bundle includes, and manifest dependency specs; symbol maps are generated from `nm` / `llvm-nm` when available
+- `cool bundle` / `cool release` now accept `--target` and preserve manifest/CLI target triples in archive names plus release metadata
 - `cool release` now surfaces the generated metadata and symbol sidecars as part of the release flow
 
 ### Phase 12 — Static Semantic Core (In Progress)
