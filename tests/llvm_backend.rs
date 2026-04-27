@@ -2483,6 +2483,30 @@ fn test_llvm_import_file_flattens_exports() {
 }
 
 #[test]
+fn test_llvm_import_visibility_filters_private_exports() {
+    let temp_dir = unique_temp_dir("cool_llvm_import_visibility_test");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    let source_path = temp_dir.join("main.cool");
+    fs::write(
+        temp_dir.join("helper.cool"),
+        "private const hidden: i32 = 1\npublic const shown: i32 = 2\n",
+    )
+    .unwrap();
+    fs::write(
+        &source_path,
+        "import \"helper.cool\"\nimport helper\nprint(shown)\nprint(helper.shown)\n",
+    )
+    .unwrap();
+
+    let result = compile_and_run_native_path(&source_path).unwrap();
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["2", "2"]);
+}
+
+#[test]
 fn test_llvm_term_get_char() {
     let stdout = compile_and_run_native(
         r#"

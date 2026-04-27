@@ -44,6 +44,9 @@ pub enum Token {
     Global,
     Nonlocal,
     Lambda,
+    Const,
+    Public,
+    Private,
 
     // Operators
     Plus,
@@ -337,6 +340,9 @@ impl Lexer {
             "global" => Token::Global,
             "nonlocal" => Token::Nonlocal,
             "lambda" => Token::Lambda,
+            "const" => Token::Const,
+            "public" => Token::Public,
+            "private" => Token::Private,
             "true" => Token::Bool(true),
             "false" => Token::Bool(false),
             "nil" => Token::Nil,

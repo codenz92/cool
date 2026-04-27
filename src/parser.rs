@@ -101,10 +101,13 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek().clone() {
+            Token::Public => self.parse_visibility_stmt(Visibility::Public),
+            Token::Private => self.parse_visibility_stmt(Visibility::Private),
             Token::Def => self.parse_fn_def(),
             Token::Data => self.parse_data_def(),
             Token::Ident(name) if name == "data" && self.is_data_declaration_stmt() => self.parse_data_def(),
             Token::Extern => self.parse_extern_fn(),
+            Token::Const => self.parse_const_decl(),
             Token::Class => self.parse_class(),
             Token::Struct => self.parse_struct(false),
             Token::Packed => {
@@ -141,6 +144,63 @@ impl Parser {
             Token::Nonlocal => self.parse_nonlocal(),
             _ => self.parse_assign_or_expr(),
         }
+    }
+
+    fn parse_visibility_stmt(&mut self, visibility: Visibility) -> Result<Stmt, String> {
+        match visibility {
+            Visibility::Public => self.eat(&Token::Public)?,
+            Visibility::Private => self.eat(&Token::Private)?,
+        }
+        let stmt = match self.peek().clone() {
+            Token::Def => self.parse_fn_def()?,
+            Token::Data => self.parse_data_def()?,
+            Token::Ident(name) if name == "data" && self.is_data_declaration_stmt() => self.parse_data_def()?,
+            Token::Extern => self.parse_extern_fn()?,
+            Token::Const => self.parse_const_decl()?,
+            Token::Class => self.parse_class()?,
+            Token::Struct => self.parse_struct(false)?,
+            Token::Packed => {
+                self.advance();
+                self.eat(&Token::Struct)?;
+                self.parse_struct_body(true)?
+            }
+            Token::Union => self.parse_union()?,
+            Token::Ident(_) => self.parse_assign_or_expr()?,
+            _ => {
+                return Err(format!(
+                    "line {}: {} may only be used with top-level declarations or bindings",
+                    self.line(),
+                    match visibility {
+                        Visibility::Public => "public",
+                        Visibility::Private => "private",
+                    }
+                ))
+            }
+        };
+        if !matches!(
+            stmt,
+            Stmt::Assign { .. }
+                | Stmt::VarDecl { .. }
+                | Stmt::FnDef { .. }
+                | Stmt::ExternFn { .. }
+                | Stmt::Data { .. }
+                | Stmt::Class { .. }
+                | Stmt::Struct { .. }
+                | Stmt::Union { .. }
+        ) {
+            return Err(format!(
+                "line {}: {} may only be used with top-level declarations or bindings",
+                self.line(),
+                match visibility {
+                    Visibility::Public => "public",
+                    Visibility::Private => "private",
+                }
+            ));
+        }
+        Ok(Stmt::Visibility {
+            visibility,
+            stmt: Box::new(stmt),
+        })
     }
 
     fn eat_newline(&mut self) {
@@ -769,8 +829,48 @@ impl Parser {
         Ok(Stmt::Nonlocal(names))
     }
 
+    fn parse_const_decl(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Const)?;
+        let name = self.expect_ident()?;
+        let type_name = if self.check(&Token::Colon) && matches!(self.token_at(1), Token::Ident(_)) {
+            self.advance();
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+        self.eat(&Token::Eq)?;
+        let value = self.parse_expr()?;
+        self.eat_newline();
+        Ok(Stmt::VarDecl {
+            name,
+            type_name,
+            value,
+            is_const: true,
+        })
+    }
+
     /// Parse assignment or augmented assignment or a bare expression.
     fn parse_assign_or_expr(&mut self) -> Result<Stmt, String> {
+        if let Token::Ident(name) = self.peek().clone() {
+            if self.token_at(1) == &Token::Colon
+                && matches!(self.token_at(2), Token::Ident(_))
+                && self.token_at(3) == &Token::Eq
+            {
+                self.advance();
+                self.advance();
+                let type_name = self.expect_ident()?;
+                self.eat(&Token::Eq)?;
+                let value = self.parse_expr()?;
+                self.eat_newline();
+                return Ok(Stmt::VarDecl {
+                    name,
+                    type_name: Some(type_name),
+                    value,
+                    is_const: false,
+                });
+            }
+        }
+
         // Augmented assignment: ident <op>= expr
         if let Token::Ident(name) = self.peek().clone() {
             let aug_op = match self.token_at(1) {

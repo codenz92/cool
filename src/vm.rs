@@ -6,6 +6,7 @@ use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::module_exports;
 use crate::project::ModuleResolver;
 use crate::sqlite_runtime::{self, SqlData};
 use crate::toml_runtime::{self, TomlData};
@@ -181,6 +182,7 @@ impl VM {
             "outb",
             "inb",
             "write_serial_byte",
+            "__import_file__",
             "__import_module__",
             "__exc_matches__",
         ] {
@@ -2156,6 +2158,13 @@ impl VM {
                     Some(_) => return Err(self.err("runfile() 2nd argument must be a list or tuple of args")),
                 };
                 self.run_file(&path, &extra_args)
+            }
+            "__import_file__" => {
+                let path = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("__import_file__ requires a string")),
+                };
+                self.import_file(&path)
             }
             "__import_module__" => {
                 let module_name = match args.first() {
@@ -5067,6 +5076,60 @@ impl VM {
         Ok(VmValue::Nil)
     }
 
+    fn import_file(&mut self, path: &str) -> Result<VmValue, String> {
+        let full_path = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            self.source_dir.join(path)
+        };
+        let canonical = full_path.canonicalize().unwrap_or(full_path.clone());
+        if self.importing_modules.contains(&canonical) {
+            return Err(self.err(&format!("circular import detected for '{}'", canonical.display())));
+        }
+        self.importing_modules.push(canonical.clone());
+        let source = std::fs::read_to_string(&canonical).map_err(|e| self.err(&format!("import {}: {}", path, e)))?;
+        let module_dir = canonical.parent().unwrap_or(&self.source_dir).to_path_buf();
+        let mut module_vm = VM::new(module_dir, self.module_resolver.clone());
+        module_vm.importing_modules = self.importing_modules.clone();
+
+        let mut lexer = crate::lexer::Lexer::new(&source);
+        let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                self.importing_modules.pop();
+                return Err(err);
+            }
+        };
+        let mut parser = crate::parser::Parser::new(tokens);
+        let program = match parser.parse_program().map_err(|e| self.err(&e)) {
+            Ok(program) => program,
+            Err(err) => {
+                self.importing_modules.pop();
+                return Err(err);
+            }
+        };
+        let exported_names: std::collections::HashSet<String> =
+            module_exports::exported_names(&program).into_iter().collect();
+        let chunk = match crate::compiler::compile(&program).map_err(|e| self.err(&e)) {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                self.importing_modules.pop();
+                return Err(err);
+            }
+        };
+        if let Err(err) = module_vm.run(&chunk) {
+            self.importing_modules.pop();
+            return Err(err);
+        }
+        self.importing_modules.pop();
+        for name in &exported_names {
+            if let Some(value) = module_vm.globals.get(name) {
+                self.globals.insert(name.clone(), value.clone());
+            }
+        }
+        Ok(VmValue::Nil)
+    }
+
     fn import_module(&mut self, name: &str) -> Result<VmValue, String> {
         // Try to load from source dir first (e.g., math.cool, foo/bar.cool).
         if let Some(path) = self.module_resolver.resolve_module(&self.source_dir, name) {
@@ -5081,7 +5144,6 @@ impl VM {
             let module_dir = path.parent().unwrap_or(&self.source_dir).to_path_buf();
             let mut module_vm = VM::new(module_dir, self.module_resolver.clone());
             module_vm.importing_modules = self.importing_modules.clone();
-            let builtin_keys: std::collections::HashSet<String> = module_vm.globals.keys().cloned().collect();
             let mut lexer = crate::lexer::Lexer::new(&source);
             let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
                 Ok(tokens) => tokens,
@@ -5098,6 +5160,8 @@ impl VM {
                     return Err(err);
                 }
             };
+            let exported_names: std::collections::HashSet<String> =
+                module_exports::exported_names(&program).into_iter().collect();
             let chunk = match crate::compiler::compile(&program).map_err(|e| self.err(&e)) {
                 Ok(chunk) => chunk,
                 Err(err) => {
@@ -5112,9 +5176,9 @@ impl VM {
             self.importing_modules.pop();
             // Return the module's exported namespace.
             let mut d = VmDict::new();
-            for (k, v) in &module_vm.globals {
-                if !builtin_keys.contains(k) {
-                    d.set(VmValue::Str(k.clone()), v.clone());
+            for name in &exported_names {
+                if let Some(value) = module_vm.globals.get(name) {
+                    d.set(VmValue::Str(name.clone()), value.clone());
                 }
             }
             return Ok(VmValue::Dict(Rc::new(RefCell::new(d))));

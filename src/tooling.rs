@@ -1,5 +1,6 @@
-use crate::ast::{Expr, ExceptHandler, Program, Stmt};
+use crate::ast::{ExceptHandler, Expr, Program, Stmt, Visibility};
 use crate::lexer::Lexer;
+use crate::module_exports;
 use crate::parser::Parser;
 use crate::project::ModuleResolver;
 use serde::Serialize;
@@ -39,6 +40,7 @@ pub fn diagnose_source(source: &str, path: &str) -> Vec<ToolingDiagnostic> {
     };
     let report = inspect_program(path.to_string(), &program, vec![]);
     diags.extend(check_report_warnings(&report));
+    diags.extend(type_check_program(&program, path, false, None));
     diags
 }
 
@@ -196,6 +198,12 @@ pub struct InspectAssignment {
     pub line: Option<usize>,
     pub kind: &'static str,
     pub names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_const: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -273,7 +281,7 @@ pub struct ModuleGraph {
     pub diagnostics: Vec<ToolingDiagnostic>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ModuleGraphModule {
     pub path: String,
     pub imports: Vec<ModuleGraphImport>,
@@ -396,11 +404,32 @@ pub fn build_symbol_index(path: &Path) -> Result<SymbolIndexReport, String> {
 pub fn build_check_report(path: &Path, strict: bool) -> Result<CheckReport, String> {
     let graph = build_module_graph(path)?;
     let mut diagnostics = graph.diagnostics.clone();
+    let mut parsed_modules = Vec::new();
     for module in &graph.modules {
         let program = parse_file(Path::new(&module.path))?;
         let report = inspect_program(module.path.clone(), &program, module.imports.clone());
+        parsed_modules.push((module.clone(), program, report));
+    }
+    let exports_by_path: HashMap<String, HashSet<String>> = parsed_modules
+        .iter()
+        .map(|(_, program, report)| {
+            (
+                report.path.clone(),
+                module_exports::exported_names(program).into_iter().collect(),
+            )
+        })
+        .collect();
+    for (module, program, report) in parsed_modules {
         diagnostics.extend(check_report_warnings(&report));
-        diagnostics.extend(type_check_program(&program, &module.path, strict));
+        diagnostics.extend(type_check_program(
+            &program,
+            &module.path,
+            strict,
+            Some(ModuleCheckContext {
+                imports: module.imports.clone(),
+                exports_by_path: exports_by_path.clone(),
+            }),
+        ));
     }
     diagnostics.sort_by_key(diagnostic_sort_key);
     Ok(CheckReport {
@@ -607,6 +636,15 @@ fn collect_imports_from_block(
                     collect_imports_from_block(body, current_source_dir, resolver, imports, context)?;
                 }
             }
+            Stmt::Visibility { stmt, .. } => {
+                collect_imports_from_block(
+                    std::slice::from_ref(stmt.as_ref()),
+                    current_source_dir,
+                    resolver,
+                    imports,
+                    context,
+                )?;
+            }
             _ => {}
         }
     }
@@ -782,6 +820,17 @@ fn collect_graph_imports_from_block(
                     );
                 }
             }
+            Stmt::Visibility { stmt, .. } => {
+                collect_graph_imports_from_block(
+                    std::slice::from_ref(stmt.as_ref()),
+                    current_source_dir,
+                    resolver,
+                    current_module_path,
+                    state,
+                    imports,
+                    context,
+                );
+            }
             _ => {}
         }
     }
@@ -936,15 +985,25 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
     let mut current_line = None;
 
     for stmt in program {
-        match stmt {
+        match module_exports::stmt_unwrap_visibility(stmt).0 {
             Stmt::SetLine(line) => current_line = Some(*line),
-            Stmt::FnDef { name, params, return_type, .. } => functions.push(InspectFunction {
+            Stmt::FnDef {
+                name,
+                params,
+                return_type,
+                ..
+            } => functions.push(InspectFunction {
                 line: current_line,
                 name: name.clone(),
                 params: inspect_params(params),
                 return_type: return_type.clone(),
             }),
-            Stmt::ExternFn { name, params, return_type, .. } => functions.push(InspectFunction {
+            Stmt::ExternFn {
+                name,
+                params,
+                return_type,
+                ..
+            } => functions.push(InspectFunction {
                 line: current_line,
                 name: name.clone(),
                 params: inspect_extern_params(params),
@@ -1116,6 +1175,35 @@ fn top_level_duplicate_warnings(report: &InspectReport) -> Vec<ToolingDiagnostic
         }
     }
 
+    for assignment in &report.assignments {
+        if !assignment_defines_symbol(assignment) {
+            continue;
+        }
+        for name in &assignment.names {
+            let symbol = Symbol {
+                line: assignment.line,
+                kind: assignment.kind,
+            };
+            if let Some(previous) = seen.get(name) {
+                diagnostics.push(ToolingDiagnostic {
+                    severity: DiagnosticSeverity::Warning,
+                    code: "duplicate_symbol",
+                    path: report.path.clone(),
+                    line: assignment.line,
+                    message: format!(
+                        "top-level symbol '{}' ({}) duplicates earlier {} at line {}",
+                        name,
+                        symbol.kind,
+                        previous.kind,
+                        previous.line.unwrap_or(0)
+                    ),
+                });
+            } else {
+                seen.insert(name.clone(), symbol);
+            }
+        }
+    }
+
     diagnostics
 }
 
@@ -1283,7 +1371,10 @@ fn assignment_identity_key(item: &InspectAssignment) -> String {
 }
 
 fn assignment_defines_symbol(item: &InspectAssignment) -> bool {
-    matches!(item.kind, "assign" | "data" | "aug_assign" | "unpack")
+    matches!(
+        item.kind,
+        "assign" | "var_decl" | "const" | "data" | "aug_assign" | "unpack"
+    )
 }
 
 fn import_binding_name(specifier: &str) -> String {
@@ -1322,9 +1413,14 @@ fn inspect_class_body(body: &[Stmt]) -> (Vec<InspectFunction>, Vec<InspectAssign
     let mut current_line = None;
 
     for stmt in body {
-        match stmt {
+        match module_exports::stmt_unwrap_visibility(stmt).0 {
             Stmt::SetLine(line) => current_line = Some(*line),
-            Stmt::FnDef { name, params, return_type, .. } => methods.push(InspectFunction {
+            Stmt::FnDef {
+                name,
+                params,
+                return_type,
+                ..
+            } => methods.push(InspectFunction {
                 line: current_line,
                 name: name.clone(),
                 params: inspect_params(params),
@@ -1342,17 +1438,36 @@ fn inspect_class_body(body: &[Stmt]) -> (Vec<InspectFunction>, Vec<InspectAssign
 }
 
 fn inspect_assignment(stmt: &Stmt, line: Option<usize>) -> Option<InspectAssignment> {
-    let (kind, names) = match stmt {
-        Stmt::Assign { name, .. } => ("assign", vec![name.clone()]),
-        Stmt::Data { name, .. } => ("data", vec![name.clone()]),
-        Stmt::AugAssign { name, .. } => ("aug_assign", vec![name.clone()]),
-        Stmt::Unpack { names, .. } => ("unpack", names.clone()),
-        Stmt::Global(names) => ("global", names.clone()),
-        Stmt::Nonlocal(names) => ("nonlocal", names.clone()),
+    let (stmt, visibility) = module_exports::stmt_unwrap_visibility(stmt);
+    let (kind, names, type_name, is_const) = match stmt {
+        Stmt::Assign { name, .. } => ("assign", vec![name.clone()], None, false),
+        Stmt::VarDecl {
+            name,
+            type_name,
+            is_const,
+            ..
+        } => (
+            if *is_const { "const" } else { "var_decl" },
+            vec![name.clone()],
+            type_name.clone(),
+            *is_const,
+        ),
+        Stmt::Data { name, .. } => ("data", vec![name.clone()], None, false),
+        Stmt::AugAssign { name, .. } => ("aug_assign", vec![name.clone()], None, false),
+        Stmt::Unpack { names, .. } => ("unpack", names.clone(), None, false),
+        Stmt::Global(names) => ("global", names.clone(), None, false),
+        Stmt::Nonlocal(names) => ("nonlocal", names.clone(), None, false),
         _ => return None,
     };
 
-    Some(InspectAssignment { line, kind, names })
+    Some(InspectAssignment {
+        line,
+        kind,
+        names,
+        type_name,
+        is_const,
+        visibility,
+    })
 }
 
 fn parse_file(path: &Path) -> Result<Program, String> {
@@ -1385,6 +1500,17 @@ fn strip_line_markers(program: &Program) -> Program {
 fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
     match stmt {
         Stmt::SetLine(_) => None,
+        Stmt::VarDecl {
+            name,
+            type_name,
+            value,
+            is_const,
+        } => Some(Stmt::VarDecl {
+            name: name.clone(),
+            type_name: type_name.clone(),
+            value: value.clone(),
+            is_const: *is_const,
+        }),
         Stmt::If {
             condition,
             then_body,
@@ -1477,53 +1603,192 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             as_name: as_name.clone(),
             body: strip_line_markers(body),
         }),
+        Stmt::Visibility { visibility, stmt } => Some(Stmt::Visibility {
+            visibility: *visibility,
+            stmt: Box::new(strip_stmt(stmt).unwrap_or_else(|| stmt.as_ref().clone())),
+        }),
         _ => Some(stmt.clone()),
     }
 }
 
-// ── Type checker (v0) ────────────────────────────────────────────────────────
-//
-// Catches obvious literal-type mismatches at typed-def boundaries.
-// Only fires when functions carry explicit type annotations — untyped code
-// is unchanged. Does not attempt full type inference; non-literal expressions
-// (variables, calls, arithmetic) are considered unknown and not flagged.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
-pub fn type_check_program(program: &[Stmt], path: &str, strict: bool) -> Vec<ToolingDiagnostic> {
+const BUILTIN_NAMES: &[&str] = &[
+    "print",
+    "len",
+    "range",
+    "input",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "list",
+    "dict",
+    "tuple",
+    "set",
+    "min",
+    "max",
+    "sum",
+    "abs",
+    "round",
+    "sorted",
+    "reversed",
+    "enumerate",
+    "zip",
+    "map",
+    "filter",
+    "type",
+    "isinstance",
+    "hasattr",
+    "getattr",
+    "open",
+    "repr",
+    "ord",
+    "chr",
+    "hex",
+    "bin",
+    "oct",
+    "any",
+    "all",
+    "callable",
+    "i8",
+    "u8",
+    "i16",
+    "u16",
+    "i32",
+    "u32",
+    "i64",
+    "isize",
+    "usize",
+    "word_bits",
+    "word_bytes",
+    "asm",
+    "malloc",
+    "free",
+    "read_byte",
+    "write_byte",
+    "read_i8",
+    "write_i8",
+    "read_u8",
+    "write_u8",
+    "read_i16",
+    "write_i16",
+    "read_u16",
+    "write_u16",
+    "read_i32",
+    "write_i32",
+    "read_u32",
+    "write_u32",
+    "read_i64",
+    "write_i64",
+    "read_f64",
+    "write_f64",
+    "read_str",
+    "write_str",
+    "read_byte_volatile",
+    "write_byte_volatile",
+    "read_i8_volatile",
+    "write_i8_volatile",
+    "read_u8_volatile",
+    "write_u8_volatile",
+    "read_i16_volatile",
+    "write_i16_volatile",
+    "read_u16_volatile",
+    "write_u16_volatile",
+    "read_i32_volatile",
+    "write_i32_volatile",
+    "read_u32_volatile",
+    "write_u32_volatile",
+    "read_i64_volatile",
+    "write_i64_volatile",
+    "read_f64_volatile",
+    "write_f64_volatile",
+    "outb",
+    "inb",
+    "write_serial_byte",
+    "runfile",
+    "super",
+    "eval",
+    "Exception",
+    "ValueError",
+    "TypeError",
+    "RuntimeError",
+    "IndexError",
+    "KeyError",
+    "AttributeError",
+    "NameError",
+];
+
+#[derive(Clone)]
+struct ModuleCheckContext {
+    imports: Vec<ModuleGraphImport>,
+    exports_by_path: HashMap<String, HashSet<String>>,
+}
+
+#[derive(Clone, Default)]
+struct SymbolScope {
+    names: HashSet<String>,
+    consts: HashSet<String>,
+    module_bindings: HashMap<String, String>,
+    builtin_module_bindings: HashSet<String>,
+    globals_declared: HashSet<String>,
+    nonlocals_declared: HashSet<String>,
+}
+
+fn type_check_program(
+    program: &[Stmt],
+    path: &str,
+    strict: bool,
+    context: Option<ModuleCheckContext>,
+) -> Vec<ToolingDiagnostic> {
     let mut checker = TypeChecker {
         path: path.to_string(),
+        context,
         typed_fns: HashMap::new(),
         type_env: HashMap::new(),
+        annotated_env: HashMap::new(),
+        symbol_scopes: Vec::new(),
         current_return_type: None,
         current_line: 1,
         diagnostics: Vec::new(),
     };
     checker.collect_fn_signatures(program);
+    checker.symbol_scopes.push(checker.collect_scope(program, true));
     if strict {
         checker.check_annotation_coverage(program);
     }
-    checker.check_stmts(program);
+    checker.check_stmts(program, 0);
     checker.diagnostics
 }
 
 struct TypeChecker {
     path: String,
+    context: Option<ModuleCheckContext>,
     // fn name → (param types per position, return type)
     typed_fns: HashMap<String, (Vec<Option<String>>, Option<String>)>,
-    // Local variable → inferred type (e.g. "int", "str", "f64", "i32")
+    // Variable → currently-known type (inferred or annotated).
     type_env: HashMap<String, String>,
+    // Variable → explicit declared/annotated type.
+    annotated_env: HashMap<String, String>,
+    symbol_scopes: Vec<SymbolScope>,
     current_return_type: Option<String>,
     current_line: usize,
     diagnostics: Vec<ToolingDiagnostic>,
 }
 
 impl TypeChecker {
-    // Pass 1: collect all typed FnDef signatures visible at the top level and inside classes.
     fn collect_fn_signatures(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
-            match stmt {
-                Stmt::FnDef { name, params, return_type, .. } => {
-                    let param_types: Vec<Option<String>> =
-                        params.iter().map(|p| p.type_name.clone()).collect();
+            match module_exports::stmt_unwrap_visibility(stmt).0 {
+                Stmt::FnDef {
+                    name,
+                    params,
+                    return_type,
+                    ..
+                } => {
+                    let param_types: Vec<Option<String>> = params.iter().map(|p| p.type_name.clone()).collect();
                     let has_types = param_types.iter().any(|t| t.is_some()) || return_type.is_some();
                     if has_types {
                         self.typed_fns.insert(name.clone(), (param_types, return_type.clone()));
@@ -1535,13 +1800,16 @@ impl TypeChecker {
         }
     }
 
-    // Strict mode: flag top-level def params/returns without type annotations.
     fn check_annotation_coverage(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
-            match stmt {
+            match module_exports::stmt_unwrap_visibility(stmt).0 {
                 Stmt::SetLine(n) => self.current_line = *n,
-                Stmt::FnDef { name, params, return_type, .. } => {
-                    // Skip special methods and private-style names that are implementation detail.
+                Stmt::FnDef {
+                    name,
+                    params,
+                    return_type,
+                    ..
+                } => {
                     if name.starts_with("__") && name.ends_with("__") {
                         continue;
                     }
@@ -1571,63 +1839,158 @@ impl TypeChecker {
         }
     }
 
-    // Pass 2: walk statements, checking calls and returns.
-    fn check_stmts(&mut self, stmts: &[Stmt]) {
+    fn check_stmts(&mut self, stmts: &[Stmt], nesting: usize) {
         for stmt in stmts {
-            self.check_stmt(stmt);
+            self.check_stmt(stmt, nesting);
         }
     }
 
-    fn check_stmt(&mut self, stmt: &Stmt) {
-        match stmt {
+    fn check_stmt(&mut self, raw_stmt: &Stmt, nesting: usize) {
+        if let Stmt::Visibility { stmt, .. } = raw_stmt {
+            if nesting > 0 {
+                self.emit(
+                    "invalid_visibility",
+                    "public/private visibility is only valid at module scope",
+                );
+            }
+            self.check_stmt(stmt, nesting);
+            return;
+        }
+
+        match raw_stmt {
             Stmt::SetLine(n) => self.current_line = *n,
 
-            Stmt::FnDef { name, params, body, return_type, .. } => {
-                let saved_ret = self.current_return_type.clone();
-                let saved_env = self.type_env.clone();
-                // Seed the env with typed parameters so the body can track their types.
+            Stmt::FnDef {
+                name,
+                params,
+                body,
+                return_type,
+                ..
+            } => {
                 for param in params {
-                    if let Some(type_name) = &param.type_name {
-                        self.type_env.insert(param.name.clone(), type_name.clone());
+                    if let Some(default) = &param.default {
+                        self.check_expr(default);
                     }
                 }
+
+                let saved_ret = self.current_return_type.clone();
+                let saved_env = self.type_env.clone();
+                let saved_annotated = self.annotated_env.clone();
+                let mut scope = self.collect_scope(body, false);
+                for param in params {
+                    scope.names.insert(param.name.clone());
+                    if let Some(type_name) = &param.type_name {
+                        self.type_env.insert(param.name.clone(), type_name.clone());
+                        self.annotated_env.insert(param.name.clone(), type_name.clone());
+                    }
+                }
+                self.symbol_scopes.push(scope);
                 self.current_return_type = if self.typed_fns.contains_key(name) {
                     return_type.clone()
                 } else {
                     None
                 };
-                self.check_stmts(body);
+                self.check_stmts(body, nesting + 1);
+                if let Some(ret_type) = &return_type {
+                    if ret_type != "void" && !self.block_guarantees_return(body) {
+                        self.emit(
+                            "missing_return",
+                            &format!("function '{}' may exit without returning '{}'", name, ret_type),
+                        );
+                    }
+                }
                 self.current_return_type = saved_ret;
                 self.type_env = saved_env;
+                self.annotated_env = saved_annotated;
+                self.symbol_scopes.pop();
+            }
+
+            Stmt::Class { body, .. } => {
+                let saved_env = self.type_env.clone();
+                let saved_annotated = self.annotated_env.clone();
+                self.symbol_scopes.push(self.collect_scope(body, false));
+                self.check_stmts(body, nesting + 1);
+                self.symbol_scopes.pop();
+                self.type_env = saved_env;
+                self.annotated_env = saved_annotated;
             }
 
             Stmt::Return(opt_expr) => {
-                if let (Some(ret_type), Some(expr)) = (&self.current_return_type.clone(), opt_expr) {
-                    let actual = literal_kind(expr)
-                        .map(str::to_owned)
-                        .or_else(|| {
-                            if let Expr::Ident(v) = expr {
-                                self.type_env.get(v).cloned()
-                            } else {
-                                self.infer_type(expr)
+                if let Some(ret_type) = &self.current_return_type.clone() {
+                    match opt_expr {
+                        Some(expr) => {
+                            self.check_expr(expr);
+                            if let Some(actual) = self.infer_type(expr) {
+                                if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), ret_type) {
+                                    self.emit("type_error", &format!("return type mismatch: {msg}"));
+                                }
                             }
-                        });
-                    if let Some(actual) = actual {
-                        if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), ret_type) {
-                            self.emit("type_error", &format!("return type mismatch: {msg}"));
                         }
+                        None if ret_type != "void" => {
+                            self.emit(
+                                "type_error",
+                                &format!("return type mismatch: expected '{}', got nil", ret_type),
+                            );
+                        }
+                        None => {}
                     }
+                } else if let Some(expr) = opt_expr {
+                    self.check_expr(expr);
                 }
             }
 
             Stmt::Expr(e) => self.check_expr(e),
+
             Stmt::Assign { name, value } => {
                 self.check_expr(value);
-                if let Some(inferred) = self.infer_type(value) {
+                if self.is_const_binding(name) {
+                    self.emit(
+                        "immutable_reassign",
+                        &format!("cannot reassign immutable binding '{}'", name),
+                    );
+                }
+                if let Some(expected) = self.annotated_env.get(name).cloned() {
+                    if let Some(actual) = self.infer_type(value) {
+                        if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), &expected) {
+                            self.emit("type_error", &format!("assignment to '{}': {msg}", name));
+                        }
+                    }
+                    self.type_env.insert(name.clone(), expected);
+                } else if let Some(inferred) = self.infer_type(value) {
                     self.type_env.insert(name.clone(), inferred);
                 }
             }
-            Stmt::AugAssign { value: e, .. } => self.check_expr(e),
+
+            Stmt::VarDecl {
+                name, type_name, value, ..
+            } => {
+                self.check_expr(value);
+                if let Some(expected) = type_name {
+                    if let Some(actual) = self.infer_type(value) {
+                        if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), expected) {
+                            self.emit("type_error", &format!("binding '{}': {msg}", name));
+                        }
+                    }
+                    self.type_env.insert(name.clone(), expected.clone());
+                    self.annotated_env.insert(name.clone(), expected.clone());
+                } else if let Some(inferred) = self.infer_type(value) {
+                    self.type_env.insert(name.clone(), inferred);
+                }
+            }
+
+            Stmt::AugAssign { name, value, .. } => {
+                if self.is_const_binding(name) {
+                    self.emit(
+                        "immutable_reassign",
+                        &format!("cannot reassign immutable binding '{}'", name),
+                    );
+                }
+                if !self.lookup_symbol(name) {
+                    self.emit("undefined_symbol", &format!("unknown symbol '{}'", name));
+                }
+                self.check_expr(value);
+            }
+
             Stmt::SetItem { object, index, value } => {
                 self.check_expr(object);
                 self.check_expr(index);
@@ -1637,45 +2000,82 @@ impl TypeChecker {
                 self.check_expr(object);
                 self.check_expr(value);
             }
-            Stmt::Unpack { value, .. } => self.check_expr(value),
+            Stmt::Unpack { names, value } => {
+                self.check_expr(value);
+                for name in names {
+                    if self.is_const_binding(name) {
+                        self.emit(
+                            "immutable_reassign",
+                            &format!("cannot reassign immutable binding '{}'", name),
+                        );
+                    }
+                }
+            }
             Stmt::UnpackTargets { targets, value } => {
-                for t in targets {
-                    self.check_expr(t);
+                for target in targets {
+                    if let Expr::Ident(name) = target {
+                        if self.is_const_binding(name) {
+                            self.emit(
+                                "immutable_reassign",
+                                &format!("cannot reassign immutable binding '{}'", name),
+                            );
+                        }
+                    } else {
+                        self.check_expr(target);
+                    }
                 }
                 self.check_expr(value);
             }
 
-            Stmt::If { condition, then_body, elif_clauses, else_body } => {
+            Stmt::If {
+                condition,
+                then_body,
+                elif_clauses,
+                else_body,
+            } => {
                 self.check_expr(condition);
-                self.check_stmts(then_body);
+                self.check_stmts(then_body, nesting);
                 for (cond, blk) in elif_clauses {
                     self.check_expr(cond);
-                    self.check_stmts(blk);
+                    self.check_stmts(blk, nesting);
                 }
                 if let Some(blk) = else_body {
-                    self.check_stmts(blk);
+                    self.check_stmts(blk, nesting);
                 }
             }
             Stmt::While { condition, body } => {
                 self.check_expr(condition);
-                self.check_stmts(body);
+                self.check_stmts(body, nesting);
             }
-            Stmt::For { iter, body, .. } => {
+            Stmt::For { var, iter, body } => {
                 self.check_expr(iter);
-                self.check_stmts(body);
-            }
-            Stmt::Class { body, .. } => self.check_stmts(body),
-            Stmt::Try { body, handlers, else_body, finally_body } => {
-                self.check_stmts(body);
-                for h in handlers {
-                    self.check_stmts(&h.body);
+                if !self.lookup_symbol(var) {
+                    if let Some(scope) = self.symbol_scopes.last_mut() {
+                        scope.names.insert(var.clone());
+                    }
                 }
-                if let Some(b) = else_body { self.check_stmts(b); }
-                if let Some(b) = finally_body { self.check_stmts(b); }
+                self.check_stmts(body, nesting);
+            }
+            Stmt::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
+                self.check_stmts(body, nesting);
+                for h in handlers {
+                    self.check_stmts(&h.body, nesting);
+                }
+                if let Some(b) = else_body {
+                    self.check_stmts(b, nesting);
+                }
+                if let Some(b) = finally_body {
+                    self.check_stmts(b, nesting);
+                }
             }
             Stmt::With { expr, body, .. } => {
                 self.check_expr(expr);
-                self.check_stmts(body);
+                self.check_stmts(body, nesting);
             }
             Stmt::Raise(Some(e)) => self.check_expr(e),
             _ => {}
@@ -1684,34 +2084,33 @@ impl TypeChecker {
 
     fn check_expr(&mut self, expr: &Expr) {
         match expr {
+            Expr::Ident(name) => {
+                if !self.lookup_symbol(name) {
+                    self.emit("undefined_symbol", &format!("unknown symbol '{}'", name));
+                }
+            }
             Expr::Call { callee, args, kwargs } => {
-                // Check typed-def call sites: literal args and variable args with known types.
                 if let Expr::Ident(fn_name) = callee.as_ref() {
                     if let Some((param_types, _)) = self.typed_fns.get(fn_name).cloned() {
                         for (i, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
                             if let Some(type_name) = param_type {
-                                let mismatch = if let Some(actual) = literal_kind(arg) {
-                                    type_mismatch_msg(actual, &type_name)
-                                } else if let Expr::Ident(var) = arg {
-                                    self.type_env.get(var).and_then(|vt| {
-                                        type_mismatch_msg(normalize_to_kind(vt), &type_name)
-                                    })
-                                } else {
-                                    None
-                                };
+                                let mismatch = self
+                                    .infer_type(arg)
+                                    .and_then(|actual| type_mismatch_msg(normalize_to_kind(&actual), &type_name));
                                 if let Some(msg) = mismatch {
-                                    self.emit(
-                                        "type_error",
-                                        &format!("argument {} to '{}': {msg}", i + 1, fn_name),
-                                    );
+                                    self.emit("type_error", &format!("argument {} to '{}': {msg}", i + 1, fn_name));
                                 }
                             }
                         }
                     }
                 }
                 self.check_expr(callee);
-                for a in args { self.check_expr(a); }
-                for (_, v) in kwargs { self.check_expr(v); }
+                for a in args {
+                    self.check_expr(a);
+                }
+                for (_, v) in kwargs {
+                    self.check_expr(v);
+                }
             }
             Expr::BinOp { left, right, .. } => {
                 self.check_expr(left);
@@ -1724,12 +2123,36 @@ impl TypeChecker {
             }
             Expr::Slice { object, start, stop } => {
                 self.check_expr(object);
-                if let Some(e) = start { self.check_expr(e); }
-                if let Some(e) = stop { self.check_expr(e); }
+                if let Some(e) = start {
+                    self.check_expr(e);
+                }
+                if let Some(e) = stop {
+                    self.check_expr(e);
+                }
             }
-            Expr::Attr { object, .. } => self.check_expr(object),
+            Expr::Attr { object, name } => {
+                if let Expr::Ident(binding) = object.as_ref() {
+                    if let Some(module_path) = self.lookup_module_binding(binding) {
+                        let exported = self
+                            .context
+                            .as_ref()
+                            .and_then(|ctx| ctx.exports_by_path.get(module_path));
+                        if let Some(exports) = exported {
+                            if !exports.contains(name) {
+                                self.emit(
+                                    "import_validation",
+                                    &format!("module '{}' does not export '{}'", binding, name),
+                                );
+                            }
+                        }
+                    }
+                }
+                self.check_expr(object);
+            }
             Expr::List(items) | Expr::Tuple(items) => {
-                for e in items { self.check_expr(e); }
+                for e in items {
+                    self.check_expr(e);
+                }
             }
             Expr::Dict(pairs) => {
                 for (k, v) in pairs {
@@ -1737,21 +2160,59 @@ impl TypeChecker {
                     self.check_expr(v);
                 }
             }
-            Expr::Ternary { condition, then_expr, else_expr } => {
+            Expr::FString(parts) => {
+                for part in parts {
+                    if let crate::ast::FStringPart::Expr(expr) = part {
+                        self.check_expr(expr);
+                    }
+                }
+            }
+            Expr::Lambda { params, body } => {
+                let saved_env = self.type_env.clone();
+                let saved_annotated = self.annotated_env.clone();
+                let mut scope = SymbolScope::default();
+                for param in params {
+                    scope.names.insert(param.name.clone());
+                    if let Some(type_name) = &param.type_name {
+                        self.type_env.insert(param.name.clone(), type_name.clone());
+                        self.annotated_env.insert(param.name.clone(), type_name.clone());
+                    }
+                }
+                self.symbol_scopes.push(scope);
+                self.check_expr(body);
+                self.symbol_scopes.pop();
+                self.type_env = saved_env;
+                self.annotated_env = saved_annotated;
+            }
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 self.check_expr(condition);
                 self.check_expr(then_expr);
                 self.check_expr(else_expr);
             }
-            Expr::ListComp { expr, iter, condition, .. } => {
-                self.check_expr(expr);
+            Expr::ListComp {
+                expr,
+                var,
+                iter,
+                condition,
+            } => {
                 self.check_expr(iter);
-                if let Some(c) = condition { self.check_expr(c); }
+                let mut scope = SymbolScope::default();
+                scope.names.insert(var.clone());
+                self.symbol_scopes.push(scope);
+                self.check_expr(expr);
+                if let Some(c) = condition {
+                    self.check_expr(c);
+                }
+                self.symbol_scopes.pop();
             }
             _ => {}
         }
     }
 
-    /// Infer the type of an expression, returning a type string or None if unknown.
     fn infer_type(&self, expr: &Expr) -> Option<String> {
         match expr {
             Expr::Int(_) => Some("int".to_string()),
@@ -1768,7 +2229,289 @@ impl TypeChecker {
                 }
                 None
             }
+            Expr::Ternary {
+                then_expr, else_expr, ..
+            } => {
+                let then_ty = self.infer_type(then_expr)?;
+                let else_ty = self.infer_type(else_expr)?;
+                if normalize_to_kind(&then_ty) == normalize_to_kind(&else_ty) {
+                    Some(then_ty)
+                } else {
+                    None
+                }
+            }
             _ => None,
+        }
+    }
+
+    fn collect_scope(&self, stmts: &[Stmt], include_builtins: bool) -> SymbolScope {
+        let mut scope = SymbolScope::default();
+        if include_builtins {
+            for builtin in BUILTIN_NAMES {
+                scope.names.insert((*builtin).to_string());
+            }
+        }
+        self.collect_scope_directives(stmts, &mut scope);
+        let mut current_line = 1usize;
+        self.collect_scope_bindings(stmts, &mut scope, &mut current_line);
+        scope
+    }
+
+    fn collect_scope_directives(&self, stmts: &[Stmt], scope: &mut SymbolScope) {
+        for raw_stmt in stmts {
+            let stmt = module_exports::stmt_unwrap_visibility(raw_stmt).0;
+            match stmt {
+                Stmt::Global(names) => {
+                    for name in names {
+                        scope.globals_declared.insert(name.clone());
+                    }
+                }
+                Stmt::Nonlocal(names) => {
+                    for name in names {
+                        scope.nonlocals_declared.insert(name.clone());
+                    }
+                }
+                Stmt::If {
+                    then_body,
+                    elif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    self.collect_scope_directives(then_body, scope);
+                    for (_, body) in elif_clauses {
+                        self.collect_scope_directives(body, scope);
+                    }
+                    if let Some(body) = else_body {
+                        self.collect_scope_directives(body, scope);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::For { body, .. } | Stmt::With { body, .. } => {
+                    self.collect_scope_directives(body, scope);
+                }
+                Stmt::Try {
+                    body,
+                    handlers,
+                    else_body,
+                    finally_body,
+                } => {
+                    self.collect_scope_directives(body, scope);
+                    for handler in handlers {
+                        self.collect_scope_directives(&handler.body, scope);
+                    }
+                    if let Some(body) = else_body {
+                        self.collect_scope_directives(body, scope);
+                    }
+                    if let Some(body) = finally_body {
+                        self.collect_scope_directives(body, scope);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_scope_bindings(&self, stmts: &[Stmt], scope: &mut SymbolScope, current_line: &mut usize) {
+        for raw_stmt in stmts {
+            let stmt = module_exports::stmt_unwrap_visibility(raw_stmt).0;
+            match stmt {
+                Stmt::SetLine(line) => *current_line = *line,
+                Stmt::Assign { name, .. } => self.add_scope_binding(scope, name, false),
+                Stmt::VarDecl { name, is_const, .. } => self.add_scope_binding(scope, name, *is_const),
+                Stmt::FnDef { name, .. }
+                | Stmt::ExternFn { name, .. }
+                | Stmt::Data { name, .. }
+                | Stmt::Class { name, .. }
+                | Stmt::Struct { name, .. }
+                | Stmt::Union { name, .. } => self.add_scope_binding(scope, name, false),
+                Stmt::Unpack { names, .. } => {
+                    for name in names {
+                        self.add_scope_binding(scope, name, false);
+                    }
+                }
+                Stmt::For { var, body, .. } => {
+                    self.add_scope_binding(scope, var, false);
+                    self.collect_scope_bindings(body, scope, current_line);
+                }
+                Stmt::With { as_name, body, .. } => {
+                    if let Some(name) = as_name {
+                        self.add_scope_binding(scope, name, false);
+                    }
+                    self.collect_scope_bindings(body, scope, current_line);
+                }
+                Stmt::If {
+                    then_body,
+                    elif_clauses,
+                    else_body,
+                    ..
+                } => {
+                    self.collect_scope_bindings(then_body, scope, current_line);
+                    for (_, body) in elif_clauses {
+                        self.collect_scope_bindings(body, scope, current_line);
+                    }
+                    if let Some(body) = else_body {
+                        self.collect_scope_bindings(body, scope, current_line);
+                    }
+                }
+                Stmt::While { body, .. } => self.collect_scope_bindings(body, scope, current_line),
+                Stmt::Try {
+                    body,
+                    handlers,
+                    else_body,
+                    finally_body,
+                } => {
+                    self.collect_scope_bindings(body, scope, current_line);
+                    for handler in handlers {
+                        if let Some(name) = &handler.as_name {
+                            self.add_scope_binding(scope, name, false);
+                        }
+                        self.collect_scope_bindings(&handler.body, scope, current_line);
+                    }
+                    if let Some(body) = else_body {
+                        self.collect_scope_bindings(body, scope, current_line);
+                    }
+                    if let Some(body) = finally_body {
+                        self.collect_scope_bindings(body, scope, current_line);
+                    }
+                }
+                Stmt::Import(specifier) => {
+                    if let Some(import) = self.find_import(*current_line, ModuleImportKind::File, specifier.as_str()) {
+                        if let Some(resolved) = &import.resolved {
+                            if let Some(exports) =
+                                self.context.as_ref().and_then(|ctx| ctx.exports_by_path.get(resolved))
+                            {
+                                for name in exports {
+                                    self.add_scope_binding(scope, name, false);
+                                }
+                            }
+                        }
+                    }
+                }
+                Stmt::ImportModule(name) => {
+                    let binding = import_binding_name(name);
+                    self.add_scope_binding(scope, &binding, false);
+                    if let Some(import) = self.find_import(*current_line, ModuleImportKind::Module, name.as_str()) {
+                        if let Some(resolved) = &import.resolved {
+                            scope.module_bindings.insert(binding.clone(), resolved.clone());
+                        }
+                    } else if self
+                        .find_import(*current_line, ModuleImportKind::Builtin, name.as_str())
+                        .is_some()
+                    {
+                        scope.builtin_module_bindings.insert(binding);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn add_scope_binding(&self, scope: &mut SymbolScope, name: &str, is_const: bool) {
+        if scope.globals_declared.contains(name) || scope.nonlocals_declared.contains(name) {
+            return;
+        }
+        scope.names.insert(name.to_string());
+        if is_const {
+            scope.consts.insert(name.to_string());
+        }
+    }
+
+    fn lookup_symbol(&self, name: &str) -> bool {
+        for scope in self.symbol_scopes.iter().rev() {
+            if scope.globals_declared.contains(name) || scope.nonlocals_declared.contains(name) {
+                continue;
+            }
+            if scope.names.contains(name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn is_const_binding(&self, name: &str) -> bool {
+        for scope in self.symbol_scopes.iter().rev() {
+            if scope.globals_declared.contains(name) || scope.nonlocals_declared.contains(name) {
+                continue;
+            }
+            if scope.names.contains(name) {
+                return scope.consts.contains(name);
+            }
+        }
+        false
+    }
+
+    fn lookup_module_binding(&self, name: &str) -> Option<&str> {
+        for scope in self.symbol_scopes.iter().rev() {
+            if scope.globals_declared.contains(name) || scope.nonlocals_declared.contains(name) {
+                continue;
+            }
+            if let Some(path) = scope.module_bindings.get(name) {
+                return Some(path);
+            }
+            if scope.names.contains(name) {
+                return None;
+            }
+        }
+        None
+    }
+
+    fn find_import(&self, line: usize, kind: ModuleImportKind, specifier: &str) -> Option<&ModuleGraphImport> {
+        self.context
+            .as_ref()?
+            .imports
+            .iter()
+            .find(|import| import.line == Some(line) && import.kind == kind && import.specifier == specifier)
+    }
+
+    fn block_guarantees_return(&self, stmts: &[Stmt]) -> bool {
+        for stmt in stmts {
+            if self.stmt_guarantees_return(stmt) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn stmt_guarantees_return(&self, raw_stmt: &Stmt) -> bool {
+        let stmt = module_exports::stmt_unwrap_visibility(raw_stmt).0;
+        match stmt {
+            Stmt::Return(_) | Stmt::Raise(_) => true,
+            Stmt::If {
+                then_body,
+                elif_clauses,
+                else_body,
+                ..
+            } => {
+                let Some(else_body) = else_body else {
+                    return false;
+                };
+                self.block_guarantees_return(then_body)
+                    && elif_clauses.iter().all(|(_, body)| self.block_guarantees_return(body))
+                    && self.block_guarantees_return(else_body)
+            }
+            Stmt::While { condition, body } => {
+                matches!(condition, Expr::Bool(true)) && self.block_guarantees_return(body)
+            }
+            Stmt::Try {
+                body,
+                handlers,
+                else_body,
+                finally_body,
+            } => {
+                if let Some(finally_body) = finally_body {
+                    if self.block_guarantees_return(finally_body) {
+                        return true;
+                    }
+                }
+                self.block_guarantees_return(body)
+                    && handlers
+                        .iter()
+                        .all(|handler| self.block_guarantees_return(&handler.body))
+                    && else_body
+                        .as_ref()
+                        .map(|body| self.block_guarantees_return(body))
+                        .unwrap_or(true)
+            }
+            _ => false,
         }
     }
 
@@ -1780,18 +2523,6 @@ impl TypeChecker {
             line: Some(self.current_line),
             message: message.to_string(),
         });
-    }
-}
-
-/// Classify a literal expression. Returns a short kind string, or None for non-literals.
-fn literal_kind(expr: &Expr) -> Option<&'static str> {
-    match expr {
-        Expr::Int(_) => Some("int"),
-        Expr::Float(_) => Some("float"),
-        Expr::Str(_) => Some("str"),
-        Expr::Bool(_) => Some("bool"),
-        Expr::Nil => Some("nil"),
-        _ => None,
     }
 }
 
@@ -1819,7 +2550,9 @@ fn type_mismatch_msg(actual: &str, expected: &str) -> Option<String> {
     match actual {
         "int" => {
             if expected == "str" {
-                Some(format!("expected '{expected}', got integer — use str(value) to convert"))
+                Some(format!(
+                    "expected '{expected}', got integer — use str(value) to convert"
+                ))
             } else {
                 None // int is compatible with all numeric types (may truncate, but not flagged here)
             }
@@ -1839,9 +2572,13 @@ fn type_mismatch_msg(actual: &str, expected: &str) -> Option<String> {
             if expected == "str" {
                 None
             } else if is_int_type {
-                Some(format!("expected integer type '{expected}', got str — use int(value) to convert"))
+                Some(format!(
+                    "expected integer type '{expected}', got str — use int(value) to convert"
+                ))
             } else if is_float_type {
-                Some(format!("expected float type '{expected}', got str — use float(value) to convert"))
+                Some(format!(
+                    "expected float type '{expected}', got str — use float(value) to convert"
+                ))
             } else if expected == "bool" {
                 Some(format!("expected '{expected}', got str — use bool(value) to convert"))
             } else {

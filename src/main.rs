@@ -11,6 +11,7 @@ mod lexer;
 mod llvm_codegen;
 mod logging_runtime;
 mod lsp;
+mod module_exports;
 mod opcode;
 mod parser;
 mod project;

@@ -11,6 +11,7 @@
 
 use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
 use crate::core_runtime;
+use crate::module_exports;
 use crate::project::ModuleResolver;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -9334,7 +9335,7 @@ impl<'ctx> Compiler<'ctx> {
 
     fn declare_top_level_types(&mut self, program: &Program) -> Result<(), String> {
         for stmt in program {
-            match stmt {
+            match module_exports::stmt_unwrap_visibility(stmt).0 {
                 Stmt::Struct {
                     name,
                     fields,
@@ -9364,7 +9365,7 @@ impl<'ctx> Compiler<'ctx> {
                 type_name,
                 section,
                 ..
-            } = stmt
+            } = module_exports::stmt_unwrap_visibility(stmt).0
             {
                 if self.data_globals.contains_key(name) {
                     continue;
@@ -9390,7 +9391,7 @@ impl<'ctx> Compiler<'ctx> {
 
     fn declare_top_level_functions(&mut self, program: &Program) -> Result<(), String> {
         for stmt in program {
-            match stmt {
+            match module_exports::stmt_unwrap_visibility(stmt).0 {
                 Stmt::FnDef {
                     name,
                     params,
@@ -9618,7 +9619,7 @@ impl<'ctx> Compiler<'ctx> {
         let mut current_line = 1usize;
         self.allow_toplevel_defs = true;
         for stmt in program {
-            match stmt {
+            match module_exports::stmt_unwrap_visibility(stmt).0 {
                 Stmt::SetLine(line) => current_line = *line,
                 Stmt::Pass => {}
                 Stmt::FnDef { .. }
@@ -10004,7 +10005,7 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             // ── variable assignment ───────────────────────────────────────────
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value } | Stmt::VarDecl { name, value, .. } => {
                 // Detect struct construction for GEP fast path tracking
                 let struct_type_name = if let Expr::Call { callee, .. } = value {
                     if let Expr::Ident(n) = callee.as_ref() {
@@ -10369,6 +10370,10 @@ impl<'ctx> Compiler<'ctx> {
             // ── import module_name ───────────────────────────────────────────
             Stmt::ImportModule(name) => {
                 self.compile_import_module(name)?;
+            }
+
+            Stmt::Visibility { stmt, .. } => {
+                self.compile_stmt(stmt)?;
             }
 
             other => {
@@ -10935,7 +10940,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         for stmt in body {
-            match stmt {
+            match module_exports::stmt_unwrap_visibility(stmt).0 {
                 Stmt::FnDef {
                     name: mname, params, ..
                 } => {
@@ -10945,7 +10950,7 @@ impl<'ctx> Compiler<'ctx> {
                     }
                     method_params.insert(mname.clone(), self.erase_param_type_annotations(params));
                 }
-                Stmt::Assign { name: aname, value } => {
+                Stmt::Assign { name: aname, value } | Stmt::VarDecl { name: aname, value, .. } => {
                     // Instance attribute assignment - strip "self." prefix for storage
                     let attr_name = if aname.starts_with("self.") {
                         aname.strip_prefix("self.").unwrap().to_string()
@@ -10973,7 +10978,7 @@ impl<'ctx> Compiler<'ctx> {
                 params,
                 section,
                 ..
-            } = stmt
+            } = module_exports::stmt_unwrap_visibility(stmt).0
             {
                 let fn_name = self.mangle_global_name(&format!("{}#{}.{}", name, mname, name));
                 let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
@@ -12208,7 +12213,7 @@ impl<'ctx> Compiler<'ctx> {
             self.declare_top_level_functions(&program)?;
             self.compile_stmts(&program)?;
 
-            let mut exports: Vec<String> = self.locals.keys().cloned().collect();
+            let mut exports = module_exports::exported_names(&program);
             exports.sort();
 
             if !self.current_block_terminated() {
@@ -12221,13 +12226,12 @@ impl<'ctx> Compiler<'ctx> {
                     .unwrap()
                     .into_struct_value();
                 for export in &exports {
+                    let Some(ptr) = self.locals.get(export).copied() else {
+                        continue;
+                    };
                     let value = self
                         .builder
-                        .build_load(
-                            self.cv_type,
-                            *self.locals.get(export).expect("module export local missing"),
-                            export,
-                        )
+                        .build_load(self.cv_type, ptr, export)
                         .unwrap()
                         .into_struct_value();
                     let name_ptr = self

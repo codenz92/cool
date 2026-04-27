@@ -488,22 +488,22 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### Declarations And Modules
 
 - [x] Typed parameters and return types for ordinary `def`
-- [ ] Typed local bindings and module-level constants
-- [ ] Immutable bindings / constant declarations
-- [ ] Explicit public/private module visibility
-- [ ] Export surface rules and import validation for large projects
+- [x] Typed local bindings and module-level constants
+- [x] Immutable bindings / constant declarations
+- [x] Explicit public/private module visibility
+- [x] Export surface rules and import validation for large projects
 
 ### Type Checking
 
 - [x] A real type checker for normal program code — v0: literal-type mismatch detection at typed-def boundaries; v1: variable type tracking propagates inferred types from assignments and typed-def return values through the checker
 - [x] Assignability and coercion rules for primitives — variable types are tracked and checked at typed-def call sites and return statements
-- [ ] Compile-time checking of function returns on all code paths
-- [ ] Module-level symbol/type resolution before codegen
+- [x] Compile-time checking of function returns on all code paths
+- [x] Module-level symbol/type resolution before codegen
 - [x] `cool check --strict` / strict project mode — errors on unannotated top-level `def` params and return types; dunder methods exempted
 
 ### Tooling Integration
 
-- [ ] Type-aware LSP completions, hover, and diagnostics
+- [x] Type-aware LSP completions, hover, and diagnostics
 - [x] Typed `cool ast` / `inspect` output — `cool inspect` now includes `type_name` on annotated params and `return_type` on typed `def`; untyped fields are omitted from JSON output
 - [x] Compiler diagnostics with fix suggestions — type mismatch errors now include actionable conversion hints (e.g. "use str(value) to convert", "use int() to truncate")
 
@@ -650,7 +650,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 9 — Self-Hosted Compiler | ✅ Complete |
 | 10 — Production Readiness And Ecosystem | ✅ Complete |
 | 11 — Freestanding Systems Foundation | ✅ Complete |
-| 12 — Static Semantic Core | ⏳ Planned |
+| 12 — Static Semantic Core | ✅ Complete |
 | 13 — Typed Language Features | ⏳ Planned |
 | 14 — Runtime And Memory Model | ⏳ Planned |
 | 15 — Native Toolchain And Distribution | ⏳ Planned |

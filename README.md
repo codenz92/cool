@@ -16,6 +16,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Variables, arithmetic, comparisons, logical and bitwise operators
 - `if` / `elif` / `else`, `while`, `for`, `break`, `continue`
 - Functions with default args, `*args`, `**kwargs`, keyword args, closures
+- Typed local bindings (`name: Type = expr`) and immutable constants (`const NAME: Type = expr`)
 - Classes with inheritance, `super()`, operator overloading (`__add__`, `__str__`, `__eq__`, `__len__`, etc.)
 - Lists, dicts, tuples with full method support
 - `set()` built-in (returns deduplicated list)
@@ -29,6 +30,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import ffi` — call C functions from shared libraries at runtime
 - LLVM-native `extern def` declarations with `symbol:` and `cc:` metadata
 - LLVM-native ordinary `def` signatures with typed parameters and return types
+- Explicit module export control with `public` / `private` on top-level bindings and declarations
 - `cool build --freestanding` to emit object files for custom/freestanding link steps; `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
@@ -134,6 +136,23 @@ log_value(11)
 ```
 
 In native builds, annotated parameters and return types lower to real native LLVM types, while unannotated parameters still use the normal dynamic `CoolVal` calling convention. The tree-walk interpreter and bytecode VM accept this syntax too, but currently ignore the annotations and execute the functions dynamically.
+
+### Typed Bindings And Module Visibility
+
+Cool also supports typed bindings for ordinary code plus explicit module export visibility:
+
+```python
+public const VERSION: str = "1.0"
+private const SECRET: str = "hidden"
+
+count: i32 = 3
+
+def next_count(value: i32) -> i32:
+    local: i32 = value + count
+    return local
+```
+
+`cool check` validates typed bindings, immutable reassignments, missing returns on typed functions, and private/exported module surfaces. `import "helper.cool"` only flattens public exports, and `import helper` only exposes public names on the module namespace.
 
 ### Extern Declarations (LLVM backend)
 
@@ -439,7 +458,7 @@ run = "cool test"
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, and **type checking** — literal-type mismatches at typed `def` boundaries (string passed to `i32` param, float literal to integer type, return type mismatches, etc.). `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, and typed `def` call/return mismatches. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
 
 ## VS Code
 
@@ -477,7 +496,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool symbols [file.cool]` | Print a resolved JSON symbol index for reachable modules |
 | `cool diff <before.cool> <after.cool>` | Print a JSON summary of top-level changes |
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
-| `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, and type mismatches; `--strict` enforces full annotations |
+| `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, typed bindings, immutable reassignments, missing returns, export validation, and type mismatches; `--strict` enforces full annotations |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |

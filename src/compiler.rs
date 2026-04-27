@@ -329,7 +329,7 @@ impl Compiler {
                 self.emit(Op::Pop);
             }
 
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value } | Stmt::VarDecl { name, value, .. } => {
                 self.compile_expr(value)?;
                 let op = self.resolve_set(name);
                 self.emit(op);
@@ -898,9 +898,9 @@ impl Compiler {
             Stmt::Import(path) => {
                 // import "file.cool" — load and run, push module namespace
                 let ci = self.add_constant(VmValue::Str(path.clone()));
-                self.emit(Op::Constant(ci));
                 let idx = self.add_name("__import_file__");
                 self.emit(Op::GetGlobal(idx));
+                self.emit(Op::Constant(ci));
                 self.emit(Op::Call(1, vec![]));
                 self.emit(Op::Pop);
             }
@@ -917,6 +917,10 @@ impl Compiler {
                 self.emit(Op::Constant(ci));
                 self.emit(Op::Call(1, vec![]));
                 self.emit(Op::SetGlobal(name_idx));
+            }
+
+            Stmt::Visibility { stmt, .. } => {
+                self.compile_stmt(stmt)?;
             }
         }
         Ok(())

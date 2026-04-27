@@ -3078,8 +3078,14 @@ greet(99)
 
     assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stderr.contains("type_error"), "expected type_error in:\n{stderr}");
-    assert!(stderr.contains("argument 1 to 'add'"), "expected add error in:\n{stderr}");
-    assert!(stderr.contains("argument 1 to 'greet'"), "expected greet error in:\n{stderr}");
+    assert!(
+        stderr.contains("argument 1 to 'add'"),
+        "expected add error in:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("argument 1 to 'greet'"),
+        "expected greet error in:\n{stderr}"
+    );
 }
 
 #[test]
@@ -3123,7 +3129,65 @@ fn test_cool_check_type_checker_flags_return_type_mismatch() {
     let _ = std::fs::remove_file(&temp);
 
     assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(stderr.contains("return type mismatch"), "expected return type error in:\n{stderr}");
+    assert!(
+        stderr.contains("return type mismatch"),
+        "expected return type error in:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_cool_check_type_checker_flags_typed_binding_mismatch() {
+    let temp = unique_temp_path("cool_check_typed_binding", "cool");
+    std::fs::write(&temp, "count: i32 = \"oops\"\n").unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "expected error, got:\n{stderr}");
+    assert!(
+        stderr.contains("binding 'count'"),
+        "expected typed binding error in:\n{stderr}"
+    );
+    assert!(stderr.contains("type_error"), "expected type_error in:\n{stderr}");
+}
+
+#[test]
+fn test_cool_check_type_checker_flags_const_reassign() {
+    let temp = unique_temp_path("cool_check_const_reassign", "cool");
+    std::fs::write(&temp, "const LIMIT: i32 = 3\nLIMIT = 4\n").unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "expected error, got:\n{stderr}");
+    assert!(
+        stderr.contains("immutable_reassign"),
+        "expected immutable_reassign in:\n{stderr}"
+    );
+    assert!(stderr.contains("LIMIT"), "expected const name in:\n{stderr}");
+}
+
+#[test]
+fn test_cool_check_type_checker_flags_missing_return_path() {
+    let temp = unique_temp_path("cool_check_missing_return", "cool");
+    std::fs::write(
+        &temp,
+        "def choose(flag: bool) -> i32:\n    if flag:\n        return 1\n",
+    )
+    .unwrap();
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
+    let _ = std::fs::remove_file(&temp);
+
+    assert_ne!(code, 0, "expected error, got:\n{stderr}");
+    assert!(
+        stderr.contains("missing_return"),
+        "expected missing_return in:\n{stderr}"
+    );
+    assert!(stderr.contains("choose"), "expected function name in:\n{stderr}");
 }
 
 #[test]
@@ -3191,7 +3255,10 @@ fn test_cool_check_type_checker_catches_return_variable_mismatch() {
     let _ = std::fs::remove_file(&temp);
 
     assert_ne!(code, 0, "expected error, got:\n{stderr}");
-    assert!(stderr.contains("return type mismatch"), "expected return type error in:\n{stderr}");
+    assert!(
+        stderr.contains("return type mismatch"),
+        "expected return type error in:\n{stderr}"
+    );
 }
 
 #[test]
@@ -3211,24 +3278,32 @@ fn test_cool_inspect_includes_param_types_and_return_type() {
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("inspect output must be JSON");
     let fns = json["functions"].as_array().unwrap();
 
-    let add_fn = fns.iter().find(|f| f["name"] == "add").expect("add must be in functions");
+    let add_fn = fns
+        .iter()
+        .find(|f| f["name"] == "add")
+        .expect("add must be in functions");
     assert_eq!(add_fn["return_type"], "i32", "add must have return_type i32");
     let x_param = &add_fn["params"][0];
     assert_eq!(x_param["type_name"], "i32", "x param must have type_name i32");
 
-    let greet_fn = fns.iter().find(|f| f["name"] == "greet").expect("greet must be in functions");
-    assert!(greet_fn["return_type"].is_null(), "untyped greet must have no return_type");
-    assert!(greet_fn["params"][0]["type_name"].is_null(), "untyped param must have no type_name");
+    let greet_fn = fns
+        .iter()
+        .find(|f| f["name"] == "greet")
+        .expect("greet must be in functions");
+    assert!(
+        greet_fn["return_type"].is_null(),
+        "untyped greet must have no return_type"
+    );
+    assert!(
+        greet_fn["params"][0]["type_name"].is_null(),
+        "untyped param must have no type_name"
+    );
 }
 
 #[test]
 fn test_cool_check_type_checker_fix_suggestions_mention_conversion() {
     let temp = unique_temp_path("cool_check_fix_hint", "cool");
-    std::fs::write(
-        &temp,
-        "def process(n: i32) -> i32:\n    return n\n\nprocess(\"bad\")\n",
-    )
-    .unwrap();
+    std::fs::write(&temp, "def process(n: i32) -> i32:\n    return n\n\nprocess(\"bad\")\n").unwrap();
     let cwd = temp.parent().unwrap();
     let file_name = temp.file_name().unwrap().to_str().unwrap();
     let (_, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", file_name]).unwrap();
@@ -3274,8 +3349,7 @@ fn test_cool_check_strict_passes_fully_typed_program() {
     .unwrap();
     let cwd = temp.parent().unwrap();
     let file_name = temp.file_name().unwrap().to_str().unwrap();
-    let (stdout, stderr, code) =
-        run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
     let _ = std::fs::remove_file(&temp);
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stdout.contains("check ok"));
@@ -3291,13 +3365,21 @@ fn test_cool_check_strict_flags_unannotated_params_and_returns() {
     .unwrap();
     let cwd = temp.parent().unwrap();
     let file_name = temp.file_name().unwrap().to_str().unwrap();
-    let (stdout, stderr, code) =
-        run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
     let _ = std::fs::remove_file(&temp);
     assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(stderr.contains("unannotated_param"), "expected unannotated_param in:\n{stderr}");
-    assert!(stderr.contains("unannotated_return"), "expected unannotated_return in:\n{stderr}");
-    assert!(stderr.contains("'name' of 'greet'"), "expected name/greet in:\n{stderr}");
+    assert!(
+        stderr.contains("unannotated_param"),
+        "expected unannotated_param in:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("unannotated_return"),
+        "expected unannotated_return in:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("'name' of 'greet'"),
+        "expected name/greet in:\n{stderr}"
+    );
 }
 
 #[test]
@@ -3306,8 +3388,7 @@ fn test_cool_check_strict_ignores_dunder_methods() {
     std::fs::write(&temp, "def __init__(self):\n    pass\n").unwrap();
     let cwd = temp.parent().unwrap();
     let file_name = temp.file_name().unwrap().to_str().unwrap();
-    let (stdout, stderr, code) =
-        run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["check", "--strict", file_name]).unwrap();
     let _ = std::fs::remove_file(&temp);
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stdout.contains("check ok"));
@@ -3323,6 +3404,36 @@ fn test_cool_check_nonstrict_passes_untyped_functions() {
     let _ = std::fs::remove_file(&temp);
     assert_eq!(code, 0);
     assert!(stdout.contains("check ok"));
+}
+
+#[test]
+fn test_cool_check_import_validation_flags_private_exports() {
+    let temp_dir = unique_temp_dir("cool_check_private_export");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    std::fs::write(
+        temp_dir.join("helper.cool"),
+        "private const hidden: i32 = 1\npublic const shown: i32 = 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("main.cool"),
+        "import helper\nprint(helper.shown)\nprint(helper.hidden)\n",
+    )
+    .unwrap();
+
+    let (_, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["check", "main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_ne!(code, 0, "expected error, got:\n{stderr}");
+    assert!(
+        stderr.contains("import_validation"),
+        "expected import_validation in:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("does not export 'hidden'"),
+        "expected hidden export error in:\n{stderr}"
+    );
 }
 
 #[test]
@@ -3436,6 +3547,66 @@ main = "src/main.cool"
             && import["specifier"].as_str() == Some("shared.cool")
             && import["resolved"].as_str() == Some(shared_path.to_str().unwrap())
     }));
+}
+
+#[test]
+fn test_import_visibility_hides_private_file_exports_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_import_visibility_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    std::fs::write(
+        temp_dir.join("helper.cool"),
+        "private const hidden: i32 = 1\npublic const shown: i32 = 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("main.cool"),
+        "import \"helper.cool\"\nprint(shown)\nprint(hidden)\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_ne!(
+        code, 0,
+        "expected runtime error, got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("2"), "expected public export in stdout:\n{stdout}");
+    assert!(
+        stderr.contains("hidden") || stderr.contains("undefined variable"),
+        "expected hidden export failure in:\n{stderr}"
+    );
+}
+
+#[test]
+fn test_import_visibility_hides_private_file_exports_in_vm() {
+    let temp_dir = unique_temp_dir("cool_import_visibility_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    std::fs::write(
+        temp_dir.join("helper.cool"),
+        "private const hidden: i32 = 1\npublic const shown: i32 = 2\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("main.cool"),
+        "import \"helper.cool\"\nprint(shown)\nprint(hidden)\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["--vm", "main.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_ne!(
+        code, 0,
+        "expected runtime error, got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("2"), "expected public export in stdout:\n{stdout}");
+    assert!(
+        stderr.contains("hidden") || stderr.contains("undefined"),
+        "expected hidden export failure in:\n{stderr}"
+    );
 }
 
 #[test]
@@ -4395,6 +4566,88 @@ fn test_lsp_document_symbols() {
     assert!(names.contains(&"greet"), "expected greet in symbols: {names:?}");
     assert!(names.contains(&"Dog"), "expected Dog in symbols: {names:?}");
     assert!(names.contains(&"bark"), "expected bark in symbols: {names:?}");
+
+    let exit = r#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
+    child.stdin.as_mut().unwrap().write_all(&lsp_message(exit)).unwrap();
+    let _ = child.wait();
+}
+
+#[test]
+fn test_lsp_hover_and_completion_are_type_aware() {
+    use std::io::{BufReader, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(cool_bin())
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn cool lsp");
+
+    let stdin = child.stdin.as_mut().unwrap();
+    let init = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+    stdin.write_all(&lsp_message(init)).unwrap();
+
+    let stdout = child.stdout.as_mut().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let _init_resp = read_lsp_response(&mut reader);
+
+    let source =
+        "const LIMIT: i32 = 3\n\ndef add(x: i32, y: i32) -> i32:\n    return x + y\n\nanswer: i32 = add(LIMIT, 2)\n";
+    let did_open_val = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": "file:///tmp/type_lsp.cool",
+                "languageId": "cool",
+                "version": 1,
+                "text": source
+            }
+        }
+    });
+    let did_open = serde_json::to_string(&did_open_val).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&lsp_message(&did_open))
+        .unwrap();
+    let _diag_notif = read_lsp_response(&mut reader);
+
+    let hover_req = r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/type_lsp.cool"},"position":{"line":0,"character":7}}}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&lsp_message(hover_req))
+        .unwrap();
+    let hover_resp = read_lsp_response(&mut reader);
+    let hover_text = hover_resp["result"]["contents"]["value"].as_str().unwrap_or("");
+    assert!(
+        hover_text.contains("const LIMIT: i32"),
+        "expected typed const hover in:\n{hover_text}"
+    );
+
+    let completion_req = r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/type_lsp.cool"},"position":{"line":5,"character":15}}}"#;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(&lsp_message(completion_req))
+        .unwrap();
+    let completion_resp = read_lsp_response(&mut reader);
+    let items = completion_resp["result"].as_array().unwrap();
+    let add_item = items
+        .iter()
+        .find(|item| item["label"] == "add")
+        .expect("add completion missing");
+    let detail = add_item["detail"].as_str().unwrap_or("");
+    assert!(
+        detail.contains("def add(x: i32, y: i32) -> i32"),
+        "expected typed function signature in completion detail, got:\n{detail}"
+    );
 
     let exit = r#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
     child.stdin.as_mut().unwrap().write_all(&lsp_message(exit)).unwrap();

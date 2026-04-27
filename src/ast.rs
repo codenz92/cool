@@ -105,6 +105,13 @@ pub enum UnaryOp {
     BitNot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    Public,
+    Private,
+}
+
 /// One except clause in a try statement.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExceptHandler {
@@ -141,6 +148,12 @@ pub enum Stmt {
     Assign {
         name: String,
         value: Expr,
+    },
+    VarDecl {
+        name: String,
+        type_name: Option<String>,
+        value: Expr,
+        is_const: bool,
     },
     /// obj[index] = value
     SetItem {
@@ -259,6 +272,10 @@ pub enum Stmt {
     Global(Vec<String>),
     /// nonlocal x, y
     Nonlocal(Vec<String>),
+    Visibility {
+        visibility: Visibility,
+        stmt: Box<Stmt>,
+    },
 }
 
 pub type Program = Vec<Stmt>;

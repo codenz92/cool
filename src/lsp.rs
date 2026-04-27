@@ -1,13 +1,14 @@
-use crate::tooling::{self, DiagnosticSeverity, InspectParam};
+use crate::module_exports;
+use crate::tooling::{self, DiagnosticSeverity, InspectAssignment, InspectParam};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufWriter, Write};
 use std::path::PathBuf;
 
 const COOL_KEYWORDS: &[&str] = &[
     "def", "data", "extern", "class", "struct", "packed", "union", "if", "elif", "else", "while", "for", "in", "not",
     "and", "or", "return", "break", "continue", "pass", "import", "from", "as", "try", "except", "finally", "raise",
-    "with", "lambda", "assert", "global", "nonlocal", "True", "False", "None",
+    "with", "lambda", "assert", "global", "nonlocal", "const", "public", "private", "True", "False", "None",
 ];
 
 const COOL_BUILTINS: &[&str] = &[
@@ -422,9 +423,9 @@ fn report_to_symbols(report: &tooling::InspectReport, uri: &str) -> Vec<Value> {
         symbols.push(json!({"name": s.name, "kind": 23, "location": loc(s.line)}));
     }
     for a in &report.assignments {
-        if matches!(a.kind, "assign" | "unpack") {
+        if matches!(a.kind, "assign" | "unpack" | "var_decl" | "const") {
             for name in &a.names {
-                symbols.push(json!({"name": name, "kind": 13, "location": loc(a.line)}));
+                symbols.push(json!({"name": name, "kind": if a.is_const { 14 } else { 13 }, "location": loc(a.line)}));
             }
         }
     }
@@ -463,7 +464,7 @@ fn find_definition_in_report(word: &str, report: &tooling::InspectReport, uri: &
 
 fn hover_markdown(word: &str, report: &tooling::InspectReport) -> Option<String> {
     if let Some(f) = report.functions.iter().find(|f| f.name == word) {
-        let sig = format!("def {}({})", f.name, fmt_params(&f.params));
+        let sig = fmt_function_signature(f.name.as_str(), &f.params, f.return_type.as_deref());
         return Some(format!("```cool\n{sig}\n```"));
     }
     if let Some(c) = report.classes.iter().find(|c| c.name == word) {
@@ -483,6 +484,13 @@ fn hover_markdown(word: &str, report: &tooling::InspectReport) -> Option<String>
         let kw = if s.is_packed { "packed struct" } else { "struct" };
         return Some(format!("```cool\n{kw} {}:\n{}\n```", s.name, fields.join("\n")));
     }
+    if let Some(assignment) = report
+        .assignments
+        .iter()
+        .find(|assignment| assignment.names.iter().any(|name| name == word))
+    {
+        return Some(format!("```cool\n{}\n```", fmt_assignment_signature(word, assignment)));
+    }
     None
 }
 
@@ -492,6 +500,12 @@ fn compute_completions(content: &str, uri: &str, line_prefix: &str) -> Vec<Value
     let trimmed = line_prefix.trim_start();
     if trimmed.starts_with("import ") || trimmed == "import" || trimmed.starts_with("from ") {
         return COOL_MODULES.iter().map(|m| json!({"label": m, "kind": 9})).collect();
+    }
+    if let Some(receiver) = module_completion_receiver(line_prefix) {
+        let report = tooling::inspect_source(content, uri);
+        if let Some(items) = imported_module_completion_items(&report, &receiver) {
+            return items;
+        }
     }
     let mut items = Vec::new();
     for kw in COOL_KEYWORDS {
@@ -505,7 +519,7 @@ fn compute_completions(content: &str, uri: &str, line_prefix: &str) -> Vec<Value
         items.push(json!({
             "label": f.name,
             "kind": 3,
-            "detail": format!("def {}({})", f.name, fmt_params(&f.params))
+            "detail": fmt_function_signature(f.name.as_str(), &f.params, f.return_type.as_deref())
         }));
     }
     for c in &report.classes {
@@ -517,7 +531,15 @@ fn compute_completions(content: &str, uri: &str, line_prefix: &str) -> Vec<Value
     for a in &report.assignments {
         if matches!(a.kind, "assign" | "unpack") {
             for name in &a.names {
-                items.push(json!({"label": name, "kind": 6}));
+                items.push(json!({"label": name, "kind": 6, "detail": fmt_assignment_signature(name, a)}));
+            }
+        } else if matches!(a.kind, "var_decl" | "const") {
+            for name in &a.names {
+                items.push(json!({
+                    "label": name,
+                    "kind": if a.is_const { 21 } else { 6 },
+                    "detail": fmt_assignment_signature(name, a)
+                }));
             }
         }
     }
@@ -601,6 +623,10 @@ fn fmt_params(params: &[InspectParam]) -> String {
             } else {
                 p.name.clone()
             };
+            if let Some(type_name) = &p.type_name {
+                s.push_str(": ");
+                s.push_str(type_name);
+            }
             if p.has_default {
                 s.push_str("=...");
             }
@@ -621,6 +647,10 @@ fn fmt_params_slice(params: &[&InspectParam]) -> String {
             } else {
                 p.name.clone()
             };
+            if let Some(type_name) = &p.type_name {
+                s.push_str(": ");
+                s.push_str(type_name);
+            }
             if p.has_default {
                 s.push_str("=...");
             }
@@ -628,6 +658,92 @@ fn fmt_params_slice(params: &[&InspectParam]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn fmt_function_signature(name: &str, params: &[InspectParam], return_type: Option<&str>) -> String {
+    let mut sig = format!("def {}({})", name, fmt_params(params));
+    if let Some(return_type) = return_type {
+        sig.push_str(" -> ");
+        sig.push_str(return_type);
+    }
+    sig
+}
+
+fn fmt_assignment_signature(name: &str, assignment: &InspectAssignment) -> String {
+    let mut sig = String::new();
+    if assignment.is_const {
+        sig.push_str("const ");
+    }
+    sig.push_str(name);
+    if let Some(type_name) = &assignment.type_name {
+        sig.push_str(": ");
+        sig.push_str(type_name);
+    }
+    sig
+}
+
+fn module_completion_receiver(line_prefix: &str) -> Option<String> {
+    let trimmed = line_prefix.trim_end();
+    if !trimmed.ends_with('.') {
+        return None;
+    }
+    let without_dot = &trimmed[..trimmed.len().saturating_sub(1)];
+    let start = without_dot
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !(ch.is_alphanumeric() || *ch == '_'))
+        .map(|(idx, ch)| idx + ch.len_utf8())
+        .unwrap_or(0);
+    let receiver = &without_dot[start..];
+    if receiver.is_empty() {
+        None
+    } else {
+        Some(receiver.to_string())
+    }
+}
+
+fn imported_module_completion_items(report: &tooling::InspectReport, receiver: &str) -> Option<Vec<Value>> {
+    let import = report.imports.iter().find(|import| {
+        import.kind == tooling::ModuleImportKind::Module
+            && import.specifier.rsplit('.').next().unwrap_or(import.specifier.as_str()) == receiver
+            && import.resolved.is_some()
+    })?;
+    let resolved = import.resolved.as_ref()?;
+    let ast = tooling::build_ast_dump(std::path::Path::new(resolved), false).ok()?;
+    let exports: HashSet<String> = module_exports::exported_names(&ast.ast).into_iter().collect();
+    let imported_report = tooling::build_inspect_report(std::path::Path::new(resolved)).ok()?;
+    let mut items = Vec::new();
+    for function in &imported_report.functions {
+        if exports.contains(&function.name) {
+            items.push(json!({
+                "label": function.name,
+                "kind": 3,
+                "detail": fmt_function_signature(function.name.as_str(), &function.params, function.return_type.as_deref())
+            }));
+        }
+    }
+    for class in &imported_report.classes {
+        if exports.contains(&class.name) {
+            items.push(json!({"label": class.name, "kind": 7, "detail": format!("class {}", class.name)}));
+        }
+    }
+    for structure in &imported_report.structs {
+        if exports.contains(&structure.name) {
+            items.push(json!({"label": structure.name, "kind": 22, "detail": format!("struct {}", structure.name)}));
+        }
+    }
+    for assignment in &imported_report.assignments {
+        for name in &assignment.names {
+            if exports.contains(name) {
+                items.push(json!({
+                    "label": name,
+                    "kind": if assignment.is_const { 21 } else { 6 },
+                    "detail": fmt_assignment_signature(name, assignment)
+                }));
+            }
+        }
+    }
+    Some(items)
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────

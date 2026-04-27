@@ -6,6 +6,7 @@ use crate::datetime_runtime::{self, DateTimeParts};
 use crate::hashlib_runtime;
 use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
+use crate::module_exports;
 use crate::project::ModuleResolver;
 use crate::sqlite_runtime::{self, SqlData};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
@@ -670,7 +671,7 @@ impl Interpreter {
                 Ok(Signal::None)
             }
 
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value } | Stmt::VarDecl { name, value, .. } => {
                 let v = self.eval(value, env)?;
                 env.set_local(name.clone(), v);
                 Ok(Signal::None)
@@ -1129,12 +1130,16 @@ impl Interpreter {
                 let program = parser
                     .parse_program()
                     .map_err(|e| self.err(&format!("import parse error: {}", e)))?;
+                let exports: std::collections::HashSet<String> =
+                    module_exports::exported_names(&program).into_iter().collect();
 
                 let child = Env::new_child(env.clone());
                 self.exec_block(&program, &child)?;
                 let child_vars = child.0.borrow();
-                for (k, v) in &child_vars.vars {
-                    env.set_local(k.clone(), v.clone());
+                for name in &exports {
+                    if let Some(value) = child_vars.vars.get(name) {
+                        env.set_local(name.clone(), value.clone());
+                    }
                 }
                 Ok(Signal::None)
             }
@@ -1193,6 +1198,8 @@ impl Interpreter {
                 }
                 Ok(Signal::None)
             }
+
+            Stmt::Visibility { stmt, .. } => self.exec_stmt(stmt, env),
         }
     }
 
@@ -1690,6 +1697,8 @@ class Stack:
                     let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
                     let mut parser = crate::parser::Parser::new(tokens);
                     let program = parser.parse_program().map_err(|e| self.err(&e))?;
+                    let exported_names: std::collections::HashSet<String> =
+                        module_exports::exported_names(&program).into_iter().collect();
                     let child = Env::new_child(env.clone());
                     let old_dir = self.source_dir.clone();
                     self.source_dir = path.parent().unwrap_or(&old_dir).to_path_buf();
@@ -1698,8 +1707,10 @@ class Stack:
                     result?;
                     let child_vars = child.0.borrow();
                     let mut exports = IndexedMap::new();
-                    for (k, v) in &child_vars.vars {
-                        exports.set(Value::Str(k.clone()), v.clone());
+                    for name in &exported_names {
+                        if let Some(value) = child_vars.vars.get(name) {
+                            exports.set(Value::Str(name.clone()), value.clone());
+                        }
                     }
                     env.set_local(binding_name.to_string(), Value::Dict(Rc::new(RefCell::new(exports))));
                 } else {
