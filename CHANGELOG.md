@@ -25,6 +25,13 @@ All notable changes to the Cool language project.
 - With no file argument inside a project, `cool doc` uses `cool.toml`'s `main` entry and documents every reachable local module; `--private` includes private members and marks them in rendered output
 - `cool new` now scaffolds a starter `[tasks.doc]` task so fresh projects can write `docs/API.md` without extra setup
 
+### Release Artifacts
+
+- `cool bundle` now emits `dist/<artifact>.metadata.json` plus `dist/<artifact>.symbols.txt` alongside the `.tar.gz` archive
+- Bundled archives embed the same metadata and symbol map as `metadata.json` and `symbols/<artifact>.symbols.txt`, so packaged releases carry their own inspection data
+- Metadata records project identity, build profile, artifact kind/path, bundle includes, and manifest dependency specs; symbol maps are generated from `nm` / `llvm-nm` when available
+- `cool release` now surfaces the generated metadata and symbol sidecars as part of the release flow
+
 ### Phase 12 — Static Semantic Core (In Progress)
 
 #### Typed Function Signatures

@@ -446,6 +446,10 @@ cool build                   # reads cool.toml, produces ./myapp
 cool build --profile strict  # checked build that requires annotated top-level defs
 cool build --freestanding    # reads cool.toml, produces ./myapp.o
 # (or set linker_script in cool.toml to produce ./myapp.elf via LLD)
+
+# Package a release artifact
+cool bundle                  # writes dist/*.tar.gz plus metadata/symbol sidecars
+cool release --bump minor
 ```
 
 `cool.toml` format:
@@ -535,8 +539,8 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
 | `cool build --linker-script=<ld> [file.cool]` | Compile freestanding and link a kernel image (`.elf`) via LLD |
 | `cool bench [path ...]` | Compile and benchmark native Cool programs |
-| `cool bundle` | Build and package the project into a distributable tarball |
-| `cool release [--bump patch]` | Bump version, bundle, and git-tag a release |
+| `cool bundle` | Build and package the project into a distributable tarball with metadata and symbol-map sidecars |
+| `cool release [--bump patch]` | Bump version, bundle, emit artifact metadata, and git-tag a release |
 | `cool lsp` | Start the language server (LSP) on stdin/stdout |
 | `cool install` | Fetch git dependencies and write `cool.lock` |
 | `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
@@ -552,6 +556,10 @@ Use `cool bench` inside a project to compile and time files under `benchmarks/` 
 ### API docs
 
 Use `cool doc` to turn a module graph into API documentation. By default it emits Markdown to stdout, but `--format html` and `--format json` are also supported, and `--output <path>` writes the result to disk. Inside a project, `cool doc` with no file argument uses the manifest `main` entry and documents every reachable local module; pass `--private` to include private functions, bindings, classes, and methods in the output.
+
+### Release artifacts
+
+`cool bundle` now writes three release-oriented outputs under `dist/`: the archive itself (`.tar.gz`), a `.metadata.json` sidecar describing the bundled project/artifact/build profile, and a `.symbols.txt` sidecar generated from `nm`/`llvm-nm` when available. The archive also embeds `metadata.json` plus `symbols/<artifact>.symbols.txt`, so downstream packaging or CI jobs can inspect artifact identity without unpacking the full project tree manually.
 
 ---
 

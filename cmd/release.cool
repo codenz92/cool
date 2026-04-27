@@ -166,11 +166,16 @@ print("  Updated  cool.toml version -> " + str(new_version))
 bundle_project(project_root, cool_exe)
 
 archive = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".tar.gz")
+metadata = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".metadata.json")
+symbols = path.join(project_root, "dist", name + "-" + str(new_version) + "-" + target_triple() + ".symbols.txt")
 if not no_tag:
     tag_release(project_root, "v" + str(new_version))
 
 print("")
 print("  Released " + name + " v" + str(new_version))
 print("  Archive  -> " + archive)
+print("  Metadata -> " + metadata)
+if os["exists"](symbols):
+    print("  Symbols  -> " + symbols)
 if not no_tag:
     print("  Run 'git push --tags' to publish the tag.")

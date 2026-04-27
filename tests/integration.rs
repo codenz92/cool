@@ -2147,22 +2147,67 @@ include = ["assets", "README.txt"]
 "#,
     )
     .unwrap();
-    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"bundle ok\")\n").unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def greet() -> str:\n    return \"bundle ok\"\n\nprint(greet())\n",
+    )
+    .unwrap();
     std::fs::write(project_dir.join("assets").join("info.txt"), "asset\n").unwrap();
     std::fs::write(project_dir.join("README.txt"), "hello\n").unwrap();
 
     let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["bundle"]).unwrap();
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Metadata"));
+    assert!(stdout.contains("Symbols"));
     assert!(stdout.contains("Bundled"));
 
     let artifact_name = format!("demo-0.2.0-{}", host_target_triple());
     let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    let metadata_path = project_dir.join("dist").join(format!("{artifact_name}.metadata.json"));
+    let symbols_path = project_dir.join("dist").join(format!("{artifact_name}.symbols.txt"));
     assert!(
         archive_path.exists(),
         "expected bundle archive at {}",
         archive_path.display()
     );
+    assert!(
+        metadata_path.exists(),
+        "expected metadata sidecar at {}",
+        metadata_path.display()
+    );
+    assert!(
+        symbols_path.exists(),
+        "expected symbol map sidecar at {}",
+        symbols_path.display()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["artifact_name"].as_str().unwrap(), artifact_name);
+    assert_eq!(metadata["project"]["name"].as_str().unwrap(), "demo");
+    assert_eq!(metadata["project"]["version"].as_str().unwrap(), "0.2.0");
+    assert_eq!(metadata["project"]["main"].as_str().unwrap(), "src/main.cool");
+    assert_eq!(metadata["project"]["output"].as_str().unwrap(), "demo-bin");
+    assert_eq!(metadata["build"]["artifact_kind"].as_str().unwrap(), "executable");
+    assert_eq!(metadata["build"]["artifact_path"].as_str().unwrap(), "demo-bin");
+    assert_eq!(metadata["bundle"]["metadata_path"].as_str().unwrap(), "metadata.json");
+    assert_eq!(
+        metadata["bundle"]["symbol_map_path"].as_str().unwrap(),
+        "symbols/demo-bin.symbols.txt"
+    );
+    assert!(metadata["bundle"]["include"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item.as_str() == Some("assets")));
+    assert!(metadata["bundle"]["include"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item.as_str() == Some("README.txt")));
+
+    let symbols = std::fs::read_to_string(&symbols_path).unwrap();
+    assert!(symbols.contains("greet"), "expected greet in symbol map:\n{symbols}");
 
     let tar_output = Command::new("tar")
         .args(["tzf", archive_path.to_str().unwrap()])
@@ -2178,6 +2223,8 @@ include = ["assets", "README.txt"]
     assert!(listing.contains(&format!("{artifact_name}/demo-bin")));
     assert!(listing.contains(&format!("{artifact_name}/assets/info.txt")));
     assert!(listing.contains(&format!("{artifact_name}/README.txt")));
+    assert!(listing.contains(&format!("{artifact_name}/metadata.json")));
+    assert!(listing.contains(&format!("{artifact_name}/symbols/demo-bin.symbols.txt")));
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
@@ -2215,6 +2262,8 @@ include = ["README.txt"]
     assert!(stdout.contains("Releasing demo v0.2.0 -> v0.3.0"));
     assert!(stdout.contains("Updated  cool.toml version -> 0.3.0"));
     assert!(stdout.contains("Bundled"));
+    assert!(stdout.contains("Metadata"));
+    assert!(stdout.contains("Symbols"));
     assert!(stdout.contains("Tagged   -> v0.3.0"));
     assert!(stdout.contains("Released demo v0.3.0"));
 
@@ -2223,11 +2272,27 @@ include = ["README.txt"]
 
     let artifact_name = format!("demo-0.3.0-{}", host_target_triple());
     let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    let metadata_path = project_dir.join("dist").join(format!("{artifact_name}.metadata.json"));
+    let symbols_path = project_dir.join("dist").join(format!("{artifact_name}.symbols.txt"));
     assert!(
         archive_path.exists(),
         "expected release archive at {}",
         archive_path.display()
     );
+    assert!(
+        metadata_path.exists(),
+        "expected metadata sidecar at {}",
+        metadata_path.display()
+    );
+    assert!(
+        symbols_path.exists(),
+        "expected symbol map sidecar at {}",
+        symbols_path.display()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["project"]["version"].as_str().unwrap(), "0.3.0");
+    assert_eq!(metadata["archive"].as_str().unwrap(), format!("{artifact_name}.tar.gz"));
 
     let tags = run_git_in_dir(&project_dir, &["tag", "--list", "v0.3.0"]);
     assert_eq!(tags.trim(), "v0.3.0");

@@ -4,6 +4,7 @@ import path
 import term
 import platform
 import subprocess
+import json
 import lib.projectlib
 
 def shell_quote(text):
@@ -31,6 +32,31 @@ def bundle_include(manifest):
             raise "cool bundle: [bundle].include must contain only strings"
         out.append(item)
     return out
+
+def build_table(manifest):
+    build = manifest.get("build", nil)
+    if build == nil:
+        return {}
+    if not isinstance(build, "dict"):
+        raise "cool bundle: [build] must be a table"
+    return build
+
+def build_profile(manifest):
+    build = build_table(manifest)
+    profile = build.get("profile", nil)
+    if profile == nil:
+        return "release"
+    if not isinstance(profile, "str"):
+        raise "cool bundle: [build].profile must be a string"
+    return profile
+
+def linker_script_value(manifest, project):
+    linker_script = project.get("linker_script", manifest.get("linker_script", nil))
+    if linker_script == nil:
+        return nil
+    if not isinstance(linker_script, "str"):
+        raise "cool bundle: linker_script must be a string"
+    return linker_script
 
 def target_triple():
     os_name = platform.os()
@@ -72,6 +98,98 @@ def build_project(project_root, cool_exe):
 
 def chmod_executable(target):
     run_shell_checked("chmod " + target, "chmod 755 " + shell_quote(target))
+
+def write_text(path_value, contents):
+    projectlib.write_text_file(path_value, contents)
+
+def built_artifact(project_root, manifest, project, output):
+    profile = build_profile(manifest)
+    linker_script = linker_script_value(manifest, project)
+    bin_name = output
+    obj_name = output + ".o"
+    elf_name = output + ".elf"
+    bin_path = path.join(project_root, bin_name)
+    obj_path = path.join(project_root, obj_name)
+    elf_path = path.join(project_root, elf_name)
+
+    if linker_script != nil and os["exists"](elf_path):
+        return {
+            "kind": "kernel_image",
+            "path": elf_path,
+            "package_name": elf_name,
+        }
+    if profile == "freestanding" and os["exists"](obj_path):
+        return {
+            "kind": "object",
+            "path": obj_path,
+            "package_name": obj_name,
+        }
+    if os["exists"](bin_path):
+        return {
+            "kind": "executable",
+            "path": bin_path,
+            "package_name": bin_name,
+        }
+    if os["exists"](elf_path):
+        return {
+            "kind": "kernel_image",
+            "path": elf_path,
+            "package_name": elf_name,
+        }
+    if os["exists"](obj_path):
+        return {
+            "kind": "object",
+            "path": obj_path,
+            "package_name": obj_name,
+        }
+    raise "cool bundle: built artifact not found (expected one of '" + bin_name + "', '" + obj_name + "', or '" + elf_name + "')"
+
+def symbol_map_output(artifact_path):
+    for tool in ["nm", "llvm-nm"]:
+        result = subprocess.run(tool + " -n " + shell_quote(artifact_path))
+        if result["timed_out"]:
+            continue
+        if result["code"] == 0 and result["stdout"].strip() != "":
+            return {
+                "tool": tool,
+                "text": result["stdout"],
+            }
+    return nil
+
+def metadata_json(name, version, main, output, manifest, artifact_name, archive_name, artifact, copied_items, target, symbol_map):
+    metadata = {
+        "schema_version": 1,
+        "artifact_name": artifact_name,
+        "archive": archive_name,
+        "target": target,
+        "project": {
+            "name": name,
+            "version": version,
+            "main": main,
+            "output": output,
+        },
+        "build": {
+            "profile": build_profile(manifest),
+            "artifact_kind": artifact["kind"],
+            "artifact_path": artifact["package_name"],
+            "linker_script": linker_script_value(manifest, projectlib.project_table(manifest, "cool bundle")),
+        },
+        "bundle": {
+            "include": copied_items,
+            "metadata_path": "metadata.json",
+            "symbol_map_path": nil,
+            "symbol_map_tool": nil,
+        },
+        "dependencies": projectlib.parse_dependencies(manifest),
+        "generated_by": {
+            "tool": "cool bundle",
+            "version": "1.0",
+        },
+    }
+    if symbol_map != nil:
+        metadata["bundle"]["symbol_map_path"] = "symbols/" + symbol_map["archive_name"]
+        metadata["bundle"]["symbol_map_tool"] = symbol_map["tool"]
+    return json.dumps(metadata)
 
 def create_archive(project_root, dist_dir, artifact_name, archive):
     cmd = "cd " + shell_quote(project_root) + " && tar czf " + shell_quote(archive)
@@ -117,27 +235,60 @@ artifact_name = name + "-" + version + "-" + target
 dist_dir = path.join(project_root, "dist")
 staging = path.join(dist_dir, artifact_name)
 archive = path.join(dist_dir, artifact_name + ".tar.gz")
-bin_path = path.join(project_root, output)
-dst_bin = path.join(staging, output)
+metadata_sidecar = path.join(dist_dir, artifact_name + ".metadata.json")
+symbols_sidecar = path.join(dist_dir, artifact_name + ".symbols.txt")
 
 ensure_dir(dist_dir)
 remove_tree(staging)
 ensure_dir(staging)
-copy_path(bin_path, dst_bin)
-chmod_executable(dst_bin)
+artifact = built_artifact(project_root, manifest, project, output)
+dst_artifact = path.join(staging, artifact["package_name"])
+copy_path(artifact["path"], dst_artifact)
+if artifact["kind"] != "object":
+    chmod_executable(dst_artifact)
 
+copied_items = []
 for item in include:
     src = path.join(project_root, item)
     if not os["exists"](src):
         print("  warning: bundle include '" + item + "' not found, skipping")
     else:
-        name = path.basename(src)
-        if name == "":
+        item_name = path.basename(src)
+        if item_name == "":
             raise "cool bundle: invalid include path '" + item + "'"
-        copy_path(src, path.join(staging, name))
+        copy_path(src, path.join(staging, item_name))
+        copied_items.append(item)
         print("  Including " + item)
+
+symbol_map = symbol_map_output(artifact["path"])
+if symbol_map != nil:
+    symbol_map["archive_name"] = artifact["package_name"] + ".symbols.txt"
+    write_text(symbols_sidecar, symbol_map["text"])
+    ensure_dir(path.join(staging, "symbols"))
+    write_text(path.join(staging, "symbols", symbol_map["archive_name"]), symbol_map["text"])
+
+metadata = metadata_json(
+    name,
+    version,
+    main,
+    output,
+    manifest,
+    artifact_name,
+    artifact_name + ".tar.gz",
+    artifact,
+    copied_items,
+    target,
+    symbol_map,
+)
+write_text(metadata_sidecar, metadata)
+write_text(path.join(staging, "metadata.json"), metadata)
 
 create_archive(project_root, dist_dir, artifact_name, archive)
 remove_tree(staging)
 
+print("  Metadata -> " + metadata_sidecar)
+if symbol_map != nil:
+    print("  Symbols  -> " + symbols_sidecar)
+else:
+    print("  warning: no symbol map generated (install 'nm' or 'llvm-nm')")
 print("  Bundled  -> " + archive)
