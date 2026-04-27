@@ -90,6 +90,30 @@ fn expected_core_lines() -> Vec<String> {
     ]
 }
 
+fn expected_extended_core_lines() -> Vec<String> {
+    vec![
+        "4099".to_string(),
+        "4104".to_string(),
+        "4096".to_string(),
+        "5".to_string(),
+        "4096".to_string(),
+        "4104".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+        "4".to_string(),
+        "ababab".to_string(),
+        "0xff".to_string(),
+        "0b1010".to_string(),
+        format!("0x{:0width$x}", 4096u64, width = std::mem::size_of::<usize>() * 2),
+        "2".to_string(),
+        "8".to_string(),
+        "1".to_string(),
+        "1".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+    ]
+}
+
 fn compile_and_run_native(source: &str) -> Result<String, String> {
     compile_and_run_native_with_env(source, &[])
 }
@@ -944,6 +968,34 @@ def mmio_test():
     assert!(
         undefined_cool.is_empty(),
         "freestanding volatile ops must not reference C runtime symbols, found: {undefined_cool:?}"
+    );
+}
+
+#[test]
+fn test_llvm_freestanding_core_mmio_and_reg_helpers_have_no_undefined_runtime_symbols() {
+    let source = r#"
+import core
+
+def mmio_test():
+    entry: "mmio_test"
+    core.mmio_write(4096, "u32", 1)
+    value = core.mmio_read(4096, "u32")
+    core.reg_write(4100, "u32", value)
+    core.reg_set_bits(4100, "u32", 16)
+    core.reg_clear_bits(4100, "u32", 1)
+    core.reg_update_bits(4100, "u32", 255, 32)
+    return core.reg_read(4100, "u32")
+"#;
+
+    let (source_path, object_path) = compile_freestanding_object(source).unwrap();
+    let undefined_cool = object_undefined_cool_symbols(&object_path).unwrap();
+    let binary_path = source_path.with_extension("");
+    cleanup_native_artifacts(&source_path, &binary_path);
+    let _ = fs::remove_file(&object_path);
+
+    assert!(
+        undefined_cool.is_empty(),
+        "freestanding core MMIO/register helpers must not reference hosted runtime symbols, found: {undefined_cool:?}"
     );
 }
 
@@ -1892,6 +1944,48 @@ print(core.pml4_index(addr))
         .map(str::to_string)
         .collect();
     assert_eq!(lines, expected_core_lines());
+}
+
+#[test]
+fn test_llvm_import_core_extended_module() {
+    let result = compile_and_run_native(
+        r#"
+import core
+addr = core.addr(4099)
+print(addr)
+print(core.addr_add(addr, 5))
+print(core.addr_sub(addr, 3))
+print(core.addr_diff(core.addr_add(addr, 5), addr))
+print(core.addr_align_down(4099, 8))
+print(core.addr_align_up(4099, 8))
+print(core.addr_is_aligned(4096, 256))
+print(core.addr_is_aligned(4097, 256))
+print(core.string_len("cool"))
+print(core.string_repeat("ab", 3))
+print(core.format_hex(255))
+print(core.format_bin(10))
+print(core.format_ptr(4096))
+items = core.list_new(2)
+core.list_push(items, 7)
+core.list_push(items, 8)
+print(core.list_len(items))
+print(core.list_pop(items))
+print(core.list_len(items))
+mapping = core.dict_new()
+mapping["ready"] = true
+print(core.dict_len(mapping))
+print(core.dict_has(mapping, "ready"))
+print(core.dict_has(mapping, "missing"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_extended_core_lines());
 }
 
 #[test]

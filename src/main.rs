@@ -1,6 +1,7 @@
 mod argparse_runtime;
 mod ast;
 mod benchmark;
+mod bindgen;
 mod build_cache;
 mod compiler;
 mod core_runtime;
@@ -10,6 +11,7 @@ mod formatter;
 mod hashlib_runtime;
 mod http_runtime;
 mod interpreter;
+mod layout_tool;
 mod lexer;
 mod llvm_codegen;
 mod logging_runtime;
@@ -110,6 +112,7 @@ fn link_kernel_image(
     output_path: &Path,
     toolchain: &llvm_codegen::NativeToolchainConfig,
     reproducible: bool,
+    entry_symbol: Option<&str>,
 ) -> Result<(), String> {
     let lld = find_lld(toolchain).ok_or_else(|| {
         "cool build: no LLD linker found — install LLVM/LLD to enable kernel image linking\n  \
@@ -125,6 +128,12 @@ fn link_kernel_image(
     let status = command
         .arg("-T")
         .arg(script_path)
+        .args(
+            entry_symbol
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| vec!["-e", value])
+                .unwrap_or_default(),
+        )
         .arg("-o")
         .arg(output_path)
         .arg(obj_path)
@@ -222,9 +231,14 @@ fn default_native_compile_options(script_path: &Path) -> llvm_codegen::NativeCom
         build_mode: llvm_codegen::NativeBuildMode::Hosted,
         artifact_kind: llvm_codegen::NativeArtifactKind::Binary,
         target_triple: None,
+        target_cpu: None,
+        target_features: None,
+        entry_symbol: None,
         debug_info: false,
         reproducible: false,
+        no_libc: false,
         toolchain: llvm_codegen::NativeToolchainConfig::default(),
+        native_links: project::NativeLinkConfig::default(),
         source_root: script_path.parent().map(Path::to_path_buf),
     }
 }
@@ -236,6 +250,30 @@ fn native_toolchain_config(project: &CoolProject) -> llvm_codegen::NativeToolcha
         ar: project.toolchain.ar.clone(),
         lld: project.toolchain.lld.clone(),
     }
+}
+
+fn native_link_config(project: &CoolProject) -> project::NativeLinkConfig {
+    let mut config = project.native.clone();
+    for path in &mut config.search_paths {
+        let candidate = PathBuf::from(path.as_str());
+        if candidate.is_relative() {
+            *path = project.root.join(candidate).to_string_lossy().into_owned();
+        }
+    }
+    for library in &mut config.libraries {
+        let candidate = PathBuf::from(library.name.as_str());
+        if candidate.is_relative()
+            && (library.name.contains('/')
+                || library.name.contains('\\')
+                || library.name.ends_with(".a")
+                || library.name.ends_with(".so")
+                || library.name.ends_with(".dylib")
+                || library.name.ends_with(".dll"))
+        {
+            library.name = project.root.join(candidate).to_string_lossy().into_owned();
+        }
+    }
+    config
 }
 
 fn validate_native_toolchain(toolchain: &llvm_codegen::NativeToolchainConfig, context: &str) -> Result<(), String> {
@@ -432,6 +470,7 @@ enum BuildEmitKind {
     Assembly,
     LlvmIr,
     StaticLib,
+    SharedLib,
 }
 
 impl BuildEmitKind {
@@ -442,8 +481,9 @@ impl BuildEmitKind {
             "asm" | "assembly" => Ok(Self::Assembly),
             "ir" | "ll" | "llvm-ir" | "llvm_ir" => Ok(Self::LlvmIr),
             "lib" | "library" | "staticlib" | "static-lib" => Ok(Self::StaticLib),
+            "shared" | "sharedlib" | "shared-lib" | "dylib" | "so" | "dll" => Ok(Self::SharedLib),
             _ => Err(format!(
-                "unknown build emit '{raw}' (expected binary, object, assembly, llvm-ir, or staticlib)"
+                "unknown build emit '{raw}' (expected binary, object, assembly, llvm-ir, staticlib, or sharedlib)"
             )),
         }
     }
@@ -455,6 +495,7 @@ impl BuildEmitKind {
             Self::Assembly => "assembly",
             Self::LlvmIr => "llvm-ir",
             Self::StaticLib => "staticlib",
+            Self::SharedLib => "sharedlib",
         }
     }
 
@@ -465,6 +506,7 @@ impl BuildEmitKind {
             Self::Assembly => llvm_codegen::NativeArtifactKind::Assembly,
             Self::LlvmIr => llvm_codegen::NativeArtifactKind::LlvmIr,
             Self::StaticLib => llvm_codegen::NativeArtifactKind::StaticLib,
+            Self::SharedLib => llvm_codegen::NativeArtifactKind::SharedLib,
         }
     }
 }
@@ -483,13 +525,14 @@ impl BuildFinalArtifact {
         }
     }
 
-    fn output_path(self, base: &Path) -> PathBuf {
+    fn output_path(self, base: &Path, target_triple: Option<&str>) -> PathBuf {
         match self {
             Self::Emit(BuildEmitKind::Binary) => base.to_path_buf(),
             Self::Emit(BuildEmitKind::Object) => base.with_extension("o"),
             Self::Emit(BuildEmitKind::Assembly) => base.with_extension("s"),
             Self::Emit(BuildEmitKind::LlvmIr) => base.with_extension("ll"),
             Self::Emit(BuildEmitKind::StaticLib) => static_library_path(base),
+            Self::Emit(BuildEmitKind::SharedLib) => shared_library_path(base, target_triple),
             Self::KernelImage => base.with_extension("elf"),
         }
     }
@@ -501,6 +544,28 @@ fn static_library_path(base: &Path) -> PathBuf {
     match base.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         Some(parent) => parent.join(archive_name),
         None => PathBuf::from(archive_name),
+    }
+}
+
+fn shared_library_path(base: &Path, target_triple: Option<&str>) -> PathBuf {
+    let file_name = base.file_name().and_then(|name| name.to_str()).unwrap_or("cool");
+    let ext = if target_triple
+        .map(|triple| triple.contains("windows"))
+        .unwrap_or(cfg!(target_os = "windows"))
+    {
+        "dll"
+    } else if target_triple
+        .map(|triple| triple.contains("darwin") || triple.contains("apple"))
+        .unwrap_or(cfg!(target_os = "macos"))
+    {
+        "dylib"
+    } else {
+        "so"
+    };
+    let library_name = format!("lib{file_name}.{ext}");
+    match base.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        Some(parent) => parent.join(library_name),
+        None => PathBuf::from(library_name),
     }
 }
 
@@ -1105,6 +1170,24 @@ fn resolve_build_toggle(
     }
 }
 
+fn resolve_no_libc_toggle(
+    cli_enable: bool,
+    cli_disable: bool,
+    manifest_value: Option<bool>,
+    default_value: bool,
+) -> Result<bool, String> {
+    if cli_enable && cli_disable {
+        return Err("cool build: choose either --no-libc or --with-libc, not both".to_string());
+    }
+    if cli_enable {
+        Ok(true)
+    } else if cli_disable {
+        Ok(false)
+    } else {
+        Ok(manifest_value.unwrap_or(default_value))
+    }
+}
+
 struct BuildRun<'a> {
     source: &'a str,
     script_path: &'a Path,
@@ -1121,6 +1204,69 @@ struct BuildRun<'a> {
     extra_inputs: Vec<PathBuf>,
 }
 
+fn native_build_identity(options: &llvm_codegen::NativeCompileOptions) -> Vec<(String, String)> {
+    let mut identity = vec![
+        ("cool".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+        ("build_mode".to_string(), format!("{:?}", options.build_mode)),
+        ("artifact".to_string(), format!("{:?}", options.artifact_kind)),
+        ("debug".to_string(), options.debug_info.to_string()),
+        ("reproducible".to_string(), options.reproducible.to_string()),
+        ("no_libc".to_string(), options.no_libc.to_string()),
+        (
+            "target".to_string(),
+            options.target_triple.clone().unwrap_or_else(|| "<host>".to_string()),
+        ),
+        (
+            "target_cpu".to_string(),
+            options.target_cpu.clone().unwrap_or_else(|| "<default>".to_string()),
+        ),
+        (
+            "target_features".to_string(),
+            options
+                .target_features
+                .clone()
+                .unwrap_or_else(|| "<default>".to_string()),
+        ),
+        ("entry".to_string(), options.entry_symbol.clone().unwrap_or_default()),
+        (
+            "source_root".to_string(),
+            options
+                .source_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        ),
+        (
+            "toolchain.cc".to_string(),
+            options.toolchain.cc.clone().unwrap_or_default(),
+        ),
+        (
+            "toolchain.ar".to_string(),
+            options.toolchain.ar.clone().unwrap_or_default(),
+        ),
+        (
+            "toolchain.lld".to_string(),
+            options.toolchain.lld.clone().unwrap_or_default(),
+        ),
+        ("native.search".to_string(), options.native_links.search_paths.join(";")),
+        ("native.rpath".to_string(), options.native_links.rpaths.join(";")),
+        (
+            "native.libs".to_string(),
+            options
+                .native_links
+                .libraries
+                .iter()
+                .map(|library| format!("{:?}:{}", library.kind, library.name))
+                .collect::<Vec<_>>()
+                .join(";"),
+        ),
+    ];
+    if let Some(cool) = &options.toolchain.cool {
+        identity.push(("toolchain.cool".to_string(), cool.clone()));
+    }
+    identity
+}
+
 fn perform_native_build(run: BuildRun<'_>) -> Result<(), String> {
     validate_native_toolchain(&run.options.toolchain, "cool build")?;
 
@@ -1132,48 +1278,11 @@ fn perform_native_build(run: BuildRun<'_>) -> Result<(), String> {
 
     println!("  Compiling {}{}", run.display, run.label);
     if run.incremental {
-        let mut identity = vec![
-            ("cool".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-            ("build_mode".to_string(), format!("{:?}", run.options.build_mode)),
-            ("artifact".to_string(), format!("{:?}", run.options.artifact_kind)),
-            ("debug".to_string(), run.options.debug_info.to_string()),
-            ("reproducible".to_string(), run.options.reproducible.to_string()),
-            (
-                "target".to_string(),
-                run.options
-                    .target_triple
-                    .clone()
-                    .unwrap_or_else(|| "<host>".to_string()),
-            ),
-            (
-                "source_root".to_string(),
-                run.options
-                    .source_root
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            ),
-            (
-                "toolchain.cc".to_string(),
-                run.options.toolchain.cc.clone().unwrap_or_default(),
-            ),
-            (
-                "toolchain.ar".to_string(),
-                run.options.toolchain.ar.clone().unwrap_or_default(),
-            ),
-            (
-                "toolchain.lld".to_string(),
-                run.options.toolchain.lld.clone().unwrap_or_default(),
-            ),
-        ];
-        if let Some(cool) = &run.options.toolchain.cool {
-            identity.push(("toolchain.cool".to_string(), cool.clone()));
-        }
         let fingerprint = build_cache::BuildFingerprintInput {
             entry_path: run.script_path.to_path_buf(),
             manifest_path: run.manifest_path.clone(),
             extra_files: run.extra_inputs.clone(),
-            identity,
+            identity: native_build_identity(&run.options),
         }
         .compute()?;
         let cache = build_cache::BuildCache::new(run.cache_root.clone(), fingerprint);
@@ -1199,6 +1308,7 @@ fn perform_native_build(run: BuildRun<'_>) -> Result<(), String> {
                 &run.final_path,
                 &run.options.toolchain,
                 run.options.reproducible,
+                run.options.entry_symbol.as_deref(),
             )?;
         }
         BuildFinalArtifact::Emit(_) => {
@@ -1207,48 +1317,11 @@ fn perform_native_build(run: BuildRun<'_>) -> Result<(), String> {
     }
 
     if run.incremental {
-        let mut identity = vec![
-            ("cool".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-            ("build_mode".to_string(), format!("{:?}", run.options.build_mode)),
-            ("artifact".to_string(), format!("{:?}", run.options.artifact_kind)),
-            ("debug".to_string(), run.options.debug_info.to_string()),
-            ("reproducible".to_string(), run.options.reproducible.to_string()),
-            (
-                "target".to_string(),
-                run.options
-                    .target_triple
-                    .clone()
-                    .unwrap_or_else(|| "<host>".to_string()),
-            ),
-            (
-                "source_root".to_string(),
-                run.options
-                    .source_root
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            ),
-            (
-                "toolchain.cc".to_string(),
-                run.options.toolchain.cc.clone().unwrap_or_default(),
-            ),
-            (
-                "toolchain.ar".to_string(),
-                run.options.toolchain.ar.clone().unwrap_or_default(),
-            ),
-            (
-                "toolchain.lld".to_string(),
-                run.options.toolchain.lld.clone().unwrap_or_default(),
-            ),
-        ];
-        if let Some(cool) = &run.options.toolchain.cool {
-            identity.push(("toolchain.cool".to_string(), cool.clone()));
-        }
         let fingerprint = build_cache::BuildFingerprintInput {
             entry_path: run.script_path.to_path_buf(),
             manifest_path: run.manifest_path,
             extra_files: run.extra_inputs,
-            identity,
+            identity: native_build_identity(&run.options),
         }
         .compute()?;
         let cache = build_cache::BuildCache::new(run.cache_root, fingerprint);
@@ -1268,9 +1341,13 @@ fn build_label(
     build_mode: llvm_codegen::NativeBuildMode,
     artifact: BuildFinalArtifact,
     target_triple: Option<&str>,
+    target_cpu: Option<&str>,
+    target_features: Option<&str>,
+    entry_symbol: Option<&str>,
     debug_info: bool,
     reproducible: bool,
     incremental: bool,
+    no_libc: bool,
 ) -> String {
     let mut parts = Vec::new();
     if profile != BuildProfile::Release {
@@ -1285,6 +1362,15 @@ fn build_label(
     if let Some(target) = target_triple {
         parts.push(format!("target={target}"));
     }
+    if let Some(cpu) = target_cpu {
+        parts.push(format!("cpu={cpu}"));
+    }
+    if let Some(features) = target_features.filter(|value| !value.trim().is_empty()) {
+        parts.push(format!("features={features}"));
+    }
+    if let Some(entry) = entry_symbol.filter(|value| !value.trim().is_empty()) {
+        parts.push(format!("entry={entry}"));
+    }
     if debug_info {
         parts.push("debug".to_string());
     }
@@ -1293,6 +1379,9 @@ fn build_label(
     }
     if !incremental {
         parts.push("no-incremental".to_string());
+    }
+    if no_libc {
+        parts.push("no-libc".to_string());
     }
 
     if parts.is_empty() {
@@ -1358,12 +1447,17 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     let mut profile_arg: Option<String> = None;
     let mut emit_arg: Option<String> = None;
     let mut target_arg: Option<String> = None;
+    let mut cpu_arg: Option<String> = None;
+    let mut cpu_features_arg: Option<String> = None;
+    let mut entry_arg: Option<String> = None;
     let mut debug_enabled = false;
     let mut debug_disabled = false;
     let mut reproducible_enabled = false;
     let mut reproducible_disabled = false;
     let mut incremental_enabled = false;
     let mut incremental_disabled = false;
+    let mut no_libc_enabled = false;
+    let mut no_libc_disabled = false;
     let mut help = false;
     let mut file_arg = None::<&String>;
 
@@ -1405,6 +1499,35 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             other if other.starts_with("--target=") => {
                 target_arg = Some(other["--target=".len()..].to_string());
             }
+            "--cpu" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool build: --cpu requires a value".to_string())?;
+                cpu_arg = Some(value.clone());
+            }
+            other if other.starts_with("--cpu=") => {
+                cpu_arg = Some(other["--cpu=".len()..].to_string());
+            }
+            "--cpu-features" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool build: --cpu-features requires a value".to_string())?;
+                cpu_features_arg = Some(value.clone());
+            }
+            other if other.starts_with("--cpu-features=") => {
+                cpu_features_arg = Some(other["--cpu-features=".len()..].to_string());
+            }
+            "--entry" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool build: --entry requires a value".to_string())?;
+                entry_arg = Some(value.clone());
+            }
+            other if other.starts_with("--entry=") => {
+                entry_arg = Some(other["--entry=".len()..].to_string());
+            }
+            "--no-libc" => no_libc_enabled = true,
+            "--with-libc" => no_libc_disabled = true,
             other if other.starts_with("--linker-script=") => {
                 linker_script_arg = Some(other["--linker-script=".len()..].to_string());
             }
@@ -1412,7 +1535,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             _ => {
                 if file_arg.is_some() {
                     return Err(
-                        "Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--debug] [--reproducible] [--incremental|--no-incremental] [--freestanding] [--linker-script=<path>] [file.cool]"
+                        "Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--cpu <name>] [--cpu-features <spec>] [--entry <symbol>] [--debug] [--reproducible] [--incremental|--no-incremental] [--no-libc|--with-libc] [--freestanding] [--linker-script=<path>] [file.cool]"
                             .to_string(),
                     );
                 }
@@ -1424,21 +1547,27 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     if help {
         println!(
             "\
-Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--debug|--no-debug] [--reproducible|--no-reproducible] [--incremental|--no-incremental] [--freestanding] [--linker-script=<path>] [file.cool]
+Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--cpu <name>] [--cpu-features <spec>] [--entry <symbol>] [--debug|--no-debug] [--reproducible|--no-reproducible] [--incremental|--no-incremental] [--no-libc|--with-libc] [--freestanding] [--linker-script=<path>] [file.cool]
 
 Build a Cool project from cool.toml or compile a single file.
 
 Options:
   --profile <name>      Select a named build profile: dev, release, freestanding, or strict
-  --emit <kind>         Select the final artifact: binary, object, assembly, llvm-ir, or staticlib
+  --emit <kind>         Select the final artifact: binary, object, assembly, llvm-ir,
+                        staticlib, or sharedlib
   --target <triple>     Emit code for an explicit LLVM target triple (for example
                         x86_64-unknown-linux-gnu or i386-unknown-linux-gnu)
+  --cpu <name>          Override the LLVM target CPU (for example native, x86-64-v3, cortex-a72)
+  --cpu-features <spec> Override LLVM target features (for example +sse4.2,+popcnt)
+  --entry <symbol>      Select an explicit linker entry symbol for kernel/no-libc outputs
   --debug               Emit native debug info and line locations
   --no-debug            Override manifest defaults and disable native debug info
   --reproducible        Normalize source paths and deterministic tool output where supported
   --no-reproducible     Override manifest defaults and disable reproducible build settings
   --incremental         Force build-cache reuse when inputs are unchanged
   --no-incremental      Disable the project-local native build cache
+  --no-libc             Skip the hosted C runtime and libc assumptions where supported
+  --with-libc           Override manifest defaults and keep the hosted runtime/link path
   --freestanding        Compile in freestanding mode without the hosted Cool runtime
   --linker-script=<path>  Link the object file into a kernel image (.elf) using LLD and the
                           given GNU linker script; implies --freestanding unless --emit overrides
@@ -1448,10 +1577,13 @@ Examples:
   cool build
   cool build --profile dev
   cool build --debug --reproducible
+  cool build --emit sharedlib
+  cool build --cpu native --cpu-features +sse4.2,+popcnt
   cool build hello.cool
   cool build --target x86_64-unknown-linux-gnu --emit object hello.cool
   cool build --emit object hello.cool
   cool build --emit staticlib
+  cool build --no-libc --entry _start hello.cool
   cool build --profile strict hello.cool
   cool build --freestanding
   cool build --freestanding hello.cool
@@ -1474,6 +1606,9 @@ Examples:
             let profile = resolve_build_profile(profile_arg.as_deref(), project.build_profile.as_deref())?;
             let requested_emit = resolve_build_emit(emit_arg.as_deref(), project.build_emit.as_deref())?;
             let requested_target = resolve_build_target(target_arg.as_deref(), project.build_target.as_deref())?;
+            let requested_cpu = cpu_arg.clone().or_else(|| project.build_cpu.clone());
+            let requested_cpu_features = cpu_features_arg.clone().or_else(|| project.build_cpu_features.clone());
+            let requested_entry = entry_arg.clone().or_else(|| project.build_entry.clone());
             let debug_info = resolve_build_toggle("debug", debug_enabled, debug_disabled, project.build_debug, false)?;
             let reproducible = resolve_build_toggle(
                 "reproducible",
@@ -1489,11 +1624,13 @@ Examples:
                 project.build_incremental,
                 true,
             )?;
+            let no_libc = resolve_no_libc_toggle(no_libc_enabled, no_libc_disabled, project.build_no_libc, false)?;
             let effective_linker_script: Option<PathBuf> = match &linker_script_arg {
                 Some(path) => Some(PathBuf::from(path)),
                 None => project.linker_script.as_ref().map(|s| project.root.join(s)),
             };
             let freestanding_requested = freestanding
+                || no_libc
                 || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding
                 || linker_script_arg.is_some();
             let final_artifact = if requested_emit.is_none() && effective_linker_script.is_some() {
@@ -1512,9 +1649,10 @@ Examples:
             };
             if build_mode == llvm_codegen::NativeBuildMode::Freestanding
                 && final_artifact == BuildFinalArtifact::Emit(BuildEmitKind::Binary)
+                && !no_libc
             {
                 return Err(
-                    "cool build: freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, or a kernel image"
+                    "cool build: freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, sharedlib, a kernel image, or pair --emit binary with --no-libc"
                         .to_string(),
                 );
             }
@@ -1531,9 +1669,10 @@ Examples:
             let display = format!("{} v{} ({})", project.name, project.version, project.main);
             run_build_profile_checks(&main_path, profile, &display)?;
             let toolchain = native_toolchain_config(&project);
+            let native_links = native_link_config(&project);
 
             let base_output = PathBuf::from(project.output_name());
-            let final_path = final_artifact.output_path(&base_output);
+            let final_path = final_artifact.output_path(&base_output, requested_target.as_deref());
             let compile_output = if final_artifact == BuildFinalArtifact::KernelImage {
                 base_output.with_extension("o")
             } else {
@@ -1549,9 +1688,13 @@ Examples:
                 build_mode,
                 final_artifact,
                 requested_target.as_deref(),
+                requested_cpu.as_deref(),
+                requested_cpu_features.as_deref(),
+                requested_entry.as_deref(),
                 debug_info,
                 reproducible,
                 incremental,
+                no_libc,
             );
 
             perform_native_build(BuildRun {
@@ -1565,9 +1708,14 @@ Examples:
                     build_mode,
                     artifact_kind: compile_kind,
                     target_triple: requested_target.clone(),
+                    target_cpu: requested_cpu,
+                    target_features: requested_cpu_features,
+                    entry_symbol: requested_entry,
                     debug_info,
                     reproducible,
+                    no_libc,
                     toolchain,
+                    native_links,
                     source_root: Some(project.root.clone()),
                 },
                 final_artifact,
@@ -1584,13 +1732,18 @@ Examples:
             let profile = resolve_build_profile(profile_arg.as_deref(), None)?;
             let requested_emit = resolve_build_emit(emit_arg.as_deref(), None)?;
             let requested_target = resolve_build_target(target_arg.as_deref(), None)?;
+            let requested_cpu = cpu_arg.clone();
+            let requested_cpu_features = cpu_features_arg.clone();
+            let requested_entry = entry_arg.clone();
             let debug_info = resolve_build_toggle("debug", debug_enabled, debug_disabled, None, false)?;
             let reproducible =
                 resolve_build_toggle("reproducible", reproducible_enabled, reproducible_disabled, None, false)?;
             let incremental =
                 resolve_build_toggle("incremental", incremental_enabled, incremental_disabled, None, true)?;
+            let no_libc = resolve_no_libc_toggle(no_libc_enabled, no_libc_disabled, None, false)?;
             let effective_linker_script = linker_script_arg.as_deref();
             let freestanding_requested = freestanding
+                || no_libc
                 || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding
                 || effective_linker_script.is_some();
 
@@ -1620,15 +1773,16 @@ Examples:
             };
             if build_mode == llvm_codegen::NativeBuildMode::Freestanding
                 && final_artifact == BuildFinalArtifact::Emit(BuildEmitKind::Binary)
+                && !no_libc
             {
                 return Err(
-                    "cool build: freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, or a kernel image"
+                    "cool build: freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, sharedlib, a kernel image, or pair --emit binary with --no-libc"
                         .to_string(),
                 );
             }
 
             let base_output = file_path.with_extension("");
-            let final_path = final_artifact.output_path(&base_output);
+            let final_path = final_artifact.output_path(&base_output, requested_target.as_deref());
             let compile_output = if final_artifact == BuildFinalArtifact::KernelImage {
                 base_output.with_extension("o")
             } else {
@@ -1644,9 +1798,13 @@ Examples:
                 build_mode,
                 final_artifact,
                 requested_target.as_deref(),
+                requested_cpu.as_deref(),
+                requested_cpu_features.as_deref(),
+                requested_entry.as_deref(),
                 debug_info,
                 reproducible,
                 incremental,
+                no_libc,
             );
 
             perform_native_build(BuildRun {
@@ -1665,9 +1823,14 @@ Examples:
                     build_mode,
                     artifact_kind: compile_kind,
                     target_triple: requested_target.clone(),
+                    target_cpu: requested_cpu,
+                    target_features: requested_cpu_features,
+                    entry_symbol: requested_entry,
                     debug_info,
                     reproducible,
+                    no_libc,
                     toolchain: llvm_codegen::NativeToolchainConfig::default(),
+                    native_links: project::NativeLinkConfig::default(),
                     source_root: file_path.parent().map(Path::to_path_buf),
                 },
                 final_artifact,
@@ -1996,6 +2159,158 @@ With no file argument inside a project, `cool doc` uses the manifest main file."
     Ok(())
 }
 
+// ── `cool bindgen` ───────────────────────────────────────────────────────────
+
+fn cmd_bindgen(args: &[&String]) -> Result<(), String> {
+    let mut header = None::<String>;
+    let mut output = None::<String>;
+    let mut library = None::<String>;
+    let mut link_kind = None::<String>;
+
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--output" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool bindgen: --output requires a value".to_string())?;
+                output = Some(value.clone());
+            }
+            "--library" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool bindgen: --library requires a value".to_string())?;
+                library = Some(value.clone());
+            }
+            "--link-kind" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool bindgen: --link-kind requires a value".to_string())?;
+                link_kind = Some(value.clone());
+            }
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool bindgen [--library name] [--link-kind kind] [--output path] <header.h>
+
+Generate Cool FFI declarations from a C header subset.
+
+Supported today:
+  - simple #define constants
+  - enum constants
+  - struct/union layouts with scalar or pointer fields
+  - plain C function prototypes
+
+Options:
+  --library <name>    Attach library metadata to generated extern defs
+  --link-kind <kind>  Attach native link kind metadata (default/static/shared/framework)
+  --output <path>     Write generated Cool source to a file instead of stdout"
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool bindgen: unexpected flag '{other}'")),
+            other => {
+                if header.is_some() {
+                    return Err(
+                        "Usage: cool bindgen [--library name] [--link-kind kind] [--output path] <header.h>"
+                            .to_string(),
+                    );
+                }
+                header = Some(other.to_string());
+            }
+        }
+    }
+
+    let header = header.ok_or_else(|| {
+        "Usage: cool bindgen [--library name] [--link-kind kind] [--output path] <header.h>".to_string()
+    })?;
+    let rendered = bindgen::generate_bindings(Path::new(&header), &bindgen::BindgenOptions { library, link_kind })?;
+
+    if let Some(output_path) = output {
+        let output_path = PathBuf::from(output_path);
+        if let Some(parent) = output_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("cool bindgen: cannot create '{}': {e}", parent.display()))?;
+            }
+        }
+        fs::write(&output_path, rendered)
+            .map_err(|e| format!("cool bindgen: cannot write '{}': {e}", output_path.display()))?;
+        println!("Wrote bindings → {}", output_path.display());
+    } else {
+        print!("{rendered}");
+        if !rendered.ends_with('\n') {
+            println!();
+        }
+    }
+    Ok(())
+}
+
+// ── `cool layout` ────────────────────────────────────────────────────────────
+
+fn cmd_layout(args: &[&String]) -> Result<(), String> {
+    let mut json = false;
+    let mut output = None::<String>;
+    let mut artifact = None::<String>;
+
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--output" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool layout: --output requires a value".to_string())?;
+                output = Some(value.clone());
+            }
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool layout [--json] [--output path] <artifact>
+
+Inspect section, symbol, and archive-member layout for an object file, executable,
+shared library, kernel image, or static archive."
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool layout: unexpected flag '{other}'")),
+            other => {
+                if artifact.is_some() {
+                    return Err("Usage: cool layout [--json] [--output path] <artifact>".to_string());
+                }
+                artifact = Some(other.to_string());
+            }
+        }
+    }
+
+    let artifact = artifact.ok_or_else(|| "Usage: cool layout [--json] [--output path] <artifact>".to_string())?;
+    let report = layout_tool::inspect_path(Path::new(&artifact))?;
+    let rendered = if json {
+        serde_json::to_string_pretty(&report).map_err(|e| format!("cool layout: failed to encode JSON: {e}"))?
+    } else {
+        layout_tool::render_text(&report)
+    };
+
+    if let Some(output_path) = output {
+        let output_path = PathBuf::from(output_path);
+        if let Some(parent) = output_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("cool layout: cannot create '{}': {e}", parent.display()))?;
+            }
+        }
+        fs::write(&output_path, rendered)
+            .map_err(|e| format!("cool layout: cannot write '{}': {e}", output_path.display()))?;
+        println!("Wrote layout report → {}", output_path.display());
+    } else {
+        print!("{rendered}");
+        if !rendered.ends_with('\n') {
+            println!();
+        }
+    }
+    Ok(())
+}
+
 // ── `cool check` ──────────────────────────────────────────────────────────────
 
 fn cmd_check(args: &[&String]) -> Result<(), String> {
@@ -2222,7 +2537,9 @@ USAGE:
     cool symbols [file.cool]      Print a resolved JSON symbol index
     cool diff <before> <after>    Print a JSON summary of top-level changes
     cool doc [file.cool]          Generate API docs for modules, types, and functions
+    cool bindgen <header.h>       Generate Cool FFI declarations from a C header subset
     cool check [file.cool]        Statically check imports, cycles, symbols, and types
+    cool layout <artifact>        Inspect section and symbol layout for native artifacts
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool bundle [--target <triple>]  Build and package the project into a distributable tarball
     cool release [--bump patch] [--target <triple>]  Bump version, bundle, and git-tag a release
@@ -2258,7 +2575,9 @@ EXAMPLES:
     cool symbols hello.cool       # index resolved symbol locations as JSON
     cool diff old.cool new.cool   # compare top-level imports and symbols
     cool doc hello.cool           # generate markdown API docs
+    cool bindgen include/demo.h --library demo
     cool check hello.cool         # statically check imports, cycles, symbols, and types
+    cool layout hello.o           # inspect section and symbol layout
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
@@ -2283,7 +2602,7 @@ NOTES:
     fixed-width int helpers i8/u8/i16/u16/i32/u32/i64,
     pointer-width aliases isize/usize and word_bits()/word_bytes(),
     source-relative file imports and project/package imports,
-    LLVM-native extern def/data declarations with symbol/cc/section metadata,
+    LLVM-native extern def/data declarations with symbol/cc/section/library/link metadata,
     native import ffi (ffi.open/ffi.func),
     built-in import math/os/sys/path/platform/core/csv/datetime/hashlib/toml/yaml/sqlite/http/subprocess/argparse/logging/test/time and import random
     (seed/random/randint/uniform/choice/shuffle), plus json
@@ -2352,10 +2671,26 @@ fn main() {
                 }
                 return;
             }
+            "bindgen" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_bindgen(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
             "check" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_check(&rest) {
                     eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "layout" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_layout(&rest) {
+                    eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
                 return;

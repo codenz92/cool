@@ -217,6 +217,11 @@ pub enum Stmt {
         symbol: Option<String>,
         callconv: Option<String>,
         section: Option<String>,
+        library: Option<String>,
+        link_kind: Option<String>,
+        weak: bool,
+        ownership: Option<String>,
+        lifetime: Option<String>,
     },
     /// data NAME: type = expr
     Data {

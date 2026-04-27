@@ -2,7 +2,7 @@
 
 A native-first, high-level systems language with Python-like syntax, an LLVM compiler, FFI, and freestanding build support — all implemented in Rust.
 
-Cool is a high-level systems language with Python-like syntax and a native-first toolchain. Its primary compilation path targets native binaries and freestanding object files through LLVM, while the tree-walk interpreter and bytecode VM provide fast iteration, tooling support, and runtime parity. It also ships with a **foreign function interface**, explicit ABI/data-layout features, and bundled terminal apps written in Cool itself.
+Cool is a high-level systems language with Python-like syntax and a native-first toolchain. Its primary compilation path targets native binaries, freestanding objects, static libraries, and shared libraries through LLVM, while the tree-walk interpreter and bytecode VM provide fast iteration, tooling support, and runtime parity. It also ships with a **foreign function interface**, explicit ABI/data-layout features, and bundled terminal apps written in Cool itself.
 
 ---
 
@@ -10,8 +10,8 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 
 ### Language
 
-- Native-first toolchain: tree-walk interpreter, bytecode VM, LLVM native compiler, freestanding object output, and kernel image linking via LLD
-- Systems reach: `extern def`, `data`, structs/unions, FFI, inline assembly, and raw memory operations
+- Native-first toolchain: tree-walk interpreter, bytecode VM, LLVM native compiler, freestanding object output, static/shared library output, and kernel image linking via LLD
+- Systems reach: `extern def`, `data`, structs/unions, FFI, inline assembly, raw memory operations, MMIO/register helpers, and no-libc syscall paths
 - Indentation-based block syntax (Python-style)
 - Variables, arithmetic, comparisons, logical and bitwise operators
 - `if` / `elif` / `else`, `while`, `for`, `break`, `continue`
@@ -28,14 +28,15 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import math`, `import os`, `import sys`, `import path`, `import platform`, `import core`, `import csv`, `import datetime`, `import hashlib`, `import toml`, `import yaml`, `import sqlite`, `import http`, `import argparse`, `import logging`, `import test`
 - `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket` (`http` requires host `curl`)
 - `import ffi` — call C functions from shared libraries at runtime
-- LLVM-native `extern def` declarations with `symbol:` and `cc:` metadata
+- LLVM-native `extern def` declarations with symbol/link/ownership metadata
 - LLVM-native ordinary `def` signatures with typed parameters and return types
 - Explicit module export control with `public` / `private` on top-level bindings and declarations
 - Build profiles for native workflows: `cool build --profile dev|release|freestanding|strict`
-- Explicit target triples for native builds: `cool build --target <triple>`
+- Explicit target triples and CPU tuning for native builds: `cool build --target <triple> --cpu <name> --cpu-features <spec>`
 - Incremental native build caching plus reproducible/toolchain-pinned builds via `[build]` and `[toolchain]`
 - Native stack traces on unhandled exceptions, `cool bench --profile`, and first-class `cool fmt`
-- `cool build --freestanding` to emit object files for custom/freestanding link steps; `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
+- `cool build --freestanding` / `--no-libc` for host-free outputs, `--entry <symbol>` for explicit entry control, and `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
+- `cool bindgen` for C headers and `cool layout` for archive/object/kernel/shared-library inspection
 - `cool new --template app|lib|service|freestanding` for app, library, network-service, and freestanding scaffolds
 - `cool publish`, `cool install --locked`, and lockfile checksums for source-distribution packaging and reproducible dependency installs
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
@@ -97,6 +98,27 @@ print(core.pml4_index(addr))
 ```
 
 `core.alloc()`, `core.free()`, `core.set_allocator()`, and `core.clear_allocator()` are LLVM-native allocator hooks for hosted/freestanding builds. The interpreter and bytecode VM recognize those names but intentionally report `compile with cool build`.
+
+Phase 16 extends `import core` with pointer/address helpers, string/formatting helpers, lightweight collection constructors, and low-level register/syscall primitives:
+
+```python
+import core
+
+ptr = core.addr(4099)
+print(core.addr_align_up(ptr, 16))
+print(core.format_hex(255))        # 0xff
+print(core.format_bin(10))         # 0b1010
+print(core.format_ptr(ptr))
+
+items = core.list_new(2)
+core.list_push(items, "cool")
+print(core.list_pop(items))
+
+flags_addr = 0x1000
+core.reg_set_bits(flags_addr, "u32", 0x10)   # LLVM-only
+```
+
+`core.mmio_*`, `core.reg_*`, and `core.syscall*` are LLVM-only. `core.syscall*` currently targets Linux x86_64 / aarch64 no-libc or freestanding builds.
 
 ### FFI — Call C from Cool
 
@@ -170,13 +192,23 @@ extern def abs(x: i32) -> i32
 extern def c_strlen(text: str) -> usize:
     symbol: "strlen"
     cc: "c"
+    library: "c"
+    link_kind: "shared"
+    ownership: "borrowed"
+    lifetime: "caller"
     section: ".text.host"
 
 print(abs(-42))
 print(c_strlen("hello"))
 ```
 
-`extern def` is only available in compiled programs (`cool build`). It uses the same ABI type names as `ffi.func`, with optional `symbol:` aliasing, `cc:` calling-convention metadata, and `section:` placement metadata.
+`extern def` is only available in compiled programs (`cool build`). It uses the same ABI type names as `ffi.func`, with optional `symbol:` / `library:` / `link_kind:` metadata for native link flows, `cc:` calling-convention metadata, `section:` placement metadata, `weak: true` for weak symbols, and `ownership:` / `lifetime:` annotations so generated docs and bindings can describe FFI contracts explicitly.
+
+For existing C headers, `cool bindgen` can scaffold this surface for you:
+
+```bash
+cool bindgen --library sqlite3 --link-kind shared include/sqlite3.h --output src/sqlite_bindings.cool
+```
 
 ### Raw Data Declarations And Sections (LLVM backend)
 
@@ -213,16 +245,21 @@ cool build hello.cool                        # compiles → ./hello
 ./hello                                      # runs natively, no runtime needed
 
 cool build --freestanding hello.cool         # emits → ./hello.o
+cool build --emit sharedlib hello.cool       # emits → ./libhello.<so|dylib|dll>
+cool build --emit staticlib hello.cool       # emits → ./libhello.a
 cool build --target i386-unknown-linux-gnu --emit llvm-ir hello.cool
                                             # emits cross-target LLVM IR → ./hello.ll
+cool build --target x86_64-unknown-linux-gnu --cpu x86-64-v3 --cpu-features +popcnt hello.cool
+cool build --no-libc --entry _start hello.cool
+                                            # host-free Linux binary path with explicit entry
 cool build --linker-script=link.ld hello.cool  # emits → ./hello.o, then links → ./hello.elf
 ```
 
 `cool build --freestanding` skips the hosted C runtime compile/link step and writes an object file instead. Freestanding builds accept declaration-style top-level programs: `def`, `extern def`, `data`, `struct`, `union`, plus top-level `import core` for the host-free systems helpers. Other top-level executable statements, imports, and classes are rejected. Freestanding `assert` failure paths lower to a direct LLVM trap instead of depending on libc `abort()`. Use `entry: "symbol_name"` metadata on a zero-argument `def` to export an additional raw entry symbol for custom link flows. All raw memory builtins (`read_*`, `write_*`, and `_volatile` variants) are lowered directly to LLVM IR in freestanding mode — no C runtime symbols are needed.
 
-`--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`.
+`--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`. `--entry <symbol>` / `[build].entry` let you control the final linker entry for no-libc or kernel-style outputs, while `--cpu` / `--cpu-features` thread target tuning through the LLVM target machine.
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, and top-level typed parameters/return types), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (`word_bits`, `word_bytes`, page/address helpers, paging-index helpers, and allocator hooks), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, and top-level typed parameters/return types), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** closures/lambdas.
 
@@ -455,6 +492,9 @@ cool build --target i386-unknown-linux-gnu --emit llvm-ir
 cool build --emit assembly   # writes ./myapp.s
 cool build --emit llvm-ir    # writes ./myapp.ll
 cool build --emit staticlib  # writes ./libmyapp.a
+cool build --emit sharedlib  # writes ./libmyapp.<so|dylib|dll>
+cool build --cpu native --cpu-features +sse4.2,+popcnt
+cool build --no-libc --entry _start
 # (or set linker_script in cool.toml to produce ./myapp.elf via LLD)
 
 # Package a release artifact
@@ -476,17 +516,27 @@ linker_script = "link.ld"     # optional; enables kernel image output via LLD (c
 
 [build]
 profile = "dev"               # optional: dev, release, freestanding, or strict
-emit = "binary"               # optional: binary, object, assembly, llvm-ir, or staticlib
+emit = "binary"               # optional: binary, object, assembly, llvm-ir, staticlib, or sharedlib
 target = "x86_64-unknown-linux-gnu"  # optional: explicit LLVM target triple
+cpu = "x86-64-v3"             # optional: explicit LLVM target CPU
+cpu_features = "+popcnt"      # optional: explicit LLVM target feature string
+entry = "_start"              # optional: explicit linker entry for no-libc/kernel outputs
 incremental = true            # optional: enable the project-local native build cache
 reproducible = true           # optional: deterministic tool output and normalized source paths
 debug = true                  # optional: emit DWARF/line locations for native builds
+no_libc = false               # optional: skip the hosted runtime/libc assumptions where supported
 
 [toolchain]
 cool = "1.0.0"               # optional: pin the Cool CLI version expected by this project
 cc = "clang"                 # optional: C compiler for hosted native links
 ar = "llvm-ar"               # optional: archiver for static libraries
 lld = "ld.lld"               # optional: linker for kernel-image flows
+
+[native]
+libraries = ["sqlite3"]                     # optional: link -lsqlite3
+# libraries = [{ name = "mylib", kind = "static" }]
+search = ["native/lib"]                     # optional: extra -L search paths
+rpath = ["@loader_path/../lib"]             # optional: runtime library search path
 
 [dependencies]
 toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
@@ -517,7 +567,7 @@ description = "Format Cool source files"
 run = "cool fmt"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, or normal binaries. `[build].target` (or `cool build --target ...`) selects an explicit LLVM target triple for native output and packaging metadata. `[build].incremental` controls the project-local native build cache under `.cool/cache/build`, while `[build].reproducible` normalizes source paths and enables deterministic archive/linker settings where the host toolchain supports them. `[build].debug` enables native debug info and line locations, and `[toolchain]` can pin the expected Cool CLI version plus external `cc`/`ar`/`lld` tools. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` / `cool install --locked` to materialize git dependencies under `.cool/deps`, verify dependency checksums, and maintain `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and starter `[tasks.publish]`, `[tasks.doc]`, and `[tasks.fmt]` tasks, so packaging, docs, and formatting work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, shared libraries, or normal binaries. `[build].target`, `[build].cpu`, and `[build].cpu_features` (or the matching CLI flags) thread explicit target tuning into native output and packaging metadata. `[build].entry` / `--entry` choose the final linker entry for no-libc or kernel-style flows, and `[build].no_libc` / `--no-libc` switch hosted binary output onto the host-free path where supported. `[native]` provides extra libraries, frameworks, search paths, and rpaths for the native linker; `extern def` can also attach `library:` and `link_kind:` metadata directly to individual bindings. `[build].incremental` controls the project-local native build cache under `.cool/cache/build`, while `[build].reproducible` normalizes source paths and enables deterministic archive/linker settings where supported by the selected toolchain. `[build].debug` enables native debug info and line locations, and `[toolchain]` can pin the expected Cool CLI version plus external `cc`/`ar`/`lld` tools. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` / `cool install --locked` to materialize git dependencies under `.cool/deps`, verify dependency checksums, and maintain `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and starter `[tasks.publish]`, `[tasks.doc]`, and `[tasks.fmt]` tasks, so packaging, docs, and formatting work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
@@ -563,12 +613,15 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
 | `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, typed bindings, immutable reassignments, missing returns, export validation, and type mismatches; `--strict` enforces full annotations |
 | `cool doc [file.cool]` | Generate API docs as Markdown, HTML, or JSON |
+| `cool bindgen <header.h>` | Generate starter Cool FFI bindings from a C header subset |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build --profile <name> [file.cool]` | Build with `dev`, `release`, `freestanding`, or `strict` profile rules |
-| `cool build --emit <kind> [file.cool]` | Emit `binary`, `object`, `assembly`, `llvm-ir`, or `staticlib` artifacts |
+| `cool build --emit <kind> [file.cool]` | Emit `binary`, `object`, `assembly`, `llvm-ir`, `staticlib`, or `sharedlib` artifacts |
 | `cool build --target <triple> [file.cool]` | Emit native code for an explicit LLVM target triple |
+| `cool build --cpu <name> --cpu-features <spec> [file.cool]` | Tune native output for an explicit target CPU / feature set |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
+| `cool build --no-libc --entry <symbol> [file.cool]` | Link a host-free Linux binary when the program provides an explicit low-level entry |
 | `cool build --linker-script=<ld> [file.cool]` | Compile freestanding and link a kernel image (`.elf`) via LLD |
 | `cool bench [path ...]` | Compile and benchmark native Cool programs |
 | `cool bundle [--target <triple>]` | Build and package the project into a distributable tarball with metadata and symbol-map sidecars |
@@ -577,6 +630,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool lsp` | Start the language server (LSP) on stdin/stdout |
 | `cool install [--locked\|--frozen]` | Fetch or verify dependencies and maintain `cool.lock` with checksums |
 | `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
+| `cool layout <artifact>` | Inspect section, symbol, entry-point, and archive-member layout for native artifacts |
 | `cool fmt [--check] [path ...]` | Reformat Cool source files or report files that need formatting |
 | `cool test [path ...]` | Discover and run Cool tests |
 | `cool task [name|list ...]` | List or run manifest-defined project tasks |
@@ -591,13 +645,25 @@ Use `cool bench` inside a project to compile and time files under `benchmarks/` 
 
 Use `cool doc` to turn a module graph into API documentation. By default it emits Markdown to stdout, but `--format html` and `--format json` are also supported, and `--output <path>` writes the result to disk. Inside a project, `cool doc` with no file argument uses the manifest `main` entry and documents every reachable local module; pass `--private` to include private functions, bindings, classes, and methods in the output.
 
+### Bindgen and layout inspection
+
+Use `cool bindgen` to turn a simple C header into starter Cool bindings: today it understands plain `#define` constants, enum constants, struct/union layouts, typedef aliases, and straightforward function prototypes. `--library` and `--link-kind` attach native-link metadata directly to the generated `extern def` blocks so a bound header can move quickly into a buildable Cool module.
+
+Use `cool layout` on `.o`, `.a`, executables, `.elf` kernel images, or shared libraries when you need to inspect sections, symbols, archive members, or final entry points. `--json` is intended for tooling and CI checks around embedded/kernel link layouts.
+
 ### Native artifact selection
 
-Use `cool build --emit ...` when you want something other than the default binary or freestanding object. `object` writes a plain `.o`, `assembly` writes `.s`, `llvm-ir` writes `.ll`, and `staticlib` writes `lib<name>.a` (including the hosted runtime object when needed). The same choice can live in `cool.toml` via `[build].emit = "..."`, and CLI `--emit` overrides the manifest.
+Use `cool build --emit ...` when you want something other than the default binary or freestanding object. `object` writes a plain `.o`, `assembly` writes `.s`, `llvm-ir` writes `.ll`, `staticlib` writes `lib<name>.a` (including the hosted runtime object when needed), and `sharedlib` writes `lib<name>.<so|dylib|dll>`. The same choice can live in `cool.toml` via `[build].emit = "..."`, and CLI `--emit` overrides the manifest.
 
 ### Cross-compilation
 
-Use `cool build --target <triple>` to emit LLVM IR, assembly, objects, static libraries, or binaries for an explicit target triple, or set `[build].target = "..."` in `cool.toml` to make that the project default. `cool bundle` and `cool release` accept the same `--target` override and carry the chosen target into `dist/` archive names plus metadata. Cross-target freestanding/object-style outputs work directly through LLVM; hosted binaries and hosted `staticlib` output additionally require a C toolchain for that target (`clang`, or an explicit `COOL_CC` / `CC` toolchain).
+Use `cool build --target <triple>` to emit LLVM IR, assembly, objects, static libraries, shared libraries, or binaries for an explicit target triple, or set `[build].target = "..."` in `cool.toml` to make that the project default. `cool bundle` and `cool release` accept the same `--target` override and carry the chosen target into `dist/` archive names plus metadata. `--cpu` and `--cpu-features` let you tune the selected target more precisely. Cross-target freestanding/object-style outputs work directly through LLVM; hosted binaries and hosted library output additionally require a C toolchain for that target (`clang`, or an explicit `COOL_CC` / `CC` toolchain).
+
+### Native linking and no-libc flows
+
+Use `[native]` in `cool.toml` for additional libraries, frameworks, search paths, and rpaths that the native linker should see for the whole project. For one-off bindings, `extern def` can specify `library:` and `link_kind:` directly, which is often enough for a focused FFI module.
+
+For low-level targets, `cool build --no-libc --entry <symbol>` links a Linux binary without the hosted runtime, while `--linker-script=<path>` / `linker_script = "..."` keep the kernel-image path available through LLD. The `core.syscall*`, `core.mmio_*`, and `core.reg_*` helpers are intended for these freestanding or no-libc outputs.
 
 ### Incremental and reproducible builds
 

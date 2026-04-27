@@ -182,6 +182,27 @@ pub struct DocFunction {
     pub doc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visibility: Option<Visibility>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extern_metadata: Option<DocExternMetadata>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocExternMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callconv: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_kind: Option<String>,
+    pub weak: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ownership: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifetime: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -671,12 +692,20 @@ fn build_doc_module(
                 return_type: return_type.clone(),
                 doc: extract_docstring(body),
                 visibility: Some(effective_visibility),
+                extern_metadata: None,
             }),
             Stmt::ExternFn {
                 name,
                 params,
                 return_type,
-                ..
+                symbol,
+                callconv,
+                section,
+                library,
+                link_kind,
+                weak,
+                ownership,
+                lifetime,
             } => functions.push(DocFunction {
                 line: current_line,
                 name: name.clone(),
@@ -685,6 +714,16 @@ fn build_doc_module(
                 return_type: Some(return_type.clone()),
                 doc: None,
                 visibility: Some(effective_visibility),
+                extern_metadata: Some(DocExternMetadata {
+                    symbol: symbol.clone(),
+                    callconv: callconv.clone(),
+                    section: section.clone(),
+                    library: library.clone(),
+                    link_kind: link_kind.clone(),
+                    weak: *weak,
+                    ownership: ownership.clone(),
+                    lifetime: lifetime.clone(),
+                }),
             }),
             Stmt::Class { name, parent, body } => {
                 let (methods, class_bindings) = doc_class_body(body, include_private);
@@ -783,6 +822,7 @@ fn doc_class_body(body: &[Stmt], include_private: bool) -> (Vec<DocFunction>, Ve
                 return_type: return_type.clone(),
                 doc: extract_docstring(body),
                 visibility: Some(visibility),
+                extern_metadata: None,
             }),
             _ => {
                 if let Some(items) = doc_binding(raw_stmt, current_line) {
@@ -910,6 +950,48 @@ fn render_binding_signature(binding: &DocBinding) -> String {
     }
 }
 
+fn render_extern_metadata_markdown(metadata: &DocExternMetadata) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(symbol) = &metadata.symbol {
+        parts.push(format!("symbol=`{symbol}`"));
+    }
+    if let Some(callconv) = &metadata.callconv {
+        parts.push(format!("cc=`{callconv}`"));
+    }
+    if let Some(section) = &metadata.section {
+        parts.push(format!("section=`{section}`"));
+    }
+    if let Some(library) = &metadata.library {
+        parts.push(format!("library=`{library}`"));
+    }
+    if let Some(link_kind) = &metadata.link_kind {
+        parts.push(format!("link_kind=`{link_kind}`"));
+    }
+    if metadata.weak {
+        parts.push("weak=`true`".to_string());
+    }
+    if let Some(ownership) = &metadata.ownership {
+        parts.push(format!("ownership=`{ownership}`"));
+    }
+    if let Some(lifetime) = &metadata.lifetime {
+        parts.push(format!("lifetime=`{lifetime}`"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+fn render_extern_metadata_html(metadata: &DocExternMetadata) -> Option<String> {
+    render_extern_metadata_markdown(metadata).map(|text| {
+        format!(
+            "<p><strong>Extern metadata:</strong> <code>{}</code></p>",
+            escape_html(&text)
+        )
+    })
+}
+
 fn render_markdown_visibility(visibility: Option<Visibility>) -> &'static str {
     match visibility {
         Some(Visibility::Private) => " _(private)_",
@@ -962,6 +1044,11 @@ pub fn render_doc_markdown(report: &DocReport) -> String {
                 if let Some(doc) = &function.doc {
                     out.push_str(doc.trim());
                     out.push_str("\n\n");
+                }
+                if let Some(metadata) = &function.extern_metadata {
+                    if let Some(summary) = render_extern_metadata_markdown(metadata) {
+                        out.push_str(&format!("Extern metadata: {summary}\n\n"));
+                    }
                 }
             }
         }
@@ -1078,6 +1165,11 @@ pub fn render_doc_html(report: &DocReport) -> String {
                 ));
                 if let Some(doc) = &function.doc {
                     out.push_str(&render_doc_html_text(doc));
+                }
+                if let Some(metadata) = &function.extern_metadata {
+                    if let Some(summary) = render_extern_metadata_html(metadata) {
+                        out.push_str(&summary);
+                    }
                 }
             }
         }
@@ -2284,6 +2376,11 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             symbol,
             callconv,
             section,
+            library,
+            link_kind,
+            weak,
+            ownership,
+            lifetime,
         } => Some(Stmt::ExternFn {
             name: name.clone(),
             params: params.clone(),
@@ -2291,6 +2388,11 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             symbol: symbol.clone(),
             callconv: callconv.clone(),
             section: section.clone(),
+            library: library.clone(),
+            link_kind: link_kind.clone(),
+            weak: *weak,
+            ownership: ownership.clone(),
+            lifetime: lifetime.clone(),
         }),
         Stmt::Data {
             name,

@@ -201,6 +201,113 @@ fn expected_core_lines() -> Vec<String> {
     ]
 }
 
+fn expected_extended_core_lines() -> Vec<String> {
+    vec![
+        "4099".to_string(),
+        "4104".to_string(),
+        "4096".to_string(),
+        "5".to_string(),
+        "4096".to_string(),
+        "4104".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+        "4".to_string(),
+        "ababab".to_string(),
+        "0xff".to_string(),
+        "0b1010".to_string(),
+        format!("0x{:0width$x}", 4096u64, width = std::mem::size_of::<usize>() * 2),
+        "2".to_string(),
+        "8".to_string(),
+        "1".to_string(),
+        "1".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+    ]
+}
+
+fn find_executable_for_test(candidates: &[&str], probe_args: &[&str]) -> Option<String> {
+    for name in candidates {
+        if Command::new(name)
+            .args(probe_args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some((*name).to_string());
+        }
+    }
+    None
+}
+
+fn find_c_compiler_for_test() -> Option<String> {
+    if let Some(configured) = std::env::var("CC").ok().filter(|value| !value.trim().is_empty()) {
+        if Command::new(&configured)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(configured);
+        }
+    }
+    find_executable_for_test(&["cc", "clang", "gcc"], &["--version"])
+}
+
+fn find_archiver_for_test() -> Option<String> {
+    if let Some(configured) = std::env::var("AR").ok().filter(|value| !value.trim().is_empty()) {
+        if Command::new(&configured)
+            .arg("-V")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(configured);
+        }
+    }
+    find_executable_for_test(&["ar", "llvm-ar"], &["-V"])
+}
+
+fn build_test_static_library(dir: &std::path::Path, name: &str, source: &str) -> Result<std::path::PathBuf, String> {
+    let compiler = find_c_compiler_for_test().ok_or_else(|| "no C compiler found".to_string())?;
+    let archiver = find_archiver_for_test().ok_or_else(|| "no archiver found".to_string())?;
+    let c_path = dir.join(format!("{name}.c"));
+    let object_path = dir.join(format!("{name}.o"));
+    let archive_path = dir.join(format!("lib{name}.a"));
+
+    std::fs::write(&c_path, source).map_err(|e| e.to_string())?;
+
+    let compile_output = Command::new(&compiler)
+        .args(["-c", c_path.to_str().unwrap(), "-o", object_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !compile_output.status.success() {
+        return Err(format!(
+            "failed to compile test C library with '{}'\nstdout:\n{}\nstderr:\n{}",
+            compiler,
+            String::from_utf8_lossy(&compile_output.stdout),
+            String::from_utf8_lossy(&compile_output.stderr)
+        ));
+    }
+
+    let archive_output = Command::new(&archiver)
+        .args(["rcs", archive_path.to_str().unwrap(), object_path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !archive_output.status.success() {
+        return Err(format!(
+            "failed to archive test C library with '{}'\nstdout:\n{}\nstderr:\n{}",
+            archiver,
+            String::from_utf8_lossy(&archive_output.stdout),
+            String::from_utf8_lossy(&archive_output.stderr)
+        ));
+    }
+
+    Ok(archive_path)
+}
+
 fn wrap_unsigned_host(n: i64) -> i64 {
     let mask = (1i128 << usize::BITS) - 1;
     ((n as i128) & mask) as i64
@@ -2309,6 +2416,46 @@ emit = "staticlib"
 }
 
 #[test]
+fn test_cool_build_emit_shared_library_for_project() {
+    let project_dir = unique_temp_dir("cool_build_emit_sharedlib");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "sharedlib"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def library_value() -> i32:\n    return 42\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[sharedlib]"));
+
+    let shared_path = project_dir.join(format!("libdemo-bin.{}", host_shared_lib_ext()));
+    assert!(
+        shared_path.exists(),
+        "expected shared library at {}",
+        shared_path.display()
+    );
+    assert!(object_has_symbol(&shared_path, "library_value").unwrap());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
 fn test_cool_build_emit_binary_rejects_freestanding_mode() {
     let temp = unique_temp_path("cool_build_emit_binary_freestanding", "cool");
     std::fs::write(&temp, "def boot_entry():\n    return 1\n").unwrap();
@@ -2410,6 +2557,194 @@ target = "{manifest_target}"
         ir.contains("@PTR_BITS = global i64 64") || ir.contains("@PTR_BITS = dso_local global i64 64"),
         "expected usize global to lower to i64 for 64-bit target:\n{ir}"
     );
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_cpu_and_feature_flags_appear_in_llvm_ir() {
+    let temp = unique_temp_path("cool_build_cpu_features", "cool");
+    std::fs::write(&temp, "def helper() -> i32:\n    return 7\n\nprint(helper())\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        cwd,
+        &[
+            "build",
+            "--emit",
+            "llvm-ir",
+            "--target",
+            TEST_TARGET_X86_64,
+            "--cpu",
+            "x86-64",
+            "--cpu-features",
+            "+sse4.2,+popcnt",
+            file_name,
+        ],
+    )
+    .unwrap();
+
+    let ir_path = temp.with_extension("ll");
+    let ir = std::fs::read_to_string(&ir_path).unwrap();
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(&ir_path);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("cpu=x86-64"), "stdout:\n{stdout}");
+    assert!(stdout.contains("features=+sse4.2,+popcnt"), "stdout:\n{stdout}");
+    assert!(ir.contains(&format!("target triple = \"{}\"", TEST_TARGET_X86_64)));
+}
+
+#[test]
+fn test_cool_build_surfaces_invalid_cpu_name_warning() {
+    let temp = unique_temp_path("cool_build_bad_cpu", "cool");
+    std::fs::write(&temp, "print(1)\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        cwd,
+        &[
+            "build",
+            "--emit",
+            "llvm-ir",
+            "--target",
+            TEST_TARGET_X86_64,
+            "--cpu",
+            "definitely-not-a-real-cpu",
+            file_name,
+        ],
+    )
+    .unwrap();
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(temp.with_extension("ll"));
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("not a recognized processor"), "stderr:\n{stderr}");
+}
+
+#[test]
+fn test_cool_build_no_libc_linux_syscall_lowers_to_inline_asm_ir() {
+    let temp = unique_temp_path("cool_build_no_libc_syscall", "cool");
+    std::fs::write(
+        &temp,
+        r#"import core
+def _start():
+    entry: "_start"
+    return core.syscall1(39, 0)
+"#,
+    )
+    .unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        cwd,
+        &[
+            "build",
+            "--emit",
+            "llvm-ir",
+            "--target",
+            TEST_TARGET_X86_64,
+            "--no-libc",
+            file_name,
+        ],
+    )
+    .unwrap();
+
+    let ir_path = temp.with_extension("ll");
+    let ir = std::fs::read_to_string(&ir_path).unwrap();
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(&ir_path);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("no-libc"), "stdout:\n{stdout}");
+    assert!(
+        ir.contains("asm sideeffect \"syscall\""),
+        "expected syscall inline asm in LLVM IR:\n{ir}"
+    );
+}
+
+#[test]
+fn test_cool_build_links_native_static_library_from_extern_metadata() {
+    let Some(compiler) = find_c_compiler_for_test() else {
+        eprintln!("skipping: no C compiler found");
+        return;
+    };
+    let Some(archiver) = find_archiver_for_test() else {
+        eprintln!("skipping: no archiver found");
+        return;
+    };
+
+    let project_dir = unique_temp_dir("cool_build_native_static_link");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::create_dir_all(project_dir.join("native")).unwrap();
+    build_test_static_library(
+        &project_dir.join("native"),
+        "nativecalc",
+        "int native_sum(int left, int right) { return left + right + 5; }\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        format!(
+            r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+
+[toolchain]
+cc = "{compiler}"
+ar = "{archiver}"
+
+[native]
+search = ["native"]
+"#,
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        r#"extern def native_sum(left: i32, right: i32) -> i32:
+    symbol: "native_sum"
+    cc: "c"
+    library: "nativecalc"
+    link_kind: "static"
+    ownership: "borrowed"
+    lifetime: "caller"
+
+print(native_sum(20, 17))
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let binary_name = if std::env::consts::EXE_EXTENSION.is_empty() {
+        "demo".to_string()
+    } else {
+        format!("demo.{}", std::env::consts::EXE_EXTENSION)
+    };
+    let output = Command::new(project_dir.join(binary_name))
+        .current_dir(&project_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "binary failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "42");
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
@@ -2574,6 +2909,70 @@ emit = "staticlib"
     );
     let listing = String::from_utf8_lossy(&tar_output.stdout);
     assert!(listing.contains(&format!("{artifact_name}/libdemo-bin.a")));
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_bundle_packages_shared_library_artifact() {
+    let project_dir = unique_temp_dir("cool_project_bundle_sharedlib");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "sharedlib"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def library_value() -> i32:\n    return 42\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["bundle"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Bundled"));
+
+    let artifact_name = format!("demo-0.2.0-{}", host_target_triple());
+    let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    let metadata_path = project_dir.join("dist").join(format!("{artifact_name}.metadata.json"));
+    let shared_name = format!("libdemo-bin.{}", host_shared_lib_ext());
+    assert!(
+        archive_path.exists(),
+        "expected bundle archive at {}",
+        archive_path.display()
+    );
+    assert!(
+        metadata_path.exists(),
+        "expected metadata sidecar at {}",
+        metadata_path.display()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["build"]["artifact_kind"].as_str().unwrap(), "sharedlib");
+    assert_eq!(metadata["build"]["artifact_path"].as_str().unwrap(), shared_name);
+
+    let tar_output = Command::new("tar")
+        .args(["tzf", archive_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        tar_output.status.success(),
+        "tar list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&tar_output.stdout),
+        String::from_utf8_lossy(&tar_output.stderr)
+    );
+    let listing = String::from_utf8_lossy(&tar_output.stdout);
+    assert!(listing.contains(&format!("{artifact_name}/{shared_name}")));
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
@@ -2988,6 +3387,90 @@ fn test_cool_build_linker_script_missing_lld_gives_clear_error() {
         stderr.contains("no LLD linker found"),
         "expected LLD error, got:\n{stderr}"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_cool_layout_inspects_static_archive_members_as_json() {
+    let project_dir = unique_temp_dir("cool_layout_archive");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "staticlib"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def library_value() -> i32:\n    return 42\n",
+    )
+    .unwrap();
+
+    let (_, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+
+    let archive_path = project_dir.join("libdemo-bin.a");
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&project_dir, &["layout", "--json", "libdemo-bin.a"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["file_kind"].as_str().unwrap(), "archive");
+    let members = report["members"].as_array().unwrap();
+    assert!(members
+        .iter()
+        .any(|member| member["name"].as_str() == Some("demo-bin.o")));
+    assert!(members
+        .iter()
+        .any(|member| member["name"].as_str() == Some("cool_runtime.o")));
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+    let _ = std::fs::remove_file(&archive_path);
+}
+
+#[test]
+fn test_cool_layout_inspects_kernel_image_entry_as_json() {
+    let Some(_lld) = find_lld_for_test() else {
+        eprintln!("skipping: no LLD linker found");
+        return;
+    };
+    let dir = unique_temp_dir("cool_layout_kernel");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("kernel.cool"),
+        "def _start():\n    entry: \"_start\"\n    return 0\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("link.ld"),
+        "ENTRY(_start)\nSECTIONS { . = 0x100000; .text : { *(.text*) } }\n",
+    )
+    .unwrap();
+
+    let (build_stdout, build_stderr, build_code) =
+        run_cool_subcommand_in_dir(&dir, &["build", "--linker-script=link.ld", "kernel.cool"]).unwrap();
+    assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&dir, &["layout", "--json", "kernel.elf"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["format"].as_str().unwrap(), "elf");
+    assert!(report["entry"].as_u64().unwrap() > 0);
+    let symbols = report["symbols"].as_array().unwrap();
+    assert!(symbols.iter().any(|symbol| symbol["name"].as_str() == Some("_start")));
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -3900,6 +4383,112 @@ public def greet(name: str) -> str:
 }
 
 #[test]
+fn test_cool_doc_json_reports_extern_metadata() {
+    let temp_dir = unique_temp_dir("cool_doc_extern_metadata");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    std::fs::write(
+        temp_dir.join("ffi.cool"),
+        r#"extern def native_sum(left: i32, right: i32) -> i32:
+    symbol: "native_sum"
+    cc: "c"
+    section: ".text.native"
+    library: "nativecalc"
+    link_kind: "static"
+    weak: true
+    ownership: "borrowed"
+    lifetime: "caller"
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&temp_dir, &["doc", "--format", "json", "ffi.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let function = report["modules"][0]["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|function| function["name"].as_str() == Some("native_sum"))
+        .unwrap();
+    let metadata = &function["extern_metadata"];
+    assert_eq!(function["kind"].as_str().unwrap(), "extern");
+    assert_eq!(metadata["symbol"].as_str().unwrap(), "native_sum");
+    assert_eq!(metadata["callconv"].as_str().unwrap(), "c");
+    assert_eq!(metadata["section"].as_str().unwrap(), ".text.native");
+    assert_eq!(metadata["library"].as_str().unwrap(), "nativecalc");
+    assert_eq!(metadata["link_kind"].as_str().unwrap(), "static");
+    assert!(metadata["weak"].as_bool().unwrap());
+    assert_eq!(metadata["ownership"].as_str().unwrap(), "borrowed");
+    assert_eq!(metadata["lifetime"].as_str().unwrap(), "caller");
+}
+
+#[test]
+fn test_cool_bindgen_generates_bindings_and_writes_output() {
+    let temp_dir = unique_temp_dir("cool_bindgen");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    std::fs::write(
+        temp_dir.join("demo.h"),
+        r#"typedef unsigned long size_t;
+#define LIMIT 16
+enum Mode { MODE_A = 1, MODE_B };
+typedef struct DemoPoint {
+    int x;
+    int y;
+} DemoPoint;
+size_t native_len(const char* text);
+int native_sum(int left, int right);
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        &temp_dir,
+        &[
+            "bindgen",
+            "--library",
+            "nativecalc",
+            "--link-kind",
+            "static",
+            "--output",
+            "bindings.cool",
+            "demo.h",
+        ],
+    )
+    .unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Wrote bindings"));
+
+    let bindings = std::fs::read_to_string(temp_dir.join("bindings.cool")).unwrap();
+    assert!(bindings.contains("const LIMIT = 16"), "bindings:\n{bindings}");
+    assert!(bindings.contains("const MODE_A = 1"), "bindings:\n{bindings}");
+    assert!(bindings.contains("struct DemoPoint:"), "bindings:\n{bindings}");
+    assert!(bindings.contains("x: i32"), "bindings:\n{bindings}");
+    assert!(
+        bindings.contains("extern def native_len(text: str) -> usize:"),
+        "bindings:\n{bindings}"
+    );
+    assert!(bindings.contains("library: \"nativecalc\""), "bindings:\n{bindings}");
+    assert!(bindings.contains("link_kind: \"static\""), "bindings:\n{bindings}");
+
+    let (check_stdout, check_stderr, check_code) =
+        run_cool_subcommand_in_dir(&temp_dir, &["check", "bindings.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(check_code, 0, "stdout:\n{check_stdout}\nstderr:\n{check_stderr}");
+    assert!(check_stderr.trim().is_empty());
+}
+
+#[test]
 fn test_cool_check_subcommand_uses_project_main_by_default() {
     let temp_dir = unique_temp_dir("cool_check_command_ok");
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -4774,6 +5363,88 @@ print(core.pml4_index(addr))
         .map(str::to_string)
         .collect();
     assert_eq!(lines, expected_core_lines());
+}
+
+#[test]
+fn test_import_core_extended_module() {
+    let result = run_cool(
+        r#"import core
+addr = core.addr(4099)
+print(addr)
+print(core.addr_add(addr, 5))
+print(core.addr_sub(addr, 3))
+print(core.addr_diff(core.addr_add(addr, 5), addr))
+print(core.addr_align_down(4099, 8))
+print(core.addr_align_up(4099, 8))
+print(core.addr_is_aligned(4096, 256))
+print(core.addr_is_aligned(4097, 256))
+print(core.string_len("cool"))
+print(core.string_repeat("ab", 3))
+print(core.format_hex(255))
+print(core.format_bin(10))
+print(core.format_ptr(4096))
+items = core.list_new(2)
+core.list_push(items, 7)
+core.list_push(items, 8)
+print(core.list_len(items))
+print(core.list_pop(items))
+print(core.list_len(items))
+mapping = core.dict_new()
+mapping["ready"] = true
+print(core.dict_len(mapping))
+print(core.dict_has(mapping, "ready"))
+print(core.dict_has(mapping, "missing"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_extended_core_lines());
+}
+
+#[test]
+fn test_vm_import_core_extended_module() {
+    let result = run_cool_vm(
+        r#"import core
+addr = core.addr(4099)
+print(addr)
+print(core.addr_add(addr, 5))
+print(core.addr_sub(addr, 3))
+print(core.addr_diff(core.addr_add(addr, 5), addr))
+print(core.addr_align_down(4099, 8))
+print(core.addr_align_up(4099, 8))
+print(core.addr_is_aligned(4096, 256))
+print(core.addr_is_aligned(4097, 256))
+print(core.string_len("cool"))
+print(core.string_repeat("ab", 3))
+print(core.format_hex(255))
+print(core.format_bin(10))
+print(core.format_ptr(4096))
+items = core.list_new(2)
+core.list_push(items, 7)
+core.list_push(items, 8)
+print(core.list_len(items))
+print(core.list_pop(items))
+print(core.list_len(items))
+mapping = core.dict_new()
+mapping["ready"] = true
+print(core.dict_len(mapping))
+print(core.dict_has(mapping, "ready"))
+print(core.dict_has(mapping, "missing"))
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(lines, expected_extended_core_lines());
 }
 
 #[test]

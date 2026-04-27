@@ -39,10 +39,15 @@ pub struct CoolProject {
     pub build_profile: Option<String>,
     pub build_emit: Option<String>,
     pub build_target: Option<String>,
+    pub build_cpu: Option<String>,
+    pub build_cpu_features: Option<String>,
+    pub build_entry: Option<String>,
     pub build_incremental: Option<bool>,
     pub build_reproducible: Option<bool>,
     pub build_debug: Option<bool>,
+    pub build_no_libc: Option<bool>,
     pub toolchain: ToolchainConfig,
+    pub native: NativeLinkConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -51,6 +56,81 @@ pub struct ToolchainConfig {
     pub cc: Option<String>,
     pub ar: Option<String>,
     pub lld: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeLinkLibraryKind {
+    Default,
+    Static,
+    Shared,
+    Framework,
+}
+
+impl NativeLinkLibraryKind {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "default" | "auto" | "normal" | "dynamic" => Ok(Self::Default),
+            "shared" => Ok(Self::Shared),
+            "static" => Ok(Self::Static),
+            "framework" => Ok(Self::Framework),
+            other => Err(format!(
+                "cool.toml [native]: unsupported library kind '{other}' (expected auto, shared, static, or framework)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NativeLinkLibrary {
+    pub name: String,
+    pub kind: NativeLinkLibraryKind,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NativeLinkConfig {
+    pub libraries: Vec<NativeLinkLibrary>,
+    pub search_paths: Vec<String>,
+    pub rpaths: Vec<String>,
+}
+
+impl NativeLinkConfig {
+    pub fn add_library(&mut self, name: impl Into<String>, kind: NativeLinkLibraryKind) {
+        let candidate = NativeLinkLibrary {
+            name: name.into(),
+            kind,
+        };
+        if !self.libraries.contains(&candidate) {
+            self.libraries.push(candidate);
+        }
+    }
+
+    pub fn add_search_path(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        if !self.search_paths.contains(&path) {
+            self.search_paths.push(path);
+        }
+    }
+
+    pub fn add_rpath(&mut self, path: impl Into<String>) {
+        let path = path.into();
+        if !self.rpaths.contains(&path) {
+            self.rpaths.push(path);
+        }
+    }
+
+    pub fn merged_with(&self, other: &Self) -> Self {
+        let mut merged = self.clone();
+        for library in &other.libraries {
+            merged.add_library(library.name.clone(), library.kind);
+        }
+        for path in &other.search_paths {
+            merged.add_search_path(path.clone());
+        }
+        for path in &other.rpaths {
+            merged.add_rpath(path.clone());
+        }
+        merged
+    }
 }
 
 fn canonical_or_path(path: PathBuf) -> PathBuf {
@@ -104,6 +184,74 @@ fn parse_bool_field(value: Option<&toml::Value>, field_name: &str, context: &str
         Some(toml::Value::Boolean(value)) => Ok(Some(*value)),
         Some(other) => Err(format!(
             "{context}: field '{field_name}' must be a boolean, got {}",
+            other.type_str()
+        )),
+    }
+}
+
+fn parse_string_array_field(
+    value: Option<&toml::Value>,
+    field_name: &str,
+    context: &str,
+) -> Result<Vec<String>, String> {
+    match value {
+        None => Ok(Vec::new()),
+        Some(toml::Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    toml::Value::String(text) => out.push(text.clone()),
+                    other => {
+                        return Err(format!(
+                            "{context}: field '{field_name}' must contain only strings, got {}",
+                            other.type_str()
+                        ))
+                    }
+                }
+            }
+            Ok(out)
+        }
+        Some(other) => Err(format!(
+            "{context}: field '{field_name}' must be an array of strings, got {}",
+            other.type_str()
+        )),
+    }
+}
+
+fn parse_native_link_libraries(value: Option<&toml::Value>) -> Result<Vec<NativeLinkLibrary>, String> {
+    match value {
+        None => Ok(Vec::new()),
+        Some(toml::Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    toml::Value::String(name) => out.push(NativeLinkLibrary {
+                        name: name.clone(),
+                        kind: NativeLinkLibraryKind::Default,
+                    }),
+                    toml::Value::Table(table) => {
+                        let name = parse_string_field(table.get("name"), "name", "cool.toml [native].libraries")?
+                            .ok_or_else(|| {
+                                "cool.toml [native].libraries: table entries require a 'name'".to_string()
+                            })?;
+                        let kind = parse_string_field(table.get("kind"), "kind", "cool.toml [native].libraries")?
+                            .map(|value| NativeLinkLibraryKind::parse(value.trim()))
+                            .transpose()?
+                            .unwrap_or(NativeLinkLibraryKind::Default);
+                        out.push(NativeLinkLibrary { name, kind });
+                    }
+                    other => {
+                        return Err(format!(
+                            "cool.toml [native].libraries: expected strings or tables, got {}",
+                            other.type_str()
+                        ))
+                    }
+                }
+            }
+            Ok(out)
+        }
+        Some(other) => Err(format!(
+            "cool.toml [native]: field 'libraries' must be an array, got {}",
             other.type_str()
         )),
     }
@@ -204,22 +352,73 @@ impl CoolProject {
             .ok_or_else(|| format!("cool.toml: invalid manifest path '{}'", manifest_path.display()))?;
         let manifest_dir = canonical_or_path(manifest_dir.to_path_buf());
 
-        let (build_profile, build_emit, build_target, build_incremental, build_reproducible, build_debug) = match root
-            .get("build")
-        {
-            None => (None, None, None, None, None, None),
+        let (
+            build_profile,
+            build_emit,
+            build_target,
+            build_cpu,
+            build_cpu_features,
+            build_entry,
+            build_incremental,
+            build_reproducible,
+            build_debug,
+            build_no_libc,
+        ) = match root.get("build") {
+            None => (None, None, None, None, None, None, None, None, None, None),
             Some(toml::Value::Table(table)) => {
                 let profile = parse_string_field(table.get("profile"), "profile", "cool.toml [build]")?;
                 let emit = parse_string_field(table.get("emit"), "emit", "cool.toml [build]")?;
                 let target = parse_string_field(table.get("target"), "target", "cool.toml [build]")?;
+                let cpu = parse_string_field(table.get("cpu"), "cpu", "cool.toml [build]")?;
+                let cpu_features = parse_string_field(table.get("cpu_features"), "cpu_features", "cool.toml [build]")?;
+                let entry = parse_string_field(table.get("entry"), "entry", "cool.toml [build]")?;
                 let incremental = parse_bool_field(table.get("incremental"), "incremental", "cool.toml [build]")?;
                 let reproducible = parse_bool_field(table.get("reproducible"), "reproducible", "cool.toml [build]")?;
                 let debug = parse_bool_field(table.get("debug"), "debug", "cool.toml [build]")?;
-                (profile, emit, target, incremental, reproducible, debug)
+                let no_libc = parse_bool_field(table.get("no_libc"), "no_libc", "cool.toml [build]")?;
+                (
+                    profile,
+                    emit,
+                    target,
+                    cpu,
+                    cpu_features,
+                    entry,
+                    incremental,
+                    reproducible,
+                    debug,
+                    no_libc,
+                )
             }
             Some(other) => {
                 return Err(format!(
                     "cool.toml: field 'build' must be a table, got {}",
+                    other.type_str()
+                ))
+            }
+        };
+
+        let native = match root.get("native") {
+            None => NativeLinkConfig::default(),
+            Some(toml::Value::Table(table)) => {
+                let mut native = NativeLinkConfig::default();
+                for library in parse_native_link_libraries(table.get("libraries"))? {
+                    native.add_library(library.name, library.kind);
+                }
+                for framework in parse_string_array_field(table.get("frameworks"), "frameworks", "cool.toml [native]")?
+                {
+                    native.add_library(framework, NativeLinkLibraryKind::Framework);
+                }
+                for path in parse_string_array_field(table.get("search"), "search", "cool.toml [native]")? {
+                    native.add_search_path(path);
+                }
+                for path in parse_string_array_field(table.get("rpath"), "rpath", "cool.toml [native]")? {
+                    native.add_rpath(path);
+                }
+                native
+            }
+            Some(other) => {
+                return Err(format!(
+                    "cool.toml: field 'native' must be a table, got {}",
                     other.type_str()
                 ))
             }
@@ -342,10 +541,15 @@ impl CoolProject {
             build_profile,
             build_emit,
             build_target,
+            build_cpu,
+            build_cpu_features,
+            build_entry,
             build_incremental,
             build_reproducible,
             build_debug,
+            build_no_libc,
             toolchain,
+            native,
         })
     }
 

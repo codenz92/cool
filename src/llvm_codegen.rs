@@ -12,7 +12,7 @@
 use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
 use crate::core_runtime;
 use crate::module_exports;
-use crate::project::ModuleResolver;
+use crate::project::{ModuleResolver, NativeLinkConfig, NativeLinkLibraryKind};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -51,9 +51,14 @@ pub struct NativeCompileOptions {
     pub build_mode: NativeBuildMode,
     pub artifact_kind: NativeArtifactKind,
     pub target_triple: Option<String>,
+    pub target_cpu: Option<String>,
+    pub target_features: Option<String>,
+    pub entry_symbol: Option<String>,
     pub debug_info: bool,
     pub reproducible: bool,
+    pub no_libc: bool,
     pub toolchain: NativeToolchainConfig,
+    pub native_links: NativeLinkConfig,
     pub source_root: Option<PathBuf>,
 }
 
@@ -356,6 +361,7 @@ CoolVal cool_u32(CoolVal);
 CoolVal cool_i64(CoolVal);
 CoolVal cool_isize(CoolVal);
 CoolVal cool_usize(CoolVal);
+CoolVal cool_string_repeat(CoolVal, CoolVal);
 CoolVal cool_read_byte_volatile(CoolVal);
 CoolVal cool_write_byte_volatile(CoolVal, CoolVal);
 CoolVal cool_read_i8_volatile(CoolVal);
@@ -429,6 +435,66 @@ CoolVal cv_float(double f) {
     CoolVal v; v.tag = TAG_FLOAT;
     memcpy(&v.payload, &f, sizeof(double));
     return v;
+}
+
+CoolVal cool_format_hex(CoolVal value) {
+    char buf[2 + (sizeof(uint64_t) * 2) + 1];
+    snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)(uint64_t)value.payload);
+    return cv_str(strdup(buf));
+}
+
+CoolVal cool_format_bin(CoolVal value) {
+    uint64_t raw = (uint64_t)value.payload;
+    char digits[64 + 1];
+    for (int i = 0; i < 64; i++) {
+        int bit = 63 - i;
+        digits[i] = ((raw >> bit) & 1u) ? '1' : '0';
+    }
+    digits[64] = '\0';
+    int first = 0;
+    while (first < 63 && digits[first] == '0') {
+        first++;
+    }
+    size_t digits_len = 64u - (size_t)first;
+    char* out = (char*)malloc(2 + digits_len + 1);
+    out[0] = '0';
+    out[1] = 'b';
+    memcpy(out + 2, digits + first, digits_len);
+    out[2 + digits_len] = '\0';
+    return cv_str(out);
+}
+
+CoolVal cool_format_ptr(CoolVal value) {
+    char buf[2 + (sizeof(uintptr_t) * 2) + 1];
+    int digits = (int)(sizeof(uintptr_t) * 2);
+    snprintf(
+        buf,
+        sizeof(buf),
+        "0x%0*llx",
+        digits,
+        (unsigned long long)(uintptr_t)value.payload
+    );
+    return cv_str(strdup(buf));
+}
+
+CoolVal cool_string_repeat(CoolVal text, CoolVal count_val) {
+    if (text.tag != TAG_STR) return cv_nil();
+    int64_t count = count_val.payload;
+    if (count <= 0) return cv_str(strdup(""));
+    const char* src = (const char*)(intptr_t)text.payload;
+    size_t len = strlen(src);
+    if (len == 0) return cv_str(strdup(""));
+    if ((uint64_t)count > SIZE_MAX / len) return cv_nil();
+    size_t total = len * (size_t)count;
+    char* out = (char*)malloc(total + 1);
+    if (!out) return cv_nil();
+    char* cursor = out;
+    for (int64_t i = 0; i < count; i++) {
+        memcpy(cursor, src, len);
+        cursor += len;
+    }
+    out[total] = '\0';
+    return cv_str(out);
 }
 
 /* ── truthiness ───────────────────────────────────────────────────────── */
@@ -8031,6 +8097,10 @@ struct RuntimeFns<'ctx> {
     cool_i64: FunctionValue<'ctx>,
     cool_isize: FunctionValue<'ctx>,
     cool_usize: FunctionValue<'ctx>,
+    cool_string_repeat: FunctionValue<'ctx>,
+    cool_format_hex: FunctionValue<'ctx>,
+    cool_format_bin: FunctionValue<'ctx>,
+    cool_format_ptr: FunctionValue<'ctx>,
     // list/tuple operations
     cool_list_make: FunctionValue<'ctx>,
     cool_tuple_make: FunctionValue<'ctx>,
@@ -8233,6 +8303,8 @@ struct Compiler<'ctx> {
     target_triple: String,
     pointer_bytes: u32,
     current_line: u32,
+    link_requirements: NativeLinkConfig,
+    no_libc: bool,
 }
 
 /// Information about a compiled class
@@ -8344,12 +8416,13 @@ pub enum NativeArtifactKind {
     Assembly,
     LlvmIr,
     StaticLib,
+    SharedLib,
 }
 
 impl NativeArtifactKind {
     fn archive_basename_hint(self) -> &'static str {
         match self {
-            Self::StaticLib => "library",
+            Self::StaticLib | Self::SharedLib => "library",
             Self::Binary | Self::Object | Self::Assembly | Self::LlvmIr => "artifact",
         }
     }
@@ -8365,6 +8438,7 @@ impl<'ctx> Compiler<'ctx> {
         pointer_bytes: u32,
         debug_info: bool,
         reproducible: bool,
+        no_libc: bool,
         source_root: Option<PathBuf>,
     ) -> Self {
         let module = context.create_module("cool_program");
@@ -8459,6 +8533,8 @@ impl<'ctx> Compiler<'ctx> {
             target_triple,
             pointer_bytes,
             current_line: 1,
+            link_requirements: NativeLinkConfig::default(),
+            no_libc,
             build_mode,
         }
     }
@@ -8566,6 +8642,10 @@ impl<'ctx> Compiler<'ctx> {
             cool_i64: decl!("cool_i64", cv_type.fn_type(&[cv], false)),
             cool_isize: decl!("cool_isize", cv_type.fn_type(&[cv], false)),
             cool_usize: decl!("cool_usize", cv_type.fn_type(&[cv], false)),
+            cool_string_repeat: decl!("cool_string_repeat", cv_type.fn_type(&[cv, cv], false)),
+            cool_format_hex: decl!("cool_format_hex", cv_type.fn_type(&[cv], false)),
+            cool_format_bin: decl!("cool_format_bin", cv_type.fn_type(&[cv], false)),
+            cool_format_ptr: decl!("cool_format_ptr", cv_type.fn_type(&[cv], false)),
             // list operations
             cool_list_make: decl!("cool_list_make", cv_type.fn_type(&[cv], false)),
             cool_tuple_make: decl!("cool_tuple_make", cv_type.fn_type(&[cv], false)),
@@ -8637,6 +8717,14 @@ impl<'ctx> Compiler<'ctx> {
             cool_struct_get_field: decl!("cool_struct_get_field", cv_type.fn_type(&[cv, ptrm], false)),
             cool_struct_set_field: decl!("cool_struct_set_field", cv_type.fn_type(&[cv, ptrm, cv], false)),
         }
+    }
+
+    fn record_link_library(&mut self, name: &str, kind: NativeLinkLibraryKind) {
+        self.link_requirements.add_library(name.to_string(), kind);
+    }
+
+    fn link_requirements(&self) -> NativeLinkConfig {
+        self.link_requirements.clone()
     }
 
     // ── Small helpers ─────────────────────────────────────────────────────────
@@ -8832,6 +8920,18 @@ impl<'ctx> Compiler<'ctx> {
             "vectorcall" | "x86_vectorcall" => Ok(80),
             "regcall" | "x86_regcall" => Ok(92),
             other => Err(format!("unsupported extern calling convention '{other}'")),
+        }
+    }
+
+    fn native_library_kind(&self, kind: &str, name: &str) -> Result<NativeLinkLibraryKind, String> {
+        match kind {
+            "auto" | "default" | "normal" | "dynamic" => Ok(NativeLinkLibraryKind::Default),
+            "shared" => Ok(NativeLinkLibraryKind::Shared),
+            "static" => Ok(NativeLinkLibraryKind::Static),
+            "framework" => Ok(NativeLinkLibraryKind::Framework),
+            other => Err(format!(
+                "extern '{name}': unsupported link_kind '{other}' (expected auto, shared, static, or framework)"
+            )),
         }
     }
 
@@ -10328,6 +10428,28 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn build_bool_from_i1(&mut self, value: IntValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        if self.build_mode.is_freestanding() {
+            let payload = self
+                .builder
+                .build_int_z_extend(value, self.context.i64_type(), &format!("{name}_payload"))
+                .unwrap();
+            self.build_coolval_from_payload(3, payload, name)
+        } else {
+            let bool_i32 = self
+                .builder
+                .build_int_z_extend(value, self.context.i32_type(), &format!("{name}_i32"))
+                .unwrap();
+            self.builder
+                .build_call(self.rt.cv_bool, &[bool_i32.into()], name)
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value()
+        }
+    }
+
     fn build_str(&mut self, s: &str) -> StructValue<'ctx> {
         let name = self.fresh_name();
         let gbl = self.builder.build_global_string_ptr(s, &name).unwrap();
@@ -10733,6 +10855,10 @@ impl<'ctx> Compiler<'ctx> {
                 symbol,
                 callconv,
                 section,
+                library,
+                link_kind,
+                weak,
+                ..
             } => {
                 self.compile_extern_fndef(
                     name,
@@ -10741,6 +10867,9 @@ impl<'ctx> Compiler<'ctx> {
                     symbol.as_deref(),
                     callconv.as_deref(),
                     section.as_deref(),
+                    library.as_deref(),
+                    link_kind.as_deref(),
+                    *weak,
                 )?;
             }
 
@@ -11254,6 +11383,9 @@ impl<'ctx> Compiler<'ctx> {
         symbol: Option<&str>,
         callconv: Option<&str>,
         section: Option<&str>,
+        library: Option<&str>,
+        link_kind: Option<&str>,
+        weak: bool,
     ) -> Result<(), String> {
         if !self.allow_toplevel_defs {
             return Err("extern declarations are only allowed at the top level".into());
@@ -11269,6 +11401,16 @@ impl<'ctx> Compiler<'ctx> {
             Some(cc) => self.extern_callconv_number(cc)?,
             None => 0,
         };
+        let requested_library_kind = match link_kind {
+            Some(kind) => Some(self.native_library_kind(kind, name)?),
+            None => None,
+        };
+        if let Some(library_name) = library {
+            self.record_link_library(
+                library_name,
+                requested_library_kind.unwrap_or(NativeLinkLibraryKind::Default),
+            );
+        }
         let ret_ty = self.parse_extern_abi_type(return_type, &format!("extern '{name}' return"))?;
         let mut raw_param_types = Vec::with_capacity(params.len());
         let mut raw_arg_types = Vec::with_capacity(params.len());
@@ -11295,10 +11437,21 @@ impl<'ctx> Compiler<'ctx> {
         let raw_fn = if let Some(existing) = self.module.get_function(raw_symbol) {
             existing
         } else {
-            self.module
-                .add_function(raw_symbol, raw_fn_type, Some(inkwell::module::Linkage::External))
+            self.module.add_function(
+                raw_symbol,
+                raw_fn_type,
+                Some(if weak {
+                    inkwell::module::Linkage::ExternalWeak
+                } else {
+                    inkwell::module::Linkage::External
+                }),
+            )
         };
-        raw_fn.set_linkage(inkwell::module::Linkage::External);
+        raw_fn.set_linkage(if weak {
+            inkwell::module::Linkage::ExternalWeak
+        } else {
+            inkwell::module::Linkage::External
+        });
         raw_fn.set_call_conventions(cc_number);
         if let Some(section_name) = section {
             raw_fn.set_section(Some(section_name));
@@ -13649,7 +13802,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_unconditional_branch(after_bb).unwrap();
 
         self.builder.position_at_end(fallback_bb);
-        let fallback_result = if self.build_mode.is_freestanding() {
+        let fallback_result = if self.build_mode.is_freestanding() || self.no_libc {
             self.builder
                 .build_call(self.rt.trap_fn, &[], "malloc_missing_hook")
                 .unwrap();
@@ -13703,7 +13856,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_unconditional_branch(after_bb).unwrap();
 
         self.builder.position_at_end(fallback_bb);
-        let fallback_result = if self.build_mode.is_freestanding() {
+        let fallback_result = if self.build_mode.is_freestanding() || self.no_libc {
             self.builder
                 .build_call(self.rt.trap_fn, &[], "free_missing_hook")
                 .unwrap();
@@ -13724,6 +13877,247 @@ impl<'ctx> Compiler<'ctx> {
             phi.add_incoming(&[(&fallback_nil, end)]);
         }
         Ok(phi.as_basic_value().into_struct_value())
+    }
+
+    fn require_string_literal(&self, expr: &Expr, context: &str) -> Result<String, String> {
+        match expr {
+            Expr::Str(value) => Ok(value.clone()),
+            _ => Err(format!("{context} requires a string literal kind argument")),
+        }
+    }
+
+    fn wrap_pointer_value(&mut self, value: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
+        if self.pointer_bit_width() >= 64 {
+            value
+        } else {
+            let truncated = self
+                .builder
+                .build_int_truncate(value, self.pointer_int_type(), &format!("{name}_trunc"))
+                .unwrap();
+            self.builder
+                .build_int_z_extend(truncated, self.context.i64_type(), &format!("{name}_zext"))
+                .unwrap()
+        }
+    }
+
+    fn core_mmio_kind(kind: &str) -> Option<(u32, bool, bool)> {
+        match kind {
+            "byte" | "u8" => Some((8, false, false)),
+            "i8" => Some((8, false, true)),
+            "u16" => Some((16, false, false)),
+            "i16" => Some((16, false, true)),
+            "u32" => Some((32, false, false)),
+            "i32" => Some((32, false, true)),
+            "u64" => Some((64, false, false)),
+            "i64" => Some((64, false, true)),
+            "f64" => Some((64, true, false)),
+            _ => None,
+        }
+    }
+
+    fn compile_core_mmio_load(
+        &mut self,
+        addr_expr: &Expr,
+        bit_width: u32,
+        is_float: bool,
+        is_signed: bool,
+        is_volatile: bool,
+    ) -> Result<StructValue<'ctx>, String> {
+        let addr_cv = self.compile_expr(addr_expr)?;
+        let addr_i64 = self.coolval_payload_i64(addr_cv, "core_mmio_addr");
+        if is_float {
+            let ptr = self
+                .builder
+                .build_int_to_ptr(
+                    addr_i64,
+                    self.context.f64_type().ptr_type(AddressSpace::default()),
+                    "core_mmio_f64_ptr",
+                )
+                .unwrap();
+            let load = self
+                .builder
+                .build_load(self.context.f64_type(), ptr, "core_mmio_f64_load")
+                .unwrap()
+                .into_float_value();
+            if is_volatile {
+                load.as_instruction().unwrap().set_volatile(true).unwrap();
+            }
+            return Ok(self.build_cv_float_from_f64_value(load, "core_mmio_f64_cv"));
+        }
+
+        let int_type = self.context.custom_width_int_type(bit_width);
+        let ptr = self
+            .builder
+            .build_int_to_ptr(
+                addr_i64,
+                int_type.ptr_type(AddressSpace::default()),
+                "core_mmio_int_ptr",
+            )
+            .unwrap();
+        let load = self
+            .builder
+            .build_load(int_type, ptr, "core_mmio_int_load")
+            .unwrap()
+            .into_int_value();
+        if is_volatile {
+            load.as_instruction().unwrap().set_volatile(true).unwrap();
+        }
+        let extended = if bit_width == 64 {
+            load
+        } else if is_signed {
+            self.builder
+                .build_int_s_extend(load, self.context.i64_type(), "core_mmio_sext")
+                .unwrap()
+        } else {
+            self.builder
+                .build_int_z_extend(load, self.context.i64_type(), "core_mmio_zext")
+                .unwrap()
+        };
+        Ok(self.build_cv_int_from_i64(extended, "core_mmio_int_cv"))
+    }
+
+    fn compile_core_mmio_store(
+        &mut self,
+        addr_expr: &Expr,
+        value_cv: StructValue<'ctx>,
+        bit_width: u32,
+        is_float: bool,
+        is_volatile: bool,
+    ) -> Result<StructValue<'ctx>, String> {
+        let addr_cv = self.compile_expr(addr_expr)?;
+        let addr_i64 = self.coolval_payload_i64(addr_cv, "core_mmio_store_addr");
+        if is_float {
+            let ptr = self
+                .builder
+                .build_int_to_ptr(
+                    addr_i64,
+                    self.context.f64_type().ptr_type(AddressSpace::default()),
+                    "core_mmio_store_f64_ptr",
+                )
+                .unwrap();
+            let bits = self.coolval_payload_i64(value_cv, "core_mmio_store_f64_bits");
+            let f64_val = self
+                .builder
+                .build_bitcast(bits, self.context.f64_type(), "core_mmio_store_f64")
+                .unwrap()
+                .into_float_value();
+            let store = self.builder.build_store(ptr, f64_val).unwrap();
+            if is_volatile {
+                store.set_volatile(true).unwrap();
+            }
+            return Ok(self.build_nil());
+        }
+
+        let int_type = self.context.custom_width_int_type(bit_width);
+        let ptr = self
+            .builder
+            .build_int_to_ptr(
+                addr_i64,
+                int_type.ptr_type(AddressSpace::default()),
+                "core_mmio_store_int_ptr",
+            )
+            .unwrap();
+        let payload = self.coolval_payload_i64(value_cv, "core_mmio_store_payload");
+        let truncated = if bit_width == 64 {
+            payload
+        } else {
+            self.builder
+                .build_int_truncate(payload, int_type, "core_mmio_store_trunc")
+                .unwrap()
+        };
+        let store = self.builder.build_store(ptr, truncated).unwrap();
+        if is_volatile {
+            store.set_volatile(true).unwrap();
+        }
+        Ok(self.build_nil())
+    }
+
+    fn compile_core_syscall(
+        &mut self,
+        name: &str,
+        syscall_number: &Expr,
+        syscall_args: &[Expr],
+    ) -> Result<StructValue<'ctx>, String> {
+        if !self.no_libc && !self.build_mode.is_freestanding() {
+            return Err(format!("core.{name}() requires a no-libc or freestanding native build"));
+        }
+        if !self.target_triple.contains("linux") {
+            return Err(format!(
+                "core.{name}() is currently supported for Linux targets only (got '{}')",
+                self.target_triple
+            ));
+        }
+        if syscall_args.len() > 6 {
+            return Err(format!("core.{name}() supports at most 6 syscall arguments"));
+        }
+
+        let i64_type = self.context.i64_type();
+        let mut values = Vec::with_capacity(7);
+        let syscall_number_cv = self.compile_expr(syscall_number)?;
+        values.push(self.coolval_payload_i64(syscall_number_cv, "core_syscall_nr"));
+        for (index, arg) in syscall_args.iter().enumerate() {
+            let arg_cv = self.compile_expr(arg)?;
+            values.push(self.coolval_payload_i64(arg_cv, &format!("core_syscall_arg{index}")));
+        }
+        while values.len() < 7 {
+            values.push(i64_type.const_zero());
+        }
+        let params: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = (0..7).map(|_| i64_type.into()).collect();
+
+        let result = if self.target_triple.starts_with("x86_64") {
+            let fn_type = i64_type.fn_type(&params, false);
+            let asm_ptr = self.context.create_inline_asm(
+                fn_type,
+                "syscall".to_string(),
+                "={rax},{rax},{rdi},{rsi},{rdx},{r10},{r8},{r9},~{rcx},~{r11},~{memory}".to_string(),
+                true,
+                false,
+                Some(InlineAsmDialect::ATT),
+                false,
+            );
+            self.builder
+                .build_indirect_call(
+                    fn_type,
+                    asm_ptr,
+                    &values.iter().copied().map(Into::into).collect::<Vec<_>>(),
+                    "core_syscall_x86_64",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value()
+        } else if self.target_triple.starts_with("aarch64") || self.target_triple.starts_with("arm64") {
+            let fn_type = i64_type.fn_type(&params, false);
+            let asm_ptr = self.context.create_inline_asm(
+                fn_type,
+                "svc #0".to_string(),
+                "={x0},{x8},{x0},{x1},{x2},{x3},{x4},{x5},~{memory}".to_string(),
+                true,
+                false,
+                None,
+                false,
+            );
+            self.builder
+                .build_indirect_call(
+                    fn_type,
+                    asm_ptr,
+                    &values.iter().copied().map(Into::into).collect::<Vec<_>>(),
+                    "core_syscall_aarch64",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_int_value()
+        } else {
+            return Err(format!(
+                "core.{name}() is not implemented for target '{}'; supported Linux architectures are x86_64 and aarch64",
+                self.target_triple
+            ));
+        };
+
+        Ok(self.build_cv_int_from_i64(result, "core_syscall_result"))
     }
 
     fn compile_core_module_call(
@@ -13931,6 +14325,301 @@ impl<'ctx> Compiler<'ctx> {
                     _ => unreachable!(),
                 };
                 Ok(self.build_cv_int_from_i64(aligned, &format!("core_{name}_cv")))
+            }
+            "addr" => {
+                require_one("core.addr()", args.len())?;
+                let value_cv = self.compile_expr(&args[0])?;
+                let value = self.coolval_payload_i64(value_cv, "core_addr_arg");
+                let wrapped = self.wrap_pointer_value(value, "core_addr");
+                Ok(self.build_cv_int_from_i64(wrapped, "core_addr_cv"))
+            }
+            "addr_add" | "addr_sub" | "addr_diff" => {
+                if args.len() != 2 {
+                    return Err(format!("core.{name}() takes exactly two arguments"));
+                }
+                let left_cv = self.compile_expr(&args[0])?;
+                let right_cv = self.compile_expr(&args[1])?;
+                let left = self.coolval_payload_i64(left_cv, "core_addr_left");
+                let right = self.coolval_payload_i64(right_cv, "core_addr_right");
+                let raw = match name {
+                    "addr_add" => self.builder.build_int_add(left, right, "core_addr_add").unwrap(),
+                    "addr_sub" => self.builder.build_int_sub(left, right, "core_addr_sub").unwrap(),
+                    "addr_diff" => self.builder.build_int_sub(left, right, "core_addr_diff").unwrap(),
+                    _ => unreachable!(),
+                };
+                let value = if name == "addr_diff" {
+                    raw
+                } else {
+                    self.wrap_pointer_value(raw, &format!("core_{name}"))
+                };
+                Ok(self.build_cv_int_from_i64(value, &format!("core_{name}_cv")))
+            }
+            "addr_align_down" | "addr_align_up" | "addr_is_aligned" => {
+                if args.len() != 2 {
+                    return Err(format!("core.{name}() takes exactly two arguments"));
+                }
+                let addr_cv = self.compile_expr(&args[0])?;
+                let align_cv = self.compile_expr(&args[1])?;
+                let addr = self.coolval_payload_i64(addr_cv, "core_addr_align_addr");
+                let align = self.coolval_payload_i64(align_cv, "core_addr_align_value");
+                let mask = self
+                    .builder
+                    .build_int_sub(align, self.context.i64_type().const_int(1, false), "core_addr_mask")
+                    .unwrap();
+                let addr = self.wrap_pointer_value(addr, "core_addr_align");
+                let value = match name {
+                    "addr_align_down" => self
+                        .builder
+                        .build_and(
+                            addr,
+                            self.builder.build_not(mask, "core_addr_not_mask").unwrap(),
+                            "core_addr_align_down",
+                        )
+                        .unwrap(),
+                    "addr_align_up" => {
+                        let plus = self
+                            .builder
+                            .build_int_add(addr, mask, "core_addr_align_up_plus")
+                            .unwrap();
+                        self.builder
+                            .build_and(
+                                plus,
+                                self.builder.build_not(mask, "core_addr_align_up_not_mask").unwrap(),
+                                "core_addr_align_up",
+                            )
+                            .unwrap()
+                    }
+                    "addr_is_aligned" => {
+                        let anded = self.builder.build_and(addr, mask, "core_addr_is_aligned_mask").unwrap();
+                        let is_aligned = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::EQ,
+                                anded,
+                                self.context.i64_type().const_zero(),
+                                "core_addr_is_aligned",
+                            )
+                            .unwrap();
+                        return Ok(self.build_bool_from_i1(is_aligned, "core_addr_is_aligned_cv"));
+                    }
+                    _ => unreachable!(),
+                };
+                let wrapped = self.wrap_pointer_value(value, &format!("core_{name}"));
+                Ok(self.build_cv_int_from_i64(wrapped, &format!("core_{name}_cv")))
+            }
+            "string_len" => {
+                require_one("core.string_len()", args.len())?;
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.string_len() is not available in freestanding or no-libc builds".into());
+                }
+                let value = self.compile_expr(&args[0])?;
+                Ok(self.call_unop_fn(self.rt.cool_len, value, "core_string_len"))
+            }
+            "string_repeat" => {
+                if args.len() != 2 {
+                    return Err("core.string_repeat() takes exactly two arguments".into());
+                }
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.string_repeat() is not available in freestanding or no-libc builds".into());
+                }
+                let left = self.compile_expr(&args[0])?;
+                let right = self.compile_expr(&args[1])?;
+                Ok(self.call_binop_fn(self.rt.cool_string_repeat, left, right, "core_string_repeat"))
+            }
+            "format_hex" | "format_bin" | "format_ptr" => {
+                require_one(&format!("core.{name}()"), args.len())?;
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err(format!(
+                        "core.{name}() is not available in freestanding or no-libc builds"
+                    ));
+                }
+                let value = self.compile_expr(&args[0])?;
+                let fn_value = match name {
+                    "format_hex" => self.rt.cool_format_hex,
+                    "format_bin" => self.rt.cool_format_bin,
+                    "format_ptr" => self.rt.cool_format_ptr,
+                    _ => unreachable!(),
+                };
+                Ok(self.call_unop_fn(fn_value, value, &format!("core_{name}")))
+            }
+            "list_new" => {
+                if args.len() > 1 {
+                    return Err("core.list_new() takes zero or one argument".into());
+                }
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.list_new() is not available in freestanding or no-libc builds".into());
+                }
+                let capacity = if args.is_empty() {
+                    self.build_int(0)
+                } else {
+                    self.compile_expr(&args[0])?
+                };
+                Ok(self.call_unop_fn(self.rt.cool_list_make, capacity, "core_list_new"))
+            }
+            "list_len" => {
+                require_one("core.list_len()", args.len())?;
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.list_len() is not available in freestanding or no-libc builds".into());
+                }
+                let value = self.compile_expr(&args[0])?;
+                Ok(self.call_unop_fn(self.rt.cool_list_len, value, "core_list_len"))
+            }
+            "list_push" => {
+                if args.len() != 2 {
+                    return Err("core.list_push() takes exactly two arguments".into());
+                }
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.list_push() is not available in freestanding or no-libc builds".into());
+                }
+                let list = self.compile_expr(&args[0])?;
+                let value = self.compile_expr(&args[1])?;
+                Ok(self.call_binop_fn(self.rt.cool_list_push, list, value, "core_list_push"))
+            }
+            "list_pop" => {
+                require_one("core.list_pop()", args.len())?;
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.list_pop() is not available in freestanding or no-libc builds".into());
+                }
+                let list = self.compile_expr(&args[0])?;
+                Ok(self.call_unop_fn(self.rt.cool_list_pop, list, "core_list_pop"))
+            }
+            "dict_new" => {
+                if !args.is_empty() {
+                    return Err("core.dict_new() takes no arguments".into());
+                }
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.dict_new() is not available in freestanding or no-libc builds".into());
+                }
+                Ok(self
+                    .builder
+                    .build_call(self.rt.cool_dict_new, &[], "core_dict_new")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value())
+            }
+            "dict_len" => {
+                require_one("core.dict_len()", args.len())?;
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.dict_len() is not available in freestanding or no-libc builds".into());
+                }
+                let dict = self.compile_expr(&args[0])?;
+                Ok(self.call_unop_fn(self.rt.cool_dict_len, dict, "core_dict_len"))
+            }
+            "dict_has" => {
+                if args.len() != 2 {
+                    return Err("core.dict_has() takes exactly two arguments".into());
+                }
+                if self.build_mode.is_freestanding() || self.no_libc {
+                    return Err("core.dict_has() is not available in freestanding or no-libc builds".into());
+                }
+                let dict = self.compile_expr(&args[0])?;
+                let key = self.compile_expr(&args[1])?;
+                Ok(self.call_binop_fn(self.rt.cool_contains, dict, key, "core_dict_has"))
+            }
+            "mmio_read" | "reg_read" => {
+                if args.len() != 2 {
+                    return Err(format!("core.{name}() takes exactly two arguments"));
+                }
+                let kind = self.require_string_literal(&args[1], &format!("core.{name}()"))?;
+                let Some((bit_width, is_float, is_signed)) = Self::core_mmio_kind(kind.as_str()) else {
+                    return Err(format!(
+                        "core.{name}() kind must be one of byte, i8, u8, i16, u16, i32, u32, i64, u64, or f64"
+                    ));
+                };
+                if name == "reg_read" && is_float {
+                    return Err("core.reg_read() requires an integer register kind".into());
+                }
+                self.compile_core_mmio_load(&args[0], bit_width, is_float, is_signed, true)
+            }
+            "mmio_write" | "reg_write" => {
+                if args.len() != 3 {
+                    return Err(format!("core.{name}() takes exactly three arguments"));
+                }
+                let kind = self.require_string_literal(&args[1], &format!("core.{name}()"))?;
+                let Some((bit_width, is_float, _)) = Self::core_mmio_kind(kind.as_str()) else {
+                    return Err(format!(
+                        "core.{name}() kind must be one of byte, i8, u8, i16, u16, i32, u32, i64, u64, or f64"
+                    ));
+                };
+                if name == "reg_write" && is_float {
+                    return Err("core.reg_write() requires an integer register kind".into());
+                }
+                let value = self.compile_expr(&args[2])?;
+                self.compile_core_mmio_store(&args[0], value, bit_width, is_float, true)
+            }
+            "reg_set_bits" | "reg_clear_bits" | "reg_update_bits" => {
+                let expected = if name == "reg_update_bits" { 4 } else { 3 };
+                if args.len() != expected {
+                    return Err(format!("core.{name}() takes exactly {expected} arguments"));
+                }
+                let kind = self.require_string_literal(&args[1], &format!("core.{name}()"))?;
+                let Some((bit_width, is_float, is_signed)) = Self::core_mmio_kind(kind.as_str()) else {
+                    return Err(format!(
+                        "core.{name}() kind must be one of byte, i8, u8, i16, u16, i32, u32, i64, or u64"
+                    ));
+                };
+                if is_float {
+                    return Err(format!("core.{name}() requires an integer register kind"));
+                }
+                let current = self.compile_core_mmio_load(&args[0], bit_width, false, is_signed, true)?;
+                let current_i64 = self.coolval_payload_i64(current, "core_reg_current");
+                let mask_cv = self.compile_expr(&args[2])?;
+                let mask_i64 = self.coolval_payload_i64(mask_cv, "core_reg_mask");
+                let next_i64 = match name {
+                    "reg_set_bits" => self
+                        .builder
+                        .build_or(current_i64, mask_i64, "core_reg_set_bits")
+                        .unwrap(),
+                    "reg_clear_bits" => self
+                        .builder
+                        .build_and(
+                            current_i64,
+                            self.builder.build_not(mask_i64, "core_reg_clear_not").unwrap(),
+                            "core_reg_clear_bits",
+                        )
+                        .unwrap(),
+                    "reg_update_bits" => {
+                        let value_cv = self.compile_expr(&args[3])?;
+                        let value_i64 = self.coolval_payload_i64(value_cv, "core_reg_value");
+                        let cleared = self
+                            .builder
+                            .build_and(
+                                current_i64,
+                                self.builder.build_not(mask_i64, "core_reg_update_not").unwrap(),
+                                "core_reg_update_cleared",
+                            )
+                            .unwrap();
+                        let masked_value = self
+                            .builder
+                            .build_and(value_i64, mask_i64, "core_reg_update_masked")
+                            .unwrap();
+                        self.builder
+                            .build_or(cleared, masked_value, "core_reg_update_bits")
+                            .unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+                let next_cv = self.build_cv_int_from_i64(next_i64, "core_reg_next");
+                let _ = self.compile_core_mmio_store(&args[0], next_cv, bit_width, false, true)?;
+                Ok(self.build_cv_int_from_i64(next_i64, "core_reg_result"))
+            }
+            "syscall0" | "syscall1" | "syscall2" | "syscall3" | "syscall4" | "syscall5" | "syscall6" => {
+                let expected = match name {
+                    "syscall0" => 1,
+                    "syscall1" => 2,
+                    "syscall2" => 3,
+                    "syscall3" => 4,
+                    "syscall4" => 5,
+                    "syscall5" => 6,
+                    "syscall6" => 7,
+                    _ => unreachable!(),
+                };
+                if args.len() != expected {
+                    return Err(format!("core.{name}() takes exactly {expected} arguments"));
+                }
+                self.compile_core_syscall(name, &args[0], &args[1..])
             }
             "alloc" => {
                 require_one("core.alloc()", args.len())?;
@@ -15072,7 +15761,11 @@ fn host_target_triple() -> String {
         .into_owned()
 }
 
-fn create_target_machine(requested_triple: Option<&str>) -> Result<(TargetMachine, NativeTargetConfig), String> {
+fn create_target_machine(
+    requested_triple: Option<&str>,
+    requested_cpu: Option<&str>,
+    requested_features: Option<&str>,
+) -> Result<(TargetMachine, NativeTargetConfig), String> {
     let host_triple = host_target_triple();
     let triple_text = requested_triple.unwrap_or(host_triple.as_str()).trim().to_string();
     let triple = if requested_triple.is_some() {
@@ -15081,16 +15774,29 @@ fn create_target_machine(requested_triple: Option<&str>) -> Result<(TargetMachin
         TargetMachine::get_default_triple()
     };
     let target = Target::from_triple(&triple).map_err(|e| format!("Target error: {e}"))?;
+    let cpu = requested_cpu.unwrap_or("generic");
+    let features = requested_features.unwrap_or("");
     let machine = target
         .create_target_machine(
             &triple,
-            "generic",
-            "",
+            cpu,
+            features,
             OptimizationLevel::Default,
             RelocMode::Default,
             CodeModel::Default,
         )
         .ok_or_else(|| format!("Failed to create target machine for target '{}'", triple_text))?;
+    if let Some(requested_cpu) = requested_cpu.map(str::trim).filter(|value| !value.is_empty()) {
+        let actual_cpu = machine.get_cpu().to_string();
+        let allow_native_alias =
+            requested_cpu == "native" && (requested_triple.is_none() || triple_text == host_triple);
+        if requested_cpu != "generic" && !allow_native_alias && (actual_cpu.is_empty() || actual_cpu == "generic") {
+            return Err(format!(
+                "unknown target CPU '{}' for target '{}'",
+                requested_cpu, triple_text
+            ));
+        }
+    }
     Ok((
         machine,
         NativeTargetConfig {
@@ -15112,6 +15818,75 @@ fn find_command_on_path(candidates: &[&str]) -> Option<String> {
         }
     }
     None
+}
+
+fn append_native_link_config(cmd: &mut std::process::Command, config: &NativeLinkConfig, target: &NativeTargetConfig) {
+    for path in &config.search_paths {
+        cmd.arg(format!("-L{path}"));
+    }
+    for path in &config.rpaths {
+        cmd.arg(format!("-Wl,-rpath,{path}"));
+    }
+    for library in &config.libraries {
+        let raw = library.name.as_str();
+        let looks_like_path = raw.contains('/')
+            || raw.contains('\\')
+            || raw.ends_with(".a")
+            || raw.ends_with(".so")
+            || raw.ends_with(".dylib")
+            || raw.ends_with(".dll")
+            || raw.ends_with(".lib");
+        match library.kind {
+            NativeLinkLibraryKind::Framework => {
+                if target.triple.contains("darwin") || target.triple.contains("apple") {
+                    cmd.arg("-framework").arg(raw);
+                } else if looks_like_path {
+                    cmd.arg(raw);
+                } else {
+                    cmd.arg(format!("-l{raw}"));
+                }
+            }
+            NativeLinkLibraryKind::Static => {
+                if looks_like_path {
+                    cmd.arg(raw);
+                } else if target.triple.contains("linux") {
+                    cmd.arg("-Wl,-Bstatic").arg(format!("-l{raw}")).arg("-Wl,-Bdynamic");
+                } else {
+                    cmd.arg(format!("-l{raw}"));
+                }
+            }
+            NativeLinkLibraryKind::Shared | NativeLinkLibraryKind::Default => {
+                if looks_like_path {
+                    cmd.arg(raw);
+                } else {
+                    cmd.arg(format!("-l{raw}"));
+                }
+            }
+        }
+    }
+}
+
+fn append_runtime_support_libraries(cmd: &mut std::process::Command, target: &NativeTargetConfig) {
+    cmd.arg("-lm").arg("-lsqlite3");
+    if target.triple.contains("linux") {
+        cmd.arg("-ldl");
+    }
+}
+
+fn shared_library_flag(target: &NativeTargetConfig) -> &'static str {
+    if target.triple.contains("darwin") || target.triple.contains("apple") {
+        "-dynamiclib"
+    } else {
+        "-shared"
+    }
+}
+
+fn append_reproducible_linker_flags(cmd: &mut std::process::Command, target: &NativeTargetConfig) {
+    if target.triple.contains("linux") {
+        cmd.arg("-Wl,--build-id=none");
+    } else if target.triple.contains("darwin") || target.triple.contains("apple") {
+        cmd.arg("-Wl,-no_uuid");
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -15254,6 +16029,7 @@ fn link_hosted_binary(
     target: &NativeTargetConfig,
     toolchain: &NativeToolchainConfig,
     reproducible: bool,
+    native_links: &NativeLinkConfig,
 ) -> Result<(), String> {
     let toolchain = resolve_hosted_toolchain(target, toolchain)?;
     let mut link_cmd = std::process::Command::new(&toolchain.compiler);
@@ -15261,21 +16037,12 @@ fn link_hosted_binary(
     if reproducible {
         link_cmd.env("SOURCE_DATE_EPOCH", "0");
     }
-    link_cmd
-        .arg(runtime_obj)
-        .arg(object_path)
-        .arg("-o")
-        .arg(output_path)
-        .arg("-lm")
-        .arg("-lsqlite3");
+    link_cmd.arg(runtime_obj).arg(object_path).arg("-o").arg(output_path);
+    append_runtime_support_libraries(&mut link_cmd, target);
+    append_native_link_config(&mut link_cmd, native_links, target);
     if reproducible {
-        #[cfg(target_os = "linux")]
-        link_cmd.arg("-Wl,--build-id=none");
-        #[cfg(target_os = "macos")]
-        link_cmd.arg("-Wl,-no_uuid");
+        append_reproducible_linker_flags(&mut link_cmd, target);
     }
-    #[cfg(target_os = "linux")]
-    link_cmd.arg("-ldl");
 
     let link_status = link_cmd
         .status()
@@ -15292,15 +16059,101 @@ fn link_hosted_binary(
     Ok(())
 }
 
+fn link_shared_library(
+    object_paths: &[&Path],
+    output_path: &Path,
+    target: &NativeTargetConfig,
+    toolchain: &NativeToolchainConfig,
+    reproducible: bool,
+    native_links: &NativeLinkConfig,
+    no_libc: bool,
+) -> Result<(), String> {
+    let toolchain = resolve_hosted_toolchain(target, toolchain)?;
+    let mut link_cmd = std::process::Command::new(&toolchain.compiler);
+    toolchain.apply_to(&mut link_cmd);
+    if reproducible {
+        link_cmd.env("SOURCE_DATE_EPOCH", "0");
+    }
+    if no_libc {
+        link_cmd.arg("-nostdlib");
+    }
+    link_cmd.arg(shared_library_flag(target));
+    for object in object_paths {
+        link_cmd.arg(object);
+    }
+    link_cmd.arg("-o").arg(output_path);
+    if !no_libc {
+        append_runtime_support_libraries(&mut link_cmd, target);
+    }
+    append_native_link_config(&mut link_cmd, native_links, target);
+    if reproducible {
+        append_reproducible_linker_flags(&mut link_cmd, target);
+    }
+    let link_status = link_cmd
+        .status()
+        .map_err(|e| format!("Linker error from '{}': {e}", toolchain.compiler))?;
+    if !link_status.success() {
+        return Err(format!("Shared library link failed for target '{}'", target.triple));
+    }
+    Ok(())
+}
+
+fn link_no_libc_binary(
+    object_path: &Path,
+    output_path: &Path,
+    target: &NativeTargetConfig,
+    toolchain: &NativeToolchainConfig,
+    reproducible: bool,
+    entry_symbol: Option<&str>,
+    native_links: &NativeLinkConfig,
+) -> Result<(), String> {
+    if !target.triple.contains("linux") {
+        return Err(
+            "no-libc binary output is currently supported for Linux targets only; use object/staticlib/sharedlib for other targets"
+                .to_string(),
+        );
+    }
+    let entry_symbol = entry_symbol
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "no-libc binary output requires --entry <symbol> or [build].entry".to_string())?;
+    let toolchain = resolve_hosted_toolchain(target, toolchain)?;
+    let mut link_cmd = std::process::Command::new(&toolchain.compiler);
+    toolchain.apply_to(&mut link_cmd);
+    if reproducible {
+        link_cmd.env("SOURCE_DATE_EPOCH", "0");
+    }
+    link_cmd
+        .arg("-nostdlib")
+        .arg("-no-pie")
+        .arg(object_path)
+        .arg("-o")
+        .arg(output_path)
+        .arg(format!("-Wl,-e,{entry_symbol}"));
+    append_native_link_config(&mut link_cmd, native_links, target);
+    if reproducible {
+        append_reproducible_linker_flags(&mut link_cmd, target);
+    }
+    let link_status = link_cmd
+        .status()
+        .map_err(|e| format!("Linker error from '{}': {e}", toolchain.compiler))?;
+    if !link_status.success() {
+        return Err(format!(
+            "No-libc link failed for target '{}'; ensure your entry function uses an explicit native signature and only low-level facilities",
+            target.triple
+        ));
+    }
+    Ok(())
+}
+
 pub fn compile_program_with_output(
     program: &Program,
     output_path: &Path,
     script_path: &Path,
     options: &NativeCompileOptions,
 ) -> Result<(), String> {
-    if options.build_mode.is_freestanding() && options.artifact_kind == NativeArtifactKind::Binary {
+    if options.build_mode.is_freestanding() && options.artifact_kind == NativeArtifactKind::Binary && !options.no_libc {
         return Err(
-            "freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, or staticlib output"
+            "freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, sharedlib, or pair binary output with no-libc mode"
                 .to_string(),
         );
     }
@@ -15308,7 +16161,11 @@ pub fn compile_program_with_output(
     // Initialise LLVM target info so explicit target triples can be resolved.
     Target::initialize_all(&InitializationConfig::default());
 
-    let (machine, target) = create_target_machine(options.target_triple.as_deref())?;
+    let (machine, target) = create_target_machine(
+        options.target_triple.as_deref(),
+        options.target_cpu.as_deref(),
+        options.target_features.as_deref(),
+    )?;
     let target_data = machine.get_target_data();
     let pointer_bytes = target_data.get_pointer_byte_size(None);
     if pointer_bytes != 4 && pointer_bytes != 8 {
@@ -15327,6 +16184,7 @@ pub fn compile_program_with_output(
         pointer_bytes,
         options.debug_info,
         options.reproducible,
+        options.no_libc,
         options.source_root.clone(),
     );
     compiler.module.set_triple(&machine.get_triple());
@@ -15379,6 +16237,8 @@ pub fn compile_program_with_output(
         .verify()
         .map_err(|e| format!("LLVM module verification failed: {e}"))?;
 
+    let combined_links = options.native_links.merged_with(&compiler.link_requirements());
+
     let display_path =
         normalized_source_display_path(script_path, options.reproducible, options.source_root.as_deref());
 
@@ -15397,27 +16257,39 @@ pub fn compile_program_with_output(
                 .write_to_file(&compiler.module, FileType::Object, &obj_path)
                 .map_err(|e| format!("Write object file error: {e}"))?;
 
-            let runtime_dir = unique_temp_dir("cool_runtime_binary");
-            let runtime_obj = compile_runtime_object(
-                script_path,
-                &runtime_dir,
-                &target,
-                &options.toolchain,
-                &display_path,
-                options.reproducible,
-            )?;
-
-            let link_result = link_hosted_binary(
-                &runtime_obj,
-                &obj_path,
-                output_path,
-                &target,
-                &options.toolchain,
-                options.reproducible,
-            );
-
+            let link_result = if options.no_libc {
+                link_no_libc_binary(
+                    &obj_path,
+                    output_path,
+                    &target,
+                    &options.toolchain,
+                    options.reproducible,
+                    options.entry_symbol.as_deref(),
+                    &combined_links,
+                )
+            } else {
+                let runtime_dir = unique_temp_dir("cool_runtime_binary");
+                let runtime_obj = compile_runtime_object(
+                    script_path,
+                    &runtime_dir,
+                    &target,
+                    &options.toolchain,
+                    &display_path,
+                    options.reproducible,
+                )?;
+                let result = link_hosted_binary(
+                    &runtime_obj,
+                    &obj_path,
+                    output_path,
+                    &target,
+                    &options.toolchain,
+                    options.reproducible,
+                    &combined_links,
+                );
+                fs::remove_dir_all(&runtime_dir).ok();
+                result
+            };
             fs::remove_file(&obj_path).ok();
-            fs::remove_dir_all(&runtime_dir).ok();
             link_result
         }
         NativeArtifactKind::StaticLib => {
@@ -15437,7 +16309,7 @@ pub fn compile_program_with_output(
 
             let archive_result = (|| {
                 let mut members = vec![program_obj.clone()];
-                if !options.build_mode.is_freestanding() {
+                if !options.build_mode.is_freestanding() && !options.no_libc {
                     let runtime_obj = compile_runtime_object(
                         script_path,
                         &staging_dir,
@@ -15453,6 +16325,58 @@ pub fn compile_program_with_output(
 
             fs::remove_dir_all(&staging_dir).ok();
             archive_result
+        }
+        NativeArtifactKind::SharedLib => {
+            let staging_dir = unique_temp_dir(options.artifact_kind.archive_basename_hint());
+            fs::create_dir_all(&staging_dir)
+                .map_err(|e| format!("Failed to create shared library staging dir: {e}"))?;
+            let object_name = output_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("cool_module")
+                .trim_start_matches("lib")
+                .to_string();
+            let program_obj = staging_dir.join(format!("{object_name}.o"));
+            machine
+                .write_to_file(&compiler.module, FileType::Object, &program_obj)
+                .map_err(|e| format!("Write object file error: {e}"))?;
+
+            let link_result = (|| {
+                let mut members = vec![program_obj.as_path()];
+                if !options.build_mode.is_freestanding() && !options.no_libc {
+                    let runtime_obj = compile_runtime_object(
+                        script_path,
+                        &staging_dir,
+                        &target,
+                        &options.toolchain,
+                        &display_path,
+                        options.reproducible,
+                    )?;
+                    members.push(runtime_obj.as_path());
+                    link_shared_library(
+                        &members,
+                        output_path,
+                        &target,
+                        &options.toolchain,
+                        options.reproducible,
+                        &combined_links,
+                        false,
+                    )
+                } else {
+                    link_shared_library(
+                        &members,
+                        output_path,
+                        &target,
+                        &options.toolchain,
+                        options.reproducible,
+                        &combined_links,
+                        true,
+                    )
+                }
+            })();
+
+            fs::remove_dir_all(&staging_dir).ok();
+            link_result
         }
     }
 }

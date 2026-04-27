@@ -2,7 +2,18 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 12 In Progress
+## [Unreleased] - Phase 16 Complete
+
+### Systems Interop And Targets
+
+- New `cool bindgen` subcommand for a practical C-header subset: simple `#define` constants, enum constants, struct/union layouts, typedef aliases, and plain function prototypes now generate starter Cool `extern def` / `struct` / `union` bindings
+- `extern def` now accepts richer ABI/link metadata: `library`, `link_kind`, `weak`, `ownership`, and `lifetime` alongside the existing `symbol`, `cc`, and `section` fields
+- Native project linking now supports manifest-driven `[native]` libraries, frameworks, search paths, and rpaths, and `extern def` metadata can request specific static/shared link behavior for individual bindings
+- `cool build --emit sharedlib` now produces first-class shared-library artifacts (`lib<name>.<so|dylib|dll>`) in addition to binaries, objects, assembly, LLVM IR, and static libraries
+- `cool build` now supports `--cpu`, `--cpu-features`, `--entry`, and `--no-libc`, with matching `[build]` manifest fields for explicit target tuning and host-free link flows
+- Linux no-libc binaries now use an explicit low-level entry path, while freestanding and no-libc flows share the same raw-memory/MMIO/syscall lowering support where appropriate
+- New `cool layout` subcommand inspects section, symbol, entry-point, and archive-member layout for objects, archives, executables, shared libraries, and kernel images; `--json` is intended for tooling/CI
+- `import core` now exposes safer address helpers (`addr`, `addr_add`, alignment helpers), string/formatting helpers, lightweight collection constructors, and LLVM-only MMIO/register/syscall helpers; interpreter, VM, and LLVM hosted builds now agree on the pure helper behavior
 
 ### Benchmark Tooling
 

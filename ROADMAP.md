@@ -586,25 +586,25 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### C / ABI Interop
 
-- [ ] `cool bindgen` for C headers
-- [ ] Richer ABI metadata for `extern def`
-- [ ] Better native library loading/linking workflows
-- [ ] Static library and shared library output
-- [ ] Clear FFI ownership/lifetime annotations
+- [x] `cool bindgen` for C headers
+- [x] Richer ABI metadata for `extern def`
+- [x] Better native library loading/linking workflows
+- [x] Static library and shared library output
+- [x] Clear FFI ownership/lifetime annotations
 
 ### Targeting And Linking
 
-- [ ] Linker-script support and explicit entry-point control
-- [ ] Object / kernel image output without libc assumptions
-- [ ] Target CPU / feature flags
-- [ ] No-libc syscall/runtime support where appropriate
-- [ ] Better section/link layout tooling for embedded/kernel use
+- [x] Linker-script support and explicit entry-point control
+- [x] Object / kernel image output without libc assumptions
+- [x] Target CPU / feature flags
+- [x] No-libc syscall/runtime support where appropriate
+- [x] Better section/link layout tooling for embedded/kernel use
 
 ### Systems Libraries
 
-- [ ] Register/MMIO helpers built on the existing raw-memory primitives
-- [ ] Safer pointer/address abstractions on top of raw integer addresses
-- [ ] Host-independent `core` facilities for allocators, strings, formatting, and collections
+- [x] Register/MMIO helpers built on the existing raw-memory primitives
+- [x] Safer pointer/address abstractions on top of raw integer addresses
+- [x] Host-independent `core` facilities for allocators, strings, formatting, and collections
 
 ---
 
@@ -653,6 +653,6 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 12 — Static Semantic Core | ✅ Complete |
 | 13 — Typed Language Features | ⏳ Planned |
 | 14 — Runtime And Memory Model | ⏳ Planned |
-| 15 — Native Toolchain And Distribution | ⏳ Planned |
-| 16 — Systems Interop And Targets | ⏳ Planned |
+| 15 — Native Toolchain And Distribution | ✅ Complete |
+| 16 — Systems Interop And Targets | ✅ Complete |
 | 17 — Signature Features And Flagship Software | ⏳ Planned |

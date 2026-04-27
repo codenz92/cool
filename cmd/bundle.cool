@@ -96,6 +96,22 @@ def static_library_output(output):
         return archive
     return path.join(dir_name, archive)
 
+def shared_library_ext(target):
+    lower = str(target).lower()
+    if "windows" in lower:
+        return "dll"
+    if "darwin" in lower or "apple" in lower or "macos" in lower:
+        return "dylib"
+    return "so"
+
+def shared_library_output(output, target):
+    dir_name = path.dirname(output)
+    file_name = path.basename(output)
+    shared = "lib" + file_name + "." + shared_library_ext(target)
+    if dir_name == "" or dir_name == ".":
+        return shared
+    return path.join(dir_name, shared)
+
 def target_triple():
     os_name = platform.os()
     if os_name == "macos":
@@ -154,7 +170,7 @@ def chmod_executable(target):
 def write_text(path_value, contents):
     projectlib.write_text_file(path_value, contents)
 
-def built_artifact(project_root, manifest, project, output):
+def built_artifact(project_root, manifest, project, output, target):
     profile = build_profile(manifest)
     emit = build_emit(manifest)
     linker_script = linker_script_value(manifest, project)
@@ -163,12 +179,14 @@ def built_artifact(project_root, manifest, project, output):
     asm_name = replace_extension(output, "s")
     ll_name = replace_extension(output, "ll")
     lib_name = static_library_output(output)
+    shared_name = shared_library_output(output, target)
     elf_name = replace_extension(output, "elf")
     bin_path = path.join(project_root, bin_name)
     obj_path = path.join(project_root, obj_name)
     asm_path = path.join(project_root, asm_name)
     ll_path = path.join(project_root, ll_name)
     lib_path = path.join(project_root, lib_name)
+    shared_path = path.join(project_root, shared_name)
     elf_path = path.join(project_root, elf_name)
 
     if emit == "bin" or emit == "binary":
@@ -201,6 +219,12 @@ def built_artifact(project_root, manifest, project, output):
             "path": lib_path,
             "package_name": lib_name,
         }
+    if emit == "shared" or emit == "sharedlib" or emit == "shared-lib" or emit == "dylib" or emit == "so" or emit == "dll":
+        return {
+            "kind": "sharedlib",
+            "path": shared_path,
+            "package_name": shared_name,
+        }
 
     if linker_script != nil and os["exists"](elf_path):
         return {
@@ -213,6 +237,12 @@ def built_artifact(project_root, manifest, project, output):
             "kind": "object",
             "path": obj_path,
             "package_name": obj_name,
+        }
+    if os["exists"](shared_path):
+        return {
+            "kind": "sharedlib",
+            "path": shared_path,
+            "package_name": shared_name,
         }
     if os["exists"](bin_path):
         return {
@@ -232,7 +262,7 @@ def built_artifact(project_root, manifest, project, output):
             "path": obj_path,
             "package_name": obj_name,
         }
-    raise "cool bundle: built artifact not found (expected one of '" + bin_name + "', '" + obj_name + "', '" + asm_name + "', '" + ll_name + "', '" + lib_name + "', or '" + elf_name + "')"
+    raise "cool bundle: built artifact not found (expected one of '" + bin_name + "', '" + obj_name + "', '" + asm_name + "', '" + ll_name + "', '" + lib_name + "', '" + shared_name + "', or '" + elf_name + "')"
 
 def symbol_map_output(artifact_path):
     for tool in ["nm", "llvm-nm"]:
@@ -344,7 +374,7 @@ symbols_sidecar = path.join(dist_dir, artifact_name + ".symbols.txt")
 ensure_dir(dist_dir)
 remove_tree(staging)
 ensure_dir(staging)
-artifact = built_artifact(project_root, manifest, project, output)
+artifact = built_artifact(project_root, manifest, project, output, target)
 dst_artifact = path.join(staging, artifact["package_name"])
 copy_path(artifact["path"], dst_artifact)
 if artifact["kind"] == "executable" or artifact["kind"] == "kernel_image":

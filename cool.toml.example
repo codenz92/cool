@@ -21,11 +21,15 @@ main = "src/main.cool"
 #
 # [build]
 # profile = "dev"          # dev, release, freestanding, or strict
-# emit = "binary"          # binary, object, assembly, llvm-ir, or staticlib
+# emit = "binary"          # binary, object, assembly, llvm-ir, staticlib, or sharedlib
 # target = "x86_64-unknown-linux-gnu"  # optional explicit LLVM target triple
+# cpu = "x86-64-v3"        # optional explicit LLVM target CPU
+# cpu_features = "+popcnt" # optional explicit LLVM target feature string
+# entry = "_start"         # optional explicit linker entry for no-libc/kernel outputs
 # incremental = true       # optional: enable the local native build cache
 # reproducible = true      # optional: normalize paths and deterministic tool output
 # debug = true             # optional: emit DWARF/line tables for native builds
+# no_libc = false          # optional: skip the hosted runtime/libc assumptions where supported
 #
 # Optional: pin the external toolchain used for native builds.
 #
@@ -34,6 +38,14 @@ main = "src/main.cool"
 # cc = "clang"
 # ar = "llvm-ar"
 # lld = "ld.lld"
+
+# Optional: native linker inputs used by `cool build`
+#
+# [native]
+# libraries = ["sqlite3"]                 # link -lsqlite3
+# # libraries = [{ name = "mylib", kind = "static" }]
+# search = ["native/lib"]                 # extra -L search paths
+# rpath = ["@loader_path/../lib"]         # runtime library search path
 
 # Optional: dependencies, imported by dependency name
 #

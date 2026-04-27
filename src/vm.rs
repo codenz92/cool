@@ -4262,6 +4262,27 @@ impl VM {
                 .ok_or_else(|| self.err(&format!("{context}() missing argument")))?;
             self.coerce_to_int(value)
         };
+        let req_str = |idx: usize, context: &str| -> Result<String, String> {
+            match args.get(idx) {
+                Some(VmValue::Str(value)) => Ok(value.clone()),
+                Some(other) => Err(self.err(&format!("{context}() requires a string, got {}", other.type_name()))),
+                None => Err(self.err(&format!("{context}() missing argument"))),
+            }
+        };
+        let req_list = |idx: usize, context: &str| -> Result<Rc<RefCell<Vec<VmValue>>>, String> {
+            match args.get(idx) {
+                Some(VmValue::List(items)) => Ok(items.clone()),
+                Some(other) => Err(self.err(&format!("{context}() requires a list, got {}", other.type_name()))),
+                None => Err(self.err(&format!("{context}() missing argument"))),
+            }
+        };
+        let req_dict = |idx: usize, context: &str| -> Result<Rc<RefCell<VmDict>>, String> {
+            match args.get(idx) {
+                Some(VmValue::Dict(items)) => Ok(items.clone()),
+                Some(other) => Err(self.err(&format!("{context}() requires a dict, got {}", other.type_name()))),
+                None => Err(self.err(&format!("{context}() missing argument"))),
+            }
+        };
 
         match name {
             "word_bits" => {
@@ -4342,7 +4363,161 @@ impl VM {
                 }
                 Ok(VmValue::Int(core_runtime::pml4_index(req_int(0, "core.pml4_index")?)))
             }
-            "alloc" | "free" | "set_allocator" | "clear_allocator" => Err(self.err(&format!(
+            "addr" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.addr() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::addr(req_int(0, "core.addr")?)))
+            }
+            "addr_add" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.addr_add() takes exactly two arguments"));
+                }
+                Ok(VmValue::Int(core_runtime::addr_add(
+                    req_int(0, "core.addr_add")?,
+                    req_int(1, "core.addr_add")?,
+                )))
+            }
+            "addr_sub" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.addr_sub() takes exactly two arguments"));
+                }
+                Ok(VmValue::Int(core_runtime::addr_sub(
+                    req_int(0, "core.addr_sub")?,
+                    req_int(1, "core.addr_sub")?,
+                )))
+            }
+            "addr_diff" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.addr_diff() takes exactly two arguments"));
+                }
+                Ok(VmValue::Int(core_runtime::addr_diff(
+                    req_int(0, "core.addr_diff")?,
+                    req_int(1, "core.addr_diff")?,
+                )))
+            }
+            "addr_align_down" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.addr_align_down() takes exactly two arguments"));
+                }
+                Ok(VmValue::Int(
+                    core_runtime::addr_align_down(
+                        req_int(0, "core.addr_align_down")?,
+                        req_int(1, "core.addr_align_down")?,
+                    )
+                    .map_err(|e| self.err(&format!("core.addr_align_down(): {e}")))?,
+                ))
+            }
+            "addr_align_up" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.addr_align_up() takes exactly two arguments"));
+                }
+                Ok(VmValue::Int(
+                    core_runtime::addr_align_up(req_int(0, "core.addr_align_up")?, req_int(1, "core.addr_align_up")?)
+                        .map_err(|e| self.err(&format!("core.addr_align_up(): {e}")))?,
+                ))
+            }
+            "addr_is_aligned" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.addr_is_aligned() takes exactly two arguments"));
+                }
+                Ok(VmValue::Bool(
+                    core_runtime::addr_is_aligned(
+                        req_int(0, "core.addr_is_aligned")?,
+                        req_int(1, "core.addr_is_aligned")?,
+                    )
+                    .map_err(|e| self.err(&format!("core.addr_is_aligned(): {e}")))?,
+                ))
+            }
+            "string_len" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.string_len() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(core_runtime::string_len(&req_str(0, "core.string_len")?)))
+            }
+            "string_repeat" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.string_repeat() takes exactly two arguments"));
+                }
+                Ok(VmValue::Str(core_runtime::string_repeat(
+                    &req_str(0, "core.string_repeat")?,
+                    req_int(1, "core.string_repeat")?,
+                )))
+            }
+            "format_hex" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.format_hex() takes exactly one argument"));
+                }
+                Ok(VmValue::Str(core_runtime::format_hex(req_int(0, "core.format_hex")?)))
+            }
+            "format_bin" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.format_bin() takes exactly one argument"));
+                }
+                Ok(VmValue::Str(core_runtime::format_bin(req_int(0, "core.format_bin")?)))
+            }
+            "format_ptr" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.format_ptr() takes exactly one argument"));
+                }
+                Ok(VmValue::Str(core_runtime::format_ptr(req_int(0, "core.format_ptr")?)))
+            }
+            "list_new" => {
+                if args.len() > 1 {
+                    return Err(self.err("core.list_new() takes zero or one argument"));
+                }
+                let capacity = if args.is_empty() {
+                    0usize
+                } else {
+                    req_int(0, "core.list_new")?.max(0) as usize
+                };
+                Ok(VmValue::List(Rc::new(RefCell::new(Vec::with_capacity(capacity)))))
+            }
+            "list_len" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.list_len() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(req_list(0, "core.list_len")?.borrow().len() as i64))
+            }
+            "list_push" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.list_push() takes exactly two arguments"));
+                }
+                let list = req_list(0, "core.list_push")?;
+                list.borrow_mut().push(args[1].clone());
+                Ok(args[0].clone())
+            }
+            "list_pop" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.list_pop() takes exactly one argument"));
+                }
+                let list = req_list(0, "core.list_pop")?;
+                let value = list.borrow_mut().pop().unwrap_or(VmValue::Nil);
+                Ok(value)
+            }
+            "dict_new" => {
+                if !args.is_empty() {
+                    return Err(self.err("core.dict_new() takes no arguments"));
+                }
+                Ok(VmValue::Dict(Rc::new(RefCell::new(VmDict::new()))))
+            }
+            "dict_len" => {
+                if args.len() != 1 {
+                    return Err(self.err("core.dict_len() takes exactly one argument"));
+                }
+                Ok(VmValue::Int(req_dict(0, "core.dict_len")?.borrow().keys.len() as i64))
+            }
+            "dict_has" => {
+                if args.len() != 2 {
+                    return Err(self.err("core.dict_has() takes exactly two arguments"));
+                }
+                let dict = req_dict(0, "core.dict_has")?;
+                let present = dict.borrow().contains(&args[1]);
+                Ok(VmValue::Bool(present))
+            }
+            "alloc" | "free" | "set_allocator" | "clear_allocator" | "mmio_read" | "mmio_write" | "reg_read"
+            | "reg_write" | "reg_set_bits" | "reg_clear_bits" | "reg_update_bits" | "syscall0" | "syscall1"
+            | "syscall2" | "syscall3" | "syscall4" | "syscall5" | "syscall6" => Err(self.err(&format!(
                 "core.{name}() is only supported in the LLVM backend — compile with `cool build`"
             ))),
             _ => Err(self.err(&format!("unknown core function '{}'", name))),
@@ -5315,10 +5490,43 @@ impl VM {
                     "pd_index",
                     "pdpt_index",
                     "pml4_index",
+                    "addr",
+                    "addr_add",
+                    "addr_sub",
+                    "addr_diff",
+                    "addr_align_down",
+                    "addr_align_up",
+                    "addr_is_aligned",
+                    "string_len",
+                    "string_repeat",
+                    "format_hex",
+                    "format_bin",
+                    "format_ptr",
+                    "list_new",
+                    "list_len",
+                    "list_push",
+                    "list_pop",
+                    "dict_new",
+                    "dict_len",
+                    "dict_has",
                     "alloc",
                     "free",
                     "set_allocator",
                     "clear_allocator",
+                    "mmio_read",
+                    "mmio_write",
+                    "reg_read",
+                    "reg_write",
+                    "reg_set_bits",
+                    "reg_clear_bits",
+                    "reg_update_bits",
+                    "syscall0",
+                    "syscall1",
+                    "syscall2",
+                    "syscall3",
+                    "syscall4",
+                    "syscall5",
+                    "syscall6",
                 ] {
                     set(&mut d, fname, bf(&format!("core.{}", fname)));
                 }

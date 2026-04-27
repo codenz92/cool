@@ -281,6 +281,11 @@ impl Formatter {
                 symbol,
                 callconv,
                 section,
+                library,
+                link_kind,
+                weak,
+                ownership,
+                lifetime,
             } => {
                 let mut text = format!(
                     "{}extern def {}({}) -> {}",
@@ -289,7 +294,15 @@ impl Formatter {
                     format_extern_params(params),
                     return_type
                 );
-                if symbol.is_some() || callconv.is_some() || section.is_some() {
+                if symbol.is_some()
+                    || callconv.is_some()
+                    || section.is_some()
+                    || library.is_some()
+                    || link_kind.is_some()
+                    || *weak
+                    || ownership.is_some()
+                    || lifetime.is_some()
+                {
                     text.push(':');
                     self.write_line(indent, &text, line)?;
                     if let Some(symbol) = symbol {
@@ -300,6 +313,21 @@ impl Formatter {
                     }
                     if let Some(section) = section {
                         self.write_plain_line(indent + 4, &format!("section: {}", quote_metadata(section)));
+                    }
+                    if let Some(library) = library {
+                        self.write_plain_line(indent + 4, &format!("library: {}", quote_metadata(library)));
+                    }
+                    if let Some(link_kind) = link_kind {
+                        self.write_plain_line(indent + 4, &format!("link_kind: {}", quote_metadata(link_kind)));
+                    }
+                    if *weak {
+                        self.write_plain_line(indent + 4, "weak: true");
+                    }
+                    if let Some(ownership) = ownership {
+                        self.write_plain_line(indent + 4, &format!("ownership: {}", quote_metadata(ownership)));
+                    }
+                    if let Some(lifetime) = lifetime {
+                        self.write_plain_line(indent + 4, &format!("lifetime: {}", quote_metadata(lifetime)));
                     }
                     Ok(())
                 } else {

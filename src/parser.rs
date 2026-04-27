@@ -2,6 +2,17 @@
 use crate::ast::*;
 use crate::lexer::{Tok, Token};
 
+fn parse_metadata_bool(value: &str, line: usize, key: &str) -> Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!(
+            "line {}: metadata key '{}' expects true or false, got '{}'",
+            line, key, value
+        )),
+    }
+}
+
 pub struct Parser {
     tokens: Vec<Tok>,
     pos: usize,
@@ -294,11 +305,20 @@ impl Parser {
         let mut symbol = None;
         let mut callconv = None;
         let mut section = None;
+        let mut library = None;
+        let mut link_kind = None;
+        let mut weak = false;
+        let mut ownership = None;
+        let mut lifetime = None;
         for (key, value) in self.parse_metadata_block("extern declaration")? {
             match key.as_str() {
-                "symbol" => {
+                "symbol" | "link_name" => {
                     if symbol.is_some() {
-                        return Err(format!("line {}: duplicate extern metadata key 'symbol'", self.line()));
+                        return Err(format!(
+                            "line {}: duplicate extern metadata key '{}' / 'symbol'",
+                            self.line(),
+                            key
+                        ));
                     }
                     symbol = Some(value);
                 }
@@ -313,6 +333,46 @@ impl Parser {
                         return Err(format!("line {}: duplicate extern metadata key 'section'", self.line()));
                     }
                     section = Some(value);
+                }
+                "library" | "link" => {
+                    if library.is_some() {
+                        return Err(format!(
+                            "line {}: duplicate extern metadata key '{}' / 'library'",
+                            self.line(),
+                            key
+                        ));
+                    }
+                    library = Some(value);
+                }
+                "link_kind" => {
+                    if link_kind.is_some() {
+                        return Err(format!(
+                            "line {}: duplicate extern metadata key 'link_kind'",
+                            self.line()
+                        ));
+                    }
+                    link_kind = Some(value);
+                }
+                "weak" => {
+                    weak = parse_metadata_bool(&value, self.line(), "weak")?;
+                }
+                "ownership" => {
+                    if ownership.is_some() {
+                        return Err(format!(
+                            "line {}: duplicate extern metadata key 'ownership'",
+                            self.line()
+                        ));
+                    }
+                    ownership = Some(value);
+                }
+                "lifetime" => {
+                    if lifetime.is_some() {
+                        return Err(format!(
+                            "line {}: duplicate extern metadata key 'lifetime'",
+                            self.line()
+                        ));
+                    }
+                    lifetime = Some(value);
                 }
                 other => {
                     return Err(format!(
@@ -331,6 +391,11 @@ impl Parser {
             symbol,
             callconv,
             section,
+            library,
+            link_kind,
+            weak,
+            ownership,
+            lifetime,
         })
     }
 
@@ -355,7 +420,7 @@ impl Parser {
             }
             let key = self.expect_ident()?;
             self.eat(&Token::Colon)?;
-            let value = self.expect_ident_or_string()?;
+            let value = self.expect_metadata_value()?;
             self.eat_newline();
             entries.push((key, value));
         }
@@ -372,7 +437,7 @@ impl Parser {
         while self.function_metadata_key().is_some() {
             let key = self.expect_ident()?;
             self.eat(&Token::Colon)?;
-            let value = self.expect_ident_or_string()?;
+            let value = self.expect_metadata_value()?;
             self.eat_newline();
             match key.as_str() {
                 "section" => {
@@ -1561,14 +1626,22 @@ impl Parser {
         }
     }
 
-    fn expect_ident_or_string(&mut self) -> Result<String, String> {
+    fn expect_metadata_value(&mut self) -> Result<String, String> {
         match self.peek().clone() {
             Token::Ident(s) | Token::Str(s) => {
                 self.advance();
                 Ok(s)
             }
+            Token::Int(value) => {
+                self.advance();
+                Ok(value.to_string())
+            }
+            Token::Bool(value) => {
+                self.advance();
+                Ok(if value { "true" } else { "false" }.to_string())
+            }
             _ => Err(format!(
-                "line {}: expected identifier or string, got {:?}",
+                "line {}: expected metadata value, got {:?}",
                 self.line(),
                 self.peek()
             )),
