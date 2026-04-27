@@ -1,0 +1,18 @@
+def kernel(n):
+    items = []
+    lookup = {}
+    i = 0
+    while i < n:
+        value = (i * 7) % 100003
+        items.append(value)
+        lookup[i] = value + 1
+        i = i + 1
+    acc = 0
+    i = 0
+    while i < n:
+        acc = acc + items[i]
+        acc = acc + lookup[i]
+        i = i + 1
+    return acc
+
+print(kernel(80000))

@@ -4,6 +4,12 @@ All notable changes to the Cool language project.
 
 ## [Unreleased] - Phase 12 In Progress
 
+### Benchmark Tooling
+
+- New `cool bench` subcommand for native-first benchmarking: discovers `bench_*.cool` / `*_bench.cool` under `benchmarks/`, compiles each workload with the LLVM backend, times warmup + measured runs, and reports compile/mean/median/min timings
+- `cool new` now scaffolds `benchmarks/bench_main.cool` plus a starter `[tasks.bench]` manifest task so projects get a working benchmark path alongside `cool test`
+- Shared Rust-side benchmark helpers now back both `cool bench` and the repo's `bench_compare` maintainer harness, keeping timing/reporting logic aligned
+
 ### Phase 12 — Static Semantic Core (In Progress)
 
 #### Typed Function Signatures

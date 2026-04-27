@@ -567,7 +567,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 ### Debugging, Docs, And Observability
 
 - [ ] Native debug info and better stack traces
-- [ ] Profiling and benchmark tooling
+- [~] Profiling and benchmark tooling (`cool bench` now benchmarks native `.cool` workloads directly, and the repo-native Rust comparison harness lives under `benchmarks/`; profiling support is still open)
 - [ ] `cool fmt`
 - [ ] First-class doc generation for modules, types, and APIs
 - [ ] Better release artifact metadata and symbol maps

@@ -1,5 +1,6 @@
 mod argparse_runtime;
 mod ast;
+mod benchmark;
 mod compiler;
 mod core_runtime;
 mod csv_runtime;
@@ -241,6 +242,21 @@ struct TestFailure {
     stderr: String,
 }
 
+struct BenchConfig {
+    runs: usize,
+    warmups: usize,
+}
+
+struct BenchFailure {
+    stdout: String,
+    stderr: String,
+}
+
+struct BenchResult {
+    compile_time: std::time::Duration,
+    stats: benchmark::BenchStats,
+}
+
 fn unique_temp_executable_path(stem: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -263,6 +279,14 @@ fn is_named_test_file(path: &Path) -> bool {
     stem.starts_with("test_") || stem.ends_with("_test")
 }
 
+fn is_named_benchmark_file(path: &Path) -> bool {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("cool") {
+        return false;
+    }
+    let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or("");
+    stem.starts_with("bench_") || stem.ends_with("_bench")
+}
+
 fn collect_test_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|e| format!("cool test: cannot read '{}': {e}", dir.display()))?;
     for entry in entries {
@@ -271,6 +295,20 @@ fn collect_test_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> 
         if path.is_dir() {
             collect_test_files(&path, out)?;
         } else if is_named_test_file(&path) {
+            out.push(path.canonicalize().unwrap_or(path));
+        }
+    }
+    Ok(())
+}
+
+fn collect_benchmark_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = fs::read_dir(dir).map_err(|e| format!("cool bench: cannot read '{}': {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cool bench: cannot read '{}': {e}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_benchmark_files(&path, out)?;
+        } else if is_named_benchmark_file(&path) {
             out.push(path.canonicalize().unwrap_or(path));
         }
     }
@@ -316,7 +354,52 @@ fn resolve_test_targets(args: &[&String]) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-fn display_test_path(path: &Path, cwd: &Path) -> String {
+fn resolve_benchmark_targets(args: &[&String], cwd: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    if args.is_empty() {
+        let benchmarks_dir = match CoolProject::discover(cwd)? {
+            Some(project) => project.root.join("benchmarks"),
+            None => cwd.join("benchmarks"),
+        };
+        if !benchmarks_dir.exists() {
+            return Err(
+                "cool bench: no benchmarks directory found.\nCreate benchmarks/bench_*.cool or pass explicit benchmark files/directories."
+                    .to_string(),
+            );
+        }
+        collect_benchmark_files(&benchmarks_dir, &mut files)?;
+    } else {
+        for raw in args {
+            let path = Path::new(raw.as_str());
+            if !path.exists() {
+                return Err(format!("cool bench: path not found: {}", raw));
+            }
+            if path.is_dir() {
+                collect_benchmark_files(path, &mut files)?;
+            } else {
+                if path.extension().and_then(|ext| ext.to_str()) != Some("cool") {
+                    return Err(format!(
+                        "cool bench: explicit benchmark files must end in .cool: {}",
+                        raw
+                    ));
+                }
+                files.push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+            }
+        }
+    }
+
+    files.sort();
+    files.dedup();
+    if files.is_empty() {
+        return Err(
+            "cool bench: no benchmark files found.\nExpected files named bench_*.cool or *_bench.cool, or pass explicit .cool files."
+                .to_string(),
+        );
+    }
+    Ok(files)
+}
+
+fn display_relative_path(path: &Path, cwd: &Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 
@@ -438,7 +521,7 @@ Examples:
     let mut passed = 0usize;
     let mut failed = 0usize;
     for path in &tests {
-        let display = display_test_path(path, &cwd);
+        let display = display_relative_path(path, &cwd);
         match run_test_file(path, mode) {
             Ok(()) => {
                 println!("ok {}", display);
@@ -472,6 +555,177 @@ Examples:
     } else {
         println!("test result: FAILED. {} passed; {} failed", passed, failed);
         Err(format!("cool test: {} test file(s) failed", failed))
+    }
+}
+
+fn run_native_benchmark(path: &Path, current_dir: &Path, config: &BenchConfig) -> Result<BenchResult, BenchFailure> {
+    let source = fs::read_to_string(path).map_err(|e| BenchFailure {
+        stdout: String::new(),
+        stderr: format!("failed to read '{}': {e}", path.display()),
+    })?;
+    let binary_path = unique_temp_executable_path(
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("cool_bench_native"),
+    );
+
+    let compile_time = match benchmark::time_command(|| compile_to_native(&source, &binary_path, path)) {
+        Ok(duration) => duration,
+        Err(err) => {
+            let _ = fs::remove_file(&binary_path);
+            return Err(BenchFailure {
+                stdout: String::new(),
+                stderr: err,
+            });
+        }
+    };
+
+    let benchmark_result = (|| {
+        benchmark::capture_binary_output(&binary_path, Some(current_dir))?;
+        let samples = benchmark::measure_binary_runs(&binary_path, Some(current_dir), config.warmups, config.runs)?;
+        let stats = benchmark::summarize(&samples)?;
+        Ok(BenchResult { compile_time, stats })
+    })();
+
+    let _ = fs::remove_file(&binary_path);
+
+    benchmark_result.map_err(|stderr| BenchFailure {
+        stdout: String::new(),
+        stderr,
+    })
+}
+
+fn run_benchmark_file(path: &Path, current_dir: &Path, config: &BenchConfig) -> Result<BenchResult, BenchFailure> {
+    run_native_benchmark(path, current_dir, config)
+}
+
+fn cmd_bench(args: &[&String]) -> Result<(), String> {
+    let mut config = BenchConfig { runs: 5, warmups: 1 };
+    let mut targets = Vec::new();
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--runs" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool bench: --runs requires a value".to_string())?;
+                config.runs = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("cool bench: invalid --runs value: {value}"))?;
+            }
+            "--warmups" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool bench: --warmups requires a value".to_string())?;
+                config.warmups = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("cool bench: invalid --warmups value: {value}"))?;
+            }
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool bench [--runs N] [--warmups N] [path ...]
+
+Compile and benchmark native Cool programs.
+
+With no path arguments, `cool bench` discovers files named `bench_*.cool` or `*_bench.cool`
+under `benchmarks/` recursively. Inside a project, discovery starts from the project root.
+
+Examples:
+  cool bench
+  cool bench benchmarks/bench_main.cool
+  cool bench benchmarks/numeric
+  cool bench --runs 10 --warmups 2"
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool bench: unexpected flag '{other}'")),
+            _ => targets.push(arg),
+        }
+    }
+
+    if config.runs == 0 {
+        return Err("cool bench: --runs must be at least 1".to_string());
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("cool bench: cannot read current directory: {e}"))?;
+    let benchmarks = resolve_benchmark_targets(&targets, &cwd)?;
+    println!(
+        "running {} Cool benchmark file(s) with native ({} warmup(s), {} measured run(s))",
+        benchmarks.len(),
+        config.warmups,
+        config.runs
+    );
+
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut results = Vec::new();
+
+    for path in &benchmarks {
+        let display = display_relative_path(path, &cwd);
+        match run_benchmark_file(path, &cwd, &config) {
+            Ok(result) => {
+                println!("ok {}", display);
+                println!("  compile {}", benchmark::format_duration(result.compile_time));
+                println!(
+                    "  mean {}  median {}  min {}",
+                    benchmark::format_duration(result.stats.mean),
+                    benchmark::format_duration(result.stats.median),
+                    benchmark::format_duration(result.stats.min),
+                );
+                completed += 1;
+                results.push((display, result));
+            }
+            Err(failure) => {
+                println!("FAILED {}", display);
+                if !failure.stdout.trim().is_empty() {
+                    println!("---- {} stdout ----", display);
+                    print!("{}", failure.stdout);
+                    if !failure.stdout.ends_with('\n') {
+                        println!();
+                    }
+                }
+                if !failure.stderr.trim().is_empty() {
+                    println!("---- {} stderr ----", display);
+                    eprint!("{}", failure.stderr);
+                    if !failure.stderr.ends_with('\n') {
+                        eprintln!();
+                    }
+                }
+                failed += 1;
+            }
+        }
+    }
+
+    println!();
+    if !results.is_empty() {
+        println!("summary");
+        println!(
+            "{:<36} {:>10} {:>10} {:>10} {:>10}",
+            "benchmark", "mean", "median", "min", "compile"
+        );
+        for (display, result) in &results {
+            println!(
+                "{:<36} {:>10} {:>10} {:>10} {:>10}",
+                display,
+                benchmark::format_duration(result.stats.mean),
+                benchmark::format_duration(result.stats.median),
+                benchmark::format_duration(result.stats.min),
+                benchmark::format_duration(result.compile_time),
+            );
+        }
+        println!();
+    }
+
+    if failed == 0 {
+        println!("bench result: ok. {} benchmark(s) measured; 0 failed", completed);
+        Ok(())
+    } else {
+        println!(
+            "bench result: FAILED. {} benchmark(s) measured; {} failed",
+            completed, failed
+        );
+        Err(format!("cool bench: {} benchmark file(s) failed", failed))
     }
 }
 
@@ -1000,6 +1254,7 @@ USAGE:
     cool install                  Fetch and lock project dependencies
     cool add <name> ...           Add a path or git dependency to cool.toml
     cool test [path ...]          Run discovered or explicit Cool tests
+    cool bench [path ...]         Compile and benchmark native Cool programs
     cool task [name|list ...]     Run or list manifest-defined project tasks
     cool new <name>               Scaffold a new Cool project
     cool lsp                      Start the language server (LSP) on stdin/stdout
@@ -1024,6 +1279,7 @@ EXAMPLES:
     cool add theme --git https://github.com/acme/theme.git
     cool install                  # fetch git deps into .cool/deps and write cool.lock
     cool test                     # run test_*.cool / *_test.cool under tests/
+    cool bench                    # run bench_*.cool / *_bench.cool under benchmarks/
     cool task list                # list tasks from cool.toml
     cool new myapp                # create myapp/ project
     cool build                    # compile using myapp/cool.toml
@@ -1151,6 +1407,14 @@ fn main() {
             "test" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_test(&rest) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "bench" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_bench(&rest) {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }

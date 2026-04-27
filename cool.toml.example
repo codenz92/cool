@@ -39,3 +39,7 @@ main = "src/main.cool"
 # [tasks.test]
 # description = "Run Cool tests"
 # run = "cool test"
+#
+# [tasks.bench]
+# description = "Run native benchmarks"
+# run = "cool bench"

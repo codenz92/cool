@@ -2354,8 +2354,12 @@ fn test_cool_new_writes_project_table_manifest() {
     assert!(manifest.contains("[project]"));
     assert!(manifest.contains("name = \"demo\""));
     assert!(manifest.contains("main = \"src/main.cool\""));
+    assert!(manifest.contains("[tasks.bench]"));
     let gitignore = std::fs::read_to_string(workspace_dir.join("demo").join(".gitignore")).unwrap();
     assert!(gitignore.contains(".cool/"));
+    let benchmark =
+        std::fs::read_to_string(workspace_dir.join("demo").join("benchmarks").join("bench_main.cool")).unwrap();
+    assert!(benchmark.contains("def kernel"));
 
     let _ = std::fs::remove_dir_all(&workspace_dir);
 }
@@ -2464,6 +2468,57 @@ fn test_cool_test_compile_mode() {
     assert!(stdout.contains("with native"));
     assert!(stdout.contains("ok tests/test_native.cool"));
     assert!(stdout.contains("test result: ok. 1 passed; 0 failed"));
+}
+
+#[test]
+fn test_cool_bench_discovers_named_benchmarks() {
+    let temp_dir = unique_temp_dir("cool_bench_command_discovery");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("benchmarks").join("nested")).unwrap();
+    std::fs::write(
+        temp_dir.join("benchmarks").join("bench_math.cool"),
+        "def kernel():\n    return 2 + 2\n\nprint(kernel())\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("benchmarks").join("nested").join("strings_bench.cool"),
+        "print(\"co\" + \"ol\")\n",
+    )
+    .unwrap();
+    std::fs::write(temp_dir.join("benchmarks").join("helper.cool"), "print(\"skip\")\n").unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&temp_dir, &["bench", "--runs", "1", "--warmups", "0"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    assert!(stdout.contains("running 2 Cool benchmark file(s) with native"));
+    assert!(stdout.contains("ok benchmarks/bench_math.cool"));
+    assert!(stdout.contains("ok benchmarks/nested/strings_bench.cool"));
+    assert!(stdout.contains("bench result: ok. 2 benchmark(s) measured; 0 failed"));
+    assert!(!stdout.contains("helper.cool"));
+    assert!(stderr.trim().is_empty());
+}
+
+#[test]
+fn test_cool_bench_accepts_explicit_file() {
+    let temp_dir = unique_temp_dir("cool_bench_command_explicit");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("perf")).unwrap();
+    std::fs::write(temp_dir.join("perf").join("hotpath.cool"), "print(42)\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        &temp_dir,
+        &["bench", "--runs", "1", "--warmups", "0", "perf/hotpath.cool"],
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stderr was: {stderr}");
+    assert!(stdout.contains("running 1 Cool benchmark file(s) with native"));
+    assert!(stdout.contains("ok perf/hotpath.cool"));
+    assert!(stdout.contains("bench result: ok. 1 benchmark(s) measured; 0 failed"));
+    assert!(stderr.trim().is_empty());
 }
 
 #[test]

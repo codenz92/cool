@@ -1,0 +1,15 @@
+def kernel(n):
+    buf = malloc(n * 8)
+    i = 0
+    while i < n:
+        write_i64(buf + (i * 8), i * 3)
+        i = i + 1
+    acc = 0
+    i = 0
+    while i < n:
+        acc = acc + read_i64(buf + (i * 8))
+        i = i + 1
+    free(buf)
+    return acc
+
+print(kernel(600000))

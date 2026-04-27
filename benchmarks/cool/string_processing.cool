@@ -1,0 +1,15 @@
+import string
+
+def kernel(n):
+    text = "abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 " + "abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 " + "abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 " + "abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 abc lorem ipsum xyz 012345 "
+    acc = 0
+    i = 0
+    while i < n:
+        acc = acc + string.count(text, "abc")
+        acc = acc + string.find(text, "xyz")
+        text = string.replace(text, "abc", "abd")
+        text = string.replace(text, "abd", "abc")
+        i = i + 1
+    return acc + len(text)
+
+print(kernel(15000))

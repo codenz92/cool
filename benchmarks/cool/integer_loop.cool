@@ -1,0 +1,10 @@
+def kernel(n):
+    acc = 0
+    i = 0
+    while i < n:
+        acc = acc + ((i * 3) ^ (i >> 1))
+        acc = acc + (i % 97)
+        i = i + 1
+    return acc
+
+print(kernel(4000000))

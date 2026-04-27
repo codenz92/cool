@@ -395,6 +395,9 @@ cargo build --release
 
 # Show all CLI options
 ./target/release/cool help
+
+# Compare native Cool vs Rust on the bundled benchmark workloads
+cargo run --release --bin bench_compare -- --runs 5 --warmups 1
 ```
 
 ### Project workflow
@@ -410,6 +413,9 @@ cool src/main.cool
 # Run tests
 cool test
 
+# Run native benchmarks
+cool bench
+
 # Add dependencies
 cool add toolkit --path ../toolkit
 cool add theme --git https://github.com/acme/theme.git
@@ -420,6 +426,7 @@ cool task list
 
 # Run a manifest task
 cool task build
+cool task bench
 
 # Compile for release
 cool build                   # reads cool.toml, produces ./myapp
@@ -450,9 +457,13 @@ run = "cool build"
 [tasks.test]
 description = "Run Cool tests"
 run = "cool test"
+
+[tasks.bench]
+description = "Run native benchmarks"
+run = "cool bench"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, so `cool test` works immediately in new projects, and includes starter tasks for `cool task`. By default the runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool` and `benchmarks/bench_main.cool`, so both `cool test` and `cool bench` work immediately in new projects, and includes starter tasks for `cool task`. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
@@ -501,6 +512,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
 | `cool build --linker-script=<ld> [file.cool]` | Compile freestanding and link a kernel image (`.elf`) via LLD |
+| `cool bench [path ...]` | Compile and benchmark native Cool programs |
 | `cool bundle` | Build and package the project into a distributable tarball |
 | `cool release [--bump patch]` | Bump version, bundle, and git-tag a release |
 | `cool lsp` | Start the language server (LSP) on stdin/stdout |
@@ -510,6 +522,10 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool task [name|list ...]` | List or run manifest-defined project tasks |
 | `cool new <name>` | Scaffold a new Cool project |
 | `cool help` | Show usage help |
+
+### Native benchmarks
+
+Use `cool bench` inside a project to compile and time files under `benchmarks/` (or pass explicit `.cool` benchmark files/directories). For the Cool repo itself, the bundled harness in [benchmarks/README.md](/Users/jamie/cool-lang/benchmarks/README.md) still compares native Cool binaries against matched Rust binaries for integer loops, string processing, list/dict work, and raw-memory kernels.
 
 ---
 
