@@ -24,6 +24,7 @@ use inkwell::values::{
 };
 use inkwell::{AddressSpace, InlineAsmDialect, IntPredicate, OptimizationLevel};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 // ── Embedded C runtime ────────────────────────────────────────────────────────
@@ -8108,6 +8109,24 @@ impl NativeBuildMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeArtifactKind {
+    Binary,
+    Object,
+    Assembly,
+    LlvmIr,
+    StaticLib,
+}
+
+impl NativeArtifactKind {
+    fn archive_basename_hint(self) -> &'static str {
+        match self {
+            Self::StaticLib => "library",
+            Self::Binary | Self::Object | Self::Assembly | Self::LlvmIr => "artifact",
+        }
+    }
+}
+
 // ── Constructor & runtime declarations ───────────────────────────────────────
 
 impl<'ctx> Compiler<'ctx> {
@@ -14513,16 +14532,100 @@ fn c_string_literal(s: &str) -> String {
     out
 }
 
-pub fn compile_program(program: &Program, output_path: &Path, script_path: &Path) -> Result<(), String> {
-    compile_program_with_mode(program, output_path, script_path, NativeBuildMode::Hosted)
+fn unique_temp_dir(stem: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("{stem}_{pid}_{nonce}"))
 }
 
-pub fn compile_program_with_mode(
+fn create_target_machine() -> Result<TargetMachine, String> {
+    let triple = TargetMachine::get_default_triple();
+    let target = Target::from_triple(&triple).map_err(|e| format!("Target error: {e}"))?;
+    target
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| "Failed to create target machine".to_string())
+}
+
+fn compile_runtime_object(script_path: &Path, staging_dir: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(staging_dir).map_err(|e| format!("Failed to create runtime staging dir: {e}"))?;
+    let rt_c_path = staging_dir.join("cool_runtime.c");
+    let rt_o_path = staging_dir.join("cool_runtime.o");
+    let runtime_source = format!(
+        "static const char* COOL_SCRIPT_PATH = \"{}\";\n{}",
+        c_string_literal(&script_path.to_string_lossy()),
+        RUNTIME_C
+    );
+    fs::write(&rt_c_path, runtime_source).map_err(|e| format!("Failed to write runtime source: {e}"))?;
+
+    let cc_status = std::process::Command::new("cc")
+        .args(["-O2", "-c"])
+        .arg(&rt_c_path)
+        .arg("-o")
+        .arg(&rt_o_path)
+        .status()
+        .map_err(|e| format!("Failed to invoke cc for runtime: {e}"))?;
+
+    if !cc_status.success() {
+        return Err("Failed to compile Cool runtime (cc exited with error)".into());
+    }
+
+    Ok(rt_o_path)
+}
+
+fn find_archiver() -> Option<String> {
+    let candidates = ["llvm-ar", "ar"];
+    for name in candidates {
+        if std::process::Command::new(name)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn write_static_library(output_path: &Path, members: &[PathBuf]) -> Result<(), String> {
+    let archiver = find_archiver()
+        .ok_or_else(|| "Failed to create static library: no archiver found (`llvm-ar` or `ar`)".to_string())?;
+    let status = std::process::Command::new(&archiver)
+        .arg("crs")
+        .arg(output_path)
+        .args(members)
+        .status()
+        .map_err(|e| format!("Failed to invoke '{archiver}' for static library output: {e}"))?;
+    if !status.success() {
+        return Err(format!("Static library archiver '{}' failed", archiver));
+    }
+    Ok(())
+}
+
+pub fn compile_program_with_output(
     program: &Program,
     output_path: &Path,
     script_path: &Path,
     build_mode: NativeBuildMode,
+    artifact_kind: NativeArtifactKind,
 ) -> Result<(), String> {
+    if build_mode.is_freestanding() && artifact_kind == NativeArtifactKind::Binary {
+        return Err(
+            "freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, or staticlib output"
+                .to_string(),
+        );
+    }
+
     // Initialise LLVM for the host machine
     Target::initialize_native(&InitializationConfig::default()).map_err(|e| format!("LLVM init error: {e}"))?;
 
@@ -14561,86 +14664,74 @@ pub fn compile_program_with_mode(
         .verify()
         .map_err(|e| format!("LLVM module verification failed: {e}"))?;
 
-    // ── Emit LLVM module → object file ───────────────────────────────────────
-    let triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&triple).map_err(|e| format!("Target error: {e}"))?;
-    let machine = target
-        .create_target_machine(
-            &triple,
-            "generic",
-            "",
-            OptimizationLevel::Default,
-            RelocMode::Default,
-            CodeModel::Default,
-        )
-        .ok_or("Failed to create target machine")?;
+    let machine = create_target_machine()?;
 
-    let obj_path = if build_mode.is_freestanding() {
-        output_path.to_path_buf()
-    } else {
-        output_path.with_extension("o")
-    };
-    machine
-        .write_to_file(&compiler.module, FileType::Object, &obj_path)
-        .map_err(|e| format!("Write object file error: {e}"))?;
+    match artifact_kind {
+        NativeArtifactKind::Object => machine
+            .write_to_file(&compiler.module, FileType::Object, output_path)
+            .map_err(|e| format!("Write object file error: {e}")),
+        NativeArtifactKind::Assembly => machine
+            .write_to_file(&compiler.module, FileType::Assembly, output_path)
+            .map_err(|e| format!("Write assembly file error: {e}")),
+        NativeArtifactKind::LlvmIr => fs::write(output_path, compiler.module.print_to_string().to_string())
+            .map_err(|e| format!("Write LLVM IR file error: {e}")),
+        NativeArtifactKind::Binary => {
+            let obj_path = output_path.with_extension("o");
+            machine
+                .write_to_file(&compiler.module, FileType::Object, &obj_path)
+                .map_err(|e| format!("Write object file error: {e}"))?;
 
-    if build_mode.is_freestanding() {
-        return Ok(());
+            let runtime_dir = unique_temp_dir("cool_runtime_binary");
+            let runtime_obj = compile_runtime_object(script_path, &runtime_dir)?;
+
+            let link_result = (|| {
+                let mut link_cmd = std::process::Command::new("cc");
+                link_cmd
+                    .arg(&runtime_obj)
+                    .arg(&obj_path)
+                    .arg("-o")
+                    .arg(output_path)
+                    .arg("-lm")
+                    .arg("-lsqlite3");
+                #[cfg(target_os = "linux")]
+                link_cmd.arg("-ldl");
+                let link_status = link_cmd.status().map_err(|e| format!("Linker error: {e}"))?;
+                if !link_status.success() {
+                    return Err("Linking failed".into());
+                }
+                Ok(())
+            })();
+
+            fs::remove_file(&obj_path).ok();
+            fs::remove_dir_all(&runtime_dir).ok();
+            link_result
+        }
+        NativeArtifactKind::StaticLib => {
+            let staging_dir = unique_temp_dir(artifact_kind.archive_basename_hint());
+            fs::create_dir_all(&staging_dir)
+                .map_err(|e| format!("Failed to create static library staging dir: {e}"))?;
+            let object_name = output_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("cool_module")
+                .trim_start_matches("lib")
+                .to_string();
+            let program_obj = staging_dir.join(format!("{object_name}.o"));
+            machine
+                .write_to_file(&compiler.module, FileType::Object, &program_obj)
+                .map_err(|e| format!("Write object file error: {e}"))?;
+
+            let archive_result = (|| {
+                let mut members = vec![program_obj.clone()];
+                if !build_mode.is_freestanding() {
+                    let runtime_obj = compile_runtime_object(script_path, &staging_dir)?;
+                    members.push(runtime_obj);
+                }
+                write_static_library(output_path, &members)
+            })();
+
+            fs::remove_dir_all(&staging_dir).ok();
+            archive_result
+        }
     }
-
-    // ── Compile C runtime ─────────────────────────────────────────────────────
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = std::process::id();
-    let tmp_dir = std::env::temp_dir();
-    let rt_c_path = tmp_dir.join(format!("cool_runtime_{pid}_{nonce}.c"));
-    let rt_o_path = tmp_dir.join(format!("cool_runtime_{pid}_{nonce}.o"));
-
-    let runtime_source = format!(
-        "static const char* COOL_SCRIPT_PATH = \"{}\";\n{}",
-        c_string_literal(&script_path.to_string_lossy()),
-        RUNTIME_C
-    );
-    std::fs::write(&rt_c_path, runtime_source).map_err(|e| format!("Failed to write runtime source: {e}"))?;
-
-    let cc_status = std::process::Command::new("cc")
-        .args([
-            "-O2",
-            "-c",
-            rt_c_path.to_str().unwrap(),
-            "-o",
-            rt_o_path.to_str().unwrap(),
-        ])
-        .status()
-        .map_err(|e| format!("Failed to invoke cc for runtime: {e}"))?;
-
-    if !cc_status.success() {
-        return Err("Failed to compile Cool runtime (cc exited with error)".into());
-    }
-
-    // ── Link ──────────────────────────────────────────────────────────────────
-    let mut link_cmd = std::process::Command::new("cc");
-    link_cmd
-        .arg(&rt_o_path)
-        .arg(&obj_path)
-        .arg("-o")
-        .arg(output_path)
-        .arg("-lm")
-        .arg("-lsqlite3");
-    #[cfg(target_os = "linux")]
-    link_cmd.arg("-ldl");
-    let link_status = link_cmd.status().map_err(|e| format!("Linker error: {e}"))?;
-
-    if !link_status.success() {
-        return Err("Linking failed".into());
-    }
-
-    // ── Clean up temp files ───────────────────────────────────────────────────
-    std::fs::remove_file(&obj_path).ok();
-    std::fs::remove_file(&rt_c_path).ok();
-    std::fs::remove_file(&rt_o_path).ok();
-
-    Ok(())
 }

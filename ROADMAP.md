@@ -562,7 +562,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [ ] Cross-compilation via explicit target triples
 - [x] Build profiles (`dev`, `release`, `freestanding`, and stricter checked modes)
 - [ ] Reproducible builds and toolchain pinning
-- [ ] Better binary/object/library output selection
+- [x] Better binary/object/library output selection
 
 ### Debugging, Docs, And Observability
 

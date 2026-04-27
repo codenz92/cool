@@ -17,6 +17,9 @@ All notable changes to the Cool language project.
 - `dev` profile runs a checked build (`cool check` semantics) before native compile, while `strict` profile runs strict annotation checks (`cool check --strict`) before compile
 - `freestanding` profile makes manifest-driven `cool build` emit `.o` output by default without needing `--freestanding`
 - `cool new` now supports `--template app|lib|service|freestanding`, with template-specific manifests, starter source layouts, tasks, tests, and benchmarks
+- `cool build` now supports explicit artifact selection via `--emit` and `[build].emit`, covering hosted/freestanding object output, assembly (`.s`), LLVM IR (`.ll`), static libraries (`.a`), and the existing binary path
+- Hosted `staticlib` output archives both the generated Cool object and the hosted runtime object, so downstream native link steps can consume a single `lib*.a`
+- `--linker-script` / `linker_script` still produce kernel images by default, but `--emit` can now override that final artifact choice when you want intermediate object/assembly/IR output instead
 
 ### API Documentation
 

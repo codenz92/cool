@@ -21,6 +21,7 @@ main = "src/main.cool"
 #
 # [build]
 # profile = "dev"          # dev, release, freestanding, or strict
+# emit = "binary"          # binary, object, assembly, llvm-ir, or staticlib
 
 # Optional: dependencies, imported by dependency name
 #

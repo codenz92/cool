@@ -50,6 +50,15 @@ def build_profile(manifest):
         raise "cool bundle: [build].profile must be a string"
     return profile
 
+def build_emit(manifest):
+    build = build_table(manifest)
+    emit = build.get("emit", nil)
+    if emit == nil:
+        return nil
+    if not isinstance(emit, "str"):
+        raise "cool bundle: [build].emit must be a string"
+    return emit
+
 def linker_script_value(manifest, project):
     linker_script = project.get("linker_script", manifest.get("linker_script", nil))
     if linker_script == nil:
@@ -57,6 +66,23 @@ def linker_script_value(manifest, project):
     if not isinstance(linker_script, "str"):
         raise "cool bundle: linker_script must be a string"
     return linker_script
+
+def replace_extension(output, ext):
+    dir_name = path.dirname(output)
+    file_name = path.basename(output)
+    stem = path.stem(file_name)
+    replaced = stem + "." + ext
+    if dir_name == "" or dir_name == ".":
+        return replaced
+    return path.join(dir_name, replaced)
+
+def static_library_output(output):
+    dir_name = path.dirname(output)
+    file_name = path.basename(output)
+    archive = "lib" + file_name + ".a"
+    if dir_name == "" or dir_name == ".":
+        return archive
+    return path.join(dir_name, archive)
 
 def target_triple():
     os_name = platform.os()
@@ -104,13 +130,51 @@ def write_text(path_value, contents):
 
 def built_artifact(project_root, manifest, project, output):
     profile = build_profile(manifest)
+    emit = build_emit(manifest)
     linker_script = linker_script_value(manifest, project)
     bin_name = output
-    obj_name = output + ".o"
-    elf_name = output + ".elf"
+    obj_name = replace_extension(output, "o")
+    asm_name = replace_extension(output, "s")
+    ll_name = replace_extension(output, "ll")
+    lib_name = static_library_output(output)
+    elf_name = replace_extension(output, "elf")
     bin_path = path.join(project_root, bin_name)
     obj_path = path.join(project_root, obj_name)
+    asm_path = path.join(project_root, asm_name)
+    ll_path = path.join(project_root, ll_name)
+    lib_path = path.join(project_root, lib_name)
     elf_path = path.join(project_root, elf_name)
+
+    if emit == "bin" or emit == "binary":
+        return {
+            "kind": "executable",
+            "path": bin_path,
+            "package_name": bin_name,
+        }
+    if emit == "obj" or emit == "object":
+        return {
+            "kind": "object",
+            "path": obj_path,
+            "package_name": obj_name,
+        }
+    if emit == "asm" or emit == "assembly":
+        return {
+            "kind": "assembly",
+            "path": asm_path,
+            "package_name": asm_name,
+        }
+    if emit == "ir" or emit == "ll" or emit == "llvm-ir" or emit == "llvm_ir":
+        return {
+            "kind": "llvm_ir",
+            "path": ll_path,
+            "package_name": ll_name,
+        }
+    if emit == "lib" or emit == "library" or emit == "staticlib" or emit == "static-lib":
+        return {
+            "kind": "staticlib",
+            "path": lib_path,
+            "package_name": lib_name,
+        }
 
     if linker_script != nil and os["exists"](elf_path):
         return {
@@ -142,7 +206,7 @@ def built_artifact(project_root, manifest, project, output):
             "path": obj_path,
             "package_name": obj_name,
         }
-    raise "cool bundle: built artifact not found (expected one of '" + bin_name + "', '" + obj_name + "', or '" + elf_name + "')"
+    raise "cool bundle: built artifact not found (expected one of '" + bin_name + "', '" + obj_name + "', '" + asm_name + "', '" + ll_name + "', '" + lib_name + "', or '" + elf_name + "')"
 
 def symbol_map_output(artifact_path):
     for tool in ["nm", "llvm-nm"]:
@@ -244,7 +308,7 @@ ensure_dir(staging)
 artifact = built_artifact(project_root, manifest, project, output)
 dst_artifact = path.join(staging, artifact["package_name"])
 copy_path(artifact["path"], dst_artifact)
-if artifact["kind"] != "object":
+if artifact["kind"] == "executable" or artifact["kind"] == "kernel_image":
     chmod_executable(dst_artifact)
 
 copied_items = []

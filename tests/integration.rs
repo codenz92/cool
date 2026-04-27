@@ -302,6 +302,21 @@ fn object_has_symbol(path: &std::path::Path, symbol: &str) -> Result<bool, Strin
     Ok(String::from_utf8_lossy(&output.stdout).contains(symbol))
 }
 
+fn archive_entries(path: &std::path::Path) -> Result<Vec<String>, String> {
+    let output = Command::new("ar")
+        .args(["t", path.to_str().unwrap()])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
 fn host_target_triple() -> String {
     let os = if cfg!(target_os = "macos") {
         "darwin"
@@ -2090,7 +2105,7 @@ profile = "freestanding"
     let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
     assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
     assert!(stderr.trim().is_empty());
-    assert!(stdout.contains("Compiling demo v0.2.0 (src/main.cool) [freestanding]"));
+    assert!(stdout.contains("Compiling demo v0.2.0 (src/main.cool) [freestanding, object]"));
     assert!(project_dir.join("demo-bin.o").exists());
     assert!(!project_dir.join("demo-bin").exists());
 
@@ -2126,6 +2141,177 @@ profile = "freestanding"
     assert!(!project_dir.join("demo-bin.o").exists());
 
     let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_emit_object_for_single_file() {
+    let temp = unique_temp_path("cool_build_emit_object", "cool");
+    std::fs::write(&temp, "print(\"object output\")\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let object_path = temp.with_extension("o");
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["build", "--emit", "object", file_name]).unwrap();
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[object]"));
+    assert!(
+        object_path.exists(),
+        "expected object file at {}",
+        object_path.display()
+    );
+    assert!(object_has_symbol(&object_path, "main").unwrap());
+    assert!(!temp.with_extension("").exists());
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(&object_path);
+}
+
+#[test]
+fn test_cool_build_emit_manifest_assembly_writes_project_output() {
+    let project_dir = unique_temp_dir("cool_build_emit_assembly");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "assembly"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def helper_value() -> i32:\n    return 7\n\nprint(helper_value())\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[assembly]"));
+
+    let assembly_path = project_dir.join("demo-bin.s");
+    assert!(
+        assembly_path.exists(),
+        "expected assembly file at {}",
+        assembly_path.display()
+    );
+    let assembly = std::fs::read_to_string(&assembly_path).unwrap();
+    assert!(
+        assembly.contains("helper_value"),
+        "expected helper_value in assembly:\n{assembly}"
+    );
+    assert!(!project_dir.join("demo-bin").exists());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_emit_flag_overrides_manifest_emit() {
+    let project_dir = unique_temp_dir("cool_build_emit_override");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "assembly"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"ir output\")\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build", "--emit", "llvm-ir"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[llvm-ir]"));
+
+    let ir_path = project_dir.join("demo-bin.ll");
+    assert!(ir_path.exists(), "expected LLVM IR file at {}", ir_path.display());
+    let ir = std::fs::read_to_string(&ir_path).unwrap();
+    assert!(ir.contains("define i32 @main()"), "expected main in LLVM IR:\n{ir}");
+    assert!(!project_dir.join("demo-bin.s").exists());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_emit_static_library_for_project() {
+    let project_dir = unique_temp_dir("cool_build_emit_staticlib");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "staticlib"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def library_value() -> i32:\n    return 42\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[staticlib]"));
+
+    let archive_path = project_dir.join("libdemo-bin.a");
+    assert!(
+        archive_path.exists(),
+        "expected static library at {}",
+        archive_path.display()
+    );
+    let entries = archive_entries(&archive_path).unwrap();
+    assert!(
+        entries.iter().any(|entry| entry == "demo-bin.o"),
+        "expected demo-bin.o in archive: {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|entry| entry == "cool_runtime.o"),
+        "expected cool_runtime.o in archive: {entries:?}"
+    );
+    assert!(object_has_symbol(&archive_path, "library_value").unwrap());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_emit_binary_rejects_freestanding_mode() {
+    let temp = unique_temp_path("cool_build_emit_binary_freestanding", "cool");
+    std::fs::write(&temp, "def boot_entry():\n    return 1\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(cwd, &["build", "--freestanding", "--emit", "binary", file_name]).unwrap();
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(temp.with_extension(""));
+
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.contains("freestanding builds cannot emit hosted binaries"));
 }
 
 #[test]
@@ -2225,6 +2411,69 @@ include = ["assets", "README.txt"]
     assert!(listing.contains(&format!("{artifact_name}/README.txt")));
     assert!(listing.contains(&format!("{artifact_name}/metadata.json")));
     assert!(listing.contains(&format!("{artifact_name}/symbols/demo-bin.symbols.txt")));
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_bundle_packages_static_library_artifact() {
+    let project_dir = unique_temp_dir("cool_project_bundle_staticlib");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+emit = "staticlib"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def library_value() -> i32:\n    return 42\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["bundle"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Bundled"));
+
+    let artifact_name = format!("demo-0.2.0-{}", host_target_triple());
+    let archive_path = project_dir.join("dist").join(format!("{artifact_name}.tar.gz"));
+    let metadata_path = project_dir.join("dist").join(format!("{artifact_name}.metadata.json"));
+    assert!(
+        archive_path.exists(),
+        "expected bundle archive at {}",
+        archive_path.display()
+    );
+    assert!(
+        metadata_path.exists(),
+        "expected metadata sidecar at {}",
+        metadata_path.display()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["build"]["artifact_kind"].as_str().unwrap(), "staticlib");
+    assert_eq!(metadata["build"]["artifact_path"].as_str().unwrap(), "libdemo-bin.a");
+
+    let tar_output = Command::new("tar")
+        .args(["tzf", archive_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        tar_output.status.success(),
+        "tar list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&tar_output.stdout),
+        String::from_utf8_lossy(&tar_output.stderr)
+    );
+    let listing = String::from_utf8_lossy(&tar_output.stdout);
+    assert!(listing.contains(&format!("{artifact_name}/libdemo-bin.a")));
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
@@ -2638,7 +2887,7 @@ fn test_cool_new_freestanding_template_scaffolds_kernel_project() {
 
     let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
     assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
-    assert!(build_stdout.contains("[freestanding]"));
+    assert!(build_stdout.contains("[freestanding, object]"));
     assert!(project_dir.join("kernelkit.o").exists());
     assert!(!project_dir.join("kernelkit").exists());
 

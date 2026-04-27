@@ -445,6 +445,9 @@ cool build                   # reads cool.toml, produces ./myapp
 ./myapp
 cool build --profile strict  # checked build that requires annotated top-level defs
 cool build --freestanding    # reads cool.toml, produces ./myapp.o
+cool build --emit assembly   # writes ./myapp.s
+cool build --emit llvm-ir    # writes ./myapp.ll
+cool build --emit staticlib  # writes ./libmyapp.a
 # (or set linker_script in cool.toml to produce ./myapp.elf via LLD)
 
 # Package a release artifact
@@ -465,6 +468,7 @@ linker_script = "link.ld"     # optional; enables kernel image output via LLD (c
 
 [build]
 profile = "dev"               # optional: dev, release, freestanding, or strict
+emit = "binary"               # optional: binary, object, assembly, llvm-ir, or staticlib
 
 [dependencies]
 toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
@@ -487,7 +491,7 @@ description = "Generate API docs"
 run = "cool doc --output docs/API.md"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` emit `.o` output by default, and `release` keeps the plain hosted compile path. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and a starter `[tasks.doc]`, so `cool test`, `cool bench`, and `cool doc` work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, or normal binaries. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and a starter `[tasks.doc]`, so `cool test`, `cool bench`, and `cool doc` work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
@@ -535,6 +539,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool doc [file.cool]` | Generate API docs as Markdown, HTML, or JSON |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build --profile <name> [file.cool]` | Build with `dev`, `release`, `freestanding`, or `strict` profile rules |
+| `cool build --emit <kind> [file.cool]` | Emit `binary`, `object`, `assembly`, `llvm-ir`, or `staticlib` artifacts |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
 | `cool build --linker-script=<ld> [file.cool]` | Compile freestanding and link a kernel image (`.elf`) via LLD |
@@ -556,6 +561,10 @@ Use `cool bench` inside a project to compile and time files under `benchmarks/` 
 ### API docs
 
 Use `cool doc` to turn a module graph into API documentation. By default it emits Markdown to stdout, but `--format html` and `--format json` are also supported, and `--output <path>` writes the result to disk. Inside a project, `cool doc` with no file argument uses the manifest `main` entry and documents every reachable local module; pass `--private` to include private functions, bindings, classes, and methods in the output.
+
+### Native artifact selection
+
+Use `cool build --emit ...` when you want something other than the default binary or freestanding object. `object` writes a plain `.o`, `assembly` writes `.s`, `llvm-ir` writes `.ll`, and `staticlib` writes `lib<name>.a` (including the hosted runtime object when needed). The same choice can live in `cool.toml` via `[build].emit = "..."`, and CLI `--emit` overrides the manifest.
 
 ### Release artifacts
 

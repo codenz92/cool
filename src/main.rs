@@ -59,14 +59,21 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
 }
 
 fn compile_to_native(source: &str, output_path: &Path, script_path: &Path) -> Result<(), String> {
-    compile_to_native_with_mode(source, output_path, script_path, llvm_codegen::NativeBuildMode::Hosted)
+    compile_to_native_with_output(
+        source,
+        output_path,
+        script_path,
+        llvm_codegen::NativeBuildMode::Hosted,
+        llvm_codegen::NativeArtifactKind::Binary,
+    )
 }
 
-fn compile_to_native_with_mode(
+fn compile_to_native_with_output(
     source: &str,
     output_path: &Path,
     script_path: &Path,
     build_mode: llvm_codegen::NativeBuildMode,
+    artifact_kind: llvm_codegen::NativeArtifactKind,
 ) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
@@ -74,12 +81,7 @@ fn compile_to_native_with_mode(
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    match build_mode {
-        llvm_codegen::NativeBuildMode::Hosted => llvm_codegen::compile_program(&program, output_path, script_path),
-        llvm_codegen::NativeBuildMode::Freestanding => {
-            llvm_codegen::compile_program_with_mode(&program, output_path, script_path, build_mode)
-        }
-    }
+    llvm_codegen::compile_program_with_output(&program, output_path, script_path, build_mode, artifact_kind)
 }
 
 fn bundled_command_path(file_name: &str) -> PathBuf {
@@ -280,6 +282,85 @@ impl BuildProfile {
             Self::Strict => Some(true),
             Self::Release | Self::Freestanding => None,
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BuildEmitKind {
+    Binary,
+    Object,
+    Assembly,
+    LlvmIr,
+    StaticLib,
+}
+
+impl BuildEmitKind {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "bin" | "binary" => Ok(Self::Binary),
+            "obj" | "object" => Ok(Self::Object),
+            "asm" | "assembly" => Ok(Self::Assembly),
+            "ir" | "ll" | "llvm-ir" | "llvm_ir" => Ok(Self::LlvmIr),
+            "lib" | "library" | "staticlib" | "static-lib" => Ok(Self::StaticLib),
+            _ => Err(format!(
+                "unknown build emit '{raw}' (expected binary, object, assembly, llvm-ir, or staticlib)"
+            )),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Binary => "binary",
+            Self::Object => "object",
+            Self::Assembly => "assembly",
+            Self::LlvmIr => "llvm-ir",
+            Self::StaticLib => "staticlib",
+        }
+    }
+
+    fn native_artifact(self) -> llvm_codegen::NativeArtifactKind {
+        match self {
+            Self::Binary => llvm_codegen::NativeArtifactKind::Binary,
+            Self::Object => llvm_codegen::NativeArtifactKind::Object,
+            Self::Assembly => llvm_codegen::NativeArtifactKind::Assembly,
+            Self::LlvmIr => llvm_codegen::NativeArtifactKind::LlvmIr,
+            Self::StaticLib => llvm_codegen::NativeArtifactKind::StaticLib,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BuildFinalArtifact {
+    Emit(BuildEmitKind),
+    KernelImage,
+}
+
+impl BuildFinalArtifact {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Emit(kind) => kind.label(),
+            Self::KernelImage => "kernel image",
+        }
+    }
+
+    fn output_path(self, base: &Path) -> PathBuf {
+        match self {
+            Self::Emit(BuildEmitKind::Binary) => base.to_path_buf(),
+            Self::Emit(BuildEmitKind::Object) => base.with_extension("o"),
+            Self::Emit(BuildEmitKind::Assembly) => base.with_extension("s"),
+            Self::Emit(BuildEmitKind::LlvmIr) => base.with_extension("ll"),
+            Self::Emit(BuildEmitKind::StaticLib) => static_library_path(base),
+            Self::KernelImage => base.with_extension("elf"),
+        }
+    }
+}
+
+fn static_library_path(base: &Path) -> PathBuf {
+    let file_name = base.file_name().and_then(|name| name.to_str()).unwrap_or("cool");
+    let archive_name = format!("lib{file_name}.a");
+    match base.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        Some(parent) => parent.join(archive_name),
+        None => PathBuf::from(archive_name),
     }
 }
 
@@ -782,15 +863,29 @@ fn resolve_build_profile(cli_profile: Option<&str>, manifest_profile: Option<&st
     }
 }
 
-fn build_label(profile: BuildProfile, freestanding: bool, kernel_image: bool) -> String {
+fn resolve_build_emit(cli_emit: Option<&str>, manifest_emit: Option<&str>) -> Result<Option<BuildEmitKind>, String> {
+    match cli_emit.or(manifest_emit) {
+        Some(raw) => BuildEmitKind::parse(raw)
+            .map(Some)
+            .map_err(|err| format!("cool build: {err}")),
+        None => Ok(None),
+    }
+}
+
+fn build_label(
+    profile: BuildProfile,
+    build_mode: llvm_codegen::NativeBuildMode,
+    artifact: BuildFinalArtifact,
+) -> String {
     let mut parts = Vec::new();
     if profile != BuildProfile::Release {
         parts.push(profile.label().to_string());
     }
-    if kernel_image {
-        parts.push("freestanding -> kernel image".to_string());
-    } else if freestanding && profile != BuildProfile::Freestanding {
+    if build_mode == llvm_codegen::NativeBuildMode::Freestanding && profile != BuildProfile::Freestanding {
         parts.push("freestanding".to_string());
+    }
+    if artifact != BuildFinalArtifact::Emit(BuildEmitKind::Binary) {
+        parts.push(artifact.label().to_string());
     }
 
     if parts.is_empty() {
@@ -844,16 +939,17 @@ fn run_build_profile_checks(target: &Path, profile: BuildProfile, display: &str)
 
 // ── `cool build` ─────────────────────────────────────────────────────────────
 
-/// Build a Cool project or file to a native binary.
+/// Build a Cool project or file to a selected native artifact.
 ///
 /// Usage:
 ///   cool build                 # reads cool.toml in the current directory
 ///   cool build <file.cool>     # compiles the given file (output = file stem)
-///   cool build --freestanding [file.cool]  # emits an object file (.o)
+///   cool build --emit assembly [file.cool] # emits assembly (.s)
 fn cmd_build(args: &[&String]) -> Result<(), String> {
     let mut freestanding = false;
     let mut linker_script_arg: Option<String> = None;
     let mut profile_arg: Option<String> = None;
+    let mut emit_arg: Option<String> = None;
     let mut help = false;
     let mut file_arg = None::<&String>;
 
@@ -871,13 +967,25 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             other if other.starts_with("--profile=") => {
                 profile_arg = Some(other["--profile=".len()..].to_string());
             }
+            "--emit" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool build: --emit requires a value".to_string())?;
+                emit_arg = Some(value.clone());
+            }
+            other if other.starts_with("--emit=") => {
+                emit_arg = Some(other["--emit=".len()..].to_string());
+            }
             other if other.starts_with("--linker-script=") => {
                 linker_script_arg = Some(other["--linker-script=".len()..].to_string());
             }
             other if other.starts_with('-') => return Err(format!("cool build: unexpected flag '{other}'")),
             _ => {
                 if file_arg.is_some() {
-                    return Err("Usage: cool build [--freestanding] [--linker-script=<path>] [file.cool]".to_string());
+                    return Err(
+                        "Usage: cool build [--profile <name>] [--emit <kind>] [--freestanding] [--linker-script=<path>] [file.cool]"
+                            .to_string(),
+                    );
                 }
                 file_arg = Some(arg);
             }
@@ -887,31 +995,30 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     if help {
         println!(
             "\
-Usage: cool build [--profile <name>] [--freestanding] [--linker-script=<path>] [file.cool]
+Usage: cool build [--profile <name>] [--emit <kind>] [--freestanding] [--linker-script=<path>] [file.cool]
 
 Build a Cool project from cool.toml or compile a single file.
 
 Options:
   --profile <name>      Select a named build profile: dev, release, freestanding, or strict
-  --freestanding          Emit an object file (.o) without linking the hosted Cool runtime
+  --emit <kind>         Select the final artifact: binary, object, assembly, llvm-ir, or staticlib
+  --freestanding        Compile in freestanding mode without the hosted Cool runtime
   --linker-script=<path>  Link the object file into a kernel image (.elf) using LLD and the
-                          given GNU linker script; implies --freestanding
+                          given GNU linker script; implies --freestanding unless --emit overrides
+                          the final artifact selection
 
 Examples:
   cool build
   cool build --profile dev
   cool build hello.cool
+  cool build --emit object hello.cool
+  cool build --emit staticlib
   cool build --profile strict hello.cool
   cool build --freestanding
   cool build --freestanding hello.cool
   cool build --linker-script=link.ld hello.cool"
         );
         return Ok(());
-    }
-
-    // A linker script implies freestanding.
-    if linker_script_arg.is_some() {
-        freestanding = true;
     }
 
     match file_arg {
@@ -926,26 +1033,36 @@ Examples:
 
             let project = CoolProject::from_manifest_path(manifest_path)?;
             let profile = resolve_build_profile(profile_arg.as_deref(), project.build_profile.as_deref())?;
-
-            freestanding = freestanding || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding;
-
-            // CLI flag overrides cool.toml; cool.toml linker_script implies freestanding.
+            let requested_emit = resolve_build_emit(emit_arg.as_deref(), project.build_emit.as_deref())?;
             let effective_linker_script: Option<PathBuf> = match &linker_script_arg {
-                Some(path) => {
-                    freestanding = true;
-                    Some(PathBuf::from(path))
-                }
+                Some(path) => Some(PathBuf::from(path)),
                 None => project.linker_script.as_ref().map(|s| project.root.join(s)),
             };
-            if effective_linker_script.is_some() {
-                freestanding = true;
-            }
-
-            let build_mode = if freestanding {
+            let freestanding_requested = freestanding
+                || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding
+                || linker_script_arg.is_some();
+            let final_artifact = if requested_emit.is_none() && effective_linker_script.is_some() {
+                BuildFinalArtifact::KernelImage
+            } else if let Some(emit) = requested_emit {
+                BuildFinalArtifact::Emit(emit)
+            } else if freestanding_requested {
+                BuildFinalArtifact::Emit(BuildEmitKind::Object)
+            } else {
+                BuildFinalArtifact::Emit(BuildEmitKind::Binary)
+            };
+            let build_mode = if final_artifact == BuildFinalArtifact::KernelImage || freestanding_requested {
                 llvm_codegen::NativeBuildMode::Freestanding
             } else {
                 llvm_codegen::NativeBuildMode::Hosted
             };
+            if build_mode == llvm_codegen::NativeBuildMode::Freestanding
+                && final_artifact == BuildFinalArtifact::Emit(BuildEmitKind::Binary)
+            {
+                return Err(
+                    "cool build: freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, or a kernel image"
+                        .to_string(),
+                );
+            }
 
             let main_path = project.main_path();
             if !main_path.exists() {
@@ -959,25 +1076,42 @@ Examples:
             let display = format!("{} v{} ({})", project.name, project.version, project.main);
             run_build_profile_checks(&main_path, profile, &display)?;
 
-            let obj_path_buf = if freestanding {
-                PathBuf::from(project.output_name()).with_extension("o")
+            let base_output = PathBuf::from(project.output_name());
+            let final_path = final_artifact.output_path(&base_output);
+            let compile_output = if final_artifact == BuildFinalArtifact::KernelImage {
+                base_output.with_extension("o")
             } else {
-                PathBuf::from(project.output_name())
+                final_path.clone()
             };
 
-            let label = build_label(profile, freestanding, effective_linker_script.is_some());
+            let label = build_label(profile, build_mode, final_artifact);
             println!("  Compiling {display}{label}");
 
             let t0 = std::time::Instant::now();
-            compile_to_native_with_mode(&source, &obj_path_buf, &main_path, build_mode)?;
-
-            let final_path = if let Some(script) = &effective_linker_script {
-                let elf_path = PathBuf::from(project.output_name()).with_extension("elf");
-                link_kernel_image(&obj_path_buf, script, &elf_path)?;
-                elf_path
-            } else {
-                obj_path_buf
-            };
+            match final_artifact {
+                BuildFinalArtifact::KernelImage => {
+                    let script = effective_linker_script
+                        .as_ref()
+                        .ok_or_else(|| "cool build: kernel-image output requires a linker script".to_string())?;
+                    compile_to_native_with_output(
+                        &source,
+                        &compile_output,
+                        &main_path,
+                        build_mode,
+                        llvm_codegen::NativeArtifactKind::Object,
+                    )?;
+                    link_kernel_image(&compile_output, script, &final_path)?;
+                }
+                BuildFinalArtifact::Emit(kind) => {
+                    compile_to_native_with_output(
+                        &source,
+                        &compile_output,
+                        &main_path,
+                        build_mode,
+                        kind.native_artifact(),
+                    )?;
+                }
+            }
 
             let elapsed = t0.elapsed();
             println!(
@@ -991,7 +1125,11 @@ Examples:
         // ── cool build <file.cool>  ───────────────────────────────────────
         Some(file_arg) => {
             let profile = resolve_build_profile(profile_arg.as_deref(), None)?;
-            freestanding = freestanding || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding;
+            let requested_emit = resolve_build_emit(emit_arg.as_deref(), None)?;
+            let effective_linker_script = linker_script_arg.as_deref();
+            let freestanding_requested = freestanding
+                || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding
+                || effective_linker_script.is_some();
 
             let file_path = Path::new(file_arg.as_str());
             if !file_path.exists() {
@@ -1003,32 +1141,64 @@ Examples:
 
             let source = fs::read_to_string(file_path).map_err(|e| format!("cool build: {e}"))?;
             run_build_profile_checks(file_path, profile, &file_path.display().to_string())?;
-            let build_mode = if freestanding {
+            let final_artifact = if requested_emit.is_none() && effective_linker_script.is_some() {
+                BuildFinalArtifact::KernelImage
+            } else if let Some(emit) = requested_emit {
+                BuildFinalArtifact::Emit(emit)
+            } else if freestanding_requested {
+                BuildFinalArtifact::Emit(BuildEmitKind::Object)
+            } else {
+                BuildFinalArtifact::Emit(BuildEmitKind::Binary)
+            };
+            let build_mode = if final_artifact == BuildFinalArtifact::KernelImage || freestanding_requested {
                 llvm_codegen::NativeBuildMode::Freestanding
             } else {
                 llvm_codegen::NativeBuildMode::Hosted
             };
+            if build_mode == llvm_codegen::NativeBuildMode::Freestanding
+                && final_artifact == BuildFinalArtifact::Emit(BuildEmitKind::Binary)
+            {
+                return Err(
+                    "cool build: freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, or a kernel image"
+                        .to_string(),
+                );
+            }
 
-            let obj_path = file_path.with_extension("o");
-            let output_path = if freestanding {
-                obj_path.clone()
+            let base_output = file_path.with_extension("");
+            let final_path = final_artifact.output_path(&base_output);
+            let compile_output = if final_artifact == BuildFinalArtifact::KernelImage {
+                base_output.with_extension("o")
             } else {
-                file_path.with_extension("")
+                final_path.clone()
             };
 
-            let label = build_label(profile, freestanding, linker_script_arg.is_some());
+            let label = build_label(profile, build_mode, final_artifact);
             println!("  Compiling {}{} ...", file_path.display(), label);
 
             let t0 = std::time::Instant::now();
-            compile_to_native_with_mode(&source, &output_path, file_path, build_mode)?;
-
-            let final_path = if let Some(script) = &linker_script_arg {
-                let elf_path = file_path.with_extension("elf");
-                link_kernel_image(&obj_path, Path::new(script), &elf_path)?;
-                elf_path
-            } else {
-                output_path
-            };
+            match final_artifact {
+                BuildFinalArtifact::KernelImage => {
+                    let script = effective_linker_script
+                        .ok_or_else(|| "cool build: kernel-image output requires a linker script".to_string())?;
+                    compile_to_native_with_output(
+                        &source,
+                        &compile_output,
+                        file_path,
+                        build_mode,
+                        llvm_codegen::NativeArtifactKind::Object,
+                    )?;
+                    link_kernel_image(&compile_output, Path::new(script), &final_path)?;
+                }
+                BuildFinalArtifact::Emit(kind) => {
+                    compile_to_native_with_output(
+                        &source,
+                        &compile_output,
+                        file_path,
+                        build_mode,
+                        kind.native_artifact(),
+                    )?;
+                }
+            }
 
             let elapsed = t0.elapsed();
             println!(
@@ -1456,6 +1626,7 @@ Cool 1.0.0 — a native-first high-level systems language
 USAGE:
     cool build                    Build the project described by cool.toml
     cool build --profile <name>   Build with dev/release/freestanding/strict profile rules
+    cool build --emit <kind>      Emit binary/object/assembly/llvm-ir/staticlib artifacts
     cool build <file.cool>        Compile a single file to a native binary
     cool build --freestanding     Build a freestanding object file (.o)
     cool build --linker-script=<ld>  Link a kernel image (.elf) via LLD
@@ -1490,6 +1661,8 @@ EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool build --profile dev      # checked build using cool.toml or a file
+    cool build --emit object      # compile to .o without linking
+    cool build --emit staticlib   # compile to lib<name>.a
     cool build --profile strict hello.cool
     cool build --freestanding            # compile cool.toml project → ./name.o
     cool build --linker-script=link.ld   # compile + link → ./name.elf
