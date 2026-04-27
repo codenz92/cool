@@ -2,9 +2,36 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 16 Complete
+## [Unreleased] - Phase 17 Complete
+
+### Phase 6 Follow-on — Data Modules (Pass 1)
+
+- New bundled `stdlib/bytes.cool`, `stdlib/base64.cool`, `stdlib/codec.cool`, `stdlib/html.cool`, `stdlib/config.cool`, and `stdlib/schema.cool` modules cover byte strings, hex/base64, codec dispatch, HTML escaping/extraction, config loading/merging, and typed shape validation across interpreter, VM, and native builds
+- `bytes` includes UTF-8/ASCII/Latin-1 conversion, hex helpers, concatenation/slicing, and little/big-endian unsigned integer pack/unpack helpers; `base64` and `codec` build on the same byte-path APIs instead of each reimplementing binary plumbing
+- `config` now loads `.json`, `.toml`, `.yaml`, `.ini`, and `.env` styles with format inference plus deep merge and `${NAME}` environment expansion helpers, while `schema` provides reusable `string` / `integer` / `number` / `boolean` / `list_of` / `shape` / `one_of` rules with structured error reporting
+- Cross-runtime `ord()` / `chr()` parity is now in place, and the LLVM runtime now treats string length, indexing, slicing, and `for ch in text` iteration in UTF-8 code points instead of raw bytes so the new modules behave consistently in native builds
+
+### Signature Capability
+
+- Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers
+- Runtime diagnostics for denied capabilities now name both the missing permission and the blocked operation, and `platform.capabilities()` exposes the active manifest policy to Cool code
+- Published package metadata, bundle metadata, and `cool pkg capabilities` all record the same permission model so tooling and users can audit capability requirements before execution
+
+### Concurrency
+
+- New bundled `stdlib/jobs.cool` module provides structured concurrency primitives across interpreter, VM, and native builds: task groups, channels, deadlines, cancellation, polling, and `await_all`
+- `jobs.command`, `jobs.http_get`, `jobs.http_head`, and `jobs.sleep` provide composable process/network orchestration APIs that honor the manifest capability policy
+- LLVM-native string instance method dispatch now covers `.split()`, `.replace()`, `.startswith()`, `.endswith()`, `.find()`, `.count()`, `.title()`, `.capitalize()`, and `.format()`, bringing method-call parity in line with the string module helpers that the new bundled tools rely on
+
+### Flagship Software
+
+- New `cool pkg` command is written in Cool and provides project/package workflow helpers: `info`, `deps`, `tree`, `capabilities`, and `doctor`, plus pass-through `install`, `add`, and `publish` flows
+- New `apps/pulse.cool` health-check runner and `apps/control.cool` terminal dashboard provide a practical concurrent CLI/TUI pair driven by TOML manifests and powered by `import jobs`
+- New `examples/coolboard/` project is a native SQLite-backed note service with manifest capabilities, package metadata, and pulse checks, exercising the application/tooling path as a realistic backend example
+- New `examples/kernel_demo/` project proves the freestanding subset with an explicit `_start`, a linker script, and VGA text-memory output through the core MMIO helpers
 
 ### Systems Interop And Targets
+
 
 - New `cool bindgen` subcommand for a practical C-header subset: simple `#define` constants, enum constants, struct/union layouts, typedef aliases, and plain function prototypes now generate starter Cool `extern def` / `struct` / `union` bindings
 - `extern def` now accepts richer ABI/link metadata: `library`, `link_kind`, `weak`, `ownership`, and `lifetime` alongside the existing `symbol`, `cc`, and `section` fields

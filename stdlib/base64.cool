@@ -1,0 +1,105 @@
+import bytes
+
+def _fail(message):
+    raise "base64: " + message
+
+def _std_alphabet():
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+def _url_alphabet():
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+def _alphabet(urlsafe):
+    if urlsafe:
+        return _url_alphabet()
+    return _std_alphabet()
+
+def _clean_input(text):
+    out = ""
+    for ch in str(text):
+        if ch == " " or ch == "\t" or ch == "\r" or ch == "\n":
+            continue
+        out = out + ch
+    return out
+
+def encode(value, urlsafe=false, pad=true):
+    data = bytes.coerce(value)
+    alphabet = _alphabet(urlsafe)
+    out = ""
+    i = 0
+    while i < len(data):
+        b0 = data[i]
+        b1 = 0
+        b2 = 0
+        remaining = len(data) - i
+        if remaining > 1:
+            b1 = data[i + 1]
+        if remaining > 2:
+            b2 = data[i + 2]
+        triple = (b0 << 16) | (b1 << 8) | b2
+        out = out + alphabet[(triple >> 18) & 63]
+        out = out + alphabet[(triple >> 12) & 63]
+        if remaining > 1:
+            out = out + alphabet[(triple >> 6) & 63]
+        elif pad:
+            out = out + "="
+        if remaining > 2:
+            out = out + alphabet[triple & 63]
+        elif pad:
+            out = out + "="
+        i = i + 3
+    return out
+
+def encode_text(text, urlsafe=false, pad=true, encoding="utf-8"):
+    return encode(bytes.from_string(text, encoding), urlsafe, pad)
+
+def _value(alphabet, ch):
+    index = alphabet.find(ch)
+    if index < 0:
+        _fail("invalid base64 character '" + str(ch) + "'")
+    return index
+
+def decode(text, urlsafe=false):
+    alphabet = _alphabet(urlsafe)
+    clean = _clean_input(text)
+    if len(clean) == 0:
+        return []
+    if len(clean) % 4 == 1:
+        _fail("invalid base64 length")
+    while len(clean) % 4 != 0:
+        clean = clean + "="
+    out = []
+    i = 0
+    while i < len(clean):
+        c0 = clean[i]
+        c1 = clean[i + 1]
+        c2 = clean[i + 2]
+        c3 = clean[i + 3]
+        if c0 == "=" or c1 == "=":
+            _fail("invalid '=' placement")
+        v0 = _value(alphabet, c0)
+        v1 = _value(alphabet, c1)
+        v2 = 0
+        v3 = 0
+        pad_count = 0
+        if c2 == "=":
+            pad_count = 2
+        else:
+            v2 = _value(alphabet, c2)
+        if c3 == "=":
+            pad_count = pad_count + 1
+        else:
+            v3 = _value(alphabet, c3)
+        triple = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3
+        out.append((triple >> 16) & 0xFF)
+        if c2 != "=":
+            out.append((triple >> 8) & 0xFF)
+        if c3 != "=" and pad_count == 0:
+            out.append(triple & 0xFF)
+        if c2 == "=" and c3 != "=":
+            _fail("invalid '=' placement")
+        i = i + 4
+    return out
+
+def decode_text(text, urlsafe=false, encoding="utf-8"):
+    return bytes.to_string(decode(text, urlsafe), encoding)

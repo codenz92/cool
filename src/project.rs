@@ -24,6 +24,7 @@ struct DependencyRoots {
 pub struct ModuleResolver {
     local_roots: Vec<PathBuf>,
     dependency_roots: Vec<DependencyRoots>,
+    bundled_roots: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,8 +47,43 @@ pub struct CoolProject {
     pub build_reproducible: Option<bool>,
     pub build_debug: Option<bool>,
     pub build_no_libc: Option<bool>,
+    pub capabilities: CapabilityPolicy,
     pub toolchain: ToolchainConfig,
     pub native: NativeLinkConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityPolicy {
+    pub file: bool,
+    pub network: bool,
+    pub env: bool,
+    pub process: bool,
+}
+
+impl Default for CapabilityPolicy {
+    fn default() -> Self {
+        Self::allow_all()
+    }
+}
+
+impl CapabilityPolicy {
+    pub const fn allow_all() -> Self {
+        Self {
+            file: true,
+            network: true,
+            env: true,
+            process: true,
+        }
+    }
+
+    pub fn to_pairs(self) -> [(&'static str, bool); 4] {
+        [
+            ("file", self.file),
+            ("network", self.network),
+            ("env", self.env),
+            ("process", self.process),
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -397,6 +433,22 @@ impl CoolProject {
             }
         };
 
+        let capabilities = match root.get("capabilities") {
+            None => CapabilityPolicy::allow_all(),
+            Some(toml::Value::Table(table)) => CapabilityPolicy {
+                file: parse_bool_field(table.get("file"), "file", "cool.toml [capabilities]")?.unwrap_or(true),
+                network: parse_bool_field(table.get("network"), "network", "cool.toml [capabilities]")?.unwrap_or(true),
+                env: parse_bool_field(table.get("env"), "env", "cool.toml [capabilities]")?.unwrap_or(true),
+                process: parse_bool_field(table.get("process"), "process", "cool.toml [capabilities]")?.unwrap_or(true),
+            },
+            Some(other) => {
+                return Err(format!(
+                    "cool.toml: field 'capabilities' must be a table, got {}",
+                    other.type_str()
+                ))
+            }
+        };
+
         let native = match root.get("native") {
             None => NativeLinkConfig::default(),
             Some(toml::Value::Table(table)) => {
@@ -548,6 +600,7 @@ impl CoolProject {
             build_reproducible,
             build_debug,
             build_no_libc,
+            capabilities,
             toolchain,
             native,
         })
@@ -595,6 +648,7 @@ impl ModuleResolver {
         Self {
             local_roots: vec![canonical_or_path(source_dir)],
             dependency_roots: Vec::new(),
+            bundled_roots: bundled_module_roots(),
         }
     }
 
@@ -641,6 +695,14 @@ impl ModuleResolver {
                 }
             }
         }
+
+        for root in &self.bundled_roots {
+            for candidate in module_candidates(root, &file_path) {
+                if candidate.exists() {
+                    return Some(canonical_or_path(candidate));
+                }
+            }
+        }
         None
     }
 
@@ -652,7 +714,17 @@ impl ModuleResolver {
         Ok(Self {
             local_roots,
             dependency_roots,
+            bundled_roots: bundled_module_roots(),
         })
+    }
+}
+
+fn bundled_module_roots() -> Vec<PathBuf> {
+    let stdlib_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+    if stdlib_root.exists() && stdlib_root.is_dir() {
+        vec![canonical_or_path(stdlib_root)]
+    } else {
+        Vec::new()
     }
 }
 

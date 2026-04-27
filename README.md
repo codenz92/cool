@@ -28,6 +28,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import math`, `import os`, `import sys`, `import path`, `import platform`, `import core`, `import csv`, `import datetime`, `import hashlib`, `import toml`, `import yaml`, `import sqlite`, `import http`, `import argparse`, `import logging`, `import test`
 - `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket` (`http` requires host `curl`)
 - `import ffi` — call C functions from shared libraries at runtime
+- Project-level capability policy via `[capabilities]` in `cool.toml` for file, network, env, and process access
 - LLVM-native `extern def` declarations with symbol/link/ownership metadata
 - LLVM-native ordinary `def` signatures with typed parameters and return types
 - Explicit module export control with `public` / `private` on top-level bindings and declarations
@@ -39,6 +40,8 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `cool bindgen` for C headers and `cool layout` for archive/object/kernel/shared-library inspection
 - `cool new --template app|lib|service|freestanding` for app, library, network-service, and freestanding scaffolds
 - `cool publish`, `cool install --locked`, and lockfile checksums for source-distribution packaging and reproducible dependency installs
+- `cool pkg` for Cool-native project/package inspection and dependency diagnostics
+- `import jobs` for structured concurrency: tasks, channels, deadlines, cancellation, and process/network orchestration
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
@@ -47,6 +50,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import term` for raw terminal mode, cursor control, terminal sizing, and real-time key input across interpreter, VM, and native builds (real TTY required for interactive input)
 - `os.popen(cmd)` to run shell commands and capture output
 - Integer width helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, plus pointer-width `isize`, `usize`, `word_bits()`, and `word_bytes()`
+- Bundled data modules: `import bytes`, `import base64`, `import codec`, `import html`, `import config`, and `import schema`
 - `struct` definitions with typed fields and positional/keyword construction across all runtimes
 - `packed struct` — no inter-field padding, stable binary layout in LLVM
 - Hex / binary / octal literals, `\x` escape sequences
@@ -54,11 +58,11 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 
 ### Built-in Functions
 
-`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `isize()`, `usize()`, `word_bits()`, `word_bytes()`, `assert`, `exit()`
+`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `ord()`, `chr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `isize()`, `usize()`, `word_bits()`, `word_bytes()`, `assert`, `exit()`
 
 ### String Methods
 
-`.upper()`, `.lower()`, `.strip()`, `.lstrip()`, `.rstrip()`, `.split()`, `.join()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`, `.format()`
+`.upper()`, `.lower()`, `.strip()`, `.lstrip()`, `.rstrip()`, `.split()`, `.join()`, `.replace()`, `.find()`, `.count()`, `.startswith()`, `.endswith()`, `.title()`, `.capitalize()`, `.format()`
 
 ### Platform Module
 
@@ -74,7 +78,66 @@ print(platform.runtime())         # "interpreter", "vm", or "native"
 print(platform.shared_lib_ext())  # "dylib", "so", or "dll"
 print(platform.has_ffi())         # runtime capability flags
 print(platform.has_raw_memory())
+print(platform.capabilities())    # {"file": true, "network": true, ...}
 ```
+
+### Capability Model
+
+Projects can declare runtime permissions in `cool.toml`:
+
+```toml
+[capabilities]
+file = true
+network = false
+env = true
+process = false
+```
+
+The interpreter, bytecode VM, and native runtime enforce the same policy for `open()`, `import os`, `import http`, `import socket`, and `import subprocess`. Denied operations raise an explicit capability error, and `platform.capabilities()` reports the active manifest policy back to Cool code.
+
+### Data Modules
+
+Bundled data/serialization helpers now live under `stdlib/` and import cleanly in all three runtimes:
+
+```python
+import bytes
+import base64
+import config
+import html
+import schema
+
+blob = bytes.from_string("A🙂")
+print(bytes.hex(blob))                       # 41f09f9982
+print(base64.encode(blob))                   # QfCfmYI=
+print(config.load("settings.env")["HELLO"])  # format inference
+
+rule = schema.shape({"name": schema.string({"min": 1})})
+print(schema.check(rule, {"name": "Ada"}))   # true
+print(html.extract_title("<title>Hi</title>"))
+```
+
+Package/bundle metadata and `cool pkg capabilities` expose the same permission set so projects can audit what an app or dependency expects before running it.
+
+### Jobs Module
+
+`import jobs` provides a small structured-concurrency layer that works across interpreter, VM, and native builds:
+
+```python
+import jobs
+
+g = jobs.group("checks")
+ch = jobs.channel(g)
+jobs.send(ch, "ready")
+print(jobs.recv(ch))
+
+jobs.command(g, "printf ok", 2.0, "smoke")
+jobs.sleep(g, 0.05, "tick")
+
+for result in jobs.await_all(g):
+    print(result["name"], result["ok"], result["duration"])
+```
+
+The module includes groups, deadlines, cancellation, channels, background command tasks, HTTP tasks, and polling helpers. The bundled `cool pkg`, `pulse`, and `control` tools all use this layer directly.
 
 ### Core Module
 
@@ -405,7 +468,7 @@ clear
 - Tab completion and up-arrow history navigation in interactive TTY sessions
 - Shell scripting via `source <file>`
 
-Interactive terminal apps such as `apps/edit.cool`, `apps/top.cool`, and `apps/snake.cool`
+Interactive terminal apps such as `apps/edit.cool`, `apps/top.cool`, `apps/snake.cool`, and `apps/control.cool`
 expect a real TTY because they rely on `import term` raw-mode input and screen control.
 
 ---
@@ -466,9 +529,16 @@ cool test
 # Run native benchmarks
 cool bench
 
+# Inspect the project and dependency health
+cool pkg info
+cool pkg doctor
+
 # Generate API docs
 cool doc
 cool doc --format html --output docs/API.html
+
+# Run concurrent health checks from a pulse manifest
+cool apps/pulse.cool --file pulse.toml
 
 # Add dependencies
 cool add toolkit --path ../toolkit
@@ -538,6 +608,12 @@ libraries = ["sqlite3"]                     # optional: link -lsqlite3
 search = ["native/lib"]                     # optional: extra -L search paths
 rpath = ["@loader_path/../lib"]             # optional: runtime library search path
 
+[capabilities]
+file = true                 # optional: allow open(), os file helpers, sqlite, etc.
+network = true              # optional: allow http/socket access
+env = true                  # optional: allow getenv-style host environment access
+process = false             # optional: allow subprocess/os.popen and jobs.command()
+
 [dependencies]
 toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
 theme = { git = "https://github.com/acme/theme.git" }   # fetched into .cool/deps/theme
@@ -567,13 +643,13 @@ description = "Format Cool source files"
 run = "cool fmt"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, shared libraries, or normal binaries. `[build].target`, `[build].cpu`, and `[build].cpu_features` (or the matching CLI flags) thread explicit target tuning into native output and packaging metadata. `[build].entry` / `--entry` choose the final linker entry for no-libc or kernel-style flows, and `[build].no_libc` / `--no-libc` switch hosted binary output onto the host-free path where supported. `[native]` provides extra libraries, frameworks, search paths, and rpaths for the native linker; `extern def` can also attach `library:` and `link_kind:` metadata directly to individual bindings. `[build].incremental` controls the project-local native build cache under `.cool/cache/build`, while `[build].reproducible` normalizes source paths and enables deterministic archive/linker settings where supported by the selected toolchain. `[build].debug` enables native debug info and line locations, and `[toolchain]` can pin the expected Cool CLI version plus external `cc`/`ar`/`lld` tools. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` / `cool install --locked` to materialize git dependencies under `.cool/deps`, verify dependency checksums, and maintain `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and starter `[tasks.publish]`, `[tasks.doc]`, and `[tasks.fmt]` tasks, so packaging, docs, and formatting work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, shared libraries, or normal binaries. `[build].target`, `[build].cpu`, and `[build].cpu_features` (or the matching CLI flags) thread explicit target tuning into native output and packaging metadata. `[build].entry` / `--entry` choose the final linker entry for no-libc or kernel-style flows, and `[build].no_libc` / `--no-libc` switch hosted binary output onto the host-free path where supported. `[native]` provides extra libraries, frameworks, search paths, and rpaths for the native linker; `extern def` can also attach `library:` and `link_kind:` metadata directly to individual bindings. `[capabilities]` sets the runtime permission policy for file, network, env, and process access across interpreter, VM, and native builds, and the same values are surfaced by `platform.capabilities()`, `cool pkg capabilities`, and package metadata. `[build].incremental` controls the project-local native build cache under `.cool/cache/build`, while `[build].reproducible` normalizes source paths and enables deterministic archive/linker settings where supported by the selected toolchain. `[build].debug` enables native debug info and line locations, and `[toolchain]` can pin the expected Cool CLI version plus external `cc`/`ar`/`lld` tools. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` / `cool install --locked` to materialize git dependencies under `.cool/deps`, verify dependency checksums, and maintain `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and starter `[tasks.publish]`, `[tasks.doc]`, and `[tasks.fmt]` tasks, so packaging, docs, and formatting work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, and typed `def` call/return mismatches, and `cool doc [file.cool]` generates module/type/API docs as Markdown, HTML, or JSON. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, and typed `def` call/return mismatches, and `cool doc [file.cool]` generates module/type/API docs as Markdown, HTML, or JSON. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search. `cool pkg` adds a Cool-native project workflow layer with `info`, `deps`, `tree`, `capabilities`, and `doctor` subcommands.
 
 ## VS Code
 
@@ -627,6 +703,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool bundle [--target <triple>]` | Build and package the project into a distributable tarball with metadata and symbol-map sidecars |
 | `cool release [--bump patch] [--target <triple>]` | Bump version, bundle, emit artifact metadata, and git-tag a release |
 | `cool publish [--dry-run]` | Validate dependencies and package a source distribution for publishing |
+| `cool pkg <info\|deps\|tree\|capabilities\|doctor>` | Inspect project metadata, dependencies, and manifest capability policy |
 | `cool lsp` | Start the language server (LSP) on stdin/stdout |
 | `cool install [--locked\|--frozen]` | Fetch or verify dependencies and maintain `cool.lock` with checksums |
 | `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
@@ -672,6 +749,29 @@ Native project builds now use a local content-addressed cache under `.cool/cache
 ### Native stack traces and debug info
 
 `cool build --debug` emits native debug info and line locations, and unhandled native exceptions now print a stack trace with function names and line numbers. That same tracing machinery backs `cool bench --profile`, so production-style builds can keep diagnostics lightweight while benchmark runs still surface hotspots.
+
+### Cool-native package workflow
+
+Use `cool pkg` when you want project/package introspection without dropping to ad hoc shell scripts. `cool pkg info` summarizes the current project, `deps` and `tree` show dependency shape, `capabilities` prints the manifest permission policy, and `doctor` checks that the main file, dependency roots, and lockfile are in place.
+
+`cool pkg install`, `cool pkg add`, and `cool pkg publish` forward to the main package-management commands, so teams can keep a single Cool-native workflow surface for local project operations.
+
+### Pulse and Control
+
+`apps/pulse.cool` is a concurrent health-check runner for TOML manifests, and `apps/control.cool` is its terminal dashboard companion. Both use `import jobs`, so they exercise the same concurrency and capability path available to ordinary Cool applications.
+
+`pulse.toml` manifests declare checks under `[checks.<name>]` using either `command = "..."`, `url = "..."`, or `sleep = ...`:
+
+```toml
+[checks.homepage]
+url = "https://example.com/health"
+method = "GET"
+
+[checks.migrations]
+command = "cool pkg doctor"
+```
+
+Run them directly with `cool apps/pulse.cool --file pulse.toml`, or use `cool apps/control.cool --file pulse.toml` for the TTY dashboard.
 
 ### Release artifacts
 
@@ -725,7 +825,7 @@ sqrt_fn = ffi.func(libm, "sqrt", "f64", ["f64"])
 print(sqrt_fn(2.0))    # 1.4142135623730951
 ```
 
-More examples are in the [`examples/`](examples/) directory.
+More examples are in the [`examples/`](examples/) directory, including `examples/coolboard/` for a native SQLite-backed note service and `examples/kernel_demo/` for a freestanding VGA-text kernel/object demo.
 
 ---
 
@@ -754,6 +854,9 @@ apps/
   snake.cool        Snake game
   http.cool         HTTP client
   browse.cool       TUI file browser (two-pane layout, file preview)
+  pulse.cool        Concurrent health-check runner
+  control.cool      Terminal dashboard for pulse manifests
+  pulsekit.cool     Shared pulse/control check engine
 
 cmd/
   lib/projectlib.cool Shared manifest/project helpers for bundled commands
@@ -761,8 +864,18 @@ cmd/
   task.cool         Manifest task runner used by `cool task`
   add.cool          Dependency manifest updater for `cool add`
   install.cool      Dependency installer for `cool install`
+  pkg.cool          Cool-native project/package workflow
   bundle.cool       Project bundler for `cool bundle`
   release.cool      Release manager for `cool release`
+
+stdlib/
+  jobs.cool         Structured concurrency helpers
+  bytes.cool        Byte strings, hex, UTF-8, and binary packing helpers
+  base64.cool       Base64 encode/decode on byte lists and text
+  codec.cool        Pluggable codec dispatch for text/binary formats
+  html.cool         Escaping, tag stripping, and small extraction helpers
+  config.cool       Config loading for json/toml/yaml/ini/env formats
+  schema.cool       Typed validation rules and structured errors
 
 editors/vscode/
   extension.js      VS Code extension entry point and LSP client
@@ -780,6 +893,8 @@ examples/
   errors_and_files.cool try/except/finally, file I/O, JSON, dirs
   stdlib.cool           math, random, re, json, time, collections
   ffi_demo.cool         Calling C libraries (libm, libc) via FFI
+  coolboard/           Native SQLite-backed note service example
+  kernel_demo/         Freestanding VGA-text kernel/object demo
 ```
 
 ---
@@ -799,6 +914,12 @@ examples/
 | 9 — Self-hosted compiler | ✅ Complete |
 | 10 — Production readiness and ecosystem | ✅ Complete |
 | 11 — Freestanding systems foundation | ✅ Complete |
+| 12 — Static semantic core | ✅ Complete |
+| 13 — Typed language features | ⏳ Planned |
+| 14 — Runtime and memory model | ⏳ Planned |
+| 15 — Native toolchain and distribution | ✅ Complete |
+| 16 — Systems interop and targets | ✅ Complete |
+| 17 — Signature features and flagship software | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
@@ -808,7 +929,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 
 The self-hosted compiler lives in `coolc/compiler_vm.cool` — a lexer, recursive descent parser, code generator, and bytecode VM all written in Cool itself.
 
-Project tooling is starting to move over too: `cool new`, `cool task`, `cool add`, `cool install`, `cool bundle`, and `cool release` now delegate to `cmd/*.cool`, and shared manifest helpers now live in `cmd/lib/projectlib.cool`, so packaged CLI workflows now run in Cool rather than Rust.
+Project tooling is starting to move over too: `cool new`, `cool task`, `cool add`, `cool install`, `cool pkg`, `cool bundle`, and `cool release` now delegate to `cmd/*.cool`, and shared manifest helpers now live in `cmd/lib/projectlib.cool`, so packaged CLI workflows now run in Cool rather than Rust.
 
 It supports:
 

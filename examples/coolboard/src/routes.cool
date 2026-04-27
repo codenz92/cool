@@ -1,0 +1,25 @@
+import json
+import store
+import server_http
+
+def handle(request, db_path):
+    method = request["method"]
+    target = request["target"]
+
+    if method.startswith("GET") and target.startswith("/health"):
+        return server_http.json_response("200 OK", {"status": "ok", "service": "coolboard"})
+
+    if method.startswith("GET") and target.startswith("/notes"):
+        return server_http.json_response("200 OK", {"notes": store.list_notes(db_path)})
+
+    if method.startswith("POST") and target.startswith("/notes"):
+        payload = {}
+        if request["body"].strip() != "":
+            payload = json.loads(request["body"])
+        text = str(payload.get("text", "")).strip()
+        if text == "":
+            return server_http.json_response("400 Bad Request", {"error": "text required"})
+        store.add_note(db_path, text)
+        return server_http.json_response("201 Created", {"ok": true, "text": text})
+
+    return server_http.json_response("404 Not Found", {"error": "not found"})

@@ -47,6 +47,14 @@ main = "src/main.cool"
 # search = ["native/lib"]                 # extra -L search paths
 # rpath = ["@loader_path/../lib"]         # runtime library search path
 
+# Optional: runtime capability policy enforced by the interpreter, VM, and native runtime
+#
+# [capabilities]
+# file = true
+# network = true
+# env = true
+# process = false
+
 # Optional: dependencies, imported by dependency name
 #
 # [dependencies]

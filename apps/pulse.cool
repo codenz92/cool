@@ -1,0 +1,83 @@
+import sys
+import json
+import pulsekit
+
+def usage():
+    print("pulse v1.0 — concurrent health checks from a TOML manifest")
+    print("  cool apps/pulse.cool [--file pulse.toml] [--json]")
+
+def render_table(results):
+    print("NAME                 KIND       STATUS  SECS   DETAIL")
+    print("-------------------- ---------- ------- ------ ------------------------------")
+    for result in results:
+        check = result["check"]
+        name = check["name"]
+        kind = check["kind"]
+        status = result["ok"] and "ok" or "fail"
+        secs = str(result["duration"])
+        if "." in secs:
+            dot = secs.find(".")
+            secs = secs[:dot + 3]
+        detail = ""
+        if result["timed_out"]:
+            detail = "deadline exceeded"
+        elif result["cancelled"]:
+            detail = "cancelled"
+        elif not result["ok"]:
+            detail = result["stderr"].strip()
+            if detail == "":
+                detail = result["stdout"].strip()
+        row = name
+        while len(row) < 21:
+            row = row + " "
+        row = row + kind
+        while len(row) < 32:
+            row = row + " "
+        row = row + status
+        while len(row) < 40:
+            row = row + " "
+        row = row + secs
+        while len(row) < 47:
+            row = row + " "
+        if len(detail) > 30:
+            detail = detail[:27] + "..."
+        print(row + detail)
+
+argv = sys.argv
+manifest_path = pulsekit.default_manifest_path()
+json_mode = false
+
+i = 1
+while i < len(argv):
+    arg = argv[i]
+    if arg == "--file":
+        if i + 1 >= len(argv):
+            raise "pulse: --file requires a path"
+        manifest_path = argv[i + 1]
+        i += 2
+    elif arg == "--json":
+        json_mode = true
+        i += 1
+    elif arg == "help" or arg == "--help" or arg == "-h":
+        usage()
+        exit(0)
+    else:
+        raise "pulse: unexpected argument '" + arg + "'"
+
+results = pulsekit.run_checks(manifest_path)
+summary = pulsekit.summary(results)
+
+if json_mode:
+    print(json.dumps({
+        "manifest": manifest_path,
+        "summary": summary,
+        "results": results,
+    }))
+else:
+    print("pulse manifest: " + manifest_path)
+    print("checks: " + str(summary["total"]) + " total, " + str(summary["ok"]) + " ok, " + str(summary["failed"]) + " failed")
+    print("")
+    render_table(results)
+
+if summary["failed"] > 0:
+    exit(1)

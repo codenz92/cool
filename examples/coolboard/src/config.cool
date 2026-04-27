@@ -1,0 +1,17 @@
+import os
+import path
+
+def host():
+    return "127.0.0.1"
+
+def port():
+    raw = os.getenv("COOLBOARD_PORT")
+    if raw == nil or raw == "":
+        return 8081
+    return int(raw)
+
+def db_path():
+    raw = os.getenv("COOLBOARD_DB")
+    if raw != nil and raw != "":
+        return raw
+    return path.join(".", "coolboard.sqlite")

@@ -250,6 +250,7 @@ impl UpvalueCell {
 pub struct VmClosure {
     pub proto: Rc<FnProto>,
     pub upvalues: Vec<UpvalueCell>,
+    pub module_globals: Option<Rc<RefCell<HashMap<String, VmValue>>>>,
 }
 
 // ── Class & instance ──────────────────────────────────────────────────────────

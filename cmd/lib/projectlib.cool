@@ -62,6 +62,14 @@ def parse_optional_string(table, key, context):
         raise context + ": field '" + key + "' must be a string"
     return value
 
+def optional_bool(table, key, default_value, context):
+    value = table.get(key, nil)
+    if value == nil:
+        return default_value
+    if not isinstance(value, "bool"):
+        raise context + ": field '" + key + "' must be a boolean"
+    return value
+
 def validate_git_selector(context, name, branch, tag, rev):
     count = 0
     if branch != nil:
@@ -143,6 +151,31 @@ def parse_dependencies(manifest):
         return out
     raise "cool.toml: field 'dependencies' must be a table or array of strings"
 
+def parse_capabilities(manifest):
+    raw = manifest.get("capabilities", nil)
+    if raw == nil:
+        return {
+            "file": true,
+            "network": true,
+            "env": true,
+            "process": true,
+        }
+    if not isinstance(raw, "dict"):
+        raise "cool.toml: field 'capabilities' must be a table"
+    return {
+        "file": optional_bool(raw, "file", true, "cool.toml [capabilities]"),
+        "network": optional_bool(raw, "network", true, "cool.toml [capabilities]"),
+        "env": optional_bool(raw, "env", true, "cool.toml [capabilities]"),
+        "process": optional_bool(raw, "process", true, "cool.toml [capabilities]"),
+    }
+
+def denied_capabilities(capabilities):
+    out = []
+    for name in ["file", "network", "env", "process"]:
+        if capabilities.get(name, true) != true:
+            out.append(name)
+    return out
+
 def project_info(project_root, manifest, context):
     project = project_table(manifest, context)
     return {
@@ -151,4 +184,5 @@ def project_info(project_root, manifest, context):
         "name": optional_string(project, "name", "project", "cool.toml"),
         "version": optional_string(project, "version", "0.1.0", "cool.toml"),
         "dependencies": parse_dependencies(manifest),
+        "capabilities": parse_capabilities(manifest),
     }

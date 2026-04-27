@@ -1,0 +1,13 @@
+import core
+
+def _start():
+    entry: "_start"
+    vga = 753664
+    message = "COOL KERNEL"
+    i = 0
+    while i < len(message):
+        core.mmio_write(vga + i * 2, "u8", int(message[i]))
+        core.mmio_write(vga + i * 2 + 1, "u8", 15)
+        i = i + 1
+    while true:
+        i = i

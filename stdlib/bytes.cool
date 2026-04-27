@@ -1,0 +1,335 @@
+def _fail(message):
+    raise "bytes: " + message
+
+def _hex_lower():
+    return "0123456789abcdef"
+
+def _hex_upper():
+    return "0123456789ABCDEF"
+
+def _encoding_name(name):
+    raw = str(name).lower()
+    if raw == "utf8":
+        return "utf-8"
+    if raw == "latin-1":
+        return "latin1"
+    return raw
+
+def byte(value):
+    n = int(value)
+    if n < 0 or n > 255:
+        _fail("byte value out of range 0..255: " + str(value))
+    return n
+
+def coerce(value):
+    if value == nil:
+        return []
+    kind = type(value)
+    if kind == "str":
+        return from_string(value)
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(byte(item))
+        return out
+    _fail("expected a list, tuple, or string, got " + type(value))
+
+def empty():
+    return []
+
+def copy(value):
+    return coerce(value)
+
+def length(value):
+    return len(coerce(value))
+
+def slice(value, start, stop=nil):
+    data = coerce(value)
+    if stop == nil:
+        return data[int(start):]
+    return data[int(start):int(stop)]
+
+def concat(parts):
+    out = []
+    for part in parts:
+        for item in coerce(part):
+            out.append(item)
+    return out
+
+def join(parts, separator=nil):
+    sep = []
+    if separator != nil:
+        sep = coerce(separator)
+    out = []
+    first = true
+    for part in parts:
+        if not first and len(sep) > 0:
+            for item in sep:
+                out.append(item)
+        for item in coerce(part):
+            out.append(item)
+        first = false
+    return out
+
+def repeat(value, count):
+    data = coerce(value)
+    limit = int(count)
+    if limit <= 0:
+        return []
+    out = []
+    i = 0
+    while i < limit:
+        for item in data:
+            out.append(item)
+        i = i + 1
+    return out
+
+def starts_with(value, prefix):
+    data = coerce(value)
+    pre = coerce(prefix)
+    if len(pre) > len(data):
+        return false
+    i = 0
+    while i < len(pre):
+        if data[i] != pre[i]:
+            return false
+        i = i + 1
+    return true
+
+def ends_with(value, suffix):
+    data = coerce(value)
+    suf = coerce(suffix)
+    if len(suf) > len(data):
+        return false
+    offset = len(data) - len(suf)
+    i = 0
+    while i < len(suf):
+        if data[offset + i] != suf[i]:
+            return false
+        i = i + 1
+    return true
+
+def _hex_value(ch):
+    idx = _hex_lower().find(str(ch).lower())
+    if idx < 0:
+        _fail("invalid hex digit '" + str(ch) + "'")
+    return idx
+
+def hex(value, uppercase=false):
+    data = coerce(value)
+    digits = _hex_lower()
+    if uppercase:
+        digits = _hex_upper()
+    out = ""
+    for item in data:
+        out = out + digits[item >> 4] + digits[item & 15]
+    return out
+
+def from_hex(text):
+    clean = str(text).strip()
+    if clean.lower().startswith("0x"):
+        clean = clean[2:]
+    compact = ""
+    for ch in clean:
+        if ch == " " or ch == "\t" or ch == "\r" or ch == "\n" or ch == "_":
+            continue
+        compact = compact + ch
+    if len(compact) % 2 != 0:
+        _fail("hex text must contain an even number of digits")
+    out = []
+    i = 0
+    while i < len(compact):
+        hi = _hex_value(compact[i])
+        lo = _hex_value(compact[i + 1])
+        out.append((hi << 4) | lo)
+        i = i + 2
+    return out
+
+def from_string(text, encoding="utf-8"):
+    data = str(text)
+    enc = _encoding_name(encoding)
+    out = []
+    if enc == "utf-8":
+        for ch in data:
+            code = ord(ch)
+            if code <= 0x7F:
+                out.append(code)
+            elif code <= 0x7FF:
+                out.append(0xC0 | (code >> 6))
+                out.append(0x80 | (code & 0x3F))
+            elif code <= 0xFFFF:
+                out.append(0xE0 | (code >> 12))
+                out.append(0x80 | ((code >> 6) & 0x3F))
+                out.append(0x80 | (code & 0x3F))
+            else:
+                out.append(0xF0 | (code >> 18))
+                out.append(0x80 | ((code >> 12) & 0x3F))
+                out.append(0x80 | ((code >> 6) & 0x3F))
+                out.append(0x80 | (code & 0x3F))
+        return out
+    if enc == "ascii":
+        for ch in data:
+            code = ord(ch)
+            if code > 0x7F:
+                _fail("ascii encoding only supports code points <= 127")
+            out.append(code)
+        return out
+    if enc == "latin1":
+        for ch in data:
+            code = ord(ch)
+            if code > 0xFF:
+                _fail("latin1 encoding only supports code points <= 255")
+            out.append(code)
+        return out
+    _fail("unsupported encoding '" + enc + "'")
+
+def _require_continuation(data, index):
+    if index >= len(data):
+        _fail("unexpected end of utf-8 sequence")
+    b = byte(data[index])
+    if b < 0x80 or b > 0xBF:
+        _fail("invalid utf-8 continuation byte")
+    return b
+
+def to_string(value, encoding="utf-8"):
+    data = coerce(value)
+    enc = _encoding_name(encoding)
+    if enc == "ascii":
+        out = ""
+        for item in data:
+            if item > 0x7F:
+                _fail("ascii decoding only supports bytes <= 127")
+            out = out + chr(item)
+        return out
+    if enc == "latin1":
+        out = ""
+        for item in data:
+            out = out + chr(item)
+        return out
+    if enc != "utf-8":
+        _fail("unsupported encoding '" + enc + "'")
+
+    out = ""
+    i = 0
+    while i < len(data):
+        first = byte(data[i])
+        if first <= 0x7F:
+            out = out + chr(first)
+            i = i + 1
+        elif first >= 0xC2 and first <= 0xDF:
+            b1 = _require_continuation(data, i + 1)
+            code = ((first & 0x1F) << 6) | (b1 & 0x3F)
+            out = out + chr(code)
+            i = i + 2
+        elif first >= 0xE0 and first <= 0xEF:
+            b1 = _require_continuation(data, i + 1)
+            b2 = _require_continuation(data, i + 2)
+            code = ((first & 0x0F) << 12) | ((b1 & 0x3F) << 6) | (b2 & 0x3F)
+            if code < 0x800 or (code >= 0xD800 and code <= 0xDFFF):
+                _fail("invalid utf-8 sequence")
+            out = out + chr(code)
+            i = i + 3
+        elif first >= 0xF0 and first <= 0xF4:
+            b1 = _require_continuation(data, i + 1)
+            b2 = _require_continuation(data, i + 2)
+            b3 = _require_continuation(data, i + 3)
+            code = ((first & 0x07) << 18) | ((b1 & 0x3F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F)
+            if code < 0x10000 or code > 0x10FFFF:
+                _fail("invalid utf-8 sequence")
+            out = out + chr(code)
+            i = i + 4
+        else:
+            _fail("invalid utf-8 leading byte")
+    return out
+
+def u16_le(value):
+    n = int(value)
+    if n < 0 or n > 0xFFFF:
+        _fail("u16_le() requires a value in range 0..65535")
+    return [n & 0xFF, (n >> 8) & 0xFF]
+
+def u16_be(value):
+    n = int(value)
+    if n < 0 or n > 0xFFFF:
+        _fail("u16_be() requires a value in range 0..65535")
+    return [(n >> 8) & 0xFF, n & 0xFF]
+
+def u32_le(value):
+    n = int(value)
+    if n < 0 or n > 0xFFFFFFFF:
+        _fail("u32_le() requires a value in range 0..4294967295")
+    return [n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]
+
+def u32_be(value):
+    n = int(value)
+    if n < 0 or n > 0xFFFFFFFF:
+        _fail("u32_be() requires a value in range 0..4294967295")
+    return [(n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF]
+
+def u64_le(value):
+    n = int(value)
+    if n < 0:
+        _fail("u64_le() requires a non-negative value")
+    out = []
+    i = 0
+    while i < 8:
+        out.append((n >> (i * 8)) & 0xFF)
+        i = i + 1
+    return out
+
+def u64_be(value):
+    n = int(value)
+    if n < 0:
+        _fail("u64_be() requires a non-negative value")
+    out = []
+    i = 7
+    while i >= 0:
+        out.append((n >> (i * 8)) & 0xFF)
+        i = i - 1
+    return out
+
+def _require_range(data, offset, width, name):
+    index = int(offset)
+    if index < 0 or index + width > len(data):
+        _fail(name + "() offset out of range")
+    return index
+
+def read_u16_le(value, offset=0):
+    data = coerce(value)
+    index = _require_range(data, offset, 2, "read_u16_le")
+    return data[index] | (data[index + 1] << 8)
+
+def read_u16_be(value, offset=0):
+    data = coerce(value)
+    index = _require_range(data, offset, 2, "read_u16_be")
+    return (data[index] << 8) | data[index + 1]
+
+def read_u32_le(value, offset=0):
+    data = coerce(value)
+    index = _require_range(data, offset, 4, "read_u32_le")
+    return data[index] | (data[index + 1] << 8) | (data[index + 2] << 16) | (data[index + 3] << 24)
+
+def read_u32_be(value, offset=0):
+    data = coerce(value)
+    index = _require_range(data, offset, 4, "read_u32_be")
+    return (data[index] << 24) | (data[index + 1] << 16) | (data[index + 2] << 8) | data[index + 3]
+
+def read_u64_le(value, offset=0):
+    data = coerce(value)
+    index = _require_range(data, offset, 8, "read_u64_le")
+    out = 0
+    i = 0
+    while i < 8:
+        out = out | (data[index + i] << (i * 8))
+        i = i + 1
+    return out
+
+def read_u64_be(value, offset=0):
+    data = coerce(value)
+    index = _require_range(data, offset, 8, "read_u64_be")
+    out = 0
+    i = 0
+    while i < 8:
+        out = (out << 8) | data[index + i]
+        i = i + 1
+    return out

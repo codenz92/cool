@@ -7,9 +7,10 @@ use crate::hashlib_runtime;
 use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::module_exports;
-use crate::project::ModuleResolver;
+use crate::project::{CapabilityPolicy, ModuleResolver};
 use crate::sqlite_runtime::{self, SqlData};
 use crate::subprocess_runtime::{run_shell_command, SubprocessResult};
+use crate::text_runtime;
 use crate::toml_runtime::{self, TomlData};
 use crate::yaml_runtime::{self, YamlData};
 /// Tree-walk interpreter for Cool.
@@ -85,6 +86,8 @@ impl Env {
             "range",
             "str",
             "int",
+            "ord",
+            "chr",
             "i8",
             "u8",
             "i16",
@@ -548,6 +551,7 @@ pub struct Interpreter {
     pub current_line: usize,
     pub source_dir: std::path::PathBuf,
     module_resolver: ModuleResolver,
+    capabilities: CapabilityPolicy,
     /// Source lines, for rich error messages.
     source_lines: Vec<String>,
     /// Stash for a raised exception value that must cross a Result<Value,String> boundary.
@@ -586,7 +590,12 @@ macro_rules! compare_op {
 }
 
 impl Interpreter {
-    pub fn new(source_dir: std::path::PathBuf, source: &str, module_resolver: ModuleResolver) -> Self {
+    pub fn new(
+        source_dir: std::path::PathBuf,
+        source: &str,
+        module_resolver: ModuleResolver,
+        capabilities: CapabilityPolicy,
+    ) -> Self {
         let readline_editor = rustyline::Editor::<CoolHelper, rustyline::history::DefaultHistory>::new()
             .ok()
             .map(|mut ed| {
@@ -603,12 +612,59 @@ impl Interpreter {
             current_line: 0,
             source_dir,
             module_resolver,
+            capabilities,
             source_lines: source.lines().map(|l| l.to_string()).collect(),
             pending_raise: None,
             readline_editor,
             rng_state,
             logging_state: logging_runtime::LoggingState::default(),
         }
+    }
+
+    fn capability_error(&self, capability: &str, context: &str) -> String {
+        self.err(&format!(
+            "CapabilityError: {capability} access denied by cool.toml [capabilities] while calling {context}"
+        ))
+    }
+
+    fn require_file_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.file {
+            Ok(())
+        } else {
+            Err(self.capability_error("file", context))
+        }
+    }
+
+    fn require_network_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.network {
+            Ok(())
+        } else {
+            Err(self.capability_error("network", context))
+        }
+    }
+
+    fn require_env_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.env {
+            Ok(())
+        } else {
+            Err(self.capability_error("env", context))
+        }
+    }
+
+    fn require_process_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.process {
+            Ok(())
+        } else {
+            Err(self.capability_error("process", context))
+        }
+    }
+
+    fn capability_value(&self) -> Value {
+        let mut map = IndexedMap::new();
+        for (name, allowed) in self.capabilities.to_pairs() {
+            map.set(Value::Str(name.to_string()), Value::Bool(allowed));
+        }
+        Value::Dict(Rc::new(RefCell::new(map)))
     }
 
     fn err(&self, msg: &str) -> String {
@@ -1339,6 +1395,7 @@ impl Interpreter {
                     "has_raw_memory",
                     "has_extern",
                     "has_inline_asm",
+                    "capabilities",
                 ] {
                     map.set(
                         Value::Str(fn_name.to_string()),
@@ -2868,6 +2925,26 @@ class Stack:
                     .ok_or_else(|| self.err("int() requires 1 argument"))?;
                 Ok(Value::Int(self.coerce_to_int(&v)?))
             }
+            "ord" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("ord() requires 1 argument"))?;
+                let text = match v {
+                    Value::Str(s) => s,
+                    other => return Err(self.err(&format!("ord() requires a string, got {}", other.type_name()))),
+                };
+                Ok(Value::Int(text_runtime::ord(&text).map_err(|e| self.err(&e))?))
+            }
+            "chr" => {
+                let v = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("chr() requires 1 argument"))?;
+                Ok(Value::Str(
+                    text_runtime::chr(self.coerce_to_int(&v)?).map_err(|e| self.err(&e))?,
+                ))
+            }
             "i8" => {
                 let v = args
                     .into_iter()
@@ -3336,6 +3413,7 @@ class Stack:
                 }
             }
             "open" => {
+                self.require_file_capability("open()")?;
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("open() requires a file path string")),
@@ -3662,6 +3740,7 @@ class Stack:
                 Ok(Value::Str(path.to_string_lossy().to_string()))
             }
             "listdir" => {
+                self.require_file_capability("os.listdir()")?;
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     None => ".".to_string(),
@@ -3678,6 +3757,7 @@ class Stack:
                 Ok(Value::List(Rc::new(RefCell::new(entries?))))
             }
             "exists" => {
+                self.require_file_capability("os.exists()")?;
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.exists() requires a path string")),
@@ -3685,6 +3765,7 @@ class Stack:
                 Ok(Value::Bool(std::path::Path::new(&path).exists()))
             }
             "isdir" => {
+                self.require_file_capability("os.isdir()")?;
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.isdir() requires a path string")),
@@ -3692,6 +3773,7 @@ class Stack:
                 Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
             }
             "getenv" => {
+                self.require_env_capability("os.getenv()")?;
                 let name = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.getenv() requires an env var name")),
@@ -3717,6 +3799,7 @@ class Stack:
                 Ok(Value::Str(path.to_string_lossy().to_string()))
             }
             "mkdir" => {
+                self.require_file_capability("os.mkdir()")?;
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.mkdir() requires a path string")),
@@ -3725,6 +3808,7 @@ class Stack:
                 Ok(Value::Nil)
             }
             "remove" => {
+                self.require_file_capability("os.remove()")?;
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.remove() requires a path string")),
@@ -3733,6 +3817,7 @@ class Stack:
                 Ok(Value::Nil)
             }
             "rename" => {
+                self.require_file_capability("os.rename()")?;
                 let from = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
                     _ => return Err(self.err("os.rename() requires 2 path strings")),
@@ -3745,6 +3830,7 @@ class Stack:
                 Ok(Value::Nil)
             }
             "popen" => {
+                self.require_process_capability("os.popen()")?;
                 let cmd = match args.into_iter().next() {
                     Some(Value::Str(s)) => s,
                     _ => return Err(self.err("os.popen() requires a command string")),
@@ -3793,6 +3879,7 @@ class Stack:
     }
 
     fn call_subprocess_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        self.require_process_capability(&format!("subprocess.{name}()"))?;
         if args.is_empty() || args.len() > 2 {
             return Err(self.err(&format!("subprocess.{}() takes 1 or 2 arguments", name)));
         }
@@ -4633,6 +4720,7 @@ class Stack:
             "has_raw_memory" => Value::Bool(false),
             "has_extern" => Value::Bool(false),
             "has_inline_asm" => Value::Bool(false),
+            "capabilities" => self.capability_value(),
             _ => return Err(self.err(&format!("platform has no function '{}'", name))),
         };
         Ok(value)
@@ -5432,6 +5520,7 @@ class Stack:
     }
 
     fn call_http_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        self.require_network_capability(&format!("http.{name}()"))?;
         match name {
             "get" => {
                 let url = req_str_arg(&args, 0, "http.get")?;
@@ -5466,6 +5555,7 @@ class Stack:
     // ── socket module ────────────────────────────────────────────────────
 
     fn call_socket_fn(&self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        self.require_network_capability(&format!("socket.{name}()"))?;
         match name {
             "connect" => {
                 let host = match args.first() {

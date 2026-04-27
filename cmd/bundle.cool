@@ -302,6 +302,7 @@ def metadata_json(name, version, main, output, manifest, artifact_name, archive_
             "symbol_map_tool": nil,
         },
         "dependencies": projectlib.parse_dependencies(manifest),
+        "capabilities": projectlib.parse_capabilities(manifest),
         "generated_by": {
             "tool": "cool bundle",
             "version": "1.0",

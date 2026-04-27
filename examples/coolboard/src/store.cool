@@ -1,0 +1,10 @@
+import sqlite
+
+def init(db_path):
+    sqlite.execute(db_path, "CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)", [])
+
+def list_notes(db_path):
+    return sqlite.query(db_path, "SELECT id, text FROM notes ORDER BY id DESC LIMIT 20", [])
+
+def add_note(db_path, text):
+    sqlite.execute(db_path, "INSERT INTO notes (text) VALUES (?)", [text])

@@ -1,0 +1,115 @@
+import sys
+import term
+import pulsekit
+
+def usage():
+    print("control v1.0 — terminal dashboard for pulse manifests")
+    print("  cool apps/control.cool [--file pulse.toml] [--interval 5] [--once]")
+
+def fixed(text, width):
+    text = str(text)
+    if len(text) >= width:
+        return text[:width]
+    while len(text) < width:
+        text = text + " "
+    return text
+
+def format_secs(value):
+    text = str(value)
+    if "." in text:
+        dot = text.find(".")
+        return text[:dot + 3]
+    return text
+
+def render(manifest_path, results):
+    summary = pulsekit.summary(results)
+    size = term["size"]()
+    rows = size[0]
+    cols = size[1]
+    term["move_cursor"](1, 1)
+    term["write"]("CONTROL  manifest=" + manifest_path + "  total=" + str(summary["total"]) + "  ok=" + str(summary["ok"]) + "  failed=" + str(summary["failed"]))
+    term["move_cursor"](2, 1)
+    term["write"](fixed("NAME", 22) + fixed("KIND", 12) + fixed("STATUS", 9) + fixed("SECS", 8) + "DETAIL")
+    term["move_cursor"](3, 1)
+    term["write"](fixed("", cols).replace(" ", "─"))
+    max_rows = rows - 5
+    i = 0
+    while i < len(results) and i < max_rows:
+        result = results[i]
+        check = result["check"]
+        status = result["ok"] and "OK" or "FAIL"
+        detail = ""
+        if result["timed_out"]:
+            detail = "deadline exceeded"
+        elif result["cancelled"]:
+            detail = "cancelled"
+        elif not result["ok"]:
+            detail = result["stderr"].strip()
+            if detail == "":
+                detail = result["stdout"].strip()
+        row = fixed(check["name"], 22)
+        row = row + fixed(check["kind"], 12)
+        row = row + fixed(status, 9)
+        row = row + fixed(format_secs(result["duration"]), 8)
+        row = row + detail
+        term["move_cursor"](4 + i, 1)
+        term["write"](fixed(row, cols))
+        i += 1
+    term["move_cursor"](rows, 1)
+    term["write"]("q=quit")
+    term["flush"]()
+
+argv = sys.argv
+manifest_path = pulsekit.default_manifest_path()
+interval_ms = 5000
+once = false
+
+i = 1
+while i < len(argv):
+    arg = argv[i]
+    if arg == "--file":
+        if i + 1 >= len(argv):
+            raise "control: --file requires a path"
+        manifest_path = argv[i + 1]
+        i += 2
+    elif arg == "--interval":
+        if i + 1 >= len(argv):
+            raise "control: --interval requires seconds"
+        interval_ms = int(float(argv[i + 1]) * 1000)
+        i += 2
+    elif arg == "--once":
+        once = true
+        i += 1
+    elif arg == "help" or arg == "--help" or arg == "-h":
+        usage()
+        exit(0)
+    else:
+        raise "control: unexpected argument '" + arg + "'"
+
+if once:
+    results = pulsekit.run_checks(manifest_path)
+    summary = pulsekit.summary(results)
+    print("CONTROL " + manifest_path)
+    for result in results:
+        check = result["check"]
+        print("  " + check["name"] + "  " + check["kind"] + "  " + str(result["ok"]) + "  " + format_secs(result["duration"]))
+    if summary["failed"] > 0:
+        exit(1)
+    exit(0)
+
+term["raw"]()
+term["clear"]()
+term["hide_cursor"]()
+
+try:
+    while true:
+        results = pulsekit.run_checks(manifest_path)
+        term["clear"]()
+        render(manifest_path, results)
+        key = term["poll_char"](interval_ms)
+        if key == "q" or key == "Q":
+            break
+finally:
+    term["show_cursor"]()
+    term["normal"]()
+    term["clear"]()

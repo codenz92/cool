@@ -175,7 +175,10 @@ fn compile_and_run_native_path(source_path: &PathBuf) -> Result<String, String> 
         return Err(format!("{stdout}{stderr}"));
     }
 
-    let run_output = Command::new(&binary_path).output().map_err(|e| e.to_string())?;
+    let run_output = Command::new(&binary_path)
+        .current_dir(source_path.parent().unwrap_or_else(|| std::path::Path::new(".")))
+        .output()
+        .map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&binary_path);
 
     if run_output.status.success() {
@@ -183,6 +186,55 @@ fn compile_and_run_native_path(source_path: &PathBuf) -> Result<String, String> 
     } else {
         Err(String::from_utf8_lossy(&run_output.stderr).to_string())
     }
+}
+
+fn write_phase6_data_suite(dir: &PathBuf) -> PathBuf {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    let source_path = dir.join("main.cool");
+    fs::write(
+        &source_path,
+        r#"import base64
+import bytes
+import codec
+import config
+import html
+import schema
+
+blob = bytes.from_string("A🙂")
+print(bytes.hex(blob))
+print(bytes.to_string(blob))
+print(bytes.read_u16_le(bytes.u16_le(513)))
+print(bytes.read_u32_be(bytes.u32_be(16909060)))
+print(base64.encode_text("Cool!"))
+print(base64.decode_text("Q29vbCE="))
+print(codec.encode("hex", [0, 255]))
+decoded = codec.decode("hex", "00ff")
+print(decoded[1])
+print(codec.decode("utf-8", codec.encode("utf-8", "hi")))
+print(html.escape("<tag &\"'>"))
+print(html.extract_title("<html><title>Hi &amp; Bye</title></html>"))
+print(html.extract_links("<a href='https://example.com'>x</a>")[0])
+cfg = config.load("settings.env")
+print(cfg["HELLO"])
+print(cfg["SPACED"])
+ini = config.load("settings.ini")
+print(ini["db"]["port"])
+print(config.expand_env("hi ${COOL_NAME}", {"COOL_NAME": "Ada"}))
+rule = schema.shape({
+    "name": schema.string({"min": 1}),
+    "age": schema.optional(schema.integer({"min": 0})),
+}, false)
+print(schema.check(rule, {"name": "Ada"}))
+bad = schema.validate(rule, {"name": "", "extra": true})
+print(bad["ok"])
+print(len(bad["errors"]) >= 2)
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("settings.env"), "HELLO=world\nSPACED=\"hello world\"\n").unwrap();
+    fs::write(dir.join("settings.ini"), "[db]\nport = 5432\n").unwrap();
+    source_path
 }
 
 fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
@@ -1419,6 +1471,33 @@ print(string.format("hi {}, {}", "cool", 7))
 }
 
 #[test]
+fn test_llvm_string_instance_methods_match_module_helpers() {
+    let result = compile_and_run_native(
+        r#"
+line = "GET /health HTTP/1.1"
+print(line.split(" "))
+print("abcabc".replace("a", "X"))
+print("hello".startswith("he"))
+print("hello".endswith("lo"))
+print("hello".find("ll"))
+print("hello".count("l"))
+print("hello world".title())
+print("hello world".capitalize())
+print("hi {}, {}".format("cool", 7))
+"#,
+    )
+    .unwrap();
+
+    assert!(result.contains("[GET, /health, HTTP/1.1]") || result.contains("[GET,/health,HTTP/1.1]"));
+    assert!(result.contains("XbcXbc"));
+    assert!(result.matches("true").count() >= 2);
+    assert!(result.contains("\n2\n"));
+    assert!(result.contains("Hello World"));
+    assert!(result.contains("Hello world"));
+    assert!(result.contains("hi cool, 7"));
+}
+
+#[test]
 fn test_llvm_import_list_module() {
     let result = compile_and_run_native(
         r#"
@@ -2616,4 +2695,106 @@ term.flush()
 
     assert!(stdout.contains("true"));
     assert!(stdout.contains("native-term"));
+}
+
+#[test]
+fn test_llvm_platform_capabilities_reports_default_allow_all() {
+    let result = compile_and_run_native("import platform\nprint(platform.capabilities())\n").unwrap();
+    assert!(result.contains("\"file\": true"), "stdout:\n{result}");
+    assert!(result.contains("\"network\": true"), "stdout:\n{result}");
+    assert!(result.contains("\"env\": true"), "stdout:\n{result}");
+    assert!(result.contains("\"process\": true"), "stdout:\n{result}");
+}
+
+#[test]
+fn test_llvm_capability_enforcement_in_native_runtime() {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let temp_dir = unique_temp_dir("cool_llvm_capabilities_native");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(
+        temp_dir.join("cool.toml"),
+        "name = \"capnative\"\nmain = \"main.cool\"\noutput = \"capnative\"\n\n[capabilities]\nnetwork = false\n",
+    )
+    .unwrap();
+    fs::write(
+        temp_dir.join("main.cool"),
+        "import http\nprint(http.get(\"https://example.com\"))\n",
+    )
+    .unwrap();
+
+    let build_output = Command::new(cool_bin())
+        .current_dir(&temp_dir)
+        .args(["build"])
+        .output()
+        .unwrap();
+    assert!(
+        build_output.status.success(),
+        "build failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let binary_path = temp_dir.join("capnative");
+    let run_output = Command::new(&binary_path).output().unwrap();
+    assert!(!run_output.status.success(), "expected native run to fail");
+    let stderr = String::from_utf8_lossy(&run_output.stderr).to_string();
+    assert!(
+        stderr.contains("CapabilityError: network access denied"),
+        "stderr:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_import_jobs_module() {
+    let result = compile_and_run_native(
+        r#"import jobs
+g = jobs.group()
+ch = jobs.channel(g)
+jobs.send(ch, "hello")
+print(jobs.recv(ch))
+jobs.command(g, "printf ok", 2)
+jobs.sleep(g, 0.02)
+for result in jobs.await_all(g):
+    print(result["kind"] + ":" + str(result["ok"]))
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, ["hello", "command:true", "sleep:true"]);
+}
+
+#[test]
+fn test_llvm_phase6_data_stdlib_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_data");
+    let source_path = write_phase6_data_suite(&temp_dir);
+    let result = compile_and_run_native_path(&source_path).unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "41f09f9982",
+            "A🙂",
+            "513",
+            "16909060",
+            "Q29vbCE=",
+            "Cool!",
+            "00ff",
+            "255",
+            "hi",
+            "&lt;tag &amp;&quot;&#39;&gt;",
+            "Hi & Bye",
+            "https://example.com",
+            "world",
+            "hello world",
+            "5432",
+            "hi Ada",
+            "true",
+            "false",
+            "true",
+        ]
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
 }

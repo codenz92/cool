@@ -22,6 +22,7 @@ mod parser;
 mod project;
 mod sqlite_runtime;
 mod subprocess_runtime;
+mod text_runtime;
 mod toml_runtime;
 mod tooling;
 mod vm;
@@ -30,7 +31,7 @@ mod yaml_runtime;
 use interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
-use project::{CoolProject, ModuleResolver};
+use project::{CapabilityPolicy, CoolProject, ModuleResolver};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -46,7 +47,8 @@ fn run_source(source: &str, source_dir: PathBuf) -> Result<(), String> {
     let program = parser.parse_program()?;
 
     let module_resolver = ModuleResolver::discover_for_script(&source_dir)?;
-    let mut interpreter = Interpreter::new(source_dir, source, module_resolver);
+    let capabilities = capability_policy_for_dir(&source_dir)?;
+    let mut interpreter = Interpreter::new(source_dir, source, module_resolver, capabilities);
     interpreter.run(&program)
 }
 
@@ -59,7 +61,8 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
 
     let chunk = compiler::compile(&program)?;
     let module_resolver = ModuleResolver::discover_for_script(&source_dir)?;
-    let mut machine = vm::VM::new(source_dir, module_resolver);
+    let capabilities = capability_policy_for_dir(&source_dir)?;
+    let mut machine = vm::VM::new(source_dir, module_resolver, capabilities);
     machine.run(&chunk)
 }
 
@@ -178,6 +181,10 @@ fn add_command_path() -> PathBuf {
     bundled_command_path("add.cool")
 }
 
+fn pkg_command_path() -> PathBuf {
+    bundled_command_path("pkg.cool")
+}
+
 fn new_command_path() -> PathBuf {
     bundled_command_path("new.cool")
 }
@@ -201,6 +208,7 @@ fn run_bundled_app(
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
+    cmd.env("COOL_SKIP_PROJECT_CAPABILITIES", "1");
 
     let status = cmd
         .status()
@@ -216,6 +224,32 @@ fn run_bundled_app(
     }
 }
 
+fn should_skip_project_capabilities_for(source_dir: &Path) -> bool {
+    let source_dir = source_dir.canonicalize().unwrap_or_else(|_| source_dir.to_path_buf());
+    let bundled_cmd_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cmd");
+    let bundled_cmd_root = bundled_cmd_root.canonicalize().unwrap_or(bundled_cmd_root);
+    match std::env::var("COOL_SKIP_PROJECT_CAPABILITIES") {
+        Ok(value) => {
+            let trimmed = value.trim();
+            !trimmed.is_empty()
+                && trimmed != "0"
+                && trimmed.to_ascii_lowercase() != "false"
+                && source_dir.starts_with(&bundled_cmd_root)
+        }
+        Err(_) => false,
+    }
+}
+
+fn capability_policy_for_dir(source_dir: &Path) -> Result<CapabilityPolicy, String> {
+    if should_skip_project_capabilities_for(source_dir) {
+        return Ok(CapabilityPolicy::allow_all());
+    }
+    match CoolProject::discover(source_dir)? {
+        Some(project) => Ok(project.capabilities),
+        None => Ok(CapabilityPolicy::allow_all()),
+    }
+}
+
 fn current_project(command_name: &str) -> Result<CoolProject, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("{command_name}: cannot read current directory: {e}"))?;
     match CoolProject::discover(&cwd)? {
@@ -224,6 +258,13 @@ fn current_project(command_name: &str) -> Result<CoolProject, String> {
             "{command_name}: no cool.toml found in this directory or any parent"
         )),
     }
+}
+
+fn script_parent_dir(path: &Path) -> PathBuf {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 fn default_native_compile_options(script_path: &Path) -> llvm_codegen::NativeCompileOptions {
@@ -237,9 +278,10 @@ fn default_native_compile_options(script_path: &Path) -> llvm_codegen::NativeCom
         debug_info: false,
         reproducible: false,
         no_libc: false,
+        capabilities: CapabilityPolicy::allow_all(),
         toolchain: llvm_codegen::NativeToolchainConfig::default(),
         native_links: project::NativeLinkConfig::default(),
-        source_root: script_path.parent().map(Path::to_path_buf),
+        source_root: Some(script_parent_dir(script_path)),
     }
 }
 
@@ -1714,6 +1756,7 @@ Examples:
                     debug_info,
                     reproducible,
                     no_libc,
+                    capabilities: project.capabilities,
                     toolchain,
                     native_links,
                     source_root: Some(project.root.clone()),
@@ -1756,6 +1799,7 @@ Examples:
             }
 
             let source = fs::read_to_string(file_path).map_err(|e| format!("cool build: {e}"))?;
+            let capabilities = capability_policy_for_dir(file_path.parent().unwrap_or(Path::new(".")))?;
             run_build_profile_checks(file_path, profile, &file_path.display().to_string())?;
             let final_artifact = if requested_emit.is_none() && effective_linker_script.is_some() {
                 BuildFinalArtifact::KernelImage
@@ -1829,9 +1873,10 @@ Examples:
                     debug_info,
                     reproducible,
                     no_libc,
+                    capabilities,
                     toolchain: llvm_codegen::NativeToolchainConfig::default(),
                     native_links: project::NativeLinkConfig::default(),
-                    source_root: file_path.parent().map(Path::to_path_buf),
+                    source_root: Some(script_parent_dir(file_path)),
                 },
                 final_artifact,
                 final_path,
@@ -2471,6 +2516,17 @@ fn cmd_add(args: &[&String]) -> Result<(), String> {
     )
 }
 
+fn cmd_pkg(args: &[&String]) -> Result<(), String> {
+    let pkg_app = pkg_command_path();
+    let exe = std::env::current_exe().map_err(|e| format!("cool pkg: cannot resolve current executable: {e}"))?;
+    run_bundled_app(
+        "cool pkg",
+        &pkg_app,
+        args,
+        &[("COOL_EXE_PATH", exe.to_string_lossy().to_string())],
+    )
+}
+
 fn cmd_task(args: &[&String]) -> Result<(), String> {
     let task_app = task_command_path();
     run_bundled_app("cool task", &task_app, args, &[])
@@ -2546,6 +2602,7 @@ USAGE:
     cool publish [--dry-run]      Validate and package a source distribution for publishing
     cool install                  Fetch and lock project dependencies
     cool add <name> ...           Add a path or git dependency to cool.toml
+    cool pkg <subcommand>         Cool-native package/project workflow helpers
     cool fmt [path ...]           Reformat Cool source files
     cool test [path ...]          Run discovered or explicit Cool tests
     cool bench [path ...]         Compile and benchmark native Cool programs
@@ -2582,6 +2639,7 @@ EXAMPLES:
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
     cool install                  # fetch git deps into .cool/deps and write cool.lock
+    cool pkg doctor               # verify project entrypoints and dependency roots
     cool publish --dry-run        # validate source package contents without archiving
     cool fmt --check              # report files that need formatting
     cool test                     # run test_*.cool / *_test.cool under tests/
@@ -2743,6 +2801,14 @@ fn main() {
                 }
                 return;
             }
+            "pkg" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_pkg(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
             "test" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_test(&rest) {
@@ -2866,10 +2932,7 @@ Connect using any LSP client (VS Code, Neovim, Helix, etc.)."
                 return;
             }
 
-            let source_dir = Path::new(path.as_str())
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
+            let source_dir = script_parent_dir(Path::new(path.as_str()));
 
             let program_args: Vec<String> = file_args[1..].iter().map(|s| (*s).clone()).collect();
             std::env::set_var("COOL_SCRIPT_PATH", path);
@@ -2906,10 +2969,7 @@ Connect using any LSP client (VS Code, Neovim, Helix, etc.)."
                 std::process::exit(1);
             });
 
-            let source_dir = Path::new(path.as_str())
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
+            let source_dir = script_parent_dir(Path::new(path.as_str()));
 
             let program_args: Vec<String> = file_args[1..].iter().map(|s| (*s).clone()).collect();
             std::env::set_var("COOL_SCRIPT_PATH", path);

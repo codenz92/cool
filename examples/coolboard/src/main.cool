@@ -1,0 +1,23 @@
+import socket
+import config
+import store
+import server_http
+import routes
+
+host = config.host()
+port = config.port()
+db_path = config.db_path()
+
+store.init(db_path)
+listener = socket.listen(host, port)
+print("coolboard listening on " + host + ":" + str(port))
+
+while true:
+    conn = listener.accept()
+    try:
+        request = server_http.parse_request(conn)
+        if request != nil:
+            conn.send(routes.handle(request, db_path))
+    except:
+        conn.send(server_http.json_response("500 Internal Server Error", {"error": "request failed"}))
+    conn.close()

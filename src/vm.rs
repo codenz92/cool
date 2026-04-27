@@ -7,8 +7,9 @@ use crate::hashlib_runtime;
 use crate::http_runtime;
 use crate::logging_runtime::{self, LogData, LogLevel};
 use crate::module_exports;
-use crate::project::ModuleResolver;
+use crate::project::{CapabilityPolicy, ModuleResolver};
 use crate::sqlite_runtime::{self, SqlData};
+use crate::text_runtime;
 use crate::toml_runtime::{self, TomlData};
 use crate::yaml_runtime::{self, YamlData};
 use crossterm::event::{self as ct_event, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -50,6 +51,7 @@ pub struct VM {
     current_exc: Option<VmValue>,
     source_dir: std::path::PathBuf,
     module_resolver: ModuleResolver,
+    capabilities: CapabilityPolicy,
     current_line: usize,
     /// xorshift64 RNG state.
     rng: u64,
@@ -61,7 +63,11 @@ pub struct VM {
 }
 
 impl VM {
-    pub fn new(source_dir: std::path::PathBuf, module_resolver: ModuleResolver) -> Self {
+    pub fn new(
+        source_dir: std::path::PathBuf,
+        module_resolver: ModuleResolver,
+        capabilities: CapabilityPolicy,
+    ) -> Self {
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -74,6 +80,7 @@ impl VM {
             current_exc: None,
             source_dir,
             module_resolver,
+            capabilities,
             current_line: 0,
             rng: if seed == 0 { 1 } else { seed },
             open_upvalues: Vec::new(),
@@ -84,6 +91,52 @@ impl VM {
         vm
     }
 
+    fn capability_error(&self, capability: &str, context: &str) -> String {
+        self.err(&format!(
+            "CapabilityError: {capability} access denied by cool.toml [capabilities] while calling {context}"
+        ))
+    }
+
+    fn require_file_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.file {
+            Ok(())
+        } else {
+            Err(self.capability_error("file", context))
+        }
+    }
+
+    fn require_network_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.network {
+            Ok(())
+        } else {
+            Err(self.capability_error("network", context))
+        }
+    }
+
+    fn require_env_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.env {
+            Ok(())
+        } else {
+            Err(self.capability_error("env", context))
+        }
+    }
+
+    fn require_process_capability(&self, context: &str) -> Result<(), String> {
+        if self.capabilities.process {
+            Ok(())
+        } else {
+            Err(self.capability_error("process", context))
+        }
+    }
+
+    fn capability_value(&self) -> VmValue {
+        let mut dict = VmDict::new();
+        for (name, allowed) in self.capabilities.to_pairs() {
+            dict.set(VmValue::Str(name.to_string()), VmValue::Bool(allowed));
+        }
+        VmValue::Dict(Rc::new(RefCell::new(dict)))
+    }
+
     fn register_builtins(&mut self) {
         for name in &[
             "print",
@@ -91,6 +144,8 @@ impl VM {
             "range",
             "str",
             "int",
+            "ord",
+            "chr",
             "i8",
             "u8",
             "i16",
@@ -304,6 +359,7 @@ impl VM {
         let closure = Rc::new(VmClosure {
             proto,
             upvalues: vec![],
+            module_globals: None,
         });
         // base = current stack height so that Op::Return truncates back to here,
         // not to 0 (which would destroy callers' locals when run() is called mid-execution).
@@ -611,18 +667,36 @@ impl VM {
                 self.stack[idx] = v;
             }
             Op::GetGlobal(name_idx) => {
-                let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
-                let v = self
-                    .globals
-                    .get(&name)
-                    .cloned()
-                    .ok_or_else(|| self.err(&format!("undefined variable '{}'", name)))?;
+                let frame = self.frames.last().unwrap();
+                let name = frame.closure.proto.chunk.names[name_idx].clone();
+                let v = if let Some(module_globals) = &frame.closure.module_globals {
+                    module_globals
+                        .borrow()
+                        .get(&name)
+                        .cloned()
+                        .ok_or_else(|| self.err(&format!("undefined variable '{}'", name)))?
+                } else {
+                    self.globals
+                        .get(&name)
+                        .cloned()
+                        .ok_or_else(|| self.err(&format!("undefined variable '{}'", name)))?
+                };
                 self.push(v);
             }
             Op::SetGlobal(name_idx) => {
-                let name = self.frames.last().unwrap().closure.proto.chunk.names[name_idx].clone();
+                let (name, module_globals) = {
+                    let frame = self.frames.last().unwrap();
+                    (
+                        frame.closure.proto.chunk.names[name_idx].clone(),
+                        frame.closure.module_globals.clone(),
+                    )
+                };
                 let v = self.pop();
-                self.globals.insert(name, v);
+                if let Some(module_globals) = module_globals {
+                    module_globals.borrow_mut().insert(name, v);
+                } else {
+                    self.globals.insert(name, v);
+                }
             }
             Op::GetUpvalue(idx) => {
                 let cell = self.frames.last().unwrap().closure.upvalues[idx].clone();
@@ -681,7 +755,12 @@ impl VM {
                     };
                     upvalues.push(cell);
                 }
-                self.push(VmValue::Closure(Rc::new(VmClosure { proto, upvalues })));
+                let module_globals = self.frames.last().unwrap().closure.module_globals.clone();
+                self.push(VmValue::Closure(Rc::new(VmClosure {
+                    proto,
+                    upvalues,
+                    module_globals,
+                })));
             }
 
             Op::Call(argc, kwarg_names) => {
@@ -1762,6 +1841,20 @@ impl VM {
                 let v = args.first().ok_or_else(|| self.err("int() requires 1 argument"))?;
                 Ok(VmValue::Int(self.coerce_to_int(v)?))
             }
+            "ord" => {
+                let v = args.first().ok_or_else(|| self.err("ord() requires 1 argument"))?;
+                let text = match v {
+                    VmValue::Str(s) => s,
+                    other => return Err(self.err(&format!("ord() requires a string, got {}", other.type_name()))),
+                };
+                Ok(VmValue::Int(text_runtime::ord(text).map_err(|e| self.err(&e))?))
+            }
+            "chr" => {
+                let v = args.first().ok_or_else(|| self.err("chr() requires 1 argument"))?;
+                Ok(VmValue::Str(
+                    text_runtime::chr(self.coerce_to_int(v)?).map_err(|e| self.err(&e))?,
+                ))
+            }
             "i8" => {
                 let v = args.first().ok_or_else(|| self.err("i8() requires 1 argument"))?;
                 Ok(VmValue::Int(wrap_signed(self.coerce_to_int(v)?, 8)))
@@ -2091,6 +2184,7 @@ impl VM {
                 std::process::exit(code);
             }
             "open" => {
+                self.require_file_capability("open()")?;
                 let path = match args.first() {
                     Some(VmValue::Str(s)) => s.clone(),
                     _ => return Err(self.err("open() requires a path string")),
@@ -2343,6 +2437,7 @@ impl VM {
                             .unwrap_or_default(),
                     )),
                     "listdir" => {
+                        self.require_file_capability("os.listdir()")?;
                         let path = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => ".".to_string(),
@@ -2355,6 +2450,7 @@ impl VM {
                         Ok(VmValue::List(Rc::new(RefCell::new(entries))))
                     }
                     "mkdir" => {
+                        self.require_file_capability("os.mkdir()")?;
                         let path = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.mkdir requires a string")),
@@ -2363,6 +2459,7 @@ impl VM {
                         Ok(VmValue::Nil)
                     }
                     "remove" => {
+                        self.require_file_capability("os.remove()")?;
                         let path = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.remove requires a string")),
@@ -2371,6 +2468,7 @@ impl VM {
                         Ok(VmValue::Nil)
                     }
                     "rename" => {
+                        self.require_file_capability("os.rename()")?;
                         let src = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.rename requires strings")),
@@ -2383,6 +2481,7 @@ impl VM {
                         Ok(VmValue::Nil)
                     }
                     "exists" => {
+                        self.require_file_capability("os.exists()")?;
                         let path = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.exists requires a string")),
@@ -2390,6 +2489,7 @@ impl VM {
                         Ok(VmValue::Bool(std::path::Path::new(&path).exists()))
                     }
                     "isdir" => {
+                        self.require_file_capability("os.isdir()")?;
                         let path = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.isdir requires a string")),
@@ -2397,6 +2497,7 @@ impl VM {
                         Ok(VmValue::Bool(std::path::Path::new(&path).is_dir()))
                     }
                     "getenv" => {
+                        self.require_env_capability("os.getenv()")?;
                         let name = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.getenv requires a string")),
@@ -2407,6 +2508,7 @@ impl VM {
                         })
                     }
                     "popen" => {
+                        self.require_process_capability("os.popen()")?;
                         let cmd = match args.first() {
                             Some(VmValue::Str(s)) => s.clone(),
                             _ => return Err(self.err("os.popen requires a string")),
@@ -3193,6 +3295,7 @@ impl VM {
 
     fn call_socket_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
         use crate::opcode::{VmSocket, VmSocketKind};
+        self.require_network_capability(&format!("socket.{name}()"))?;
         match name {
             "connect" => {
                 let host = match args.first() {
@@ -3380,6 +3483,7 @@ impl VM {
     }
 
     fn call_subprocess_module(&self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        self.require_process_capability(&format!("subprocess.{name}()"))?;
         if args.is_empty() || args.len() > 2 {
             return Err(self.err(&format!("subprocess.{} takes 1 or 2 arguments", name)));
         }
@@ -4250,6 +4354,7 @@ impl VM {
             "has_raw_memory" => VmValue::Bool(false),
             "has_extern" => VmValue::Bool(false),
             "has_inline_asm" => VmValue::Bool(false),
+            "capabilities" => self.capability_value(),
             _ => return Err(self.err(&format!("unknown platform function '{}'", name))),
         };
         Ok(value)
@@ -5071,6 +5176,7 @@ impl VM {
     }
 
     fn call_http_module(&mut self, name: &str, args: &[VmValue]) -> Result<VmValue, String> {
+        self.require_network_capability(&format!("http.{name}()"))?;
         match name {
             "get" => {
                 let url = match args.first() {
@@ -5264,7 +5370,7 @@ impl VM {
         self.importing_modules.push(canonical.clone());
         let source = std::fs::read_to_string(&canonical).map_err(|e| self.err(&format!("import {}: {}", path, e)))?;
         let module_dir = canonical.parent().unwrap_or(&self.source_dir).to_path_buf();
-        let mut module_vm = VM::new(module_dir, self.module_resolver.clone());
+        let mut module_vm = VM::new(module_dir, self.module_resolver.clone(), self.capabilities);
         module_vm.importing_modules = self.importing_modules.clone();
 
         let mut lexer = crate::lexer::Lexer::new(&source);
@@ -5317,7 +5423,7 @@ impl VM {
             // Run the module in an isolated VM so imports expose a namespace
             // instead of leaking module locals into the caller's globals.
             let module_dir = path.parent().unwrap_or(&self.source_dir).to_path_buf();
-            let mut module_vm = VM::new(module_dir, self.module_resolver.clone());
+            let mut module_vm = VM::new(module_dir, self.module_resolver.clone(), self.capabilities);
             module_vm.importing_modules = self.importing_modules.clone();
             let mut lexer = crate::lexer::Lexer::new(&source);
             let tokens = match lexer.tokenize().map_err(|e| self.err(&e)) {
@@ -5349,10 +5455,19 @@ impl VM {
                 return Err(err);
             }
             self.importing_modules.pop();
+            let module_globals = Rc::new(RefCell::new(HashMap::new()));
+            {
+                let mut bound_globals = HashMap::new();
+                for (global_name, value) in &module_vm.globals {
+                    bound_globals.insert(global_name.clone(), bind_module_value(value, &module_globals));
+                }
+                *module_globals.borrow_mut() = bound_globals;
+            }
             // Return the module's exported namespace.
             let mut d = VmDict::new();
+            let bound_globals = module_globals.borrow();
             for name in &exported_names {
-                if let Some(value) = module_vm.globals.get(name) {
+                if let Some(value) = bound_globals.get(name) {
                     d.set(VmValue::Str(name.clone()), value.clone());
                 }
             }
@@ -5472,6 +5587,7 @@ impl VM {
                     "has_raw_memory",
                     "has_extern",
                     "has_inline_asm",
+                    "capabilities",
                 ] {
                     set(&mut d, fname, bf(&format!("platform.{}", fname)));
                 }
@@ -5734,6 +5850,36 @@ class Stack:
             _ => return Err(self.err(&format!("unknown module '{}'", name))),
         }
         Ok(VmValue::Dict(Rc::new(RefCell::new(d))))
+    }
+}
+
+fn bind_module_value(value: &VmValue, module_globals: &Rc<RefCell<HashMap<String, VmValue>>>) -> VmValue {
+    match value {
+        VmValue::Closure(closure) => VmValue::Closure(Rc::new(VmClosure {
+            proto: closure.proto.clone(),
+            upvalues: closure.upvalues.clone(),
+            module_globals: Some(module_globals.clone()),
+        })),
+        VmValue::Class(class) => {
+            let mut methods = HashMap::new();
+            for (method_name, method) in &class.methods {
+                methods.insert(
+                    method_name.clone(),
+                    Rc::new(VmClosure {
+                        proto: method.proto.clone(),
+                        upvalues: method.upvalues.clone(),
+                        module_globals: Some(module_globals.clone()),
+                    }),
+                );
+            }
+            VmValue::Class(Rc::new(VmClass {
+                name: class.name.clone(),
+                parent: class.parent.clone(),
+                methods,
+                class_vars: RefCell::new(class.class_vars.borrow().clone()),
+            }))
+        }
+        other => other.clone(),
     }
 }
 

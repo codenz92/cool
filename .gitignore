@@ -45,6 +45,8 @@
 
 # cool build output directory
 /dist
+.cool/
+/examples/coolboard/coolboard
 
 # Temp LLVM test artifacts (binaries left by interrupted test runs)
 /temp_llvm_test_*

@@ -47,6 +47,108 @@ CoolVal cv_float(double f) {
     memcpy(&v.payload, &f, sizeof(double)); return v;
 }
 
+static void cool_utf8_invalid(const char* context) {
+    fprintf(stderr, "ValueError: %s received invalid UTF-8\n", context);
+    exit(1);
+}
+
+static size_t cool_utf8_decode_char(const unsigned char* s, uint32_t* out) {
+    unsigned char b0 = s[0];
+    if (b0 == '\0') cool_utf8_invalid("string operation");
+    if ((b0 & 0x80) == 0) {
+        *out = b0;
+        return 1;
+    }
+    if ((b0 & 0xE0) == 0xC0) {
+        unsigned char b1 = s[1];
+        if ((b1 & 0xC0) != 0x80) cool_utf8_invalid("string operation");
+        uint32_t codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
+        if (codepoint < 0x80) cool_utf8_invalid("string operation");
+        *out = codepoint;
+        return 2;
+    }
+    if ((b0 & 0xF0) == 0xE0) {
+        unsigned char b1 = s[1];
+        unsigned char b2 = s[2];
+        if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80) cool_utf8_invalid("string operation");
+        uint32_t codepoint =
+            ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
+        if (codepoint < 0x800 || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+            cool_utf8_invalid("string operation");
+        }
+        *out = codepoint;
+        return 3;
+    }
+    if ((b0 & 0xF8) == 0xF0) {
+        unsigned char b1 = s[1];
+        unsigned char b2 = s[2];
+        unsigned char b3 = s[3];
+        if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80) {
+            cool_utf8_invalid("string operation");
+        }
+        uint32_t codepoint = ((uint32_t)(b0 & 0x07) << 18) |
+                             ((uint32_t)(b1 & 0x3F) << 12) |
+                             ((uint32_t)(b2 & 0x3F) << 6) |
+                             (uint32_t)(b3 & 0x3F);
+        if (codepoint < 0x10000 || codepoint > 0x10FFFF) cool_utf8_invalid("string operation");
+        *out = codepoint;
+        return 4;
+    }
+    cool_utf8_invalid("string operation");
+    return 0;
+}
+
+static int64_t cool_utf8_len(const char* s) {
+    const unsigned char* p = (const unsigned char*)s;
+    int64_t count = 0;
+    while (*p) {
+        uint32_t codepoint = 0;
+        p += cool_utf8_decode_char(p, &codepoint);
+        count++;
+    }
+    return count;
+}
+
+static int64_t cool_utf8_byte_offset(const char* s, int64_t index) {
+    const unsigned char* p = (const unsigned char*)s;
+    int64_t count = 0;
+    while (*p && count < index) {
+        uint32_t codepoint = 0;
+        p += cool_utf8_decode_char(p, &codepoint);
+        count++;
+    }
+    return (int64_t)(p - (const unsigned char*)s);
+}
+
+static char* cool_utf8_encode_codepoint(uint32_t codepoint) {
+    if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        fprintf(stderr, "ValueError: chr() code point must be in range 0..=1114111\n");
+        exit(1);
+    }
+    char* out = malloc(5);
+    if (!out) return NULL;
+    if (codepoint <= 0x7F) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+    } else if (codepoint <= 0x7FF) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+    } else if (codepoint <= 0xFFFF) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+    } else {
+        out[0] = (char)(0xF0 | (codepoint >> 18));
+        out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (codepoint & 0x3F));
+        out[4] = '\0';
+    }
+    return out;
+}
+
 /* ── Internal equality (used by contains / dict lookup) ─────────────────── */
 static int cv_eq_raw(CoolVal a, CoolVal b) {
     if (a.tag != b.tag) {
@@ -588,7 +690,7 @@ char* cool_to_str(CoolVal v) {
    ═══════════════════════════════════════════════════════════════════════ */
 CoolVal cool_len(CoolVal v) {
     switch (v.tag) {
-        case TAG_STR:  return cv_int((int64_t)strlen((const char*)(intptr_t)v.payload));
+        case TAG_STR:  return cv_int(cool_utf8_len((const char*)(intptr_t)v.payload));
         case TAG_LIST: return cool_list_len(v);
         case TAG_DICT: return cool_dict_len(v);
         default:
@@ -626,10 +728,14 @@ CoolVal cool_index(CoolVal obj, CoolVal key) {
     }
     if (obj.tag == TAG_STR) {
         const char* s = (const char*)(intptr_t)obj.payload;
-        int64_t len = (int64_t)strlen(s);
+        int64_t len = cool_utf8_len(s);
         int64_t i = norm_idx(key.payload, len);
         if (i < 0 || i >= len) { fputs("IndexError: string index out of range\n", stderr); exit(1); }
-        char* r = malloc(2); r[0] = s[i]; r[1] = '\0'; return cv_str(r);
+        int64_t start = cool_utf8_byte_offset(s, i);
+        const unsigned char* p = (const unsigned char*)s + start;
+        uint32_t codepoint = 0;
+        cool_utf8_decode_char(p, &codepoint);
+        return cv_str(cool_utf8_encode_codepoint(codepoint));
     }
     fprintf(stderr, "TypeError: '%s' object is not subscriptable\n", tag_name(obj.tag));
     exit(1);
@@ -642,13 +748,15 @@ CoolVal cool_slice(CoolVal obj, CoolVal start_v, CoolVal stop_v) {
     if (obj.tag == TAG_LIST) return cool_list_slice(obj, start_v, stop_v);
     if (obj.tag == TAG_STR) {
         const char* s = (const char*)(intptr_t)obj.payload;
-        int64_t len = (int64_t)strlen(s);
+        int64_t len = cool_utf8_len(s);
         int64_t ss = (start_v.tag == TAG_NIL) ? 0   : norm_idx(start_v.payload, len);
         int64_t se = (stop_v.tag  == TAG_NIL) ? len : norm_idx(stop_v.payload,  len);
         if (ss < 0) ss = 0; if (se > len) se = len; if (se < ss) se = ss;
-        size_t size = (size_t)(se - ss);
+        int64_t byte_ss = cool_utf8_byte_offset(s, ss);
+        int64_t byte_se = cool_utf8_byte_offset(s, se);
+        size_t size = (size_t)(byte_se - byte_ss);
         char* r = malloc(size + 1);
-        memcpy(r, s + ss, size); r[size] = '\0'; return cv_str(r);
+        memcpy(r, s + byte_ss, size); r[size] = '\0'; return cv_str(r);
     }
     fprintf(stderr, "TypeError: '%s' object is not sliceable\n", tag_name(obj.tag));
     exit(1);
@@ -1074,6 +1182,17 @@ CoolVal cool_dispatch_super(CoolVal self, int32_t parent_class_id, const char* n
    ═══════════════════════════════════════════════════════════════════════ */
 /* sorted(list) → new sorted list */
 CoolVal cool_sorted(CoolVal lst) {
+    if (lst.tag == TAG_STR) {
+        const unsigned char* p = (const unsigned char*)(intptr_t)lst.payload;
+        CoolVal chars = cool_list_new();
+        while (*p) {
+            uint32_t codepoint = 0;
+            size_t width = cool_utf8_decode_char(p, &codepoint);
+            cool_list_append_raw(chars, cv_str(cool_utf8_encode_codepoint(codepoint)));
+            p += width;
+        }
+        lst = chars;
+    }
     CoolVal copy = cool_list_copy(lst);
     cool_list_sort(copy, cv_nil());
     return copy;
@@ -1112,10 +1231,21 @@ CoolVal cool_sum(CoolVal lst) {
 }
 /* chr / ord */
 CoolVal cool_chr(CoolVal v) {
-    char* r = malloc(2); r[0] = (char)v.payload; r[1] = '\0'; return cv_str(r);
+    return cv_str(cool_utf8_encode_codepoint((uint32_t)cool_to_int(v).payload));
 }
 CoolVal cool_ord(CoolVal v) {
-    return cv_int((int64_t)(unsigned char)as_cstr(v)[0]);
+    const unsigned char* s = (const unsigned char*)as_cstr(v);
+    if (s[0] == '\0') {
+        fputs("ValueError: ord() requires a non-empty string\n", stderr);
+        exit(1);
+    }
+    uint32_t codepoint = 0;
+    size_t width = cool_utf8_decode_char(s, &codepoint);
+    if (s[width] != '\0') {
+        fputs("ValueError: ord() requires a single-character string\n", stderr);
+        exit(1);
+    }
+    return cv_int((int64_t)codepoint);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

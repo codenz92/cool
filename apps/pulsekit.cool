@@ -1,0 +1,120 @@
+import os
+import toml
+import jobs
+
+def read_text(file_path):
+    with open(file_path, "r") as f:
+        return f.read()
+
+def default_manifest_path():
+    return "pulse.toml"
+
+def ensure_dict(value, context):
+    if not isinstance(value, "dict"):
+        raise context + " must be a table"
+    return value
+
+def ensure_list(value, context):
+    if value == nil:
+        return []
+    if not isinstance(value, "list"):
+        raise context + " must be a list"
+    return value
+
+def normalize_headers(value, context):
+    raw = ensure_list(value, context)
+    out = []
+    for item in raw:
+        out.append(str(item))
+    return out
+
+def normalize_timeout(raw):
+    if raw == nil:
+        return nil
+    return float(raw)
+
+def normalize_check(name, raw):
+    raw = ensure_dict(raw, "check '" + name + "'")
+    if raw.get("command", nil) != nil:
+        return {
+            "name": name,
+            "kind": "command",
+            "command": str(raw["command"]),
+            "timeout": normalize_timeout(raw.get("timeout", nil)),
+        }
+    if raw.get("url", nil) != nil:
+        method = str(raw.get("method", "GET")).upper()
+        if method != "GET" and method != "HEAD":
+            raise "check '" + name + "': method must be GET or HEAD"
+        kind = "http_get"
+        if method == "HEAD":
+            kind = "http_head"
+        return {
+            "name": name,
+            "kind": kind,
+            "url": str(raw["url"]),
+            "headers": normalize_headers(raw.get("headers", []), "check '" + name + "' headers"),
+            "timeout": normalize_timeout(raw.get("timeout", nil)),
+        }
+    if raw.get("sleep", nil) != nil:
+        return {
+            "name": name,
+            "kind": "sleep",
+            "seconds": float(raw["sleep"]),
+            "timeout": nil,
+        }
+    raise "check '" + name + "' must define command, url, or sleep"
+
+def load_checks(file_path):
+    if not os["exists"](file_path):
+        raise "pulse: manifest not found: " + file_path
+    parsed = toml.loads(read_text(file_path))
+    parsed = ensure_dict(parsed, "pulse manifest")
+    raw_checks = ensure_dict(parsed.get("checks", {}), "pulse manifest [checks]")
+    checks = []
+    for pair in raw_checks.items():
+        checks.append(normalize_check(str(pair[0]), pair[1]))
+    return checks
+
+def spawn_check(group, check):
+    if check["kind"] == "command":
+        task = jobs.command(group, check["command"], check["timeout"], check["name"])
+    elif check["kind"] == "http_get":
+        task = jobs.http_get(group, check["url"], check["headers"], check["timeout"], check["name"])
+    elif check["kind"] == "http_head":
+        task = jobs.http_head(group, check["url"], check["headers"], check["timeout"], check["name"])
+    elif check["kind"] == "sleep":
+        task = jobs.sleep(group, check["seconds"], check["name"])
+    else:
+        raise "pulse: unknown check kind '" + check["kind"] + "'"
+    return {
+        "check": check,
+        "task": task,
+    }
+
+def run_checks(file_path):
+    checks = load_checks(file_path)
+    grp = jobs.group("pulse")
+    active = []
+    for check in checks:
+        active.append(spawn_check(grp, check))
+    results = []
+    for item in active:
+        result = jobs.await(item["task"])
+        result["check"] = item["check"]
+        results.append(result)
+    return results
+
+def summary(results):
+    ok = 0
+    failed = 0
+    for result in results:
+        if result["ok"]:
+            ok += 1
+        else:
+            failed += 1
+    return {
+        "total": len(results),
+        "ok": ok,
+        "failed": failed,
+    }

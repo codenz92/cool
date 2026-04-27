@@ -183,14 +183,14 @@
 - [x] `sqlite` module — path-based embedded database access with queries, params, and scalar reads
 - [ ] `json` extensions — schema-aware JSON transforms and streaming helpers
 - [ ] `xml` module — lightweight XML parsing and serialization helpers
-- [ ] `html` module — escaping/unescaping plus small DOM/text extraction helpers
-- [ ] `base64` module — base64 encode/decode for strings and bytes-like data
-- [ ] `codec` module — pluggable encoders/decoders for text and binary formats
-- [ ] `bytes` module — byte strings, hex helpers, slicing, and binary encoding utilities
+- [x] `html` module — escaping/unescaping plus small DOM/text extraction helpers
+- [x] `base64` module — base64 encode/decode for strings and bytes-like data
+- [x] `codec` module — pluggable encoders/decoders for text and binary formats
+- [x] `bytes` module — byte strings, hex helpers, slicing, and binary encoding utilities
 - [ ] `unicode` module — code point categories, normalization, width, and grapheme helpers
 - [ ] `locale` module — locale-aware formatting, parsing, and language/region helpers
-- [ ] `config` module — `.json`, `.ini`, and `.env` style configuration loading helpers
-- [ ] `schema` module — typed validation rules for dicts, lists, configs, and API payloads
+- [x] `config` module — `.json`, `.ini`, and `.env` style configuration loading helpers
+- [x] `schema` module — typed validation rules for dicts, lists, configs, and API payloads
 
 #### Filesystem And OS
 
@@ -252,7 +252,7 @@
 
 #### Runtime, Automation, And Observability
 
-- [ ] `jobs` module — background jobs, worker pools, queues, and task orchestration helpers
+- [x] `jobs` module — background jobs, worker pools, queues, and task orchestration helpers
 - [ ] `event` module — pub/sub events, listeners, timers, and message buses
 - [ ] `workflow` module — step graphs, checkpoints, resumability, and automation composition
 - [ ] `agent` module — task/plan/executor primitives for autonomous tool workflows in Cool
@@ -614,24 +614,24 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Signature Capability
 
-- [ ] Capability/permission model declared in `cool.toml` for file/network/env/process access
-- [ ] Runtime enforcement and diagnostics for denied capabilities
-- [ ] Capability-aware stdlib APIs and package metadata
+- [x] Capability/permission model declared in `cool.toml` for file/network/env/process access
+- [x] Runtime enforcement and diagnostics for denied capabilities
+- [x] Capability-aware stdlib APIs and package metadata
 
 ### Concurrency
 
-- [ ] Structured concurrency primitives
-- [ ] Tasks, cancellation, deadlines, and channels
-- [ ] Process/network orchestration APIs that compose with the stdlib
-- [ ] Clear semantics across interpreter, VM, and native builds
+- [x] Structured concurrency primitives
+- [x] Tasks, cancellation, deadlines, and channels
+- [x] Process/network orchestration APIs that compose with the stdlib
+- [x] Clear semantics across interpreter, VM, and native builds
 
 ### Flagship Software
 
-- [ ] A real package manager / project tool written in Cool
-- [ ] A substantial native CLI people would actually use outside the repo
-- [ ] A flagship TUI or desktop-like terminal app that demonstrates the compiled language story
-- [ ] A service/backend example large enough to stress the type system, tooling, and packaging
-- [ ] A freestanding/kernel/boot-path demo that proves the systems subset is not theoretical
+- [x] A real package manager / project tool written in Cool
+- [x] A substantial native CLI people would actually use outside the repo
+- [x] A flagship TUI or desktop-like terminal app that demonstrates the compiled language story
+- [x] A service/backend example large enough to stress the type system, tooling, and packaging
+- [x] A freestanding/kernel/boot-path demo that proves the systems subset is not theoretical
 
 ---
 
@@ -655,4 +655,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 14 — Runtime And Memory Model | ⏳ Planned |
 | 15 — Native Toolchain And Distribution | ✅ Complete |
 | 16 — Systems Interop And Targets | ✅ Complete |
-| 17 — Signature Features And Flagship Software | ⏳ Planned |
+| 17 — Signature Features And Flagship Software | ✅ Complete |

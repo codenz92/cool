@@ -1,0 +1,54 @@
+import json
+
+def parse_request(conn):
+    line = conn.readline()
+    if line == "":
+        return nil
+    line = line.strip()
+    if line == "":
+        return nil
+
+    parts = line.split(" ")
+    method = "GET"
+    target = "/"
+    if len(parts) > 0:
+        method = parts[0]
+    if len(parts) > 1:
+        target = parts[1]
+    headers = {}
+
+    while true:
+        header_line = conn.readline()
+        if header_line == "":
+            break
+        header_line = header_line.strip()
+        if header_line == "":
+            break
+        pos = header_line.find(":")
+        if pos < 0:
+            continue
+        key = header_line[:pos].strip().lower()
+        value = header_line[pos + 1:].strip()
+        headers[key] = value
+
+    body = ""
+    if headers.get("content-length", nil) != nil:
+        body = conn.recv(int(headers["content-length"]))
+
+    return {
+        "method": method,
+        "target": target,
+        "headers": headers,
+        "body": body,
+    }
+
+def response(status, body, content_type="text/plain"):
+    out = "HTTP/1.1 " + status + "\r\n"
+    out = out + "Content-Type: " + content_type + "\r\n"
+    out = out + "Content-Length: " + str(len(body)) + "\r\n"
+    out = out + "Connection: close\r\n\r\n"
+    out = out + body
+    return out
+
+def json_response(status, value):
+    return response(status, json.dumps(value), "application/json")

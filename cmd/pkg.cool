@@ -1,0 +1,188 @@
+import os
+import sys
+import path
+import subprocess
+import jobs
+import lib.projectlib
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("pkg v1.0 — Cool-native package and project workflow")
+    print("  cool pkg info")
+    print("  cool pkg deps")
+    print("  cool pkg tree")
+    print("  cool pkg capabilities")
+    print("  cool pkg doctor")
+    print("  cool pkg install [args...]")
+    print("  cool pkg add <dep> [args...]")
+    print("  cool pkg publish [args...]")
+
+def cool_exe():
+    exe = os.getenv("COOL_EXE_PATH")
+    if exe == nil or exe == "":
+        return "cool"
+    return exe
+
+def run_shell_checked(context, command):
+    result = subprocess.run(command)
+    if result["stdout"] != "":
+        print(result["stdout"].strip())
+    if result["stderr"] != "":
+        print(result["stderr"].strip())
+    if result["timed_out"]:
+        raise "cool pkg: " + context + " timed out"
+    if result["code"] != 0:
+        exit(result["code"])
+
+def passthrough(command_name, extra_args):
+    parts = [shell_quote(cool_exe()), command_name]
+    for arg in extra_args:
+        parts.append(shell_quote(arg))
+    run_shell_checked(command_name, " ".join(parts))
+
+def current_project():
+    project_root = projectlib.discover_project_root("cool pkg")
+    manifest = projectlib.read_manifest(project_root)
+    project = projectlib.project_table(manifest, "cool pkg")
+    return {
+        "root": project_root,
+        "manifest": manifest,
+        "project": project,
+        "info": projectlib.project_info(project_root, manifest, "cool pkg"),
+    }
+
+def dependency_root(project_root, dep):
+    if dep["kind"] == "git":
+        return path.normalize(path.join(project_root, ".cool", "deps", dep["name"]))
+    return path.normalize(path.join(project_root, dep["path"]))
+
+def print_project_info(ctx):
+    project = ctx["project"]
+    info = ctx["info"]
+    caps = info["capabilities"]
+    denied = projectlib.denied_capabilities(caps)
+    summary = "all allowed"
+    if len(denied) > 0:
+        summary = ", ".join(denied)
+    print(info["name"] + " v" + info["version"])
+    print("  Root         " + info["root"])
+    print("  Main         " + projectlib.require_string(project, "main", "cool.toml"))
+    print("  Dependencies " + str(len(info["dependencies"])))
+    print("  Capabilities " + summary)
+
+def print_dependencies(ctx):
+    deps = ctx["info"]["dependencies"]
+    if len(deps) == 0:
+        print("No dependencies declared.")
+        return
+    for dep in deps:
+        root = dependency_root(ctx["root"], dep)
+        if dep["kind"] == "git":
+            selector = dep.get("branch", dep.get("tag", dep.get("rev", "HEAD")))
+            print("  " + dep["name"] + "  git  " + dep["git"] + "  (" + str(selector) + ") -> " + root)
+        else:
+            print("  " + dep["name"] + "  path " + dep["path"] + " -> " + root)
+
+def print_tree_from(project_root, manifest, indent, visited):
+    for dep in projectlib.parse_dependencies(manifest):
+        root = dependency_root(project_root, dep)
+        line = indent + dep["name"]
+        if dep["kind"] == "git":
+            line = line + " [git]"
+        else:
+            line = line + " [path]"
+        print(line)
+        if root in visited:
+            print(indent + "  (already visited)")
+            continue
+        visited.append(root)
+        dep_manifest_path = path.join(root, "cool.toml")
+        if os["exists"](dep_manifest_path):
+            dep_manifest = projectlib.read_manifest_at(dep_manifest_path)
+            print_tree_from(root, dep_manifest, indent + "  ", visited)
+
+def print_capabilities(ctx):
+    caps = ctx["info"]["capabilities"]
+    for name in ["file", "network", "env", "process"]:
+        print("  " + name + " = " + str(caps.get(name, true)))
+
+def doctor(ctx):
+    info = ctx["info"]
+    main_path = path.join(ctx["root"], projectlib.require_string(ctx["project"], "main", "cool.toml"))
+    ok = true
+
+    if not os["exists"](main_path):
+        print("FAIL main file missing: " + main_path)
+        ok = false
+    else:
+        print("OK   main file: " + main_path)
+
+    deps = info["dependencies"]
+    if len(deps) == 0:
+        print("OK   dependencies: none declared")
+    else:
+        grp = jobs.group("pkg-doctor")
+        dep_tasks = []
+        for dep in deps:
+            root = dependency_root(ctx["root"], dep)
+            dep_tasks.append({
+                "dep": dep,
+                "root": root,
+                "task": jobs.command(grp, "test -e " + shell_quote(root), 5.0, dep["name"]),
+            })
+        for item in dep_tasks:
+            result = jobs.await(item["task"])
+            if result["ok"]:
+                print("OK   dep " + item["dep"]["name"] + " -> " + item["root"])
+            else:
+                print("FAIL dep " + item["dep"]["name"] + " -> " + item["root"])
+                ok = false
+
+    lock_path = path.join(ctx["root"], "cool.lock")
+    if os["exists"](lock_path):
+        print("OK   lockfile: " + lock_path)
+    else:
+        print("WARN lockfile missing: " + lock_path)
+
+    if not ok:
+        exit(1)
+
+argv = sys.argv
+
+if len(argv) <= 1 or argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h":
+    usage()
+    exit(0)
+
+command = argv[1]
+
+if command == "install":
+    passthrough("install", argv[2:])
+    exit(0)
+
+if command == "add":
+    passthrough("add", argv[2:])
+    exit(0)
+
+if command == "publish":
+    passthrough("publish", argv[2:])
+    exit(0)
+
+ctx = current_project()
+
+if command == "info":
+    print_project_info(ctx)
+elif command == "deps":
+    print_dependencies(ctx)
+elif command == "tree":
+    print(ctx["info"]["name"])
+    print_tree_from(ctx["root"], ctx["manifest"], "  ", [ctx["root"]])
+elif command == "capabilities":
+    print_capabilities(ctx)
+elif command == "doctor":
+    doctor(ctx)
+else:
+    usage()
+    raise "cool pkg: unknown subcommand '" + command + "'"

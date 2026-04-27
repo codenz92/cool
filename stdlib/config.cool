@@ -1,0 +1,291 @@
+import json
+import os
+import path
+import toml
+import yaml
+
+def _fail(message):
+    raise "config: " + message
+
+def _format_name(name):
+    if name == nil:
+        return nil
+    value = str(name).strip().lower()
+    if value == "yml":
+        return "yaml"
+    if value == "dotenv":
+        return "env"
+    return value
+
+def infer_format(file_path):
+    base = path.basename(file_path).lower()
+    if base == ".env" or base.endswith(".env"):
+        return "env"
+    ext = path.ext(file_path).lower()
+    if ext == ".json":
+        return "json"
+    if ext == ".toml":
+        return "toml"
+    if ext == ".yaml" or ext == ".yml":
+        return "yaml"
+    if ext == ".ini" or ext == ".conf" or ext == ".cfg":
+        return "ini"
+    return nil
+
+def _read_text(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+def _unquote_env_value(value):
+    text = str(value).strip()
+    if len(text) >= 2 and ((text[0] == "\"" and text[-1] == "\"") or (text[0] == "'" and text[-1] == "'")):
+        inner = text[1:-1]
+        if text[0] == "\"":
+            inner = inner.replace("\\n", "\n")
+            inner = inner.replace("\\r", "\r")
+            inner = inner.replace("\\t", "\t")
+            inner = inner.replace("\\\"", "\"")
+            inner = inner.replace("\\\\", "\\")
+        return inner
+    return text
+
+def parse_env(text):
+    out = {}
+    for raw_line in str(text).split("\n"):
+        line = raw_line.strip()
+        if line == "" or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        sep = line.find("=")
+        if sep < 0:
+            continue
+        key = line[:sep].strip()
+        if key == "":
+            continue
+        out[key] = _unquote_env_value(line[sep + 1:])
+    return out
+
+def _coerce_ini_value(text):
+    value = str(text).strip()
+    lower = value.lower()
+    if lower == "true":
+        return true
+    if lower == "false":
+        return false
+    if lower == "nil" or lower == "null":
+        return nil
+    if value.startswith("\"") or value.startswith("'"):
+        return _unquote_env_value(value)
+    if value != "":
+        maybe_int = nil
+        maybe_float = nil
+        try:
+            maybe_int = int(value)
+        except:
+            maybe_int = nil
+        if maybe_int != nil and str(maybe_int) == value:
+            return maybe_int
+        try:
+            maybe_float = float(value)
+        except:
+            maybe_float = nil
+        if maybe_float != nil:
+            return maybe_float
+    return value
+
+def parse_ini(text):
+    out = {}
+    section = out
+    for raw_line in str(text).split("\n"):
+        line = raw_line.strip()
+        if line == "" or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            name = line[1:-1].strip()
+            if name == "":
+                _fail("ini section names cannot be empty")
+            if name not in out or type(out[name]) != "dict":
+                out[name] = {}
+            section = out[name]
+            continue
+        sep = line.find("=")
+        if sep < 0:
+            sep = line.find(":")
+        if sep < 0:
+            _fail("invalid ini line '" + line + "'")
+        key = line[:sep].strip()
+        if key == "":
+            _fail("ini keys cannot be empty")
+        section[key] = _coerce_ini_value(line[sep + 1:])
+    return out
+
+def loads(text, format):
+    kind = _format_name(format)
+    if kind == "json":
+        return json.loads(str(text))
+    if kind == "toml":
+        return toml.loads(str(text))
+    if kind == "yaml":
+        return yaml.loads(str(text))
+    if kind == "env":
+        return parse_env(text)
+    if kind == "ini":
+        return parse_ini(text)
+    _fail("unsupported format '" + str(format) + "'")
+
+def load(file_path, format=nil):
+    kind = _format_name(format)
+    if kind == nil:
+        kind = infer_format(file_path)
+    if kind == nil:
+        _fail("could not infer config format for '" + str(file_path) + "'")
+    return loads(_read_text(file_path), kind)
+
+def _quote_env_value(value):
+    text = str(value)
+    if text == "" or " " in text or "\t" in text or "\n" in text or "#" in text or "\"" in text:
+        text = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+        return "\"" + text + "\""
+    return text
+
+def _scalar_dump(value, context):
+    kind = type(value)
+    if kind == "dict" or kind == "list" or kind == "tuple":
+        _fail(context + " only supports scalar values")
+    return value
+
+def _env_lines(value):
+    if type(value) != "dict":
+        _fail("env output requires a dict")
+    lines = []
+    for pair in value.items():
+        key = str(pair[0])
+        lines.append(key + "=" + _quote_env_value(_scalar_dump(pair[1], "env output")))
+    return lines
+
+def _ini_lines(value):
+    if type(value) != "dict":
+        _fail("ini output requires a dict")
+    root = []
+    sections = []
+    for pair in value.items():
+        key = str(pair[0])
+        current = pair[1]
+        if type(current) == "dict":
+            section_lines = ["[" + key + "]"]
+            for inner in current.items():
+                section_lines.append(str(inner[0]) + " = " + _quote_env_value(_scalar_dump(inner[1], "ini output")))
+            sections.append("\n".join(section_lines))
+        else:
+            root.append(key + " = " + _quote_env_value(_scalar_dump(current, "ini output")))
+    lines = root[:]
+    if len(root) > 0 and len(sections) > 0:
+        lines.append("")
+    for section in sections:
+        lines.append(section)
+    return lines
+
+def dumps(value, format):
+    kind = _format_name(format)
+    if kind == "json":
+        return json.dumps(value)
+    if kind == "toml":
+        return toml.dumps(value)
+    if kind == "yaml":
+        return yaml.dumps(value)
+    if kind == "env":
+        return "\n".join(_env_lines(value))
+    if kind == "ini":
+        return "\n".join(_ini_lines(value))
+    _fail("unsupported format '" + str(format) + "'")
+
+def _clone(value):
+    if type(value) == "dict":
+        out = {}
+        for pair in value.items():
+            out[pair[0]] = _clone(pair[1])
+        return out
+    if type(value) == "list":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    if type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return value
+
+def _merge_two(left, right):
+    if type(left) != "dict" or type(right) != "dict":
+        return _clone(right)
+    out = _clone(left)
+    for pair in right.items():
+        key = pair[0]
+        value = pair[1]
+        if key in out and type(out[key]) == "dict" and type(value) == "dict":
+            out[key] = _merge_two(out[key], value)
+        else:
+            out[key] = _clone(value)
+    return out
+
+def merge(values):
+    out = {}
+    for value in values:
+        if value == nil:
+            continue
+        if type(value) != "dict":
+            _fail("merge() expects dict values")
+        out = _merge_two(out, value)
+    return out
+
+def _expand_string(text, env_values):
+    out = ""
+    i = 0
+    while i < len(text):
+        if text[i] == "$" and i + 1 < len(text) and text[i + 1] == "{":
+            rest = text[i + 2:]
+            end_rel = rest.find("}")
+            if end_rel < 0:
+                out = out + text[i]
+                i = i + 1
+                continue
+            end = i + 2 + end_rel
+            key = text[i + 2:end]
+            replacement = nil
+            if env_values != nil and key in env_values:
+                replacement = env_values[key]
+            else:
+                replacement = os.getenv(key)
+            if replacement == nil:
+                replacement = ""
+            out = out + str(replacement)
+            i = end + 1
+        else:
+            out = out + text[i]
+            i = i + 1
+    return out
+
+def expand_env(value, env_values=nil):
+    if type(value) == "str":
+        return _expand_string(value, env_values)
+    if type(value) == "list":
+        out = []
+        for item in value:
+            out.append(expand_env(item, env_values))
+        return out
+    if type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(expand_env(item, env_values))
+        return out
+    if type(value) == "dict":
+        out = {}
+        for pair in value.items():
+            out[pair[0]] = expand_env(pair[1], env_values)
+        return out
+    return value

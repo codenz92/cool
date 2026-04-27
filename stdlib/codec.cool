@@ -1,0 +1,129 @@
+import base64
+import bytes
+import config
+import json
+import toml
+import yaml
+
+def _fail(message):
+    raise "codec: " + message
+
+def _name(value):
+    text = str(value).strip().lower()
+    if text == "":
+        _fail("codec name cannot be empty")
+    return text
+
+def _options(value):
+    if value == nil:
+        return {}
+    if type(value) != "dict":
+        _fail("options must be a dict")
+    return value
+
+def registry():
+    return {"encoders": {}, "decoders": {}}
+
+def _registry_maps(reg):
+    if reg == nil:
+        return nil
+    if type(reg) != "dict":
+        _fail("registry must be a dict")
+    if "encoders" not in reg:
+        reg["encoders"] = {}
+    if "decoders" not in reg:
+        reg["decoders"] = {}
+    return reg
+
+def register(reg, name, encoder, decoder=nil):
+    reg = _registry_maps(reg)
+    key = _name(name)
+    reg["encoders"][key] = encoder
+    if decoder != nil:
+        reg["decoders"][key] = decoder
+
+def unregister(reg, name):
+    reg = _registry_maps(reg)
+    key = _name(name)
+    if key in reg["encoders"]:
+        reg["encoders"].pop(key)
+    if key in reg["decoders"]:
+        reg["decoders"].pop(key)
+
+def has(name, reg=nil):
+    key = _name(name)
+    reg = _registry_maps(reg)
+    if reg != nil and (key in reg["encoders"] or key in reg["decoders"]):
+        return true
+    return key in names(reg)
+
+def names(reg=nil):
+    out = [
+        "ascii",
+        "base64",
+        "env",
+        "hex",
+        "ini",
+        "json",
+        "latin1",
+        "toml",
+        "utf-8",
+        "yaml",
+    ]
+    reg = _registry_maps(reg)
+    if reg != nil:
+        for key in reg["encoders"].keys():
+            if key not in out:
+                out.append(key)
+        for key in reg["decoders"].keys():
+            if key not in out:
+                out.append(key)
+    return out
+
+def encode(name, value, options=nil, reg=nil):
+    key = _name(name)
+    opts = _options(options)
+    reg = _registry_maps(reg)
+    if reg != nil and key in reg["encoders"]:
+        return reg["encoders"][key](value, opts)
+    if key == "base64":
+        return base64.encode(value, opts.get("urlsafe", false), opts.get("pad", true))
+    if key == "hex":
+        return bytes.hex(value, opts.get("uppercase", false))
+    if key == "json":
+        return json.dumps(value)
+    if key == "toml":
+        return toml.dumps(value)
+    if key == "yaml":
+        return yaml.dumps(value)
+    if key == "env" or key == "ini":
+        return config.dumps(value, key)
+    if key == "utf-8" or key == "ascii" or key == "latin1":
+        return bytes.from_string(value, key)
+    _fail("unknown codec '" + key + "'")
+
+def decode(name, value, options=nil, reg=nil):
+    key = _name(name)
+    opts = _options(options)
+    reg = _registry_maps(reg)
+    if reg != nil and key in reg["decoders"]:
+        return reg["decoders"][key](value, opts)
+    if key == "base64":
+        if opts.get("text", false):
+            return base64.decode_text(value, opts.get("urlsafe", false), opts.get("encoding", "utf-8"))
+        return base64.decode(value, opts.get("urlsafe", false))
+    if key == "hex":
+        if opts.get("text", false):
+            return bytes.to_string(bytes.from_hex(value), opts.get("encoding", "utf-8"))
+        return bytes.from_hex(value)
+    if key == "json":
+        return json.loads(str(value))
+    if key == "toml":
+        return toml.loads(str(value))
+    if key == "yaml":
+        return yaml.loads(str(value))
+    if key == "env" or key == "ini":
+        return config.loads(str(value), key)
+    if key == "utf-8" or key == "ascii" or key == "latin1":
+        return bytes.to_string(value, key)
+    _fail("unknown codec '" + key + "'")

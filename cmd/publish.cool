@@ -62,7 +62,7 @@ def package_hash(project_root, cool):
         raise "cool publish: " + details
     return result["stdout"].strip()
 
-def metadata_json(project, dependencies, package_name, archive_name, source_hash):
+def metadata_json(project, dependencies, capabilities, package_name, archive_name, source_hash):
     return json.dumps({
         "schema_version": 1,
         "package_name": package_name,
@@ -73,6 +73,7 @@ def metadata_json(project, dependencies, package_name, archive_name, source_hash
             "version": project["version"],
             "main": project["main"],
         },
+        "capabilities": capabilities,
         "dependencies": dependencies,
         "generated_by": {
             "tool": "cool publish",
@@ -108,6 +109,7 @@ main = projectlib.require_string(project, "main", "cool.toml")
 main_path = path.join(project_root, main)
 if not os["exists"](main_path):
     raise "cool publish: main file '" + main + "' not found"
+capabilities = projectlib.parse_capabilities(manifest)
 
 cool = cool_exe()
 lock_path = ensure_lockfile(project_root, cool)
@@ -126,6 +128,7 @@ metadata = metadata_json(
         "main": main,
     },
     projectlib.parse_dependencies(manifest),
+    capabilities,
     package_name,
     archive_name,
     source_hash,
@@ -135,6 +138,7 @@ if dry_run:
     print("  Publish validation OK")
     print("  Lockfile -> " + lock_path)
     print("  Source hash -> " + source_hash)
+    print("  Capabilities -> " + str(projectlib.denied_capabilities(capabilities)))
     print("  Archive  -> " + archive_path)
     print("  Metadata -> " + metadata_path)
     exit(0)
@@ -145,5 +149,6 @@ create_archive(project_root, archive_path)
 print("  Published source package")
 print("  Lockfile -> " + lock_path)
 print("  Source hash -> " + source_hash)
+print("  Capabilities -> " + str(projectlib.denied_capabilities(capabilities)))
 print("  Archive  -> " + archive_path)
 print("  Metadata -> " + metadata_path)

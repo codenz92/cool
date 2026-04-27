@@ -1,0 +1,15 @@
+name = "kernel_demo"
+version = "0.1.0"
+main = "src/main.cool"
+sources = ["src"]
+linker_script = "link.ld"
+
+[build]
+profile = "freestanding"
+entry = "_start"
+
+[capabilities]
+file = false
+network = false
+env = false
+process = false

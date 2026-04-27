@@ -1,0 +1,382 @@
+import os
+import path
+import time
+import random
+import subprocess
+import json
+import platform
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def _capabilities():
+    return platform.capabilities()
+
+def require_capability(name, context):
+    caps = _capabilities()
+    if caps.get(name, false) != true:
+        raise "jobs: " + context + " requires capability '" + name + "'"
+
+def ensure_dir(dir_path):
+    if not os.exists(dir_path):
+        os.mkdir(dir_path)
+
+def read_text(file_path):
+    if not os.exists(file_path):
+        return nil
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+def write_text(file_path, text):
+    f = open(file_path, "w")
+    f.write(text)
+    f.close()
+
+def tmp_root():
+    root = os.getenv("TMPDIR")
+    if root == nil or root == "":
+        root = "/tmp"
+    root = path.join(root, "cool-jobs")
+    ensure_dir(root)
+    return root
+
+def clamp_seconds(value):
+    secs = float(value)
+    if secs < 0:
+        return 0.0
+    return secs
+
+def deadline_after(seconds):
+    return {
+        "kind": "deadline",
+        "expires_at": time.monotonic() + clamp_seconds(seconds),
+    }
+
+def deadline_expired(deadline):
+    return time.monotonic() >= deadline["expires_at"]
+
+def deadline_remaining(deadline):
+    left = deadline["expires_at"] - time.monotonic()
+    if left < 0:
+        return 0.0
+    return left
+
+def group(name=nil):
+    if name == nil or str(name) == "":
+        name = "group"
+    return {
+        "kind": "group",
+        "name": str(name),
+        "tasks": [],
+        "channels": [],
+    }
+
+def channel(owner=nil, name=nil):
+    if owner != nil and not isinstance(owner, "dict"):
+        name = owner
+        owner = nil
+    if name == nil or str(name) == "":
+        name = "channel"
+    ch = {
+        "kind": "channel",
+        "name": str(name),
+        "items": [],
+        "closed": false,
+    }
+    if owner != nil:
+        owner["channels"].append(ch)
+    return ch
+
+def send(ch, value):
+    if ch["closed"]:
+        raise "jobs.send(): channel is closed"
+    ch["items"].append(value)
+
+def try_recv(ch):
+    if len(ch["items"]) == 0:
+        return nil
+    value = ch["items"][0]
+    ch["items"] = ch["items"][1:]
+    return value
+
+def recv(ch, timeout=nil):
+    deadline = nil
+    if timeout != nil:
+        if isinstance(timeout, "dict") and timeout.get("kind", "") == "deadline":
+            deadline = timeout
+        else:
+            deadline = deadline_after(timeout)
+    while true:
+        if len(ch["items"]) > 0:
+            value = ch["items"][0]
+            ch["items"] = ch["items"][1:]
+            return value
+        if ch["closed"]:
+            return nil
+        if deadline != nil and deadline_expired(deadline):
+            return nil
+        time.sleep(0.01)
+
+def close(ch):
+    ch["closed"] = true
+
+def channel_size(ch):
+    return len(ch["items"])
+
+def new_task(owner, kind, default_name, explicit_name):
+    task_id = str(int(time.time() * 1000000)) + "-" + str(random.randint(1000, 999999))
+    name = explicit_name
+    if name == nil or str(name) == "":
+        name = default_name + "-" + task_id
+    task = {
+        "kind": kind,
+        "id": task_id,
+        "name": str(name),
+        "started_at": time.time(),
+        "deadline": nil,
+        "done": false,
+        "cancelled": false,
+        "result": nil,
+        "pid": nil,
+        "command": nil,
+        "url": nil,
+        "headers": [],
+        "seconds": nil,
+        "wake_at": nil,
+        "state_dir": path.join(tmp_root(), task_id),
+        "stdout_path": path.join(tmp_root(), task_id, "stdout.txt"),
+        "stderr_path": path.join(tmp_root(), task_id, "stderr.txt"),
+        "exit_path": path.join(tmp_root(), task_id, "exit.txt"),
+        "meta_path": path.join(tmp_root(), task_id, "task.json"),
+    }
+    if owner != nil:
+        owner["tasks"].append(task)
+    return task
+
+def task_snapshot(task):
+    deadline_at = nil
+    if task["deadline"] != nil:
+        deadline_at = task["deadline"]["expires_at"]
+    return {
+        "id": task["id"],
+        "name": task["name"],
+        "kind": task["kind"],
+        "started_at": task["started_at"],
+        "deadline_at": deadline_at,
+        "pid": task["pid"],
+        "command": task["command"],
+        "url": task["url"],
+        "headers": task["headers"],
+        "seconds": task["seconds"],
+        "done": task["done"],
+        "cancelled": task["cancelled"],
+    }
+
+def persist_task(task):
+    if _capabilities().get("file", false) != true:
+        return
+    ensure_dir(task["state_dir"])
+    write_text(task["meta_path"], json.dumps(task_snapshot(task)))
+
+def process_alive(pid):
+    require_capability("process", "jobs.process_alive")
+    return subprocess.call("kill -0 " + str(pid) + " >/dev/null 2>&1") == 0
+
+def spawn_background_shell(task, shell_command):
+    require_capability("file", "jobs.spawn_background_shell")
+    require_capability("process", "jobs.spawn_background_shell")
+    ensure_dir(task["state_dir"])
+    launch = "( sh -c " + shell_quote(shell_command)
+    launch = launch + " > " + shell_quote(task["stdout_path"])
+    launch = launch + " 2> " + shell_quote(task["stderr_path"])
+    launch = launch + "; code=$?; printf '%s' \"$code\" > " + shell_quote(task["exit_path"])
+    launch = launch + " ) & printf '%s' $!"
+    pid_text = subprocess.check_output(launch).strip()
+    task["pid"] = int(pid_text)
+    persist_task(task)
+
+def make_result(task, code, timed_out):
+    stdout = ""
+    stderr = ""
+    if task["kind"] != "sleep":
+        stdout = read_text(task["stdout_path"])
+        stderr = read_text(task["stderr_path"])
+        if stdout == nil:
+            stdout = ""
+        if stderr == nil:
+            stderr = ""
+    result = {
+        "id": task["id"],
+        "name": task["name"],
+        "kind": task["kind"],
+        "ok": not timed_out and not task["cancelled"] and code == 0,
+        "code": code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "timed_out": timed_out,
+        "cancelled": task["cancelled"],
+        "started_at": task["started_at"],
+        "finished_at": time.time(),
+    }
+    result["duration"] = result["finished_at"] - task["started_at"]
+    if task["kind"].startswith("http_"):
+        result["body"] = stdout
+        result["url"] = task["url"]
+    if task["kind"] == "sleep":
+        result["seconds"] = task["seconds"]
+    task["result"] = result
+    task["done"] = true
+    persist_task(task)
+    return result
+
+def command(owner, shell_command, timeout=nil, name=nil):
+    task = new_task(owner, "command", "command", name)
+    task["command"] = str(shell_command)
+    if timeout != nil:
+        if isinstance(timeout, "dict") and timeout.get("kind", "") == "deadline":
+            task["deadline"] = timeout
+        else:
+            task["deadline"] = deadline_after(timeout)
+    spawn_background_shell(task, task["command"])
+    return task
+
+def curl_command(method, url, headers, body):
+    cmd = "curl -sS -L"
+    if method == "HEAD":
+        cmd = cmd + " -I"
+    elif method != "GET":
+        cmd = cmd + " -X " + method
+    if headers != nil:
+        for header in headers:
+            cmd = cmd + " -H " + shell_quote(header)
+    if body != nil:
+        cmd = cmd + " --data " + shell_quote(body)
+    cmd = cmd + " " + shell_quote(url)
+    return cmd
+
+def http_get(owner, url, headers=nil, timeout=nil, name=nil):
+    require_capability("network", "jobs.http_get")
+    task = new_task(owner, "http_get", "http-get", name)
+    task["url"] = str(url)
+    if headers == nil:
+        headers = []
+    task["headers"] = headers
+    if timeout != nil:
+        if isinstance(timeout, "dict") and timeout.get("kind", "") == "deadline":
+            task["deadline"] = timeout
+        else:
+            task["deadline"] = deadline_after(timeout)
+    task["command"] = curl_command("GET", task["url"], headers, nil)
+    spawn_background_shell(task, task["command"])
+    return task
+
+def http_head(owner, url, headers=nil, timeout=nil, name=nil):
+    require_capability("network", "jobs.http_head")
+    task = new_task(owner, "http_head", "http-head", name)
+    task["url"] = str(url)
+    if headers == nil:
+        headers = []
+    task["headers"] = headers
+    if timeout != nil:
+        if isinstance(timeout, "dict") and timeout.get("kind", "") == "deadline":
+            task["deadline"] = timeout
+        else:
+            task["deadline"] = deadline_after(timeout)
+    task["command"] = curl_command("HEAD", task["url"], headers, nil)
+    spawn_background_shell(task, task["command"])
+    return task
+
+def sleep(owner, seconds, name=nil):
+    task = new_task(owner, "sleep", "sleep", name)
+    task["seconds"] = clamp_seconds(seconds)
+    task["wake_at"] = time.monotonic() + task["seconds"]
+    persist_task(task)
+    return task
+
+def poll(task):
+    if task["done"]:
+        return task["result"]
+
+    if task["kind"] == "sleep":
+        if time.monotonic() >= task["wake_at"]:
+            return make_result(task, 0, false)
+        return nil
+
+    if task["deadline"] != nil and deadline_expired(task["deadline"]):
+        return cancel(task, true)
+
+    exit_text = read_text(task["exit_path"])
+    if exit_text == nil:
+        return nil
+    code = int(exit_text.strip())
+    return make_result(task, code, false)
+
+def await(task):
+    while true:
+        result = poll(task)
+        if result != nil:
+            return result
+        time.sleep(0.02)
+
+def wait_next(owner, timeout=nil):
+    deadline = nil
+    if timeout != nil:
+        if isinstance(timeout, "dict") and timeout.get("kind", "") == "deadline":
+            deadline = timeout
+        else:
+            deadline = deadline_after(timeout)
+    while true:
+        any_pending = false
+        for task in owner["tasks"]:
+            result = poll(task)
+            if result != nil:
+                return {
+                    "task": task,
+                    "result": result,
+                }
+            if not task["done"]:
+                any_pending = true
+        if not any_pending:
+            return nil
+        if deadline != nil and deadline_expired(deadline):
+            return nil
+        time.sleep(0.02)
+
+def await_all(owner):
+    results = []
+    for task in owner["tasks"]:
+        results.append(await(task))
+    return results
+
+def cancel(task, timed_out=false):
+    if task["done"]:
+        return task["result"]
+
+    task["cancelled"] = true
+    if task["kind"] == "sleep":
+        return make_result(task, -15, timed_out)
+
+    if task["pid"] != nil:
+        require_capability("process", "jobs.cancel")
+        subprocess.call("kill " + str(task["pid"]) + " >/dev/null 2>&1")
+        stop_by = time.monotonic() + 0.2
+        while time.monotonic() < stop_by:
+            if os.exists(task["exit_path"]):
+                break
+            if not process_alive(task["pid"]):
+                break
+            time.sleep(0.02)
+        subprocess.call("kill -9 " + str(task["pid"]) + " >/dev/null 2>&1")
+    if not os.exists(task["exit_path"]):
+        write_text(task["exit_path"], "-15")
+    return make_result(task, -15, timed_out)
+
+def cancel_all(owner):
+    results = []
+    for task in owner["tasks"]:
+        if not task["done"]:
+            results.append(cancel(task))
+    return results

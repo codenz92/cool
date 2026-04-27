@@ -12,7 +12,7 @@
 use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Program, Stmt, UnaryOp};
 use crate::core_runtime;
 use crate::module_exports;
-use crate::project::{ModuleResolver, NativeLinkConfig, NativeLinkLibraryKind};
+use crate::project::{CapabilityPolicy, ModuleResolver, NativeLinkConfig, NativeLinkLibraryKind};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -57,6 +57,7 @@ pub struct NativeCompileOptions {
     pub debug_info: bool,
     pub reproducible: bool,
     pub no_libc: bool,
+    pub capabilities: CapabilityPolicy,
     pub toolchain: NativeToolchainConfig,
     pub native_links: NativeLinkConfig,
     pub source_root: Option<PathBuf>,
@@ -350,6 +351,8 @@ CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
 CoolVal cool_file_open(CoolVal, CoolVal);
 CoolVal cool_abs(CoolVal);
 CoolVal cool_to_int(CoolVal);
+CoolVal cool_ord(CoolVal);
+CoolVal cool_chr(CoolVal);
 CoolVal cool_to_float_val(CoolVal);
 CoolVal cool_to_bool_val(CoolVal);
 CoolVal cool_i8(CoolVal);
@@ -435,6 +438,122 @@ CoolVal cv_float(double f) {
     CoolVal v; v.tag = TAG_FLOAT;
     memcpy(&v.payload, &f, sizeof(double));
     return v;
+}
+
+static void cool_utf8_invalid(const char* context) {
+    fprintf(stderr, "ValueError: %s received invalid UTF-8\n", context);
+    exit(1);
+}
+
+static size_t cool_utf8_decode_char(const unsigned char* s, uint32_t* out) {
+    unsigned char b0 = s[0];
+    if (b0 == '\0') cool_utf8_invalid("string operation");
+    if ((b0 & 0x80) == 0) {
+        *out = b0;
+        return 1;
+    }
+    if ((b0 & 0xE0) == 0xC0) {
+        unsigned char b1 = s[1];
+        if ((b1 & 0xC0) != 0x80) cool_utf8_invalid("string operation");
+        uint32_t codepoint = ((uint32_t)(b0 & 0x1F) << 6) | (uint32_t)(b1 & 0x3F);
+        if (codepoint < 0x80) cool_utf8_invalid("string operation");
+        *out = codepoint;
+        return 2;
+    }
+    if ((b0 & 0xF0) == 0xE0) {
+        unsigned char b1 = s[1];
+        unsigned char b2 = s[2];
+        if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80) cool_utf8_invalid("string operation");
+        uint32_t codepoint =
+            ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(b1 & 0x3F) << 6) | (uint32_t)(b2 & 0x3F);
+        if (codepoint < 0x800 || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+            cool_utf8_invalid("string operation");
+        }
+        *out = codepoint;
+        return 3;
+    }
+    if ((b0 & 0xF8) == 0xF0) {
+        unsigned char b1 = s[1];
+        unsigned char b2 = s[2];
+        unsigned char b3 = s[3];
+        if ((b1 & 0xC0) != 0x80 || (b2 & 0xC0) != 0x80 || (b3 & 0xC0) != 0x80) {
+            cool_utf8_invalid("string operation");
+        }
+        uint32_t codepoint = ((uint32_t)(b0 & 0x07) << 18) |
+                             ((uint32_t)(b1 & 0x3F) << 12) |
+                             ((uint32_t)(b2 & 0x3F) << 6) |
+                             (uint32_t)(b3 & 0x3F);
+        if (codepoint < 0x10000 || codepoint > 0x10FFFF) cool_utf8_invalid("string operation");
+        *out = codepoint;
+        return 4;
+    }
+    cool_utf8_invalid("string operation");
+    return 0;
+}
+
+static int64_t cool_utf8_len(const char* s) {
+    const unsigned char* p = (const unsigned char*)s;
+    int64_t count = 0;
+    while (*p) {
+        uint32_t codepoint = 0;
+        p += cool_utf8_decode_char(p, &codepoint);
+        count++;
+    }
+    return count;
+}
+
+static int64_t cool_utf8_byte_offset(const char* s, int64_t index) {
+    const unsigned char* p = (const unsigned char*)s;
+    int64_t count = 0;
+    while (*p && count < index) {
+        uint32_t codepoint = 0;
+        p += cool_utf8_decode_char(p, &codepoint);
+        count++;
+    }
+    return (int64_t)(p - (const unsigned char*)s);
+}
+
+static char* cool_utf8_encode_codepoint(uint32_t codepoint) {
+    if (codepoint > 0x10FFFF || (codepoint >= 0xD800 && codepoint <= 0xDFFF)) {
+        fprintf(stderr, "ValueError: chr() code point must be in range 0..=1114111\n");
+        exit(1);
+    }
+    char* out = (char*)malloc(5);
+    if (!out) return NULL;
+    if (codepoint <= 0x7F) {
+        out[0] = (char)codepoint;
+        out[1] = '\0';
+    } else if (codepoint <= 0x7FF) {
+        out[0] = (char)(0xC0 | (codepoint >> 6));
+        out[1] = (char)(0x80 | (codepoint & 0x3F));
+        out[2] = '\0';
+    } else if (codepoint <= 0xFFFF) {
+        out[0] = (char)(0xE0 | (codepoint >> 12));
+        out[1] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (codepoint & 0x3F));
+        out[3] = '\0';
+    } else {
+        out[0] = (char)(0xF0 | (codepoint >> 18));
+        out[1] = (char)(0x80 | ((codepoint >> 12) & 0x3F));
+        out[2] = (char)(0x80 | ((codepoint >> 6) & 0x3F));
+        out[3] = (char)(0x80 | (codepoint & 0x3F));
+        out[4] = '\0';
+    }
+    return out;
+}
+
+static void cool_capability_denied(const char* capability, const char* context) {
+    fprintf(stderr, "CapabilityError: %s access denied by cool.toml [capabilities] while calling %s\n", capability, context);
+    exit(1);
+}
+
+static CoolVal cool_platform_capabilities(void) {
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("file"), cv_bool(COOL_CAP_FILE));
+    cool_dict_set(out, cv_str("network"), cv_bool(COOL_CAP_NETWORK));
+    cool_dict_set(out, cv_str("env"), cv_bool(COOL_CAP_ENV));
+    cool_dict_set(out, cv_str("process"), cv_bool(COOL_CAP_PROCESS));
+    return out;
 }
 
 CoolVal cool_format_hex(CoolVal value) {
@@ -695,6 +814,40 @@ CoolVal cool_tuple_make(CoolVal n_val) {
 /* ── to_str ─────────���─────────────────────────────────────────────────── */
 char* cool_to_str(CoolVal v) {
     if (v.tag == TAG_STR) return (char*)(intptr_t)v.payload;
+    if (v.tag == TAG_DICT) {
+        CoolDict* dict = (CoolDict*)(intptr_t)v.payload;
+        char* out = (char*)malloc(512);
+        if (!out) return (char*)"<oom>";
+        char* p = out;
+        *p++ = '{';
+        if (dict) {
+            for (int64_t i = 0; i < dict->len; i++) {
+                if (i > 0) {
+                    *p++ = ',';
+                    *p++ = ' ';
+                }
+                CoolVal key = dict->keys[i];
+                CoolVal val = dict->vals[i];
+                const char* key_str = key.tag == TAG_STR ? (const char*)(intptr_t)key.payload : cool_to_str(key);
+                const char* val_str = val.tag == TAG_STR ? (const char*)(intptr_t)val.payload : cool_to_str(val);
+                *p++ = '"';
+                size_t key_len = strlen(key_str);
+                memcpy(p, key_str, key_len);
+                p += key_len;
+                *p++ = '"';
+                *p++ = ':';
+                *p++ = ' ';
+                if (val.tag == TAG_STR) *p++ = '"';
+                size_t val_len = strlen(val_str);
+                memcpy(p, val_str, val_len);
+                p += val_len;
+                if (val.tag == TAG_STR) *p++ = '"';
+            }
+        }
+        *p++ = '}';
+        *p = '\0';
+        return out;
+    }
     if (v.tag == TAG_OBJECT) {
         CoolObject* o = (CoolObject*)(intptr_t)v.payload;
         int64_t fn_ptr = o && o->class ? cool_get_method_ptr((CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class}, "method___str__") : 0;
@@ -1021,7 +1174,7 @@ CoolVal cool_list_reverse(CoolVal list_val) {
 /* ── len() ──────────────────────────────────────────────────────────────── */
 CoolVal cool_len(CoolVal v) {
     switch (v.tag) {
-        case TAG_STR: return cv_int(strlen((const char*)(intptr_t)v.payload));
+        case TAG_STR: return cv_int(cool_utf8_len((const char*)(intptr_t)v.payload));
         case TAG_LIST:
         case TAG_TUPLE: {
             CoolList* lst = (CoolList*)(intptr_t)v.payload;
@@ -1122,6 +1275,11 @@ void cool_print(int32_t n, ...) {
                     fputs(elem, stdout);
                 }
                 putchar(']');
+                break;
+            }
+            case TAG_DICT: {
+                char* repr = cool_to_str(v);
+                fputs(repr, stdout);
                 break;
             }
             default:        fputs("<unknown>", stdout); break;
@@ -2140,6 +2298,9 @@ static CoolFile* cv_file_ptr(CoolVal v) {
 }
 
 CoolVal cool_file_open(CoolVal path, CoolVal mode) {
+    if (!COOL_CAP_FILE) {
+        cool_capability_denied("file", "open()");
+    }
     if (path.tag != TAG_STR) {
         fprintf(stderr, "TypeError: open() requires a path string\n");
         exit(1);
@@ -2285,6 +2446,9 @@ static CoolVal make_socket(int fd, int is_server) {
 }
 
 CoolVal cool_socket_connect(CoolVal host_v, CoolVal port_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.connect()");
+    }
     const char* host = (const char*)(intptr_t)host_v.payload;
     int port = (int)port_v.payload;
     char port_str[16]; snprintf(port_str, sizeof(port_str), "%d", port);
@@ -2305,6 +2469,9 @@ CoolVal cool_socket_connect(CoolVal host_v, CoolVal port_v) {
 }
 
 CoolVal cool_socket_listen(CoolVal host_v, CoolVal port_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.listen()");
+    }
     const char* host = (const char*)(intptr_t)host_v.payload;
     int port = (int)port_v.payload;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -2326,6 +2493,9 @@ CoolVal cool_socket_listen(CoolVal host_v, CoolVal port_v) {
 }
 
 CoolVal cool_socket_send(CoolVal sock_v, CoolVal data_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.send()");
+    }
     CoolSocket* s = cv_sock_ptr(sock_v);
     if (s->closed || s->is_server) { fprintf(stderr, "socket.send() on invalid socket\n"); exit(1); }
     const char* data = (const char*)(intptr_t)data_v.payload;
@@ -2334,6 +2504,9 @@ CoolVal cool_socket_send(CoolVal sock_v, CoolVal data_v) {
 }
 
 CoolVal cool_socket_recv(CoolVal sock_v, CoolVal size_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.recv()");
+    }
     CoolSocket* s = cv_sock_ptr(sock_v);
     if (s->closed || s->is_server) { fprintf(stderr, "socket.recv() on invalid socket\n"); exit(1); }
     int size = (int)size_v.payload;
@@ -2346,6 +2519,9 @@ CoolVal cool_socket_recv(CoolVal sock_v, CoolVal size_v) {
 }
 
 CoolVal cool_socket_readline(CoolVal sock_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.readline()");
+    }
     CoolSocket* s = cv_sock_ptr(sock_v);
     if (s->closed || s->is_server) { fprintf(stderr, "socket.readline() on invalid socket\n"); exit(1); }
     size_t cap = 256;
@@ -2364,6 +2540,9 @@ CoolVal cool_socket_readline(CoolVal sock_v) {
 }
 
 CoolVal cool_socket_accept(CoolVal sock_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.accept()");
+    }
     CoolSocket* s = cv_sock_ptr(sock_v);
     if (s->closed || !s->is_server) { fprintf(stderr, "socket.accept() on non-server socket\n"); exit(1); }
     struct sockaddr_storage peer_addr;
@@ -2392,12 +2571,23 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
     const char* builtin_name = strncmp(name, "method_", 7) == 0 ? name + 7 : name;
 
     if (obj.tag == TAG_STR) {
+        CoolVal a0 = nargs > 0 ? g_method_args[1] : cv_nil();
+        CoolVal a1 = nargs > 1 ? g_method_args[2] : cv_nil();
         if (strcmp(builtin_name, "upper") == 0 && nargs == 0) return cool_string_upper(obj);
         if (strcmp(builtin_name, "lower") == 0 && nargs == 0) return cool_string_lower(obj);
         if (strcmp(builtin_name, "strip") == 0 && nargs == 0) return cool_string_strip(obj);
         if (strcmp(builtin_name, "lstrip") == 0 && nargs == 0) return cool_string_lstrip(obj);
         if (strcmp(builtin_name, "rstrip") == 0 && nargs == 0) return cool_string_rstrip(obj);
         if (strcmp(builtin_name, "join") == 0 && nargs == 1) return cool_string_join(obj, g_method_args[1]);
+        if (strcmp(builtin_name, "split") == 0 && (nargs == 0 || nargs == 1)) return cool_string_split(obj, a0);
+        if (strcmp(builtin_name, "replace") == 0 && nargs == 2) return cool_string_replace(obj, a0, a1);
+        if (strcmp(builtin_name, "startswith") == 0 && nargs == 1) return cool_string_startswith(obj, a0);
+        if (strcmp(builtin_name, "endswith") == 0 && nargs == 1) return cool_string_endswith(obj, a0);
+        if (strcmp(builtin_name, "find") == 0 && nargs == 1) return cool_string_find(obj, a0);
+        if (strcmp(builtin_name, "count") == 0 && nargs == 1) return cool_string_count(obj, a0);
+        if (strcmp(builtin_name, "title") == 0 && nargs == 0) return cool_string_title(obj);
+        if (strcmp(builtin_name, "capitalize") == 0 && nargs == 0) return cool_string_capitalize(obj);
+        if (strcmp(builtin_name, "format") == 0) return cool_string_format(obj, nargs, nargs > 0 ? &g_method_args[1] : NULL);
     }
 
     if (obj.tag == TAG_DICT) {
@@ -2636,6 +2826,19 @@ CoolVal cool_dict_update(CoolVal dict_v, CoolVal other) {
 CoolVal cool_index(CoolVal obj, CoolVal idx) {
     if (obj.tag == TAG_LIST || obj.tag == TAG_TUPLE) return cool_list_get(obj, idx);
     if (obj.tag == TAG_DICT) return cool_dict_get(obj, idx);
+    if (obj.tag == TAG_STR) {
+        const char* s = (const char*)(intptr_t)obj.payload;
+        int64_t len = cool_utf8_len(s);
+        int64_t index = idx.payload;
+        if (index < 0) index += len;
+        if (index < 0 || index >= len) return cv_nil();
+        int64_t start = cool_utf8_byte_offset(s, index);
+        const unsigned char* p = (const unsigned char*)s + start;
+        uint32_t codepoint = 0;
+        cool_utf8_decode_char(p, &codepoint);
+        char* out = cool_utf8_encode_codepoint(codepoint);
+        return out ? cv_str(out) : cv_nil();
+    }
     fprintf(stderr, "TypeError: not subscriptable\n"); exit(1);
 }
 
@@ -2659,16 +2862,18 @@ CoolVal cool_slice(CoolVal obj, CoolVal start_v, CoolVal stop_v) {
     }
     if (obj.tag == TAG_STR) {
         const char* s = (const char*)(intptr_t)obj.payload;
-        int64_t len = (int64_t)strlen(s);
+        int64_t len = cool_utf8_len(s);
         if (start < 0) start += len;
         if (stop == INT64_MAX) stop = len;
         if (stop < 0) stop += len;
         if (start < 0) start = 0;
         if (stop > len) stop = len;
         if (start > stop) start = stop;
-        char* out = (char*)malloc((size_t)(stop - start + 1));
-        memcpy(out, s + start, (size_t)(stop - start));
-        out[stop - start] = '\0';
+        int64_t byte_start = cool_utf8_byte_offset(s, start);
+        int64_t byte_stop = cool_utf8_byte_offset(s, stop);
+        char* out = (char*)malloc((size_t)(byte_stop - byte_start + 1));
+        memcpy(out, s + byte_start, (size_t)(byte_stop - byte_start));
+        out[byte_stop - byte_start] = '\0';
         return cv_str(out);
     }
     fprintf(stderr, "TypeError: not sliceable\n");
@@ -2698,12 +2903,14 @@ static int cool_compare(CoolVal a, CoolVal b) {
 CoolVal cool_sorted(CoolVal iterable) {
     if (iterable.tag == TAG_STR) {
         const char* s = (const char*)(intptr_t)iterable.payload;
-        CoolVal chars = cool_list_make(cv_int((int64_t)strlen(s)));
-        for (const char* p = s; *p; p++) {
-            char* ch = (char*)malloc(2);
-            ch[0] = *p;
-            ch[1] = '\0';
+        CoolVal chars = cool_list_make(cv_int(cool_utf8_len(s)));
+        const unsigned char* p = (const unsigned char*)s;
+        while (*p) {
+            uint32_t codepoint = 0;
+            size_t width = cool_utf8_decode_char(p, &codepoint);
+            char* ch = cool_utf8_encode_codepoint(codepoint);
             cool_list_push(chars, cv_str(ch));
+            p += width;
         }
         iterable = chars;
     }
@@ -2743,6 +2950,36 @@ CoolVal cool_abs(CoolVal v) {
     if (v.tag == TAG_FLOAT) return cv_float(fabs(cv_as_float(v)));
     fprintf(stderr, "TypeError: abs() requires a number\n");
     exit(1);
+}
+
+CoolVal cool_ord(CoolVal v) {
+    if (v.tag != TAG_STR) {
+        fprintf(stderr, "TypeError: ord() requires a string\n");
+        exit(1);
+    }
+    const unsigned char* s = (const unsigned char*)(intptr_t)v.payload;
+    if (s[0] == '\0') {
+        fprintf(stderr, "ValueError: ord() requires a non-empty string\n");
+        exit(1);
+    }
+    uint32_t codepoint = 0;
+    size_t len = cool_utf8_decode_char(s, &codepoint);
+    if (s[len] != '\0') {
+        fprintf(stderr, "ValueError: ord() requires a single-character string\n");
+        exit(1);
+    }
+    return cv_int((int64_t)codepoint);
+}
+
+CoolVal cool_chr(CoolVal v) {
+    int64_t raw = cool_to_int(v).payload;
+    if (raw < 0 || raw > 0x10FFFF || (raw >= 0xD800 && raw <= 0xDFFF)) {
+        fprintf(stderr, "ValueError: chr() code point must be in range 0..=1114111\n");
+        exit(1);
+    }
+
+    char* out = cool_utf8_encode_codepoint((uint32_t)raw);
+    return cv_str(out);
 }
 
 CoolVal cool_to_int(CoolVal v) {
@@ -5029,6 +5266,9 @@ static void cool_http_append_headers(CoolStrBuf* cmd, CoolVal headers, int want_
 }
 
 static char* cool_http_fetch(const char* context, const char* method, int head_only, CoolVal url_v, CoolVal body_v, CoolVal headers_v, int want_json_accept) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", context);
+    }
     if (url_v.tag != TAG_STR) {
         cool_http_raisef("%s requires a URL string, got %s", context, cool_type_name(url_v.tag));
     }
@@ -6760,6 +7000,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (strcmp(name, "has_raw_memory") == 0 && nargs == 0) return cv_bool(1);
         if (strcmp(name, "has_extern") == 0 && nargs == 0) return cv_bool(1);
         if (strcmp(name, "has_inline_asm") == 0 && nargs == 0) return cv_bool(1);
+        if (strcmp(name, "capabilities") == 0 && nargs == 0) return cool_platform_capabilities();
     }
 
     if (strcmp(module, "os") == 0) {
@@ -6772,22 +7013,26 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             return cv_str(strdup(buf));
         }
         if (strcmp(name, "exists") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.exists()");
             const char* path = cool_to_str(args[0]);
             struct stat st;
             return cv_bool(stat(path, &st) == 0);
         }
         if (strcmp(name, "isdir") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.isdir()");
             const char* path = cool_to_str(args[0]);
             struct stat st;
             return cv_bool(stat(path, &st) == 0 && S_ISDIR(st.st_mode));
         }
         if (strcmp(name, "getenv") == 0 && nargs == 1) {
+            if (!COOL_CAP_ENV) cool_capability_denied("env", "os.getenv()");
             const char* name_arg = cool_to_str(args[0]);
             const char* value = getenv(name_arg);
             if (!value) return cv_nil();
             return cv_str(strdup(value));
         }
         if (strcmp(name, "popen") == 0 && nargs == 1) {
+            if (!COOL_CAP_PROCESS) cool_capability_denied("process", "os.popen()");
             const char* cmd = cool_to_str(args[0]);
             FILE* pipe = popen(cmd, "r");
             if (!pipe) {
@@ -6822,6 +7067,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             return cv_str(out);
         }
         if (strcmp(name, "listdir") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.listdir()");
             const char* path = cool_to_str(args[0]);
             DIR* dir = opendir(path);
             if (!dir) {
@@ -6838,6 +7084,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             return out;
         }
         if (strcmp(name, "mkdir") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.mkdir()");
             const char* path = cool_to_str(args[0]);
             if (cool_mkdir_p(path) != 0) {
                 fprintf(stderr, "RuntimeError: os.mkdir failed\n");
@@ -6846,6 +7093,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             return cv_nil();
         }
         if (strcmp(name, "remove") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.remove()");
             const char* path = cool_to_str(args[0]);
             if (remove(path) != 0) {
                 fprintf(stderr, "RuntimeError: os.remove failed\n");
@@ -6854,6 +7102,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             return cv_nil();
         }
         if (strcmp(name, "rename") == 0 && nargs == 2) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.rename()");
             const char* src = cool_to_str(args[0]);
             const char* dst = cool_to_str(args[1]);
             if (rename(src, dst) != 0) {
@@ -6884,6 +7133,7 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
     if (strcmp(module, "subprocess") == 0) {
         if ((strcmp(name, "run") == 0 || strcmp(name, "call") == 0 || strcmp(name, "check_output") == 0)
             && (nargs == 1 || nargs == 2)) {
+            if (!COOL_CAP_PROCESS) cool_capability_denied("process", strcmp(name, "run") == 0 ? "subprocess.run()" : (strcmp(name, "call") == 0 ? "subprocess.call()" : "subprocess.check_output()"));
             const char* cmd = cool_to_str(args[0]);
             int has_timeout = 0;
             double timeout_secs = 0.0;
@@ -8105,6 +8355,7 @@ struct RuntimeFns<'ctx> {
     cool_list_make: FunctionValue<'ctx>,
     cool_tuple_make: FunctionValue<'ctx>,
     cool_list_len: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_list_get: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_list_set: FunctionValue<'ctx>,
@@ -8140,6 +8391,8 @@ struct RuntimeFns<'ctx> {
     cool_file_open: FunctionValue<'ctx>,
     cool_abs: FunctionValue<'ctx>,
     cool_to_int: FunctionValue<'ctx>,
+    cool_ord: FunctionValue<'ctx>,
+    cool_chr: FunctionValue<'ctx>,
     cool_to_float_val: FunctionValue<'ctx>,
     cool_to_bool_val: FunctionValue<'ctx>,
     cool_noncallable: FunctionValue<'ctx>,
@@ -8680,6 +8933,8 @@ impl<'ctx> Compiler<'ctx> {
             cool_file_open: decl!("cool_file_open", cv_type.fn_type(&[cv, cv], false)),
             cool_abs: decl!("cool_abs", cv_type.fn_type(&[cv], false)),
             cool_to_int: decl!("cool_to_int", cv_type.fn_type(&[cv], false)),
+            cool_ord: decl!("cool_ord", cv_type.fn_type(&[cv], false)),
+            cool_chr: decl!("cool_chr", cv_type.fn_type(&[cv], false)),
             cool_to_float_val: decl!("cool_to_float_val", cv_type.fn_type(&[cv], false)),
             cool_to_bool_val: decl!("cool_to_bool_val", cv_type.fn_type(&[cv], false)),
             cool_noncallable: decl!("cool_noncallable", cv_type.fn_type(&[cv], false)),
@@ -11096,7 +11351,7 @@ impl<'ctx> Compiler<'ctx> {
             .build_load(self.cv_type, idx_ptr, "idx_load")
             .unwrap()
             .into_struct_value();
-        let len_i64 = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "len");
+        let len_i64 = self.call_unop_fn(self.rt.cool_len, iter_val.clone(), "len");
         let cmp = self.call_binop_fn(self.rt.cool_lt, idx_cv, len_i64, "lt");
         let i1 = self.truthy_i1(cmp);
         self.builder.build_conditional_branch(i1, body_bb, after_bb).unwrap();
@@ -11113,7 +11368,7 @@ impl<'ctx> Compiler<'ctx> {
             .build_load(self.cv_type, idx_ptr, "body_idx")
             .unwrap()
             .into_struct_value();
-        let elem = self.call_binop_fn(self.rt.cool_list_get, iter_val.clone(), body_idx, "get");
+        let elem = self.call_binop_fn(self.rt.cool_index, iter_val.clone(), body_idx, "get");
         self.builder.build_store(var_ptr, elem).unwrap();
         self.compile_stmts(body)?;
         if !self.current_block_terminated() {
@@ -13470,14 +13725,14 @@ impl<'ctx> Compiler<'ctx> {
                     .build_load(self.cv_type, idx_ptr, "lc_idx_load")
                     .unwrap()
                     .into_struct_value();
-                let len_cv = self.call_unop_fn(self.rt.cool_list_len, iter_val.clone(), "lc_len");
+                let len_cv = self.call_unop_fn(self.rt.cool_len, iter_val.clone(), "lc_len");
                 let lt = self.call_binop_fn(self.rt.cool_lt, idx_cv, len_cv, "lc_lt");
                 let i1 = self.truthy_i1(lt);
                 self.builder.build_conditional_branch(i1, body_bb, after_bb).unwrap();
 
                 // Body: optionally filter, then push expr
                 self.builder.position_at_end(body_bb);
-                let elem = self.call_binop_fn(self.rt.cool_list_get, iter_val.clone(), idx_cv, "lc_elem");
+                let elem = self.call_binop_fn(self.rt.cool_index, iter_val.clone(), idx_cv, "lc_elem");
                 self.builder.build_store(var_ptr, elem).unwrap();
 
                 let push_bb = if let Some(cond_expr) = condition {
@@ -15527,6 +15782,19 @@ impl<'ctx> Compiler<'ctx> {
             return Ok(self.call_unop_fn(self.rt.cool_to_int, value, "int"));
         }
 
+        if name == "ord" || name == "chr" {
+            if args.len() != 1 {
+                return Err(format!("{name}() takes exactly 1 argument"));
+            }
+            let value = self.compile_expr(&args[0])?;
+            let fn_val = if name == "ord" {
+                self.rt.cool_ord
+            } else {
+                self.rt.cool_chr
+            };
+            return Ok(self.call_unop_fn(fn_val, value, &name));
+        }
+
         if name == "word_bits" || name == "word_bytes" {
             if !args.is_empty() {
                 return Err(format!("{name}() takes no arguments"));
@@ -15949,13 +16217,18 @@ fn compile_runtime_object(
     toolchain: &NativeToolchainConfig,
     display_path: &str,
     reproducible: bool,
+    capabilities: CapabilityPolicy,
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(staging_dir).map_err(|e| format!("Failed to create runtime staging dir: {e}"))?;
     let rt_c_path = staging_dir.join("cool_runtime.c");
     let rt_o_path = staging_dir.join("cool_runtime.o");
     let runtime_source = format!(
-        "static const char* COOL_SCRIPT_PATH = \"{}\";\n{}",
+        "static const char* COOL_SCRIPT_PATH = \"{}\";\nstatic const int COOL_CAP_FILE = {};\nstatic const int COOL_CAP_NETWORK = {};\nstatic const int COOL_CAP_ENV = {};\nstatic const int COOL_CAP_PROCESS = {};\n{}",
         c_string_literal(display_path),
+        if capabilities.file { 1 } else { 0 },
+        if capabilities.network { 1 } else { 0 },
+        if capabilities.env { 1 } else { 0 },
+        if capabilities.process { 1 } else { 0 },
         RUNTIME_C
     );
     fs::write(&rt_c_path, runtime_source).map_err(|e| format!("Failed to write runtime source: {e}"))?;
@@ -16276,6 +16549,7 @@ pub fn compile_program_with_output(
                     &options.toolchain,
                     &display_path,
                     options.reproducible,
+                    options.capabilities,
                 )?;
                 let result = link_hosted_binary(
                     &runtime_obj,
@@ -16317,6 +16591,7 @@ pub fn compile_program_with_output(
                         &options.toolchain,
                         &display_path,
                         options.reproducible,
+                        options.capabilities,
                     )?;
                     members.push(runtime_obj);
                 }
@@ -16351,6 +16626,7 @@ pub fn compile_program_with_output(
                         &options.toolchain,
                         &display_path,
                         options.reproducible,
+                        options.capabilities,
                     )?;
                     members.push(runtime_obj.as_path());
                     link_shared_library(

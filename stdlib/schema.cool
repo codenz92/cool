@@ -1,0 +1,194 @@
+import re
+
+def _rule(kind, extra=nil):
+    out = {"kind": kind}
+    if extra != nil:
+        out.update(extra)
+    return out
+
+def any_value():
+    return _rule("any")
+
+def literal(value):
+    return _rule("literal", {"value": value})
+
+def optional(rule):
+    return _rule("optional", {"rule": rule})
+
+def string(options=nil):
+    return _rule("string", options)
+
+def integer(options=nil):
+    return _rule("integer", options)
+
+def number(options=nil):
+    return _rule("number", options)
+
+def boolean(options=nil):
+    return _rule("boolean", options)
+
+def list_of(item_rule=nil, options=nil):
+    opts = {}
+    if options != nil:
+        opts.update(options)
+    opts["item"] = item_rule
+    return _rule("list", opts)
+
+def shape(fields, allow_extra=false):
+    return _rule("shape", {"fields": fields, "allow_extra": allow_extra})
+
+def mapping(value_rule=nil, options=nil):
+    opts = {}
+    if options != nil:
+        opts.update(options)
+    opts["value"] = value_rule
+    return _rule("mapping", opts)
+
+def one_of(rules):
+    return _rule("one_of", {"rules": rules})
+
+def _push(errors, path, message):
+    errors.append({"path": path, "message": message})
+
+def _join_path(path, part):
+    if path == "":
+        return str(part)
+    if type(part) == "int":
+        return path + "[" + str(part) + "]"
+    return path + "." + str(part)
+
+def _is_optional(rule):
+    return type(rule) == "dict" and rule.get("kind") == "optional"
+
+def _matches_choices(value, choices):
+    for item in choices:
+        if item == value:
+            return true
+    return false
+
+def _validate(rule, value, path, errors):
+    if rule == nil:
+        return
+    if type(rule) != "dict":
+        _push(errors, path, "rules must be dicts")
+        return
+
+    kind = rule.get("kind", "any")
+    if kind == "any":
+        return
+    if kind == "optional":
+        if value == nil:
+            return
+        return _validate(rule.get("rule"), value, path, errors)
+    if kind == "literal":
+        if value != rule.get("value"):
+            _push(errors, path, "expected literal " + str(rule.get("value")))
+        return
+    if kind == "string":
+        if type(value) != "str":
+            _push(errors, path, "expected string")
+            return
+        if rule.get("min") != nil and len(value) < int(rule.get("min")):
+            _push(errors, path, "string is shorter than minimum length " + str(rule.get("min")))
+        if rule.get("max") != nil and len(value) > int(rule.get("max")):
+            _push(errors, path, "string is longer than maximum length " + str(rule.get("max")))
+        if rule.get("choices") != nil and not _matches_choices(value, rule.get("choices")):
+            _push(errors, path, "value is not in the allowed choices")
+        if rule.get("pattern") != nil and re.fullmatch(str(rule.get("pattern")), value) != true:
+            _push(errors, path, "string does not match pattern")
+        return
+    if kind == "integer":
+        if type(value) != "int":
+            _push(errors, path, "expected integer")
+            return
+        if rule.get("min") != nil and value < int(rule.get("min")):
+            _push(errors, path, "integer is smaller than minimum " + str(rule.get("min")))
+        if rule.get("max") != nil and value > int(rule.get("max")):
+            _push(errors, path, "integer is larger than maximum " + str(rule.get("max")))
+        return
+    if kind == "number":
+        if type(value) != "int" and type(value) != "float":
+            _push(errors, path, "expected number")
+            return
+        if rule.get("min") != nil and value < float(rule.get("min")):
+            _push(errors, path, "number is smaller than minimum " + str(rule.get("min")))
+        if rule.get("max") != nil and value > float(rule.get("max")):
+            _push(errors, path, "number is larger than maximum " + str(rule.get("max")))
+        return
+    if kind == "boolean":
+        if type(value) != "bool":
+            _push(errors, path, "expected boolean")
+        return
+    if kind == "list":
+        if type(value) != "list" and type(value) != "tuple":
+            _push(errors, path, "expected list")
+            return
+        if rule.get("min") != nil and len(value) < int(rule.get("min")):
+            _push(errors, path, "list is shorter than minimum length " + str(rule.get("min")))
+        if rule.get("max") != nil and len(value) > int(rule.get("max")):
+            _push(errors, path, "list is longer than maximum length " + str(rule.get("max")))
+        item_rule = rule.get("item")
+        if item_rule != nil:
+            index = 0
+            for item in value:
+                _validate(item_rule, item, _join_path(path, index), errors)
+                index = index + 1
+        return
+    if kind == "mapping":
+        if type(value) != "dict":
+            _push(errors, path, "expected dict")
+            return
+        value_rule = rule.get("value")
+        if value_rule != nil:
+            for pair in value.items():
+                _validate(value_rule, pair[1], _join_path(path, pair[0]), errors)
+        return
+    if kind == "shape":
+        if type(value) != "dict":
+            _push(errors, path, "expected dict")
+            return
+        fields = rule.get("fields", {})
+        allow_extra = rule.get("allow_extra", false)
+        for field_pair in fields.items():
+            field_name = field_pair[0]
+            field_rule = field_pair[1]
+            if field_name not in value:
+                if not _is_optional(field_rule):
+                    _push(errors, _join_path(path, field_name), "missing required field")
+            else:
+                _validate(field_rule, value[field_name], _join_path(path, field_name), errors)
+        if allow_extra != true:
+            for pair in value.items():
+                if pair[0] not in fields:
+                    _push(errors, _join_path(path, pair[0]), "unexpected field")
+        return
+    if kind == "one_of":
+        rules = rule.get("rules", [])
+        for item in rules:
+            result = validate(item, value)
+            if result["ok"]:
+                return
+        _push(errors, path, "value did not match any allowed schema")
+        return
+
+    _push(errors, path, "unknown rule kind '" + str(kind) + "'")
+
+def validate(rule, value):
+    errors = []
+    _validate(rule, value, "", errors)
+    return {"ok": len(errors) == 0, "errors": errors, "value": value}
+
+def check(rule, value):
+    return validate(rule, value)["ok"]
+
+def assert_valid(rule, value):
+    result = validate(rule, value)
+    if result["ok"]:
+        return value
+    lines = []
+    for err in result["errors"]:
+        label = err["path"]
+        if label == "":
+            label = "<root>"
+        lines.append(label + ": " + err["message"])
+    raise "schema: validation failed\n" + "\n".join(lines)

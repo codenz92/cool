@@ -97,6 +97,8 @@ def cmd_help(args):
     shell_print("  edit <file>        — text editor")
     shell_print("  snake              — Snake game")
     shell_print("  http <method> <url>— HTTP client")
+    shell_print("  pulse              — concurrent health-check CLI")
+    shell_print("  control            — terminal dashboard for pulse manifests")
 
 def cmd_pwd(args):
     shell_print(cwd)

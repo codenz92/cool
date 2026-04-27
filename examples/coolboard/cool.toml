@@ -1,0 +1,22 @@
+name = "coolboard"
+version = "0.1.0"
+main = "src/main.cool"
+sources = ["src"]
+
+[build]
+profile = "release"
+
+[capabilities]
+file = true
+network = true
+env = true
+process = false
+
+[tasks.run]
+run = "cool src/main.cool {args}"
+
+[tasks.doc]
+run = "cool doc src/main.cool"
+
+[tasks.pulse]
+run = "cool ../../apps/pulse.cool --file pulse.toml"

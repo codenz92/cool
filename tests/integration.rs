@@ -383,6 +383,93 @@ fn run_cool_subcommand_in_dir_with_env(
     ))
 }
 
+fn write_phase6_data_suite(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("main.cool"),
+        r#"import base64
+import bytes
+import codec
+import config
+import html
+import schema
+
+blob = bytes.from_string("A🙂")
+print(bytes.hex(blob))
+print(bytes.to_string(blob))
+print(bytes.read_u16_le(bytes.u16_le(513)))
+print(bytes.read_u32_be(bytes.u32_be(16909060)))
+print(base64.encode_text("Cool!"))
+print(base64.decode_text("Q29vbCE="))
+print(codec.encode("hex", [0, 255]))
+decoded = codec.decode("hex", "00ff")
+print(decoded[1])
+print(codec.decode("utf-8", codec.encode("utf-8", "hi")))
+print(html.escape("<tag &\"'>"))
+print(html.extract_title("<html><title>Hi &amp; Bye</title></html>"))
+print(html.extract_links("<a href='https://example.com'>x</a>")[0])
+cfg = config.load("settings.env")
+print(cfg["HELLO"])
+print(cfg["SPACED"])
+ini = config.load("settings.ini")
+print(ini["db"]["port"])
+print(config.expand_env("hi ${COOL_NAME}", {"COOL_NAME": "Ada"}))
+rule = schema.shape({
+    "name": schema.string({"min": 1}),
+    "age": schema.optional(schema.integer({"min": 0})),
+}, false)
+print(schema.check(rule, {"name": "Ada"}))
+bad = schema.validate(rule, {"name": "", "extra": true})
+print(bad["ok"])
+print(len(bad["errors"]) >= 2)
+"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("settings.env"), "HELLO=world\nSPACED=\"hello world\"\n").unwrap();
+    std::fs::write(dir.join("settings.ini"), "[db]\nport = 5432\n").unwrap();
+}
+
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+    let status = Command::new("cp")
+        .args(["-R", src.to_str().unwrap(), dst.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "failed to copy {} -> {}",
+        src.display(),
+        dst.display()
+    );
+}
+
+fn try_http_get_text(addr: &str, path: &str) -> Result<String, std::io::Error> {
+    let mut stream = TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream
+        .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
+        .map_err(std::io::Error::other)?;
+    stream.shutdown(std::net::Shutdown::Write).ok();
+    let mut response = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => response.extend_from_slice(&chunk[..n]),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock || err.kind() == std::io::ErrorKind::TimedOut => {
+                break
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(String::from_utf8_lossy(&response).to_string())
+}
+
+fn response_contains_coolboard_health(response: &str) -> bool {
+    response.contains("200 OK")
+        && (response.contains("\"status\": \"ok\"") || response.contains("\"status\":\"ok\""))
+        && (response.contains("\"service\": \"coolboard\"") || response.contains("\"service\":\"coolboard\""))
+}
+
 fn object_has_section(path: &std::path::Path, section: &str) -> Result<bool, String> {
     if cfg!(target_os = "macos") {
         let (segment, section_name) = section
@@ -6559,6 +6646,12 @@ fn test_cool_publish_creates_source_package_and_metadata() {
 name = "demo"
 version = "0.4.0"
 main = "src/main.cool"
+
+[capabilities]
+file = true
+network = false
+env = true
+process = false
 "#,
     )
     .unwrap();
@@ -6595,7 +6688,343 @@ main = "src/main.cool"
     assert_eq!(metadata["package_name"].as_str().unwrap(), "demo-0.4.0");
     assert_eq!(metadata["project"]["name"].as_str().unwrap(), "demo");
     assert_eq!(metadata["project"]["version"].as_str().unwrap(), "0.4.0");
+    assert_eq!(metadata["capabilities"]["network"].as_bool(), Some(false));
+    assert_eq!(metadata["capabilities"]["process"].as_bool(), Some(false));
     assert!(metadata["source_hash"].as_str().unwrap().len() >= 32);
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_project_capabilities_deny_file_in_interpreter() {
+    let project_dir = unique_temp_dir("cool_capabilities_file_interp");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        "name = \"captest\"\nmain = \"main.cool\"\n\n[capabilities]\nfile = false\n",
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("main.cool"), "open(\"blocked.txt\", \"w\")\n").unwrap();
+
+    let (_, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["main.cool"]).unwrap();
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("CapabilityError: file access denied"),
+        "stderr:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_project_capabilities_deny_process_in_vm() {
+    let project_dir = unique_temp_dir("cool_capabilities_process_vm");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        "name = \"captest\"\nmain = \"main.cool\"\n\n[capabilities]\nprocess = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("main.cool"),
+        "import subprocess\nprint(subprocess.run(\"printf nope\"))\n",
+    )
+    .unwrap();
+
+    let (_, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["--vm", "main.cool"]).unwrap();
+    assert_ne!(code, 0);
+    assert!(
+        stderr.contains("CapabilityError: process access denied"),
+        "stderr:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_platform_capabilities_reports_manifest_policy() {
+    let project_dir = unique_temp_dir("cool_platform_capabilities");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        "name = \"captest\"\nmain = \"main.cool\"\n\n[capabilities]\nfile = false\nnetwork = false\nenv = true\nprocess = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("main.cool"),
+        "import platform\nprint(platform.capabilities())\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["main.cool"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("\"file\": false"), "stdout:\n{stdout}");
+    assert!(stdout.contains("\"network\": false"), "stdout:\n{stdout}");
+    assert!(stdout.contains("\"env\": true"), "stdout:\n{stdout}");
+    assert!(stdout.contains("\"process\": false"), "stdout:\n{stdout}");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_jobs_stdlib_supports_tasks_channels_and_await_all_in_interpreter() {
+    let output = run_cool(
+        r#"import jobs
+g = jobs.group()
+ch = jobs.channel(g)
+jobs.send(ch, "hello")
+print(jobs.recv(ch))
+jobs.command(g, "printf ok", 2)
+jobs.sleep(g, 0.02)
+for result in jobs.await_all(g):
+    print(result["kind"] + ":" + str(result["ok"]))
+"#,
+    )
+    .unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines, vec!["hello", "command:true", "sleep:true"]);
+}
+
+#[test]
+fn test_jobs_stdlib_supports_tasks_channels_and_await_all_in_vm() {
+    let output = run_cool_vm(
+        r#"import jobs
+g = jobs.group()
+ch = jobs.channel(g)
+jobs.send(ch, "hello")
+print(jobs.recv(ch))
+jobs.command(g, "printf ok", 2)
+jobs.sleep(g, 0.02)
+for result in jobs.await_all(g):
+    print(result["kind"] + ":" + str(result["ok"]))
+"#,
+    )
+    .unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines, vec!["hello", "command:true", "sleep:true"]);
+}
+
+#[test]
+fn test_phase6_data_stdlib_modules_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_phase6_data_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_data_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &[]).unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "41f09f9982",
+            "A🙂",
+            "513",
+            "16909060",
+            "Q29vbCE=",
+            "Cool!",
+            "00ff",
+            "255",
+            "hi",
+            "&lt;tag &amp;&quot;&#39;&gt;",
+            "Hi & Bye",
+            "https://example.com",
+            "world",
+            "hello world",
+            "5432",
+            "hi Ada",
+            "true",
+            "false",
+            "true",
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_data_stdlib_modules_in_vm() {
+    let temp_dir = unique_temp_dir("cool_phase6_data_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_data_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "41f09f9982",
+            "A🙂",
+            "513",
+            "16909060",
+            "Q29vbCE=",
+            "Cool!",
+            "00ff",
+            "255",
+            "hi",
+            "&lt;tag &amp;&quot;&#39;&gt;",
+            "Hi & Bye",
+            "https://example.com",
+            "world",
+            "hello world",
+            "5432",
+            "hi Ada",
+            "true",
+            "false",
+            "true",
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cool_pkg_reports_project_info_and_capabilities() {
+    let project_dir = unique_temp_dir("cool_pkg_phase17");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        "name = \"pkgdemo\"\nversion = \"1.2.3\"\nmain = \"main.cool\"\n\n[capabilities]\nprocess = false\n",
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("main.cool"), "print(\"pkgdemo\")\n").unwrap();
+
+    let (stdout_info, stderr_info, code_info) = run_cool_subcommand_in_dir(&project_dir, &["pkg", "info"]).unwrap();
+    assert_eq!(code_info, 0, "stdout:\n{stdout_info}\nstderr:\n{stderr_info}");
+    assert!(stdout_info.contains("pkgdemo v1.2.3"), "stdout:\n{stdout_info}");
+    assert!(stdout_info.contains("Capabilities process"), "stdout:\n{stdout_info}");
+
+    let (stdout_doctor, stderr_doctor, code_doctor) =
+        run_cool_subcommand_in_dir(&project_dir, &["pkg", "doctor"]).unwrap();
+    assert_eq!(code_doctor, 0, "stdout:\n{stdout_doctor}\nstderr:\n{stderr_doctor}");
+    assert!(stdout_doctor.contains("OK   main file"), "stdout:\n{stdout_doctor}");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_pulse_and_control_apps_run_checks_from_manifest() {
+    let temp_dir = unique_temp_dir("cool_pulse_apps");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let manifest_path = temp_dir.join("pulse.toml");
+    std::fs::write(
+        &manifest_path,
+        "[checks.ok]\ncommand = \"printf ok\"\ntimeout = 2\n\n[checks.pause]\nsleep = 0.02\n",
+    )
+    .unwrap();
+
+    let repo_root = std::env::current_dir().unwrap();
+    let pulse_path = repo_root.join("apps").join("pulse.cool");
+    let control_path = repo_root.join("apps").join("control.cool");
+
+    let pulse_output = Command::new(cool_bin())
+        .args([pulse_path.to_str().unwrap(), "--file", manifest_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        pulse_output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&pulse_output.stdout),
+        String::from_utf8_lossy(&pulse_output.stderr)
+    );
+    let pulse_output = String::from_utf8_lossy(&pulse_output.stdout).to_string();
+    assert!(
+        pulse_output.contains("2 total, 2 ok, 0 failed"),
+        "stdout:\n{pulse_output}"
+    );
+    assert!(pulse_output.contains("command"), "stdout:\n{pulse_output}");
+    assert!(pulse_output.contains("sleep"), "stdout:\n{pulse_output}");
+
+    let control_output = Command::new(cool_bin())
+        .args([
+            control_path.to_str().unwrap(),
+            "--file",
+            manifest_path.to_str().unwrap(),
+            "--once",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        control_output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&control_output.stdout),
+        String::from_utf8_lossy(&control_output.stderr)
+    );
+    let control_output = String::from_utf8_lossy(&control_output.stdout).to_string();
+    assert!(control_output.contains("CONTROL"), "stdout:\n{control_output}");
+    assert!(control_output.contains("command"), "stdout:\n{control_output}");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_example_coolboard_builds_and_serves_health() {
+    let repo_root = std::env::current_dir().unwrap();
+    let source_dir = repo_root.join("examples").join("coolboard");
+    let project_dir = unique_temp_dir("coolboard_example_copy");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    copy_dir(&source_dir, &project_dir);
+
+    let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
+
+    let binary_path = project_dir.join("coolboard");
+    assert!(binary_path.exists(), "missing {}", binary_path.display());
+
+    let port_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = port_listener.local_addr().unwrap().port();
+    drop(port_listener);
+
+    let db_path = project_dir.join("coolboard-test.sqlite");
+    let mut child = Command::new(&binary_path)
+        .current_dir(&project_dir)
+        .env("COOLBOARD_PORT", port.to_string())
+        .env("COOLBOARD_DB", &db_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut response = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let addr = format!("127.0.0.1:{port}");
+    while Instant::now() < deadline {
+        match try_http_get_text(&addr, "/health") {
+            Ok(text) => {
+                response = text;
+                if response_contains_coolboard_health(&response) {
+                    break;
+                }
+            }
+            Err(_) => {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    child.kill().ok();
+    let output = child.wait_with_output().unwrap();
+    let child_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let child_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    assert!(
+        response_contains_coolboard_health(&response),
+        "response:\n{response}\nstdout:\n{child_stdout}\nstderr:\n{child_stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_example_kernel_demo_builds_object_artifact() {
+    let repo_root = std::env::current_dir().unwrap();
+    let source_dir = repo_root.join("examples").join("kernel_demo");
+    let project_dir = unique_temp_dir("kernel_demo_example_copy");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    copy_dir(&source_dir, &project_dir);
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build", "--emit", "object"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(project_dir.join("kernel_demo.o").exists());
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
