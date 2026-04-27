@@ -19,8 +19,18 @@ All notable changes to the Cool language project.
 - `cool new` now supports `--template app|lib|service|freestanding`, with template-specific manifests, starter source layouts, tasks, tests, and benchmarks
 - `cool build` now supports explicit artifact selection via `--emit` and `[build].emit`, covering hosted/freestanding object output, assembly (`.s`), LLVM IR (`.ll`), static libraries (`.a`), and the existing binary path
 - `cool build` now supports explicit LLVM target triples via `--target` and `[build].target`, and native pointer-width lowering (`isize`/`usize`, `word_bits`, `word_bytes`) now follows the selected target instead of the host
+- `cool build` now supports incremental native rebuilds with a project-local cache under `.cool/cache/build`, configurable via `[build].incremental` plus `--incremental` / `--no-incremental`
+- `cool build` now supports reproducible-build toggles and manifest-driven debug info defaults via `[build].reproducible` / `[build].debug`, plus pinned external tools through `[toolchain] cool|cc|ar|lld`
 - Hosted `staticlib` output archives both the generated Cool object and the hosted runtime object, so downstream native link steps can consume a single `lib*.a`
 - `--linker-script` / `linker_script` still produce kernel images by default, but `--emit` can now override that final artifact choice when you want intermediate object/assembly/IR output instead
+
+### Debugging, Profiling, And Formatting
+
+- Native builds now emit stack traces for unhandled exceptions, with function names and line tracking threaded through the LLVM runtime
+- `cool build --debug` emits native debug info and line locations for LLVM-produced binaries and objects
+- `cool bench --profile` now captures runtime hotspot summaries for native benchmarks, and the same report can be redirected through `COOL_PROFILE_OUT`
+- New `cool fmt` subcommand reformats `.cool` source files, supports `--check`, and preserves standalone plus inline `#` comments
+- `cool new` now scaffolds starter `[tasks.fmt]` tasks alongside build/test/bench/doc workflows
 
 ### API Documentation
 
@@ -36,6 +46,14 @@ All notable changes to the Cool language project.
 - Metadata records project identity, build profile, artifact kind/path, bundle includes, and manifest dependency specs; symbol maps are generated from `nm` / `llvm-nm` when available
 - `cool bundle` / `cool release` now accept `--target` and preserve manifest/CLI target triples in archive names plus release metadata
 - `cool release` now surfaces the generated metadata and symbol sidecars as part of the release flow
+
+### Packaging And Reproducibility
+
+- New `cool publish` subcommand validates a source distribution, ensures `cool.lock` is present and verified, writes `dist/<name>-<version>.publish.json`, and packages a `.coolpkg.tar.gz` archive
+- `cool publish --dry-run` performs the same lockfile/hash validation without writing the archive
+- `cool install` now supports `--locked` and `--frozen`, records dependency checksums in `cool.lock`, and rejects manifest/source drift when dependencies or selectors no longer match the lockfile
+- `cool bundle` now verifies or generates `cool.lock` before packaging, so binary artifacts and source packages share the same dependency reproducibility expectations
+- `cool new` now scaffolds starter `[tasks.publish]` tasks for projects that want a source-distribution workflow from day one
 
 ### Phase 12 — Static Semantic Core (In Progress)
 

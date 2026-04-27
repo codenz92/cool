@@ -255,11 +255,20 @@ fn run_cool_with_pty_input_delayed_close(
 }
 
 fn run_cool_subcommand_in_dir(cwd: &std::path::Path, args: &[&str]) -> Result<(String, String, i32), String> {
-    let output = Command::new(cool_bin())
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .map_err(|e| e.to_string())?;
+    run_cool_subcommand_in_dir_with_env(cwd, args, &[])
+}
+
+fn run_cool_subcommand_in_dir_with_env(
+    cwd: &std::path::Path,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(String, String, i32), String> {
+    let mut cmd = Command::new(cool_bin());
+    cmd.current_dir(cwd).args(args);
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let output = cmd.output().map_err(|e| e.to_string())?;
     Ok((
         String::from_utf8_lossy(&output.stdout).to_string(),
         String::from_utf8_lossy(&output.stderr).to_string(),
@@ -2999,8 +3008,10 @@ fn test_cool_new_writes_project_table_manifest() {
     assert!(manifest.contains("main = \"src/main.cool\""));
     assert!(manifest.contains("[build]"));
     assert!(manifest.contains("profile = \"dev\""));
+    assert!(manifest.contains("[tasks.publish]"));
     assert!(manifest.contains("[tasks.bench]"));
     assert!(manifest.contains("[tasks.doc]"));
+    assert!(manifest.contains("[tasks.fmt]"));
     let gitignore = std::fs::read_to_string(workspace_dir.join("demo").join(".gitignore")).unwrap();
     assert!(gitignore.contains(".cool/"));
     assert!(gitignore.contains("*.elf"));
@@ -3029,6 +3040,7 @@ fn test_cool_new_library_template_scaffolds_and_builds_demo() {
     assert!(manifest.contains("main = \"examples/demo.cool\""));
     assert!(manifest.contains("sources = [\"src\", \"examples\"]"));
     assert!(manifest.contains("profile = \"strict\""));
+    assert!(manifest.contains("run = \"cool publish\""));
     assert!(manifest.contains("cool doc --output docs/API.md src/toolkit.cool"));
 
     let module_src = std::fs::read_to_string(project_dir.join("src").join("toolkit.cool")).unwrap();
@@ -5639,4 +5651,280 @@ fn test_lsp_hover_and_completion_are_type_aware() {
     let exit = r#"{"jsonrpc":"2.0","method":"exit","params":null}"#;
     child.stdin.as_mut().unwrap().write_all(&lsp_message(exit)).unwrap();
     let _ = child.wait();
+}
+
+#[test]
+fn test_cool_build_incremental_reproducible_debug_manifest_flags() {
+    let project_dir = unique_temp_dir("cool_build_phase15_flags");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        format!(
+            r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "src/main.cool"
+
+[build]
+emit = "llvm-ir"
+incremental = true
+reproducible = true
+debug = true
+
+[toolchain]
+cool = "{version}"
+"#,
+            version = env!("CARGO_PKG_VERSION"),
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def helper(x: i32) -> i32:\n    return x + 1\n\nprint(helper(1))\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("debug"), "stdout:\n{stdout}");
+    assert!(stdout.contains("reproducible"), "stdout:\n{stdout}");
+
+    let ir_path = project_dir.join("demo.ll");
+    let ir = std::fs::read_to_string(&ir_path).unwrap();
+    assert!(ir.contains("!DIFile"), "expected debug file metadata:\n{ir}");
+    assert!(ir.contains("!dbg"), "expected debug locations:\n{ir}");
+    assert!(
+        !ir.contains(project_dir.to_string_lossy().as_ref()),
+        "expected reproducible debug paths, got:\n{ir}"
+    );
+
+    let (stdout2, stderr2, code2) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code2, 0, "stdout:\n{stdout2}\nstderr:\n{stderr2}");
+    assert!(stdout2.contains("Finished from cache"), "stdout:\n{stdout2}");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_rejects_mismatched_toolchain_pin() {
+    let project_dir = unique_temp_dir("cool_build_bad_toolchain_pin");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "src/main.cool"
+
+[build]
+emit = "llvm-ir"
+
+[toolchain]
+cool = "0.0.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(1)\n").unwrap();
+
+    let (_, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_ne!(code, 0);
+    assert!(stderr.contains("pinned Cool toolchain version"), "stderr:\n{stderr}");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_native_unhandled_exception_prints_stack_trace() {
+    let project_dir = unique_temp_dir("cool_build_stacktrace");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.1.0"
+main = "main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("main.cool"),
+        "def leaf():\n    raise \"boom\"\n\ndef mid():\n    leaf()\n\nmid()\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let binary_name = if std::env::consts::EXE_EXTENSION.is_empty() {
+        "demo".to_string()
+    } else {
+        format!("demo.{}", std::env::consts::EXE_EXTENSION)
+    };
+    let output = Command::new(project_dir.join(binary_name))
+        .current_dir(&project_dir)
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "binary unexpectedly succeeded");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Unhandled exception: boom"), "stderr:\n{stderr}");
+    assert!(stderr.contains("Stack trace"), "stderr:\n{stderr}");
+    assert!(stderr.contains("leaf"), "stderr:\n{stderr}");
+    assert!(stderr.contains("mid"), "stderr:\n{stderr}");
+    assert!(stderr.contains("main"), "stderr:\n{stderr}");
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_bench_profile_reports_hotspots() {
+    let temp_dir = unique_temp_dir("cool_bench_profile");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("benchmarks")).unwrap();
+    std::fs::write(
+        temp_dir.join("benchmarks").join("bench_hot.cool"),
+        r#"def hot(n):
+    total = 0
+    i = 0
+    while i < n:
+        total = total + i
+        i = i + 1
+    return total
+
+print(hot(2000))
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&temp_dir, &["bench", "--runs", "1", "--warmups", "0", "--profile"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("profile summary"), "stdout:\n{stdout}");
+    assert!(stdout.contains("hot"), "stdout:\n{stdout}");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cool_fmt_reformats_code_and_preserves_comments() {
+    let temp_dir = unique_temp_dir("cool_fmt_phase15");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let file_path = temp_dir.join("main.cool");
+    std::fs::write(&file_path, "# heading\nx=1+2 # sum\nif x>1:\n  print(\"ok\")\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["fmt", "main.cool"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let formatted = std::fs::read_to_string(&file_path).unwrap();
+    assert!(formatted.contains("# heading"));
+    assert!(formatted.contains("x = 1 + 2  # sum"), "formatted:\n{formatted}");
+    assert!(formatted.contains("if x > 1:"), "formatted:\n{formatted}");
+    assert!(formatted.contains("    print(\"ok\")"), "formatted:\n{formatted}");
+
+    let (_, stderr_check, code_check) =
+        run_cool_subcommand_in_dir(&temp_dir, &["fmt", "--check", "main.cool"]).unwrap();
+    assert_eq!(code_check, 0, "stderr:\n{stderr_check}");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_cool_install_locked_detects_dependency_checksum_changes() {
+    let workspace_dir = unique_temp_dir("cool_install_locked_checksum");
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    let toolkit_dir = workspace_dir.join("toolkit");
+    let app_dir = workspace_dir.join("app");
+    std::fs::create_dir_all(&toolkit_dir).unwrap();
+    std::fs::create_dir_all(&app_dir).unwrap();
+
+    std::fs::write(
+        toolkit_dir.join("cool.toml"),
+        r#"[project]
+name = "toolkit"
+version = "0.1.0"
+main = "main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(toolkit_dir.join("main.cool"), "def value() -> i32:\n    return 1\n").unwrap();
+
+    std::fs::write(
+        app_dir.join("cool.toml"),
+        r#"[project]
+name = "app"
+version = "0.1.0"
+main = "main.cool"
+
+[dependencies]
+toolkit = { path = "../toolkit" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(app_dir.join("main.cool"), "print(1)\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&app_dir, &["install"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    let lockfile = std::fs::read_to_string(app_dir.join("cool.lock")).unwrap();
+    assert!(lockfile.contains("checksum = "), "lockfile:\n{lockfile}");
+
+    std::fs::write(toolkit_dir.join("main.cool"), "def value() -> i32:\n    return 2\n").unwrap();
+    let (_, stderr_locked, code_locked) = run_cool_subcommand_in_dir(&app_dir, &["install", "--locked"]).unwrap();
+    assert_ne!(code_locked, 0);
+    assert!(stderr_locked.contains("checksum changed"), "stderr:\n{stderr_locked}");
+
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+}
+
+#[test]
+fn test_cool_publish_creates_source_package_and_metadata() {
+    let project_dir = unique_temp_dir("cool_publish_phase15");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.4.0"
+main = "src/main.cool"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"publish\")\n").unwrap();
+    std::fs::write(project_dir.join("README.md"), "demo\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["publish"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("Published source package"), "stdout:\n{stdout}");
+
+    let archive_path = project_dir.join("dist").join("demo-0.4.0.coolpkg.tar.gz");
+    let metadata_path = project_dir.join("dist").join("demo-0.4.0.publish.json");
+    let lock_path = project_dir.join("cool.lock");
+    assert!(archive_path.exists(), "missing {}", archive_path.display());
+    assert!(metadata_path.exists(), "missing {}", metadata_path.display());
+    assert!(lock_path.exists(), "missing {}", lock_path.display());
+
+    let tar_output = Command::new("tar")
+        .args(["tzf", archive_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        tar_output.status.success(),
+        "tar list failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&tar_output.stdout),
+        String::from_utf8_lossy(&tar_output.stderr)
+    );
+    let listing = String::from_utf8_lossy(&tar_output.stdout);
+    assert!(listing.contains("cool.toml"), "listing:\n{listing}");
+    assert!(listing.contains("cool.lock"), "listing:\n{listing}");
+    assert!(listing.contains("src/main.cool"), "listing:\n{listing}");
+
+    let metadata: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(metadata["package_name"].as_str().unwrap(), "demo-0.4.0");
+    assert_eq!(metadata["project"]["name"].as_str().unwrap(), "demo");
+    assert_eq!(metadata["project"]["version"].as_str().unwrap(), "0.4.0");
+    assert!(metadata["source_hash"].as_str().unwrap().len() >= 32);
+
+    let _ = std::fs::remove_dir_all(&project_dir);
 }

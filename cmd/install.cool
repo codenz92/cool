@@ -11,8 +11,10 @@ def shell_quote(text):
     return "'" + text.replace("'", "'\"'\"'") + "'"
 
 def usage():
-    print("install v1.0 — fetch git dependencies and write cool.lock")
+    print("install v1.0 — fetch or verify dependencies and manage cool.lock")
     print("  cool install")
+    print("  cool install --locked")
+    print("  cool install --frozen")
 
 def managed_dir(project_root):
     return path.join(project_root, ".cool")
@@ -63,6 +65,30 @@ def read_lockfile(lock_path):
     if not isinstance(parsed, "dict"):
         raise "cool.lock: root must be a table"
     return parsed
+
+def lock_dependencies(existing_lockfile):
+    if existing_lockfile == nil:
+        return []
+    deps = existing_lockfile.get("dependency", [])
+    if isinstance(deps, "list"):
+        return deps
+    return []
+
+def locked_entry(existing_lockfile, name, kind):
+    deps = lock_dependencies(existing_lockfile)
+    i = len(deps) - 1
+    while i >= 0:
+        dep = deps[i]
+        if isinstance(dep, "dict") and dep.get("name", nil) == name and dep.get("kind", nil) == kind:
+            return dep
+        i -= 1
+    return nil
+
+def cool_exe_path():
+    exe = os.getenv("COOL_EXE_PATH")
+    if exe == nil or exe == "":
+        return "cool"
+    return exe
 
 def locked_rev(existing_lockfile, name):
     if existing_lockfile == nil:
@@ -217,6 +243,51 @@ def desired_git_ref(dep, existing_lockfile):
         return "origin/" + dep["branch"]
     return locked_rev(existing_lockfile, dep["name"])
 
+def dependency_checksum(dep_root):
+    exe = cool_exe_path()
+    command = shell_quote(exe) + " hashpath " + shell_quote(dep_root)
+    result = subprocess.run(command)
+    if result["timed_out"]:
+        raise "cool install: hashing dependency '" + dep_root + "' timed out"
+    if result["code"] != 0:
+        details = result["stderr"].strip()
+        if details == "":
+            details = result["stdout"].strip()
+        if details == "":
+            details = "hashpath failed"
+        raise "cool install: failed to hash dependency '" + dep_root + "': " + details
+    return result["stdout"].strip()
+
+def dependency_required_version(dep):
+    return dep.get("version", nil)
+
+def verify_locked_dependency_spec(dep, locked):
+    if locked == nil:
+        raise "cool install: cool.lock is missing dependency '" + dep["name"] + "'"
+    required_version = dependency_required_version(dep)
+    if locked.get("required_version", nil) != required_version:
+        raise "cool install: dependency '" + dep["name"] + "' version requirement does not match cool.lock"
+    if dep["kind"] == "path":
+        if locked.get("path", nil) != dep["path"]:
+            raise "cool install: dependency '" + dep["name"] + "' path changed; run `cool install` to refresh cool.lock"
+        return
+    if locked.get("git", nil) != dep.get("git", nil):
+        raise "cool install: dependency '" + dep["name"] + "' git source changed; run `cool install` to refresh cool.lock"
+    if locked.get("branch", nil) != dep.get("branch", nil):
+        raise "cool install: dependency '" + dep["name"] + "' branch selector changed; run `cool install` to refresh cool.lock"
+    if locked.get("tag", nil) != dep.get("tag", nil):
+        raise "cool install: dependency '" + dep["name"] + "' tag selector changed; run `cool install` to refresh cool.lock"
+    requested_rev = dep.get("rev", nil)
+    if requested_rev != nil and locked.get("rev", nil) != requested_rev:
+        raise "cool install: dependency '" + dep["name"] + "' rev selector changed; run `cool install` to refresh cool.lock"
+
+def verify_locked_checksum(dep, locked, actual_checksum):
+    expected = locked.get("checksum", nil)
+    if expected == nil or expected == "":
+        raise "cool install: dependency '" + dep["name"] + "' is missing a checksum in cool.lock; run `cool install`"
+    if expected != actual_checksum:
+        raise "cool install: dependency '" + dep["name"] + "' checksum changed; run `cool install` to refresh cool.lock"
+
 def escape_toml_string(text):
     text = str(text)
     text = text.replace("\\", "\\\\")
@@ -240,6 +311,8 @@ def render_lockfile(project_name, project_version, deps):
         lines.append("kind = " + escape_toml_string(dep["kind"]))
         lines.append("path = " + escape_toml_string(dep["path"]))
         lines.append("resolved_path = " + escape_toml_string(dep["resolved_path"]))
+        if dep.get("checksum", nil) != nil:
+            lines.append("checksum = " + escape_toml_string(dep["checksum"]))
         if dep.get("version", nil) != nil:
             lines.append("version = " + escape_toml_string(dep["version"]))
         if dep.get("required_version", nil) != nil:
@@ -258,8 +331,11 @@ def ensure_dir(dir_path):
     if not os["exists"](dir_path):
         os["mkdir"](dir_path)
 
-def materialize_dependency(project, dep, existing_lockfile, out):
+def materialize_dependency(project, dep, existing_lockfile, out, locked_mode):
     dep_root = dep_resolved_root(project["root"], dep)
+    locked = locked_entry(existing_lockfile, dep["name"], dep["kind"])
+    if locked_mode:
+        verify_locked_dependency_spec(dep, locked)
     if dep["kind"] == "path":
         if not os["exists"](dep_root):
             raise "cool install: " + dep_install_hint(project["root"], dep)
@@ -267,11 +343,17 @@ def materialize_dependency(project, dep, existing_lockfile, out):
         required_version = dep.get("version", nil)
         if required_version != nil and installed_version != nil:
             check_version_constraint(dep["name"], required_version, installed_version)
+        checksum = dependency_checksum(dep_root)
+        if locked_mode:
+            if locked.get("resolved_path", nil) != dep_root:
+                raise "cool install: dependency '" + dep["name"] + "' resolved path changed; run `cool install`"
+            verify_locked_checksum(dep, locked, checksum)
         out.append({
             "name": dep["name"],
             "kind": "path",
             "path": dep["path"],
             "resolved_path": dep_root,
+            "checksum": checksum,
             "version": installed_version,
             "required_version": required_version,
             "git": nil,
@@ -284,7 +366,10 @@ def materialize_dependency(project, dep, existing_lockfile, out):
     parent = path.dirname(dep_root)
     ensure_dir(parent)
 
-    if not os["exists"](dep_root):
+    if locked_mode:
+        if not os["exists"](dep_root):
+            raise "cool install: " + dep_install_hint(project["root"], dep)
+    elif not os["exists"](dep_root):
         clone_source = dep["git"]
         if not is_remote_git_source(clone_source):
             if path.isabs(clone_source):
@@ -292,30 +377,44 @@ def materialize_dependency(project, dep, existing_lockfile, out):
             else:
                 clone_source = path.join(project["root"], clone_source)
         git_command(nil, ["clone", clone_source, dep_root])
-    elif not os["exists"](path.join(dep_root, ".git")):
+    if not os["exists"](path.join(dep_root, ".git")):
         raise "cool install: managed dependency directory '" + dep_root + "' exists but is not a git checkout"
 
-    if dep.get("branch", nil) != nil or dep.get("tag", nil) != nil:
+    if not locked_mode and (dep.get("branch", nil) != nil or dep.get("tag", nil) != nil):
         try:
             git_command(dep_root, ["fetch", "--all", "--tags"])
         except:
             pass
 
-    target = desired_git_ref(dep, existing_lockfile)
-    if target != nil:
-        git_command(dep_root, ["checkout", "--detach", target])
-
     resolved_rev = git_command(dep_root, ["rev-parse", "HEAD"])
+    if locked_mode:
+        if locked.get("resolved_path", nil) != dep_root:
+            raise "cool install: dependency '" + dep["name"] + "' resolved path changed; run `cool install`"
+        expected_rev = locked.get("rev", nil)
+        if expected_rev == nil or expected_rev == "":
+            raise "cool install: dependency '" + dep["name"] + "' is missing a locked revision; run `cool install`"
+        if resolved_rev != expected_rev:
+            raise "cool install: dependency '" + dep["name"] + "' is at rev '" + resolved_rev + "' but cool.lock expects '" + expected_rev + "'"
+    else:
+        target = desired_git_ref(dep, existing_lockfile)
+        if target != nil:
+            git_command(dep_root, ["checkout", "--detach", target])
+            resolved_rev = git_command(dep_root, ["rev-parse", "HEAD"])
+
     installed_version = maybe_project_version(dep_root)
     required_version = dep.get("version", nil)
     if required_version != nil and installed_version != nil:
         check_version_constraint(dep["name"], required_version, installed_version)
+    checksum = dependency_checksum(dep_root)
+    if locked_mode:
+        verify_locked_checksum(dep, locked, checksum)
 
     out.append({
         "name": dep["name"],
         "kind": "git",
         "path": ".cool/deps/" + dep["name"],
         "resolved_path": dep_root,
+        "checksum": checksum,
         "version": installed_version,
         "required_version": required_version,
         "git": dep["git"],
@@ -325,17 +424,17 @@ def materialize_dependency(project, dep, existing_lockfile, out):
     })
     return dep_root
 
-def install_project_dependencies(project_root, existing_lockfile, out, visited):
+def install_project_dependencies(project_root, existing_lockfile, out, visited, locked_mode):
     manifest = projectlib.read_manifest(project_root)
     project = projectlib.project_info(project_root, manifest, "cool install")
     for dep in project["dependencies"]:
-        dep_root = materialize_dependency(project, dep, existing_lockfile, out)
+        dep_root = materialize_dependency(project, dep, existing_lockfile, out, locked_mode)
         if dep_root in visited:
             continue
         visited[dep_root] = true
         dep_manifest_path = path.join(dep_root, "cool.toml")
         if os["exists"](dep_manifest_path):
-            install_project_dependencies(dep_root, existing_lockfile, out, visited)
+            install_project_dependencies(dep_root, existing_lockfile, out, visited, locked_mode)
 
 def write_lockfile(project, deps):
     ensure_dir(managed_dir(project["root"]))
@@ -347,7 +446,10 @@ if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-
     usage()
     exit(0)
 
-if len(argv) != 1:
+locked_mode = false
+if len(argv) == 2 and (argv[1] == "--locked" or argv[1] == "--frozen"):
+    locked_mode = true
+elif len(argv) != 1:
     usage()
     exit(1)
 
@@ -355,11 +457,34 @@ project_root = projectlib.discover_project_root("cool install")
 manifest = projectlib.read_manifest(project_root)
 project = projectlib.project_info(project_root, manifest, "cool install")
 existing_lockfile = read_lockfile(lockfile_path(project_root))
+if locked_mode and existing_lockfile == nil:
+    raise "cool install: --locked requires an existing cool.lock"
 deps = []
 visited = {}
-install_project_dependencies(project_root, existing_lockfile, deps, visited)
-write_lockfile(project, deps)
+install_project_dependencies(project_root, existing_lockfile, deps, visited, locked_mode)
+
+if locked_mode:
+    extras = []
+    for locked_dep in lock_dependencies(existing_lockfile):
+        if not isinstance(locked_dep, "dict"):
+            continue
+        key = locked_dep.get("name", "") + ":" + locked_dep.get("kind", "")
+        found = false
+        for dep in deps:
+            if dep["name"] + ":" + dep["kind"] == key:
+                found = true
+                break
+        if not found:
+            extras.append(key)
+    if len(extras) > 0:
+        raise "cool install: cool.lock contains dependencies that are no longer reachable; run `cool install`"
+else:
+    write_lockfile(project, deps)
 
 count = len(deps)
-print("  Installed " + str(count) + " dependenc" + ("y" if count == 1 else "ies"))
-print("  Wrote " + lockfile_path(project_root))
+if locked_mode:
+    print("  Verified " + str(count) + " dependenc" + ("y" if count == 1 else "ies"))
+    print("  Lockfile OK -> " + lockfile_path(project_root))
+else:
+    print("  Installed " + str(count) + " dependenc" + ("y" if count == 1 else "ies"))
+    print("  Wrote " + lockfile_path(project_root))

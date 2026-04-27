@@ -1,0 +1,149 @@
+import os
+import sys
+import path
+import term
+import subprocess
+import json
+import lib.projectlib
+
+def shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+def usage():
+    print("publish v1.0 — validate and package a Cool source distribution")
+    print("  cool publish [--dry-run]")
+
+def stream_result(result):
+    if result["stdout"] != "":
+        term.write(result["stdout"])
+    if result["stderr"] != "":
+        term.write(result["stderr"])
+
+def run_shell_checked(context, command):
+    result = subprocess.run(command)
+    stream_result(result)
+    if result["timed_out"]:
+        raise "cool publish: " + context + " timed out"
+    if result["code"] != 0:
+        exit(result["code"])
+    return result
+
+def ensure_dir(dir_path):
+    if not os["exists"](dir_path):
+        os["mkdir"](dir_path)
+
+def cool_exe():
+    exe = os.getenv("COOL_EXE_PATH")
+    if exe == nil or exe == "":
+        return "cool"
+    return exe
+
+def ensure_lockfile(project_root, cool):
+    lock_path = path.join(project_root, "cool.lock")
+    if not os["exists"](lock_path):
+        cmd = "cd " + shell_quote(project_root) + " && " + shell_quote(cool) + " install"
+        run_shell_checked("generate lockfile", cmd)
+    cmd = "cd " + shell_quote(project_root) + " && " + shell_quote(cool) + " install --locked"
+    run_shell_checked("verify lockfile", cmd)
+    return lock_path
+
+def package_hash(project_root, cool):
+    command = shell_quote(cool) + " hashpath " + shell_quote(project_root)
+    result = subprocess.run(command)
+    if result["timed_out"]:
+        raise "cool publish: source hash timed out"
+    if result["code"] != 0:
+        details = result["stderr"].strip()
+        if details == "":
+            details = result["stdout"].strip()
+        if details == "":
+            details = "hashpath failed"
+        raise "cool publish: " + details
+    return result["stdout"].strip()
+
+def metadata_json(project, dependencies, package_name, archive_name, source_hash):
+    return json.dumps({
+        "schema_version": 1,
+        "package_name": package_name,
+        "archive": archive_name,
+        "source_hash": source_hash,
+        "project": {
+            "name": project["name"],
+            "version": project["version"],
+            "main": project["main"],
+        },
+        "dependencies": dependencies,
+        "generated_by": {
+            "tool": "cool publish",
+            "version": "1.0",
+        },
+    })
+
+def create_archive(project_root, archive_path):
+    cmd = "cd " + shell_quote(project_root)
+    cmd = cmd + " && tar czf " + shell_quote(archive_path)
+    cmd = cmd + " --exclude .git --exclude .cool --exclude dist --exclude target ."
+    run_shell_checked("create source package", cmd)
+
+argv = sys.argv
+dry_run = false
+
+if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-h"):
+    usage()
+    exit(0)
+
+if len(argv) == 2 and argv[1] == "--dry-run":
+    dry_run = true
+elif len(argv) != 1:
+    usage()
+    exit(1)
+
+project_root = projectlib.discover_project_root("cool publish")
+manifest = projectlib.read_manifest(project_root)
+project = projectlib.project_table(manifest, "cool publish")
+name = projectlib.optional_string(project, "name", "project", "cool.toml")
+version = projectlib.optional_string(project, "version", "0.1.0", "cool.toml")
+main = projectlib.require_string(project, "main", "cool.toml")
+main_path = path.join(project_root, main)
+if not os["exists"](main_path):
+    raise "cool publish: main file '" + main + "' not found"
+
+cool = cool_exe()
+lock_path = ensure_lockfile(project_root, cool)
+source_hash = package_hash(project_root, cool)
+
+dist_dir = path.join(project_root, "dist")
+ensure_dir(dist_dir)
+package_name = name + "-" + version
+archive_name = package_name + ".coolpkg.tar.gz"
+archive_path = path.join(dist_dir, archive_name)
+metadata_path = path.join(dist_dir, package_name + ".publish.json")
+metadata = metadata_json(
+    {
+        "name": name,
+        "version": version,
+        "main": main,
+    },
+    projectlib.parse_dependencies(manifest),
+    package_name,
+    archive_name,
+    source_hash,
+)
+
+if dry_run:
+    print("  Publish validation OK")
+    print("  Lockfile -> " + lock_path)
+    print("  Source hash -> " + source_hash)
+    print("  Archive  -> " + archive_path)
+    print("  Metadata -> " + metadata_path)
+    exit(0)
+
+projectlib.write_text_file(metadata_path, metadata)
+create_archive(project_root, archive_path)
+
+print("  Published source package")
+print("  Lockfile -> " + lock_path)
+print("  Source hash -> " + source_hash)
+print("  Archive  -> " + archive_path)
+print("  Metadata -> " + metadata_path)

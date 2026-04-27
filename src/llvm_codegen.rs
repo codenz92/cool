@@ -16,6 +16,11 @@ use crate::project::ModuleResolver;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
+use inkwell::debug_info::{
+    AsDIScope, DICompileUnit, DIFile, DIFlags, DIFlagsConstants, DIScope, DWARFEmissionKind, DWARFSourceLanguage,
+    DebugInfoBuilder,
+};
+use inkwell::module::FlagBehavior;
 use inkwell::module::Module;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
 use inkwell::types::{BasicType, StructType};
@@ -31,6 +36,25 @@ use std::path::{Path, PathBuf};
 struct NativeTargetConfig {
     triple: String,
     is_host: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NativeToolchainConfig {
+    pub cool: Option<String>,
+    pub cc: Option<String>,
+    pub ar: Option<String>,
+    pub lld: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeCompileOptions {
+    pub build_mode: NativeBuildMode,
+    pub artifact_kind: NativeArtifactKind,
+    pub target_triple: Option<String>,
+    pub debug_info: bool,
+    pub reproducible: bool,
+    pub toolchain: NativeToolchainConfig,
+    pub source_root: Option<PathBuf>,
 }
 
 // ── Embedded C runtime ────────────────────────────────────────────────────────
@@ -7431,17 +7455,189 @@ int32_t cool_get_num_closure_captures(void) {
 
 #define MAX_EXCEPTION_FRAMES 16
 #define MAX_WITH_MANAGERS 64
+#define MAX_TRACE_FRAMES 256
+#define MAX_PROFILE_ENTRIES 512
 
 typedef struct {
     void* buf;
     int active;
     int with_depth;
+    int trace_depth;
 } ExceptionFrame;
+
+typedef struct {
+    const char* file;
+    const char* function;
+    int line;
+    double start_time;
+} CoolTraceFrame;
+
+typedef struct {
+    const char* file;
+    const char* function;
+    double inclusive_secs;
+    uint64_t calls;
+} CoolProfileEntry;
+
 static ExceptionFrame g_exception_frames[MAX_EXCEPTION_FRAMES];
 static int g_exception_frame_count = 0;
 static CoolVal g_current_exception;
 static CoolVal g_with_managers[MAX_WITH_MANAGERS];
 static int g_with_manager_count = 0;
+static CoolTraceFrame g_trace_frames[MAX_TRACE_FRAMES];
+static int g_trace_frame_count = 0;
+static CoolProfileEntry g_profile_entries[MAX_PROFILE_ENTRIES];
+static int g_profile_entry_count = 0;
+static int g_profile_enabled = -1;
+static int g_profile_flush_registered = 0;
+static const char* g_profile_output_path = NULL;
+
+static double cool_now_monotonic_secs(void);
+
+static int cool_profile_find_entry(const char* file, const char* function) {
+    for (int i = 0; i < g_profile_entry_count; i++) {
+        if (strcmp(g_profile_entries[i].file, file) == 0 &&
+            strcmp(g_profile_entries[i].function, function) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void cool_profile_record(const char* file, const char* function, double elapsed_secs) {
+    if (!g_profile_enabled || !file || !function) {
+        return;
+    }
+    int idx = cool_profile_find_entry(file, function);
+    if (idx < 0) {
+        if (g_profile_entry_count >= MAX_PROFILE_ENTRIES) {
+            return;
+        }
+        idx = g_profile_entry_count++;
+        g_profile_entries[idx].file = file;
+        g_profile_entries[idx].function = function;
+        g_profile_entries[idx].inclusive_secs = 0.0;
+        g_profile_entries[idx].calls = 0;
+    }
+    g_profile_entries[idx].inclusive_secs += elapsed_secs;
+    g_profile_entries[idx].calls += 1;
+}
+
+static void cool_profile_flush(void) {
+    if (!g_profile_enabled || !g_profile_output_path || *g_profile_output_path == '\0') {
+        return;
+    }
+
+    FILE* out = NULL;
+    if (strcmp(g_profile_output_path, "-") == 0) {
+        out = stderr;
+    } else {
+        out = fopen(g_profile_output_path, "w");
+        if (!out) {
+            return;
+        }
+    }
+
+    int order[MAX_PROFILE_ENTRIES];
+    for (int i = 0; i < g_profile_entry_count; i++) {
+        order[i] = i;
+    }
+    for (int i = 0; i < g_profile_entry_count; i++) {
+        for (int j = i + 1; j < g_profile_entry_count; j++) {
+            if (g_profile_entries[order[j]].inclusive_secs > g_profile_entries[order[i]].inclusive_secs) {
+                int tmp = order[i];
+                order[i] = order[j];
+                order[j] = tmp;
+            }
+        }
+    }
+
+    fprintf(out, "profile summary\n");
+    fprintf(out, "%-32s %10s %10s %s\n", "function", "calls", "total_ms", "location");
+    for (int i = 0; i < g_profile_entry_count; i++) {
+        CoolProfileEntry entry = g_profile_entries[order[i]];
+        fprintf(
+            out,
+            "%-32s %10llu %10.3f %s\n",
+            entry.function,
+            (unsigned long long)entry.calls,
+            entry.inclusive_secs * 1000.0,
+            entry.file
+        );
+    }
+    if (out != stderr) {
+        fclose(out);
+    }
+    g_profile_output_path = NULL;
+}
+
+static void cool_profile_flush_atexit(void) {
+    cool_profile_flush();
+}
+
+static void cool_profile_ensure_initialized(void) {
+    if (g_profile_enabled != -1) {
+        return;
+    }
+    const char* output = getenv("COOL_PROFILE_OUT");
+    if (output && *output) {
+        g_profile_enabled = 1;
+        g_profile_output_path = output;
+        if (!g_profile_flush_registered) {
+            atexit(cool_profile_flush_atexit);
+            g_profile_flush_registered = 1;
+        }
+    } else {
+        g_profile_enabled = 0;
+    }
+}
+
+void cool_trace_push(const char* file, const char* function) {
+    cool_profile_ensure_initialized();
+    if (g_trace_frame_count >= MAX_TRACE_FRAMES) {
+        return;
+    }
+    CoolTraceFrame* frame = &g_trace_frames[g_trace_frame_count++];
+    frame->file = file;
+    frame->function = function;
+    frame->line = 0;
+    frame->start_time = g_profile_enabled ? cool_now_monotonic_secs() : 0.0;
+}
+
+void cool_trace_pop(void) {
+    if (g_trace_frame_count <= 0) {
+        return;
+    }
+    CoolTraceFrame frame = g_trace_frames[--g_trace_frame_count];
+    if (g_profile_enabled) {
+        double elapsed = cool_now_monotonic_secs() - frame.start_time;
+        if (elapsed < 0.0) {
+            elapsed = 0.0;
+        }
+        cool_profile_record(frame.file, frame.function, elapsed);
+    }
+}
+
+void cool_trace_set_line(int32_t line) {
+    if (g_trace_frame_count > 0) {
+        g_trace_frames[g_trace_frame_count - 1].line = (int)line;
+    }
+}
+
+static void cool_print_stack_trace(FILE* out) {
+    if (g_trace_frame_count <= 0) {
+        return;
+    }
+    fprintf(out, "Stack trace (most recent call last):\n");
+    for (int i = g_trace_frame_count - 1; i >= 0; i--) {
+        CoolTraceFrame frame = g_trace_frames[i];
+        if (frame.line > 0) {
+            fprintf(out, "  at %s (%s:%d)\n", frame.function, frame.file, frame.line);
+        } else {
+            fprintf(out, "  at %s (%s)\n", frame.function, frame.file);
+        }
+    }
+}
 
 static void cool_call_with_exit(CoolVal manager) {
     cool_call_method_vararg(manager, "method___exit__", 3, cv_nil(), cv_nil(), cv_nil());
@@ -7475,6 +7671,7 @@ void cool_enter_try(void* buf) {
         g_exception_frames[idx].buf = buf;
         g_exception_frames[idx].active = 1;
         g_exception_frames[idx].with_depth = g_with_manager_count;
+        g_exception_frames[idx].trace_depth = g_trace_frame_count;
         g_exception_frame_count++;
         return;
     }
@@ -7496,6 +7693,9 @@ void cool_raise(CoolVal exc) {
     for (int i = g_exception_frame_count - 1; i >= 0; i--) {
         if (g_exception_frames[i].active) {
             cool_unwind_withs_to(g_exception_frames[i].with_depth);
+            while (g_trace_frame_count > g_exception_frames[i].trace_depth) {
+                cool_trace_pop();
+            }
             g_exception_frames[i].active = 0;
             longjmp(*(jmp_buf*)g_exception_frames[i].buf, 1);
         }
@@ -7504,6 +7704,11 @@ void cool_raise(CoolVal exc) {
     /* No try frame found - print and exit */
     char* msg = cool_to_str(exc);
     fprintf(stderr, "Unhandled exception: %s\n", msg);
+    cool_print_stack_trace(stderr);
+    while (g_trace_frame_count > 0) {
+        cool_trace_pop();
+    }
+    cool_profile_flush();
     exit(1);
 }
 
@@ -7901,6 +8106,9 @@ struct RuntimeFns<'ctx> {
     cool_register_class_parent: FunctionValue<'ctx>,
     cool_push_with: FunctionValue<'ctx>,
     cool_pop_with: FunctionValue<'ctx>,
+    cool_trace_push: FunctionValue<'ctx>,
+    cool_trace_pop: FunctionValue<'ctx>,
+    cool_trace_set_line: FunctionValue<'ctx>,
     // module/import
     #[allow(dead_code)]
     cool_get_module: FunctionValue<'ctx>,
@@ -7949,6 +8157,13 @@ struct StructInfo<'ctx> {
     layout_global: inkwell::values::GlobalValue<'ctx>,
 }
 
+struct DebugContext<'ctx> {
+    builder: DebugInfoBuilder<'ctx>,
+    compile_unit: DICompileUnit<'ctx>,
+    files: HashMap<PathBuf, DIFile<'ctx>>,
+    current_scope: Option<DIScope<'ctx>>,
+}
+
 // ── Compiler struct ───────────────────────────────────────────────────────────
 
 struct Compiler<'ctx> {
@@ -7956,6 +8171,8 @@ struct Compiler<'ctx> {
     module: Module<'ctx>,
     builder: Builder<'ctx>,
     build_mode: NativeBuildMode,
+    reproducible: bool,
+    debug: Option<DebugContext<'ctx>>,
     /// %CoolVal = type { i32, i64 }
     cv_type: StructType<'ctx>,
     rt: RuntimeFns<'ctx>,
@@ -7995,6 +8212,8 @@ struct Compiler<'ctx> {
     compiling_modules: Vec<PathBuf>,
     /// Source directory used to resolve relative imports for the current compilation unit.
     current_source_dir: PathBuf,
+    current_source_path: PathBuf,
+    current_source_root: Option<PathBuf>,
     module_resolver: ModuleResolver,
     /// Prefix applied to generated LLVM symbols for the current compilation unit.
     symbol_prefix: String,
@@ -8013,6 +8232,7 @@ struct Compiler<'ctx> {
     free_hook_global: Option<inkwell::values::GlobalValue<'ctx>>,
     target_triple: String,
     pointer_bytes: u32,
+    current_line: u32,
 }
 
 /// Information about a compiled class
@@ -8138,9 +8358,60 @@ impl NativeArtifactKind {
 // ── Constructor & runtime declarations ───────────────────────────────────────
 
 impl<'ctx> Compiler<'ctx> {
-    fn new(context: &'ctx Context, build_mode: NativeBuildMode, target_triple: String, pointer_bytes: u32) -> Self {
+    fn new(
+        context: &'ctx Context,
+        build_mode: NativeBuildMode,
+        target_triple: String,
+        pointer_bytes: u32,
+        debug_info: bool,
+        reproducible: bool,
+        source_root: Option<PathBuf>,
+    ) -> Self {
         let module = context.create_module("cool_program");
         let builder = context.create_builder();
+        let initial_source = source_root.clone().unwrap_or_else(|| PathBuf::from("."));
+
+        let debug = if debug_info {
+            module.add_basic_value_flag(
+                "Debug Info Version",
+                FlagBehavior::Warning,
+                context.i32_type().const_int(3, false),
+            );
+            #[cfg(target_os = "macos")]
+            module.add_basic_value_flag(
+                "Dwarf Version",
+                FlagBehavior::Warning,
+                context.i32_type().const_int(4, false),
+            );
+
+            let (dibuilder, compile_unit) = module.create_debug_info_builder(
+                true,
+                DWARFSourceLanguage::C,
+                "cool",
+                ".",
+                "cool",
+                false,
+                "",
+                0,
+                "",
+                DWARFEmissionKind::Full,
+                0,
+                false,
+                false,
+                "",
+                "",
+            );
+            let mut files = HashMap::new();
+            files.insert(initial_source.clone(), compile_unit.get_file());
+            Some(DebugContext {
+                builder: dibuilder,
+                compile_unit,
+                files,
+                current_scope: None,
+            })
+        } else {
+            None
+        };
 
         // %CoolVal = type { i32, i64 }
         let cv_type = context.opaque_struct_type("CoolVal");
@@ -8152,6 +8423,8 @@ impl<'ctx> Compiler<'ctx> {
             context,
             module,
             builder,
+            reproducible,
+            debug,
             cv_type,
             rt,
             locals: HashMap::new(),
@@ -8172,6 +8445,8 @@ impl<'ctx> Compiler<'ctx> {
             compiled_modules: HashMap::new(),
             compiling_modules: Vec::new(),
             current_source_dir: PathBuf::from("."),
+            current_source_path: initial_source,
+            current_source_root: source_root,
             module_resolver: ModuleResolver::local_only(PathBuf::from(".")),
             symbol_prefix: String::new(),
             allow_toplevel_defs: false,
@@ -8183,6 +8458,7 @@ impl<'ctx> Compiler<'ctx> {
             free_hook_global: None,
             target_triple,
             pointer_bytes,
+            current_line: 1,
             build_mode,
         }
     }
@@ -8348,6 +8624,9 @@ impl<'ctx> Compiler<'ctx> {
             cool_register_class_parent: decl!("cool_register_class_parent", voidt.fn_type(&[ptrm, ptrm], false)),
             cool_push_with: decl!("cool_push_with", voidt.fn_type(&[cv], false)),
             cool_pop_with: decl!("cool_pop_with", voidt.fn_type(&[], false)),
+            cool_trace_push: decl!("cool_trace_push", voidt.fn_type(&[ptrm, ptrm], false)),
+            cool_trace_pop: decl!("cool_trace_pop", voidt.fn_type(&[], false)),
+            cool_trace_set_line: decl!("cool_trace_set_line", voidt.fn_type(&[i32m], false)),
             // module/import
             cool_get_module: decl!("cool_get_module", cv_type.fn_type(&[ptrm], false)),
             cool_module_exists: decl!("cool_module_exists", i32t.fn_type(&[ptrm], false)),
@@ -8401,6 +8680,141 @@ impl<'ctx> Compiler<'ctx> {
             64 => self.context.i64_type(),
             bits => self.context.custom_width_int_type(bits),
         }
+    }
+
+    fn trace_enabled(&self) -> bool {
+        !self.build_mode.is_freestanding()
+    }
+
+    fn source_display_path(&self) -> String {
+        normalized_source_display_path(
+            &self.current_source_path,
+            self.reproducible,
+            self.current_source_root.as_deref(),
+        )
+    }
+
+    fn set_source_context(&mut self, path: PathBuf) {
+        self.current_source_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        self.current_source_path = path;
+    }
+
+    fn debug_file_for_current_source(&mut self) -> Option<DIFile<'ctx>> {
+        let debug = self.debug.as_mut()?;
+        if let Some(existing) = debug.files.get(&self.current_source_path).copied() {
+            return Some(existing);
+        }
+        let (file_name, directory) = debug_path_parts(
+            &self.current_source_path,
+            self.reproducible,
+            self.current_source_root.as_deref(),
+        );
+        let file = debug.builder.create_file(&file_name, &directory);
+        debug.files.insert(self.current_source_path.clone(), file);
+        Some(file)
+    }
+
+    fn current_debug_scope(&self) -> Option<DIScope<'ctx>> {
+        self.debug.as_ref().and_then(|debug| debug.current_scope)
+    }
+
+    fn set_current_line(&mut self, line: usize) -> Result<(), String> {
+        self.current_line = line as u32;
+        if self.trace_enabled() {
+            let line_value = self.context.i32_type().const_int(line as u64, false);
+            self.builder
+                .build_call(self.rt.cool_trace_set_line, &[line_value.into()], "trace_line")
+                .unwrap();
+        }
+
+        let scope = self.debug.as_ref().and_then(|debug| debug.current_scope);
+        if let Some(scope) = scope {
+            let debug = self.debug.as_ref().expect("debug scope requires debug context");
+            let location = debug
+                .builder
+                .create_debug_location(self.context, line as u32, 1, scope, None);
+            self.builder.set_current_debug_location(location);
+        }
+
+        Ok(())
+    }
+
+    fn restore_debug_scope(&mut self, scope: Option<DIScope<'ctx>>, line: u32) {
+        self.current_line = line;
+        if let Some(debug) = self.debug.as_mut() {
+            debug.current_scope = scope;
+            if scope.is_some() {
+                let _ = self.set_current_line(line as usize);
+            } else {
+                self.builder.unset_current_debug_location();
+            }
+        }
+    }
+
+    fn enter_function_debug_scope(&mut self, fn_val: FunctionValue<'ctx>, display_name: &str, line: usize) {
+        let Some(file) = self.debug_file_for_current_source() else {
+            return;
+        };
+        let debug = self.debug.as_mut().expect("debug file requires debug context");
+        let subroutine_type = debug.builder.create_subroutine_type(file, None, &[], DIFlags::PUBLIC);
+        let linkage_name = fn_val.get_name().to_str().ok();
+        let subprogram = debug.builder.create_function(
+            debug.compile_unit.as_debug_info_scope(),
+            display_name,
+            linkage_name,
+            file,
+            line as u32,
+            subroutine_type,
+            true,
+            true,
+            line as u32,
+            DIFlags::PUBLIC,
+            false,
+        );
+        fn_val.set_subprogram(subprogram);
+        debug.current_scope = Some(subprogram.as_debug_info_scope());
+        let _ = self.set_current_line(line);
+    }
+
+    fn leave_function_debug_scope(&mut self) {
+        if let Some(debug) = self.debug.as_mut() {
+            debug.current_scope = None;
+            self.builder.unset_current_debug_location();
+        }
+    }
+
+    fn emit_trace_push(&mut self, display_name: &str) {
+        if !self.trace_enabled() {
+            return;
+        }
+        let file_display = self.source_display_path();
+        let file_global_name = format!("trace_file_{}", self.fresh_name());
+        let fn_global_name = format!("trace_fn_{}", self.fresh_name());
+        let file_ptr = self
+            .builder
+            .build_global_string_ptr(&file_display, &file_global_name)
+            .unwrap();
+        let fn_ptr = self
+            .builder
+            .build_global_string_ptr(display_name, &fn_global_name)
+            .unwrap();
+        self.builder
+            .build_call(
+                self.rt.cool_trace_push,
+                &[file_ptr.as_pointer_value().into(), fn_ptr.as_pointer_value().into()],
+                "trace_push",
+            )
+            .unwrap();
+        let _ = self.set_current_line(self.current_line as usize);
+    }
+
+    fn emit_trace_pop(&mut self) {
+        if !self.trace_enabled() {
+            return;
+        }
+        self.builder
+            .build_call(self.rt.cool_trace_pop, &[], "trace_pop")
+            .unwrap();
     }
 
     fn extern_callconv_number(&self, cc: &str) -> Result<u32, String> {
@@ -9288,6 +9702,8 @@ impl<'ctx> Compiler<'ctx> {
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
         let saved_tries = std::mem::take(&mut self.try_stack);
         let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_debug_scope = self.current_debug_scope();
+        let saved_line = self.current_line;
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
         self.allow_toplevel_defs = false;
         self.current_fn_return_type = None;
@@ -9327,6 +9743,7 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+        self.restore_debug_scope(saved_debug_scope, saved_line);
 
         Ok(wrapper_fn)
     }
@@ -9735,6 +10152,7 @@ impl<'ctx> Compiler<'ctx> {
             .get_first_basic_block()
             .expect("function should have an entry block");
         let builder = self.context.create_builder();
+        builder.unset_current_debug_location();
         if let Some(first) = entry.get_first_instruction() {
             builder.position_before(&first);
         } else {
@@ -9749,6 +10167,7 @@ impl<'ctx> Compiler<'ctx> {
             .get_first_basic_block()
             .expect("function should have an entry block");
         let builder = self.context.create_builder();
+        builder.unset_current_debug_location();
         if let Some(first) = entry.get_first_instruction() {
             builder.position_before(&first);
         } else {
@@ -10034,7 +10453,10 @@ impl<'ctx> Compiler<'ctx> {
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         match stmt {
             // ── no-ops ────────────────────────────────────────────────────────
-            Stmt::SetLine(_) | Stmt::Pass => {}
+            Stmt::SetLine(line) => {
+                self.set_current_line(*line)?;
+            }
+            Stmt::Pass => {}
 
             // ── expression statement ──────────────────────────────────────────
             Stmt::Expr(expr) => {
@@ -10203,6 +10625,7 @@ impl<'ctx> Compiler<'ctx> {
                     }
                     self.emit_try_exit_from_cleanup_depth(0);
                     self.emit_cleanup_from_depth(0)?;
+                    self.emit_trace_pop();
                     let zero = self.context.i32_type().const_int(0, false);
                     self.builder.build_return(Some(&zero)).unwrap();
                 } else {
@@ -10214,6 +10637,7 @@ impl<'ctx> Compiler<'ctx> {
                                 Some(e) => self.compile_expr(e)?,
                                 None => self.build_nil(),
                             };
+                            self.emit_trace_pop();
                             self.builder.build_return(Some(&val)).unwrap();
                         }
                         Some(ret_abi) => {
@@ -10221,6 +10645,7 @@ impl<'ctx> Compiler<'ctx> {
                                 if let Some(e) = opt_expr {
                                     self.compile_expr(e)?;
                                 }
+                                self.emit_trace_pop();
                                 self.builder.build_return(None).unwrap();
                             } else if let Some(e) = opt_expr {
                                 let val = self.compile_expr(e)?;
@@ -10236,10 +10661,13 @@ impl<'ctx> Compiler<'ctx> {
                                         )
                                     }
                                 };
+                                self.emit_trace_pop();
                                 self.builder.build_return(Some(&bve)).unwrap();
                             } else if let Some(default_value) = self.default_return_value_for_abi(ret_abi)? {
+                                self.emit_trace_pop();
                                 self.builder.build_return(Some(&default_value)).unwrap();
                             } else {
+                                self.emit_trace_pop();
                                 self.builder.build_return(None).unwrap();
                             }
                         }
@@ -10635,6 +11063,8 @@ impl<'ctx> Compiler<'ctx> {
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
         let saved_tries = std::mem::take(&mut self.try_stack);
         let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_debug_scope = self.current_debug_scope();
+        let saved_line = self.current_line;
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
         self.allow_toplevel_defs = false;
         self.imported_modules = saved_imports.clone();
@@ -10680,6 +11110,7 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+        self.restore_debug_scope(saved_debug_scope, saved_line);
 
         Ok(())
     }
@@ -10722,6 +11153,8 @@ impl<'ctx> Compiler<'ctx> {
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
         let saved_tries = std::mem::take(&mut self.try_stack);
         let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_debug_scope = self.current_debug_scope();
+        let saved_line = self.current_line;
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
         self.allow_toplevel_defs = false;
         self.current_fn_return_type = ret_abi;
@@ -10731,6 +11164,15 @@ impl<'ctx> Compiler<'ctx> {
         // Build entry block
         let entry_bb = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry_bb);
+        let start_line = body
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::SetLine(line) => Some(*line),
+                _ => None,
+            })
+            .unwrap_or(1);
+        self.restore_debug_scope(None, start_line as u32);
+        self.emit_trace_push(name);
 
         // Bind parameters. For typed params, the LLVM value is a native type;
         // box it into a CoolVal so the body can use it uniformly.
@@ -10760,13 +11202,16 @@ impl<'ctx> Compiler<'ctx> {
             match ret_abi {
                 None => {
                     let nil = self.build_nil();
+                    self.emit_trace_pop();
                     self.builder.build_return(Some(&nil)).unwrap();
                 }
                 Some(abi) => match self.default_return_value_for_abi(abi)? {
                     Some(value) => {
+                        self.emit_trace_pop();
                         self.builder.build_return(Some(&value)).unwrap();
                     }
                     None => {
+                        self.emit_trace_pop();
                         self.builder.build_return(None).unwrap();
                     }
                 },
@@ -10791,6 +11236,7 @@ impl<'ctx> Compiler<'ctx> {
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+        self.restore_debug_scope(saved_debug_scope, saved_line);
 
         if !self.build_mode.is_freestanding() {
             self.bind_top_level_function_closure(name, fn_val)?;
@@ -11057,6 +11503,8 @@ impl<'ctx> Compiler<'ctx> {
                     let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
                     let saved_tries = std::mem::take(&mut self.try_stack);
                     let saved_class = self.current_class.replace(name.to_string());
+                    let saved_debug_scope = self.current_debug_scope();
+                    let saved_line = self.current_line;
                     let saved_allow_toplevel_defs = self.allow_toplevel_defs;
                     self.allow_toplevel_defs = false;
                     self.imported_modules = saved_imports.clone();
@@ -11065,6 +11513,16 @@ impl<'ctx> Compiler<'ctx> {
                     // Build entry
                     let entry = self.context.append_basic_block(fn_val, "entry");
                     self.builder.position_at_end(entry);
+                    let start_line = mbody
+                        .iter()
+                        .find_map(|stmt| match stmt {
+                            Stmt::SetLine(line) => Some(*line),
+                            _ => None,
+                        })
+                        .unwrap_or(1);
+                    let display_name = format!("{name}.{mname}");
+                    self.restore_debug_scope(None, start_line as u32);
+                    self.emit_trace_push(&display_name);
 
                     // Bind params directly from the LLVM function signature.
                     for (i, param) in params.iter().enumerate() {
@@ -11084,6 +11542,7 @@ impl<'ctx> Compiler<'ctx> {
                     // Implicit return nil
                     if !self.current_block_terminated() {
                         let nil = self.build_nil();
+                        self.emit_trace_pop();
                         self.builder.build_return(Some(&nil)).unwrap();
                     }
 
@@ -11104,6 +11563,7 @@ impl<'ctx> Compiler<'ctx> {
                     if let Some(bb) = saved_bb {
                         self.builder.position_at_end(bb);
                     }
+                    self.restore_debug_scope(saved_debug_scope, saved_line);
                 }
             }
         }
@@ -12235,14 +12695,30 @@ impl<'ctx> Compiler<'ctx> {
         let saved_tries = std::mem::take(&mut self.try_stack);
         let saved_class = self.current_class.take();
         let saved_source_dir = self.current_source_dir.clone();
+        let saved_source_path = self.current_source_path.clone();
+        let saved_debug_scope = self.current_debug_scope();
+        let saved_line = self.current_line;
         let module_prefix = format!("__mod_{}__", self.fresh_name());
         let saved_symbol_prefix = std::mem::replace(&mut self.symbol_prefix, module_prefix);
         let saved_allow_toplevel_defs = self.allow_toplevel_defs;
 
         let entry = self.context.append_basic_block(init_fn, "entry");
         self.builder.position_at_end(entry);
-        self.current_source_dir = canonical_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        self.set_source_context(canonical_path.clone());
         self.allow_toplevel_defs = true;
+        let start_line = program
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::SetLine(line) => Some(*line),
+                _ => None,
+            })
+            .unwrap_or(1);
+        let display_name = format!(
+            "module {}",
+            normalized_source_display_path(&canonical_path, self.reproducible, self.current_source_root.as_deref())
+        );
+        self.restore_debug_scope(None, start_line as u32);
+        self.emit_trace_push(&display_name);
 
         let compile_result = (|| -> Result<ModuleInfo<'ctx>, String> {
             self.declare_top_level_types(&program)?;
@@ -12283,6 +12759,7 @@ impl<'ctx> Compiler<'ctx> {
                         )
                         .unwrap();
                 }
+                self.emit_trace_pop();
                 self.builder.build_return(Some(&namespace)).unwrap();
             }
 
@@ -12310,11 +12787,13 @@ impl<'ctx> Compiler<'ctx> {
         self.try_stack = saved_tries;
         self.current_class = saved_class;
         self.current_source_dir = saved_source_dir;
+        self.current_source_path = saved_source_path;
         self.symbol_prefix = saved_symbol_prefix;
         self.allow_toplevel_defs = saved_allow_toplevel_defs;
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
+        self.restore_debug_scope(saved_debug_scope, saved_line);
 
         self.compiling_modules.pop();
 
@@ -14549,6 +15028,34 @@ fn c_string_literal(s: &str) -> String {
     out
 }
 
+fn normalized_source_display_path(path: &Path, reproducible: bool, source_root: Option<&Path>) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if reproducible {
+        let _ = source_root;
+        if let Some(file_name) = canonical.file_name().and_then(|name| name.to_str()) {
+            return file_name.to_string();
+        }
+    }
+    canonical.to_string_lossy().into_owned()
+}
+
+fn debug_path_parts(path: &Path, reproducible: bool, source_root: Option<&Path>) -> (String, String) {
+    let display = normalized_source_display_path(path, reproducible, source_root);
+    let display_path = PathBuf::from(&display);
+    let file_name = display_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(display.as_str())
+        .to_string();
+    let directory = display_path
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .filter(|parent| !parent.is_empty())
+        .unwrap_or(".")
+        .to_string();
+    (file_name, directory)
+}
+
 fn unique_temp_dir(stem: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -14621,15 +15128,20 @@ impl HostedToolchain {
     }
 }
 
-fn configured_c_compiler() -> Option<String> {
-    std::env::var("COOL_CC")
-        .ok()
+fn configured_c_compiler(config: &NativeToolchainConfig) -> Option<String> {
+    config
+        .cc
+        .clone()
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| std::env::var("COOL_CC").ok().filter(|value| !value.trim().is_empty()))
         .or_else(|| std::env::var("CC").ok().filter(|value| !value.trim().is_empty()))
 }
 
-fn resolve_hosted_toolchain(target: &NativeTargetConfig) -> Result<HostedToolchain, String> {
-    if let Some(compiler) = configured_c_compiler() {
+fn resolve_hosted_toolchain(
+    target: &NativeTargetConfig,
+    config: &NativeToolchainConfig,
+) -> Result<HostedToolchain, String> {
+    if let Some(compiler) = configured_c_compiler(config) {
         return Ok(HostedToolchain {
             compiler,
             target_flag: (!target.is_host).then(|| format!("--target={}", target.triple)),
@@ -14656,23 +15168,29 @@ fn resolve_hosted_toolchain(target: &NativeTargetConfig) -> Result<HostedToolcha
 }
 
 fn compile_runtime_object(
-    script_path: &Path,
+    _script_path: &Path,
     staging_dir: &Path,
     target: &NativeTargetConfig,
+    toolchain: &NativeToolchainConfig,
+    display_path: &str,
+    reproducible: bool,
 ) -> Result<PathBuf, String> {
     fs::create_dir_all(staging_dir).map_err(|e| format!("Failed to create runtime staging dir: {e}"))?;
     let rt_c_path = staging_dir.join("cool_runtime.c");
     let rt_o_path = staging_dir.join("cool_runtime.o");
     let runtime_source = format!(
         "static const char* COOL_SCRIPT_PATH = \"{}\";\n{}",
-        c_string_literal(&script_path.to_string_lossy()),
+        c_string_literal(display_path),
         RUNTIME_C
     );
     fs::write(&rt_c_path, runtime_source).map_err(|e| format!("Failed to write runtime source: {e}"))?;
 
-    let toolchain = resolve_hosted_toolchain(target)?;
+    let toolchain = resolve_hosted_toolchain(target, toolchain)?;
     let mut cc_cmd = std::process::Command::new(&toolchain.compiler);
     toolchain.apply_to(&mut cc_cmd);
+    if reproducible {
+        cc_cmd.env("SOURCE_DATE_EPOCH", "0");
+    }
     let cc_status = cc_cmd
         .args(["-O2", "-c"])
         .arg(&rt_c_path)
@@ -14697,15 +15215,28 @@ fn compile_runtime_object(
     Ok(rt_o_path)
 }
 
-fn find_archiver() -> Option<String> {
-    find_command_on_path(&["llvm-ar", "ar"])
+fn find_archiver(config: &NativeToolchainConfig) -> Option<String> {
+    config
+        .ar
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| find_command_on_path(&["llvm-ar", "ar"]))
 }
 
-fn write_static_library(output_path: &Path, members: &[PathBuf]) -> Result<(), String> {
-    let archiver = find_archiver()
+fn write_static_library(
+    output_path: &Path,
+    members: &[PathBuf],
+    toolchain: &NativeToolchainConfig,
+    reproducible: bool,
+) -> Result<(), String> {
+    let archiver = find_archiver(toolchain)
         .ok_or_else(|| "Failed to create static library: no archiver found (`llvm-ar` or `ar`)".to_string())?;
-    let status = std::process::Command::new(&archiver)
-        .arg("crs")
+    let mut command = std::process::Command::new(&archiver);
+    if reproducible {
+        command.env("SOURCE_DATE_EPOCH", "0");
+    }
+    let status = command
+        .arg(if reproducible { "crsD" } else { "crs" })
         .arg(output_path)
         .args(members)
         .status()
@@ -14721,10 +15252,15 @@ fn link_hosted_binary(
     object_path: &Path,
     output_path: &Path,
     target: &NativeTargetConfig,
+    toolchain: &NativeToolchainConfig,
+    reproducible: bool,
 ) -> Result<(), String> {
-    let toolchain = resolve_hosted_toolchain(target)?;
+    let toolchain = resolve_hosted_toolchain(target, toolchain)?;
     let mut link_cmd = std::process::Command::new(&toolchain.compiler);
     toolchain.apply_to(&mut link_cmd);
+    if reproducible {
+        link_cmd.env("SOURCE_DATE_EPOCH", "0");
+    }
     link_cmd
         .arg(runtime_obj)
         .arg(object_path)
@@ -14732,6 +15268,12 @@ fn link_hosted_binary(
         .arg(output_path)
         .arg("-lm")
         .arg("-lsqlite3");
+    if reproducible {
+        #[cfg(target_os = "linux")]
+        link_cmd.arg("-Wl,--build-id=none");
+        #[cfg(target_os = "macos")]
+        link_cmd.arg("-Wl,-no_uuid");
+    }
     #[cfg(target_os = "linux")]
     link_cmd.arg("-ldl");
 
@@ -14754,11 +15296,9 @@ pub fn compile_program_with_output(
     program: &Program,
     output_path: &Path,
     script_path: &Path,
-    build_mode: NativeBuildMode,
-    artifact_kind: NativeArtifactKind,
-    target_triple: Option<&str>,
+    options: &NativeCompileOptions,
 ) -> Result<(), String> {
-    if build_mode.is_freestanding() && artifact_kind == NativeArtifactKind::Binary {
+    if options.build_mode.is_freestanding() && options.artifact_kind == NativeArtifactKind::Binary {
         return Err(
             "freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, or staticlib output"
                 .to_string(),
@@ -14768,7 +15308,7 @@ pub fn compile_program_with_output(
     // Initialise LLVM target info so explicit target triples can be resolved.
     Target::initialize_all(&InitializationConfig::default());
 
-    let (machine, target) = create_target_machine(target_triple)?;
+    let (machine, target) = create_target_machine(options.target_triple.as_deref())?;
     let target_data = machine.get_target_data();
     let pointer_bytes = target_data.get_pointer_byte_size(None);
     if pointer_bytes != 4 && pointer_bytes != 8 {
@@ -14780,10 +15320,18 @@ pub fn compile_program_with_output(
     }
 
     let context = Context::create();
-    let mut compiler = Compiler::new(&context, build_mode, target.triple.clone(), pointer_bytes);
+    let mut compiler = Compiler::new(
+        &context,
+        options.build_mode,
+        target.triple.clone(),
+        pointer_bytes,
+        options.debug_info,
+        options.reproducible,
+        options.source_root.clone(),
+    );
     compiler.module.set_triple(&machine.get_triple());
     compiler.module.set_data_layout(&target_data.get_data_layout());
-    compiler.current_source_dir = script_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    compiler.set_source_context(script_path.canonicalize().unwrap_or_else(|_| script_path.to_path_buf()));
     compiler.module_resolver = ModuleResolver::discover_for_script(&compiler.current_source_dir)?;
 
     // ── Pass 1: predeclare top-level types, data, and functions ─────────────
@@ -14792,7 +15340,7 @@ pub fn compile_program_with_output(
     compiler.declare_top_level_functions(program)?;
 
     // ── Pass 2: build the selected top-level shape ───────────────────────────
-    if build_mode.is_freestanding() {
+    if options.build_mode.is_freestanding() {
         compiler.compile_freestanding_toplevel(program)?;
     } else {
         let i32_type = context.i32_type();
@@ -14801,14 +15349,29 @@ pub fn compile_program_with_output(
         compiler.builder.position_at_end(entry);
         compiler.current_fn = Some(main_fn);
         compiler.allow_toplevel_defs = true;
+        let start_line = program
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::SetLine(line) => Some(*line),
+                _ => None,
+            })
+            .unwrap_or(1);
+        compiler.enter_function_debug_scope(main_fn, "main", start_line);
+        compiler.emit_trace_push("main");
 
         compiler.compile_stmts(program)?;
 
         // Ensure main is properly terminated
         if !compiler.current_block_terminated() {
+            compiler.emit_trace_pop();
             let zero = i32_type.const_int(0, false);
             compiler.builder.build_return(Some(&zero)).unwrap();
         }
+        compiler.leave_function_debug_scope();
+    }
+
+    if let Some(debug) = compiler.debug.as_ref() {
+        debug.builder.finalize();
     }
 
     compiler
@@ -14816,7 +15379,10 @@ pub fn compile_program_with_output(
         .verify()
         .map_err(|e| format!("LLVM module verification failed: {e}"))?;
 
-    match artifact_kind {
+    let display_path =
+        normalized_source_display_path(script_path, options.reproducible, options.source_root.as_deref());
+
+    match options.artifact_kind {
         NativeArtifactKind::Object => machine
             .write_to_file(&compiler.module, FileType::Object, output_path)
             .map_err(|e| format!("Write object file error: {e}")),
@@ -14832,16 +15398,30 @@ pub fn compile_program_with_output(
                 .map_err(|e| format!("Write object file error: {e}"))?;
 
             let runtime_dir = unique_temp_dir("cool_runtime_binary");
-            let runtime_obj = compile_runtime_object(script_path, &runtime_dir, &target)?;
+            let runtime_obj = compile_runtime_object(
+                script_path,
+                &runtime_dir,
+                &target,
+                &options.toolchain,
+                &display_path,
+                options.reproducible,
+            )?;
 
-            let link_result = link_hosted_binary(&runtime_obj, &obj_path, output_path, &target);
+            let link_result = link_hosted_binary(
+                &runtime_obj,
+                &obj_path,
+                output_path,
+                &target,
+                &options.toolchain,
+                options.reproducible,
+            );
 
             fs::remove_file(&obj_path).ok();
             fs::remove_dir_all(&runtime_dir).ok();
             link_result
         }
         NativeArtifactKind::StaticLib => {
-            let staging_dir = unique_temp_dir(artifact_kind.archive_basename_hint());
+            let staging_dir = unique_temp_dir(options.artifact_kind.archive_basename_hint());
             fs::create_dir_all(&staging_dir)
                 .map_err(|e| format!("Failed to create static library staging dir: {e}"))?;
             let object_name = output_path
@@ -14857,11 +15437,18 @@ pub fn compile_program_with_output(
 
             let archive_result = (|| {
                 let mut members = vec![program_obj.clone()];
-                if !build_mode.is_freestanding() {
-                    let runtime_obj = compile_runtime_object(script_path, &staging_dir, &target)?;
+                if !options.build_mode.is_freestanding() {
+                    let runtime_obj = compile_runtime_object(
+                        script_path,
+                        &staging_dir,
+                        &target,
+                        &options.toolchain,
+                        &display_path,
+                        options.reproducible,
+                    )?;
                     members.push(runtime_obj);
                 }
-                write_static_library(output_path, &members)
+                write_static_library(output_path, &members, &options.toolchain, options.reproducible)
             })();
 
             fs::remove_dir_all(&staging_dir).ok();

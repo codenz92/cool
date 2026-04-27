@@ -39,6 +39,18 @@ pub struct CoolProject {
     pub build_profile: Option<String>,
     pub build_emit: Option<String>,
     pub build_target: Option<String>,
+    pub build_incremental: Option<bool>,
+    pub build_reproducible: Option<bool>,
+    pub build_debug: Option<bool>,
+    pub toolchain: ToolchainConfig,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ToolchainConfig {
+    pub cool: Option<String>,
+    pub cc: Option<String>,
+    pub ar: Option<String>,
+    pub lld: Option<String>,
 }
 
 fn canonical_or_path(path: PathBuf) -> PathBuf {
@@ -81,6 +93,17 @@ fn parse_string_field(value: Option<&toml::Value>, field_name: &str, context: &s
         Some(toml::Value::String(s)) => Ok(Some(s.clone())),
         Some(other) => Err(format!(
             "{context}: field '{field_name}' must be a string, got {}",
+            other.type_str()
+        )),
+    }
+}
+
+fn parse_bool_field(value: Option<&toml::Value>, field_name: &str, context: &str) -> Result<Option<bool>, String> {
+    match value {
+        None => Ok(None),
+        Some(toml::Value::Boolean(value)) => Ok(Some(*value)),
+        Some(other) => Err(format!(
+            "{context}: field '{field_name}' must be a boolean, got {}",
             other.type_str()
         )),
     }
@@ -181,17 +204,38 @@ impl CoolProject {
             .ok_or_else(|| format!("cool.toml: invalid manifest path '{}'", manifest_path.display()))?;
         let manifest_dir = canonical_or_path(manifest_dir.to_path_buf());
 
-        let (build_profile, build_emit, build_target) = match root.get("build") {
-            None => (None, None, None),
+        let (build_profile, build_emit, build_target, build_incremental, build_reproducible, build_debug) = match root
+            .get("build")
+        {
+            None => (None, None, None, None, None, None),
             Some(toml::Value::Table(table)) => {
                 let profile = parse_string_field(table.get("profile"), "profile", "cool.toml [build]")?;
                 let emit = parse_string_field(table.get("emit"), "emit", "cool.toml [build]")?;
                 let target = parse_string_field(table.get("target"), "target", "cool.toml [build]")?;
-                (profile, emit, target)
+                let incremental = parse_bool_field(table.get("incremental"), "incremental", "cool.toml [build]")?;
+                let reproducible = parse_bool_field(table.get("reproducible"), "reproducible", "cool.toml [build]")?;
+                let debug = parse_bool_field(table.get("debug"), "debug", "cool.toml [build]")?;
+                (profile, emit, target, incremental, reproducible, debug)
             }
             Some(other) => {
                 return Err(format!(
                     "cool.toml: field 'build' must be a table, got {}",
+                    other.type_str()
+                ))
+            }
+        };
+
+        let toolchain = match root.get("toolchain") {
+            None => ToolchainConfig::default(),
+            Some(toml::Value::Table(table)) => ToolchainConfig {
+                cool: parse_string_field(table.get("cool"), "cool", "cool.toml [toolchain]")?,
+                cc: parse_string_field(table.get("cc"), "cc", "cool.toml [toolchain]")?,
+                ar: parse_string_field(table.get("ar"), "ar", "cool.toml [toolchain]")?,
+                lld: parse_string_field(table.get("lld"), "lld", "cool.toml [toolchain]")?,
+            },
+            Some(other) => {
+                return Err(format!(
+                    "cool.toml: field 'toolchain' must be a table, got {}",
                     other.type_str()
                 ))
             }
@@ -298,6 +342,10 @@ impl CoolProject {
             build_profile,
             build_emit,
             build_target,
+            build_incremental,
+            build_reproducible,
+            build_debug,
+            toolchain,
         })
     }
 

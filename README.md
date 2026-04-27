@@ -33,8 +33,11 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Explicit module export control with `public` / `private` on top-level bindings and declarations
 - Build profiles for native workflows: `cool build --profile dev|release|freestanding|strict`
 - Explicit target triples for native builds: `cool build --target <triple>`
+- Incremental native build caching plus reproducible/toolchain-pinned builds via `[build]` and `[toolchain]`
+- Native stack traces on unhandled exceptions, `cool bench --profile`, and first-class `cool fmt`
 - `cool build --freestanding` to emit object files for custom/freestanding link steps; `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
 - `cool new --template app|lib|service|freestanding` for app, library, network-service, and freestanding scaffolds
+- `cool publish`, `cool install --locked`, and lockfile checksums for source-distribution packaging and reproducible dependency installs
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
@@ -475,6 +478,15 @@ linker_script = "link.ld"     # optional; enables kernel image output via LLD (c
 profile = "dev"               # optional: dev, release, freestanding, or strict
 emit = "binary"               # optional: binary, object, assembly, llvm-ir, or staticlib
 target = "x86_64-unknown-linux-gnu"  # optional: explicit LLVM target triple
+incremental = true            # optional: enable the project-local native build cache
+reproducible = true           # optional: deterministic tool output and normalized source paths
+debug = true                  # optional: emit DWARF/line locations for native builds
+
+[toolchain]
+cool = "1.0.0"               # optional: pin the Cool CLI version expected by this project
+cc = "clang"                 # optional: C compiler for hosted native links
+ar = "llvm-ar"               # optional: archiver for static libraries
+lld = "ld.lld"               # optional: linker for kernel-image flows
 
 [dependencies]
 toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
@@ -488,6 +500,10 @@ run = "cool build"
 description = "Run Cool tests"
 run = "cool test"
 
+[tasks.publish]
+description = "Validate and package a source distribution"
+run = "cool publish"
+
 [tasks.bench]
 description = "Run native benchmarks"
 run = "cool bench"
@@ -495,9 +511,13 @@ run = "cool bench"
 [tasks.doc]
 description = "Generate API docs"
 run = "cool doc --output docs/API.md"
+
+[tasks.fmt]
+description = "Format Cool source files"
+run = "cool fmt"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, or normal binaries. `[build].target` (or `cool build --target ...`) selects an explicit LLVM target triple for native output and packaging metadata. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and a starter `[tasks.doc]`, so `cool test`, `cool bench`, and `cool doc` work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` default to object output, and `release` keeps the plain hosted compile path. `[build].emit` (or `cool build --emit ...`) selects the final artifact explicitly: hosted/freestanding object files, standalone assembly, LLVM IR, static libraries, or normal binaries. `[build].target` (or `cool build --target ...`) selects an explicit LLVM target triple for native output and packaging metadata. `[build].incremental` controls the project-local native build cache under `.cool/cache/build`, while `[build].reproducible` normalizes source paths and enables deterministic archive/linker settings where the host toolchain supports them. `[build].debug` enables native debug info and line locations, and `[toolchain]` can pin the expected Cool CLI version plus external `cc`/`ar`/`lld` tools. When no explicit emit is set, `--linker-script` / `linker_script` still produce a kernel image (`.elf`). Use `cool add` to update `cool.toml`, and `cool install` / `cool install --locked` to materialize git dependencies under `.cool/deps`, verify dependency checksums, and maintain `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and starter `[tasks.publish]`, `[tasks.doc]`, and `[tasks.fmt]` tasks, so packaging, docs, and formatting work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
@@ -553,9 +573,11 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool bench [path ...]` | Compile and benchmark native Cool programs |
 | `cool bundle [--target <triple>]` | Build and package the project into a distributable tarball with metadata and symbol-map sidecars |
 | `cool release [--bump patch] [--target <triple>]` | Bump version, bundle, emit artifact metadata, and git-tag a release |
+| `cool publish [--dry-run]` | Validate dependencies and package a source distribution for publishing |
 | `cool lsp` | Start the language server (LSP) on stdin/stdout |
-| `cool install` | Fetch git dependencies and write `cool.lock` |
+| `cool install [--locked\|--frozen]` | Fetch or verify dependencies and maintain `cool.lock` with checksums |
 | `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
+| `cool fmt [--check] [path ...]` | Reformat Cool source files or report files that need formatting |
 | `cool test [path ...]` | Discover and run Cool tests |
 | `cool task [name|list ...]` | List or run manifest-defined project tasks |
 | `cool new <name> [--template kind]` | Scaffold an app, library, service, or freestanding project |
@@ -563,7 +585,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 
 ### Native benchmarks
 
-Use `cool bench` inside a project to compile and time files under `benchmarks/` (or pass explicit `.cool` benchmark files/directories). For the Cool repo itself, the bundled harness in [benchmarks/README.md](/Users/jamie/cool-lang/benchmarks/README.md) still compares native Cool binaries against matched Rust binaries for integer loops, string processing, list/dict work, and raw-memory kernels.
+Use `cool bench` inside a project to compile and time files under `benchmarks/` (or pass explicit `.cool` benchmark files/directories). Add `--profile` to capture a runtime hotspot summary for each benchmark run; the runtime also writes that report to `COOL_PROFILE_OUT` when the environment variable is set. For the Cool repo itself, the bundled harness in [benchmarks/README.md](/Users/jamie/cool-lang/benchmarks/README.md) still compares native Cool binaries against matched Rust binaries for integer loops, string processing, list/dict work, and raw-memory kernels.
 
 ### API docs
 
@@ -577,9 +599,21 @@ Use `cool build --emit ...` when you want something other than the default binar
 
 Use `cool build --target <triple>` to emit LLVM IR, assembly, objects, static libraries, or binaries for an explicit target triple, or set `[build].target = "..."` in `cool.toml` to make that the project default. `cool bundle` and `cool release` accept the same `--target` override and carry the chosen target into `dist/` archive names plus metadata. Cross-target freestanding/object-style outputs work directly through LLVM; hosted binaries and hosted `staticlib` output additionally require a C toolchain for that target (`clang`, or an explicit `COOL_CC` / `CC` toolchain).
 
+### Incremental and reproducible builds
+
+Native project builds now use a local content-addressed cache under `.cool/cache/build` by default. Use `cool build --incremental` / `--no-incremental`, or `[build].incremental = true|false`, to control cache reuse. For release-oriented workflows, `[build].reproducible = true` (or `cool build --reproducible`) normalizes debug/source paths and enables deterministic archive/linker settings where supported by the selected toolchain. `[toolchain]` can pin the expected Cool CLI version plus the external `cc`, `ar`, and `lld` tools used by hosted and freestanding native outputs.
+
+### Native stack traces and debug info
+
+`cool build --debug` emits native debug info and line locations, and unhandled native exceptions now print a stack trace with function names and line numbers. That same tracing machinery backs `cool bench --profile`, so production-style builds can keep diagnostics lightweight while benchmark runs still surface hotspots.
+
 ### Release artifacts
 
 `cool bundle` now writes three release-oriented outputs under `dist/`: the archive itself (`.tar.gz`), a `.metadata.json` sidecar describing the bundled project/artifact/build profile, and a `.symbols.txt` sidecar generated from `nm`/`llvm-nm` when available. The archive also embeds `metadata.json` plus `symbols/<artifact>.symbols.txt`, so downstream packaging or CI jobs can inspect artifact identity without unpacking the full project tree manually.
+
+### Source publishing and locked installs
+
+Use `cool publish` to validate the current project as a source distribution, verify or generate `cool.lock`, write `dist/<name>-<version>.publish.json`, and package a `.coolpkg.tar.gz` archive. `cool publish --dry-run` performs the same validation without archiving. `cool install --locked` and `cool install --frozen` now verify dependency checksums and manifest selectors against `cool.lock`, giving path/git dependencies the same reproducibility guarantees the native build pipeline now expects.
 
 ---
 

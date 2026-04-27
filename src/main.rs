@@ -1,10 +1,12 @@
 mod argparse_runtime;
 mod ast;
 mod benchmark;
+mod build_cache;
 mod compiler;
 mod core_runtime;
 mod csv_runtime;
 mod datetime_runtime;
+mod formatter;
 mod hashlib_runtime;
 mod http_runtime;
 mod interpreter;
@@ -27,6 +29,7 @@ use interpreter::Interpreter;
 use lexer::Lexer;
 use parser::Parser;
 use project::{CoolProject, ModuleResolver};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,23 +62,15 @@ fn run_source_vm(source: &str, source_dir: PathBuf) -> Result<(), String> {
 }
 
 fn compile_to_native(source: &str, output_path: &Path, script_path: &Path) -> Result<(), String> {
-    compile_to_native_with_output(
-        source,
-        output_path,
-        script_path,
-        llvm_codegen::NativeBuildMode::Hosted,
-        llvm_codegen::NativeArtifactKind::Binary,
-        None,
-    )
+    let options = default_native_compile_options(script_path);
+    compile_to_native_with_output(source, output_path, script_path, &options)
 }
 
 fn compile_to_native_with_output(
     source: &str,
     output_path: &Path,
     script_path: &Path,
-    build_mode: llvm_codegen::NativeBuildMode,
-    artifact_kind: llvm_codegen::NativeArtifactKind,
-    target_triple: Option<&str>,
+    options: &llvm_codegen::NativeCompileOptions,
 ) -> Result<(), String> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
@@ -83,21 +78,17 @@ fn compile_to_native_with_output(
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program()?;
 
-    llvm_codegen::compile_program_with_output(
-        &program,
-        output_path,
-        script_path,
-        build_mode,
-        artifact_kind,
-        target_triple,
-    )
+    llvm_codegen::compile_program_with_output(&program, output_path, script_path, options)
 }
 
 fn bundled_command_path(file_name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cmd").join(file_name)
 }
 
-fn find_lld() -> Option<String> {
+fn find_lld(toolchain: &llvm_codegen::NativeToolchainConfig) -> Option<String> {
+    if let Some(lld) = toolchain.lld.clone().filter(|value| !value.trim().is_empty()) {
+        return Some(lld);
+    }
     let candidates = ["ld.lld", "lld", "ld.lld-19", "ld.lld-18", "ld.lld-17", "ld.lld-16"];
     for name in candidates {
         if std::process::Command::new(name)
@@ -113,20 +104,35 @@ fn find_lld() -> Option<String> {
     None
 }
 
-fn link_kernel_image(obj_path: &Path, script_path: &Path, output_path: &Path) -> Result<(), String> {
-    let lld = find_lld().ok_or_else(|| {
+fn link_kernel_image(
+    obj_path: &Path,
+    script_path: &Path,
+    output_path: &Path,
+    toolchain: &llvm_codegen::NativeToolchainConfig,
+    reproducible: bool,
+) -> Result<(), String> {
+    let lld = find_lld(toolchain).ok_or_else(|| {
         "cool build: no LLD linker found — install LLVM/LLD to enable kernel image linking\n  \
          macOS: brew install llvm\n  \
          Debian/Ubuntu: apt install lld"
             .to_string()
     })?;
 
-    let status = std::process::Command::new(&lld)
+    let mut command = std::process::Command::new(&lld);
+    if reproducible {
+        command.env("SOURCE_DATE_EPOCH", "0");
+    }
+    let status = command
         .arg("-T")
         .arg(script_path)
         .arg("-o")
         .arg(output_path)
         .arg(obj_path)
+        .args(if reproducible {
+            vec!["--build-id=none"]
+        } else {
+            Vec::new()
+        })
         .status()
         .map_err(|e| format!("cool build: failed to run '{lld}': {e}"))?;
 
@@ -149,6 +155,10 @@ fn bundle_command_path() -> PathBuf {
 
 fn release_command_path() -> PathBuf {
     bundled_command_path("release.cool")
+}
+
+fn publish_command_path() -> PathBuf {
+    bundled_command_path("publish.cool")
 }
 
 fn install_command_path() -> PathBuf {
@@ -205,6 +215,127 @@ fn current_project(command_name: &str) -> Result<CoolProject, String> {
             "{command_name}: no cool.toml found in this directory or any parent"
         )),
     }
+}
+
+fn default_native_compile_options(script_path: &Path) -> llvm_codegen::NativeCompileOptions {
+    llvm_codegen::NativeCompileOptions {
+        build_mode: llvm_codegen::NativeBuildMode::Hosted,
+        artifact_kind: llvm_codegen::NativeArtifactKind::Binary,
+        target_triple: None,
+        debug_info: false,
+        reproducible: false,
+        toolchain: llvm_codegen::NativeToolchainConfig::default(),
+        source_root: script_path.parent().map(Path::to_path_buf),
+    }
+}
+
+fn native_toolchain_config(project: &CoolProject) -> llvm_codegen::NativeToolchainConfig {
+    llvm_codegen::NativeToolchainConfig {
+        cool: project.toolchain.cool.clone(),
+        cc: project.toolchain.cc.clone(),
+        ar: project.toolchain.ar.clone(),
+        lld: project.toolchain.lld.clone(),
+    }
+}
+
+fn validate_native_toolchain(toolchain: &llvm_codegen::NativeToolchainConfig, context: &str) -> Result<(), String> {
+    if let Some(expected) = toolchain.cool.as_deref() {
+        let actual = env!("CARGO_PKG_VERSION");
+        if expected.trim() != actual {
+            return Err(format!(
+                "{context}: pinned Cool toolchain version '{expected}' does not match this executable ({actual})"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn should_skip_tree_entry(name: &str) -> bool {
+    matches!(name, ".git" | ".cool" | "dist" | "target" | "__pycache__")
+}
+
+fn collect_tree_files(path: &Path, root: &Path, out: &mut Vec<(PathBuf, PathBuf)>) -> Result<(), String> {
+    if path.is_file() {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let relative = canonical.strip_prefix(root).map(Path::to_path_buf).unwrap_or_else(|_| {
+            canonical
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| canonical.clone())
+        });
+        out.push((canonical, relative));
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path).map_err(|e| format!("cannot read '{}': {e}", path.display()))?;
+    let mut paths = Vec::new();
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|e| format!("cannot read directory entry in '{}': {e}", path.display()))?;
+        let entry_path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if should_skip_tree_entry(&file_name) {
+            continue;
+        }
+        paths.push(entry_path);
+    }
+    paths.sort();
+    for entry_path in paths {
+        collect_tree_files(&entry_path, root, out)?;
+    }
+    Ok(())
+}
+
+fn hash_package_path(path: &Path) -> Result<String, String> {
+    let root = if path.is_dir() {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.parent()
+            .unwrap_or(Path::new("."))
+            .canonicalize()
+            .unwrap_or_else(|_| path.parent().unwrap_or(Path::new(".")).to_path_buf())
+    };
+    let mut files = Vec::new();
+    collect_tree_files(path, &root, &mut files)?;
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"cool-package-tree-v1");
+    for (absolute, relative) in files {
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        let bytes = fs::read(&absolute).map_err(|e| format!("cannot read '{}': {e}", absolute.display()))?;
+        hasher.update(bytes.len().to_le_bytes());
+        hasher.update(&bytes);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_cool_files(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    if path.is_file() {
+        if path.extension().and_then(|ext| ext.to_str()) == Some("cool") {
+            out.push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        }
+        return Ok(());
+    }
+
+    let mut entries = fs::read_dir(path).map_err(|e| format!("cannot read '{}': {e}", path.display()))?;
+    let mut paths = Vec::new();
+    while let Some(entry) = entries.next() {
+        let entry = entry.map_err(|e| format!("cannot read directory entry in '{}': {e}", path.display()))?;
+        let entry_path = entry.path();
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if entry_path.is_dir() && should_skip_tree_entry(&file_name) {
+            continue;
+        }
+        paths.push(entry_path);
+    }
+    paths.sort();
+    for entry_path in paths {
+        collect_cool_files(&entry_path, out)?;
+    }
+    Ok(())
 }
 
 // ── REPL ──────────────────────────────────────────────────────────────────────
@@ -381,6 +512,7 @@ struct TestFailure {
 struct BenchConfig {
     runs: usize,
     warmups: usize,
+    profile: bool,
 }
 
 struct BenchFailure {
@@ -391,6 +523,7 @@ struct BenchFailure {
 struct BenchResult {
     compile_time: std::time::Duration,
     stats: benchmark::BenchStats,
+    profile_report: Option<String>,
 }
 
 fn unique_temp_executable_path(stem: &str) -> PathBuf {
@@ -720,7 +853,16 @@ fn run_native_benchmark(path: &Path, current_dir: &Path, config: &BenchConfig) -
         benchmark::capture_binary_output(&binary_path, Some(current_dir))?;
         let samples = benchmark::measure_binary_runs(&binary_path, Some(current_dir), config.warmups, config.runs)?;
         let stats = benchmark::summarize(&samples)?;
-        Ok(BenchResult { compile_time, stats })
+        let profile_report = if config.profile {
+            Some(capture_profile_report(&binary_path, current_dir)?)
+        } else {
+            None
+        };
+        Ok(BenchResult {
+            compile_time,
+            stats,
+            profile_report,
+        })
     })();
 
     let _ = fs::remove_file(&binary_path);
@@ -731,12 +873,51 @@ fn run_native_benchmark(path: &Path, current_dir: &Path, config: &BenchConfig) -
     })
 }
 
+fn capture_profile_report(binary_path: &Path, current_dir: &Path) -> Result<String, String> {
+    let report_path = unique_temp_path_for_suffix(
+        binary_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("cool_profile"),
+        "profile.txt",
+    );
+    let output = Command::new(binary_path)
+        .current_dir(current_dir)
+        .env("COOL_PROFILE_OUT", &report_path)
+        .output()
+        .map_err(|e| format!("run {} with profiling: {e}", binary_path.display()))?;
+    if !output.status.success() {
+        let _ = fs::remove_file(&report_path);
+        return Err(benchmark::format_command_failure(
+            &format!("run {}", binary_path.display()),
+            &output,
+        ));
+    }
+    let report =
+        fs::read_to_string(&report_path).map_err(|e| format!("read profile report {}: {e}", report_path.display()))?;
+    let _ = fs::remove_file(&report_path);
+    Ok(report)
+}
+
+fn unique_temp_path_for_suffix(stem: &str, suffix: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("{stem}_{pid}_{nonce}_{suffix}"))
+}
+
 fn run_benchmark_file(path: &Path, current_dir: &Path, config: &BenchConfig) -> Result<BenchResult, BenchFailure> {
     run_native_benchmark(path, current_dir, config)
 }
 
 fn cmd_bench(args: &[&String]) -> Result<(), String> {
-    let mut config = BenchConfig { runs: 5, warmups: 1 };
+    let mut config = BenchConfig {
+        runs: 5,
+        warmups: 1,
+        profile: false,
+    };
     let mut targets = Vec::new();
     let mut args = args.iter().copied();
     while let Some(arg) = args.next() {
@@ -757,10 +938,11 @@ fn cmd_bench(args: &[&String]) -> Result<(), String> {
                     .parse::<usize>()
                     .map_err(|_| format!("cool bench: invalid --warmups value: {value}"))?;
             }
+            "--profile" => config.profile = true,
             "--help" | "-h" => {
                 println!(
                     "\
-Usage: cool bench [--runs N] [--warmups N] [path ...]
+Usage: cool bench [--runs N] [--warmups N] [--profile] [path ...]
 
 Compile and benchmark native Cool programs.
 
@@ -771,7 +953,8 @@ Examples:
   cool bench
   cool bench benchmarks/bench_main.cool
   cool bench benchmarks/numeric
-  cool bench --runs 10 --warmups 2"
+  cool bench --runs 10 --warmups 2
+  cool bench --profile"
                 );
                 return Ok(());
             }
@@ -787,10 +970,11 @@ Examples:
     let cwd = std::env::current_dir().map_err(|e| format!("cool bench: cannot read current directory: {e}"))?;
     let benchmarks = resolve_benchmark_targets(&targets, &cwd)?;
     println!(
-        "running {} Cool benchmark file(s) with native ({} warmup(s), {} measured run(s))",
+        "running {} Cool benchmark file(s) with native ({} warmup(s), {} measured run(s){})",
         benchmarks.len(),
         config.warmups,
-        config.runs
+        config.runs,
+        if config.profile { ", profiling enabled" } else { "" }
     );
 
     let mut completed = 0usize;
@@ -809,6 +993,11 @@ Examples:
                     benchmark::format_duration(result.stats.median),
                     benchmark::format_duration(result.stats.min),
                 );
+                if let Some(report) = &result.profile_report {
+                    for line in report.lines() {
+                        println!("  {line}");
+                    }
+                }
                 completed += 1;
                 results.push((display, result));
             }
@@ -895,11 +1084,193 @@ fn resolve_build_target(cli_target: Option<&str>, manifest_target: Option<&str>)
     }
 }
 
+fn resolve_build_toggle(
+    flag_name: &str,
+    cli_enable: bool,
+    cli_disable: bool,
+    manifest_value: Option<bool>,
+    default_value: bool,
+) -> Result<bool, String> {
+    if cli_enable && cli_disable {
+        return Err(format!(
+            "cool build: choose either --{flag_name} or --no-{flag_name}, not both"
+        ));
+    }
+    if cli_enable {
+        Ok(true)
+    } else if cli_disable {
+        Ok(false)
+    } else {
+        Ok(manifest_value.unwrap_or(default_value))
+    }
+}
+
+struct BuildRun<'a> {
+    source: &'a str,
+    script_path: &'a Path,
+    manifest_path: Option<PathBuf>,
+    cache_root: PathBuf,
+    display: String,
+    label: String,
+    options: llvm_codegen::NativeCompileOptions,
+    final_artifact: BuildFinalArtifact,
+    final_path: PathBuf,
+    compile_output: PathBuf,
+    linker_script: Option<PathBuf>,
+    incremental: bool,
+    extra_inputs: Vec<PathBuf>,
+}
+
+fn perform_native_build(run: BuildRun<'_>) -> Result<(), String> {
+    validate_native_toolchain(&run.options.toolchain, "cool build")?;
+
+    let cache_outputs = if run.final_artifact == BuildFinalArtifact::KernelImage {
+        vec![run.compile_output.clone(), run.final_path.clone()]
+    } else {
+        vec![run.final_path.clone()]
+    };
+
+    println!("  Compiling {}{}", run.display, run.label);
+    if run.incremental {
+        let mut identity = vec![
+            ("cool".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            ("build_mode".to_string(), format!("{:?}", run.options.build_mode)),
+            ("artifact".to_string(), format!("{:?}", run.options.artifact_kind)),
+            ("debug".to_string(), run.options.debug_info.to_string()),
+            ("reproducible".to_string(), run.options.reproducible.to_string()),
+            (
+                "target".to_string(),
+                run.options
+                    .target_triple
+                    .clone()
+                    .unwrap_or_else(|| "<host>".to_string()),
+            ),
+            (
+                "source_root".to_string(),
+                run.options
+                    .source_root
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            (
+                "toolchain.cc".to_string(),
+                run.options.toolchain.cc.clone().unwrap_or_default(),
+            ),
+            (
+                "toolchain.ar".to_string(),
+                run.options.toolchain.ar.clone().unwrap_or_default(),
+            ),
+            (
+                "toolchain.lld".to_string(),
+                run.options.toolchain.lld.clone().unwrap_or_default(),
+            ),
+        ];
+        if let Some(cool) = &run.options.toolchain.cool {
+            identity.push(("toolchain.cool".to_string(), cool.clone()));
+        }
+        let fingerprint = build_cache::BuildFingerprintInput {
+            entry_path: run.script_path.to_path_buf(),
+            manifest_path: run.manifest_path.clone(),
+            extra_files: run.extra_inputs.clone(),
+            identity,
+        }
+        .compute()?;
+        let cache = build_cache::BuildCache::new(run.cache_root.clone(), fingerprint);
+        if cache.restore(&cache_outputs)? {
+            println!("   Finished from cache → {}", run.final_path.display());
+            return Ok(());
+        }
+    }
+
+    let t0 = std::time::Instant::now();
+    match run.final_artifact {
+        BuildFinalArtifact::KernelImage => {
+            let script = run
+                .linker_script
+                .as_ref()
+                .ok_or_else(|| "cool build: kernel-image output requires a linker script".to_string())?;
+            let mut object_options = run.options.clone();
+            object_options.artifact_kind = llvm_codegen::NativeArtifactKind::Object;
+            compile_to_native_with_output(run.source, &run.compile_output, run.script_path, &object_options)?;
+            link_kernel_image(
+                &run.compile_output,
+                script,
+                &run.final_path,
+                &run.options.toolchain,
+                run.options.reproducible,
+            )?;
+        }
+        BuildFinalArtifact::Emit(_) => {
+            compile_to_native_with_output(run.source, &run.compile_output, run.script_path, &run.options)?;
+        }
+    }
+
+    if run.incremental {
+        let mut identity = vec![
+            ("cool".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            ("build_mode".to_string(), format!("{:?}", run.options.build_mode)),
+            ("artifact".to_string(), format!("{:?}", run.options.artifact_kind)),
+            ("debug".to_string(), run.options.debug_info.to_string()),
+            ("reproducible".to_string(), run.options.reproducible.to_string()),
+            (
+                "target".to_string(),
+                run.options
+                    .target_triple
+                    .clone()
+                    .unwrap_or_else(|| "<host>".to_string()),
+            ),
+            (
+                "source_root".to_string(),
+                run.options
+                    .source_root
+                    .as_ref()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            ),
+            (
+                "toolchain.cc".to_string(),
+                run.options.toolchain.cc.clone().unwrap_or_default(),
+            ),
+            (
+                "toolchain.ar".to_string(),
+                run.options.toolchain.ar.clone().unwrap_or_default(),
+            ),
+            (
+                "toolchain.lld".to_string(),
+                run.options.toolchain.lld.clone().unwrap_or_default(),
+            ),
+        ];
+        if let Some(cool) = &run.options.toolchain.cool {
+            identity.push(("toolchain.cool".to_string(), cool.clone()));
+        }
+        let fingerprint = build_cache::BuildFingerprintInput {
+            entry_path: run.script_path.to_path_buf(),
+            manifest_path: run.manifest_path,
+            extra_files: run.extra_inputs,
+            identity,
+        }
+        .compute()?;
+        let cache = build_cache::BuildCache::new(run.cache_root, fingerprint);
+        cache.store(&cache_outputs)?;
+    }
+
+    println!(
+        "   Finished in {:.2}s → {}",
+        t0.elapsed().as_secs_f64(),
+        run.final_path.display()
+    );
+    Ok(())
+}
+
 fn build_label(
     profile: BuildProfile,
     build_mode: llvm_codegen::NativeBuildMode,
     artifact: BuildFinalArtifact,
     target_triple: Option<&str>,
+    debug_info: bool,
+    reproducible: bool,
+    incremental: bool,
 ) -> String {
     let mut parts = Vec::new();
     if profile != BuildProfile::Release {
@@ -913,6 +1284,15 @@ fn build_label(
     }
     if let Some(target) = target_triple {
         parts.push(format!("target={target}"));
+    }
+    if debug_info {
+        parts.push("debug".to_string());
+    }
+    if reproducible {
+        parts.push("reproducible".to_string());
+    }
+    if !incremental {
+        parts.push("no-incremental".to_string());
     }
 
     if parts.is_empty() {
@@ -978,6 +1358,12 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     let mut profile_arg: Option<String> = None;
     let mut emit_arg: Option<String> = None;
     let mut target_arg: Option<String> = None;
+    let mut debug_enabled = false;
+    let mut debug_disabled = false;
+    let mut reproducible_enabled = false;
+    let mut reproducible_disabled = false;
+    let mut incremental_enabled = false;
+    let mut incremental_disabled = false;
     let mut help = false;
     let mut file_arg = None::<&String>;
 
@@ -986,6 +1372,12 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
         match arg.as_str() {
             "--freestanding" => freestanding = true,
             "--help" | "-h" => help = true,
+            "--debug" => debug_enabled = true,
+            "--no-debug" => debug_disabled = true,
+            "--reproducible" => reproducible_enabled = true,
+            "--no-reproducible" => reproducible_disabled = true,
+            "--incremental" => incremental_enabled = true,
+            "--no-incremental" => incremental_disabled = true,
             "--profile" => {
                 let value = args
                     .next()
@@ -1020,7 +1412,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
             _ => {
                 if file_arg.is_some() {
                     return Err(
-                        "Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--freestanding] [--linker-script=<path>] [file.cool]"
+                        "Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--debug] [--reproducible] [--incremental|--no-incremental] [--freestanding] [--linker-script=<path>] [file.cool]"
                             .to_string(),
                     );
                 }
@@ -1032,7 +1424,7 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     if help {
         println!(
             "\
-Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--freestanding] [--linker-script=<path>] [file.cool]
+Usage: cool build [--profile <name>] [--emit <kind>] [--target <triple>] [--debug|--no-debug] [--reproducible|--no-reproducible] [--incremental|--no-incremental] [--freestanding] [--linker-script=<path>] [file.cool]
 
 Build a Cool project from cool.toml or compile a single file.
 
@@ -1041,6 +1433,12 @@ Options:
   --emit <kind>         Select the final artifact: binary, object, assembly, llvm-ir, or staticlib
   --target <triple>     Emit code for an explicit LLVM target triple (for example
                         x86_64-unknown-linux-gnu or i386-unknown-linux-gnu)
+  --debug               Emit native debug info and line locations
+  --no-debug            Override manifest defaults and disable native debug info
+  --reproducible        Normalize source paths and deterministic tool output where supported
+  --no-reproducible     Override manifest defaults and disable reproducible build settings
+  --incremental         Force build-cache reuse when inputs are unchanged
+  --no-incremental      Disable the project-local native build cache
   --freestanding        Compile in freestanding mode without the hosted Cool runtime
   --linker-script=<path>  Link the object file into a kernel image (.elf) using LLD and the
                           given GNU linker script; implies --freestanding unless --emit overrides
@@ -1049,6 +1447,7 @@ Options:
 Examples:
   cool build
   cool build --profile dev
+  cool build --debug --reproducible
   cool build hello.cool
   cool build --target x86_64-unknown-linux-gnu --emit object hello.cool
   cool build --emit object hello.cool
@@ -1075,6 +1474,21 @@ Examples:
             let profile = resolve_build_profile(profile_arg.as_deref(), project.build_profile.as_deref())?;
             let requested_emit = resolve_build_emit(emit_arg.as_deref(), project.build_emit.as_deref())?;
             let requested_target = resolve_build_target(target_arg.as_deref(), project.build_target.as_deref())?;
+            let debug_info = resolve_build_toggle("debug", debug_enabled, debug_disabled, project.build_debug, false)?;
+            let reproducible = resolve_build_toggle(
+                "reproducible",
+                reproducible_enabled,
+                reproducible_disabled,
+                project.build_reproducible,
+                false,
+            )?;
+            let incremental = resolve_build_toggle(
+                "incremental",
+                incremental_enabled,
+                incremental_disabled,
+                project.build_incremental,
+                true,
+            )?;
             let effective_linker_script: Option<PathBuf> = match &linker_script_arg {
                 Some(path) => Some(PathBuf::from(path)),
                 None => project.linker_script.as_ref().map(|s| project.root.join(s)),
@@ -1116,6 +1530,7 @@ Examples:
             let source = fs::read_to_string(&main_path).map_err(|e| format!("cool build: {e}"))?;
             let display = format!("{} v{} ({})", project.name, project.version, project.main);
             run_build_profile_checks(&main_path, profile, &display)?;
+            let toolchain = native_toolchain_config(&project);
 
             let base_output = PathBuf::from(project.output_name());
             let final_path = final_artifact.output_path(&base_output);
@@ -1125,44 +1540,43 @@ Examples:
                 final_path.clone()
             };
 
-            let label = build_label(profile, build_mode, final_artifact, requested_target.as_deref());
-            println!("  Compiling {display}{label}");
-
-            let t0 = std::time::Instant::now();
-            match final_artifact {
-                BuildFinalArtifact::KernelImage => {
-                    let script = effective_linker_script
-                        .as_ref()
-                        .ok_or_else(|| "cool build: kernel-image output requires a linker script".to_string())?;
-                    compile_to_native_with_output(
-                        &source,
-                        &compile_output,
-                        &main_path,
-                        build_mode,
-                        llvm_codegen::NativeArtifactKind::Object,
-                        requested_target.as_deref(),
-                    )?;
-                    link_kernel_image(&compile_output, script, &final_path)?;
-                }
-                BuildFinalArtifact::Emit(kind) => {
-                    compile_to_native_with_output(
-                        &source,
-                        &compile_output,
-                        &main_path,
-                        build_mode,
-                        kind.native_artifact(),
-                        requested_target.as_deref(),
-                    )?;
-                }
-            }
-
-            let elapsed = t0.elapsed();
-            println!(
-                "   Finished in {:.2}s → {}",
-                elapsed.as_secs_f64(),
-                final_path.display()
+            let compile_kind = match final_artifact {
+                BuildFinalArtifact::KernelImage => llvm_codegen::NativeArtifactKind::Object,
+                BuildFinalArtifact::Emit(kind) => kind.native_artifact(),
+            };
+            let label = build_label(
+                profile,
+                build_mode,
+                final_artifact,
+                requested_target.as_deref(),
+                debug_info,
+                reproducible,
+                incremental,
             );
-            Ok(())
+
+            perform_native_build(BuildRun {
+                source: &source,
+                script_path: &main_path,
+                manifest_path: Some(project.root.join("cool.toml")),
+                cache_root: project.root.join(".cool").join("cache").join("build"),
+                display,
+                label,
+                options: llvm_codegen::NativeCompileOptions {
+                    build_mode,
+                    artifact_kind: compile_kind,
+                    target_triple: requested_target.clone(),
+                    debug_info,
+                    reproducible,
+                    toolchain,
+                    source_root: Some(project.root.clone()),
+                },
+                final_artifact,
+                final_path,
+                compile_output,
+                linker_script: effective_linker_script.clone(),
+                incremental,
+                extra_inputs: effective_linker_script.into_iter().collect(),
+            })
         }
 
         // ── cool build <file.cool>  ───────────────────────────────────────
@@ -1170,6 +1584,11 @@ Examples:
             let profile = resolve_build_profile(profile_arg.as_deref(), None)?;
             let requested_emit = resolve_build_emit(emit_arg.as_deref(), None)?;
             let requested_target = resolve_build_target(target_arg.as_deref(), None)?;
+            let debug_info = resolve_build_toggle("debug", debug_enabled, debug_disabled, None, false)?;
+            let reproducible =
+                resolve_build_toggle("reproducible", reproducible_enabled, reproducible_disabled, None, false)?;
+            let incremental =
+                resolve_build_toggle("incremental", incremental_enabled, incremental_disabled, None, true)?;
             let effective_linker_script = linker_script_arg.as_deref();
             let freestanding_requested = freestanding
                 || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding
@@ -1216,44 +1635,142 @@ Examples:
                 final_path.clone()
             };
 
-            let label = build_label(profile, build_mode, final_artifact, requested_target.as_deref());
-            println!("  Compiling {}{} ...", file_path.display(), label);
-
-            let t0 = std::time::Instant::now();
-            match final_artifact {
-                BuildFinalArtifact::KernelImage => {
-                    let script = effective_linker_script
-                        .ok_or_else(|| "cool build: kernel-image output requires a linker script".to_string())?;
-                    compile_to_native_with_output(
-                        &source,
-                        &compile_output,
-                        file_path,
-                        build_mode,
-                        llvm_codegen::NativeArtifactKind::Object,
-                        requested_target.as_deref(),
-                    )?;
-                    link_kernel_image(&compile_output, Path::new(script), &final_path)?;
-                }
-                BuildFinalArtifact::Emit(kind) => {
-                    compile_to_native_with_output(
-                        &source,
-                        &compile_output,
-                        file_path,
-                        build_mode,
-                        kind.native_artifact(),
-                        requested_target.as_deref(),
-                    )?;
-                }
-            }
-
-            let elapsed = t0.elapsed();
-            println!(
-                "   Finished in {:.2}s → {}",
-                elapsed.as_secs_f64(),
-                final_path.display()
+            let compile_kind = match final_artifact {
+                BuildFinalArtifact::KernelImage => llvm_codegen::NativeArtifactKind::Object,
+                BuildFinalArtifact::Emit(kind) => kind.native_artifact(),
+            };
+            let label = build_label(
+                profile,
+                build_mode,
+                final_artifact,
+                requested_target.as_deref(),
+                debug_info,
+                reproducible,
+                incremental,
             );
+
+            perform_native_build(BuildRun {
+                source: &source,
+                script_path: file_path,
+                manifest_path: None,
+                cache_root: file_path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(".cool")
+                    .join("cache")
+                    .join("build"),
+                display: file_path.display().to_string(),
+                label,
+                options: llvm_codegen::NativeCompileOptions {
+                    build_mode,
+                    artifact_kind: compile_kind,
+                    target_triple: requested_target.clone(),
+                    debug_info,
+                    reproducible,
+                    toolchain: llvm_codegen::NativeToolchainConfig::default(),
+                    source_root: file_path.parent().map(Path::to_path_buf),
+                },
+                final_artifact,
+                final_path,
+                compile_output,
+                linker_script: effective_linker_script.map(PathBuf::from),
+                incremental,
+                extra_inputs: effective_linker_script.into_iter().map(PathBuf::from).collect(),
+            })
+        }
+    }
+}
+
+fn cmd_fmt(args: &[&String]) -> Result<(), String> {
+    let mut check = false;
+    let mut targets = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "--check" => check = true,
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool fmt [--check] [path ...]
+
+Format Cool source files in place.
+
+With no path arguments, `cool fmt` formats all `.cool` files under the current project
+root (or the current directory if no project is active).
+
+Examples:
+  cool fmt
+  cool fmt --check
+  cool fmt src tests
+  cool fmt app/main.cool"
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool fmt: unexpected flag '{other}'")),
+            _ => targets.push(arg.as_str()),
+        }
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| format!("cool fmt: cannot read current directory: {e}"))?;
+    let mut files = Vec::new();
+    if targets.is_empty() {
+        let root = current_project("cool fmt")
+            .map(|project| project.root)
+            .unwrap_or_else(|_| cwd.clone());
+        collect_cool_files(&root, &mut files)?;
+    } else {
+        for target in targets {
+            let path = Path::new(target);
+            if !path.exists() {
+                return Err(format!("cool fmt: path not found: {target}"));
+            }
+            collect_cool_files(path, &mut files)?;
+        }
+    }
+    files.sort();
+    files.dedup();
+
+    if files.is_empty() {
+        println!("cool fmt: no .cool files found");
+        return Ok(());
+    }
+
+    let mut changed = Vec::new();
+    for file in &files {
+        let source = fs::read_to_string(file).map_err(|e| format!("cool fmt: {}: {e}", file.display()))?;
+        let formatted = formatter::format_source(&source).map_err(|e| format!("cool fmt: {}: {e}", file.display()))?;
+        if formatted != source {
+            changed.push(file.clone());
+            if !check {
+                fs::write(file, formatted).map_err(|e| format!("cool fmt: {}: {e}", file.display()))?;
+                println!("formatted {}", display_relative_path(file, &cwd));
+            }
+        }
+    }
+
+    if check {
+        if changed.is_empty() {
+            println!("fmt check: ok. {} file(s) already formatted", files.len());
+            Ok(())
+        } else {
+            for file in &changed {
+                println!("needs format {}", display_relative_path(file, &cwd));
+            }
+            Err(format!("cool fmt: {} file(s) need formatting", changed.len()))
+        }
+    } else {
+        println!("formatted {} file(s)", changed.len());
+        Ok(())
+    }
+}
+
+fn cmd_hashpath(args: &[&String]) -> Result<(), String> {
+    match args {
+        [path] => {
+            println!("{}", hash_package_path(Path::new(path.as_str()))?);
             Ok(())
         }
+        _ => Err("Usage: cool hashpath <path>".to_string()),
     }
 }
 
@@ -1619,7 +2136,13 @@ fn cmd_new(args: &[&String]) -> Result<(), String> {
 
 fn cmd_install(args: &[&String]) -> Result<(), String> {
     let install_app = install_command_path();
-    run_bundled_app("cool install", &install_app, args, &[])
+    let exe = std::env::current_exe().map_err(|e| format!("cool install: cannot resolve current executable: {e}"))?;
+    run_bundled_app(
+        "cool install",
+        &install_app,
+        args,
+        &[("COOL_EXE_PATH", exe.to_string_lossy().to_string())],
+    )
 }
 
 fn cmd_add(args: &[&String]) -> Result<(), String> {
@@ -1662,6 +2185,17 @@ fn cmd_release(args: &[&String]) -> Result<(), String> {
     )
 }
 
+fn cmd_publish(args: &[&String]) -> Result<(), String> {
+    let publish_app = publish_command_path();
+    let exe = std::env::current_exe().map_err(|e| format!("cool publish: cannot resolve current executable: {e}"))?;
+    run_bundled_app(
+        "cool publish",
+        &publish_app,
+        args,
+        &[("COOL_EXE_PATH", exe.to_string_lossy().to_string())],
+    )
+}
+
 // ── help ──────────────────────────────────────────────────────────────────────
 
 fn print_help() {
@@ -1674,6 +2208,8 @@ USAGE:
     cool build --profile <name>   Build with dev/release/freestanding/strict profile rules
     cool build --emit <kind>      Emit binary/object/assembly/llvm-ir/staticlib artifacts
     cool build --target <triple>  Emit native code for an explicit LLVM target triple
+    cool build --debug            Emit native debug info and runtime stack traces
+    cool build --reproducible     Normalize source paths and enable deterministic tool output
     cool build <file.cool>        Compile a single file to a native binary
     cool build --freestanding     Build a freestanding object file (.o)
     cool build --linker-script=<ld>  Link a kernel image (.elf) via LLD
@@ -1690,8 +2226,10 @@ USAGE:
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool bundle [--target <triple>]  Build and package the project into a distributable tarball
     cool release [--bump patch] [--target <triple>]  Bump version, bundle, and git-tag a release
+    cool publish [--dry-run]      Validate and package a source distribution for publishing
     cool install                  Fetch and lock project dependencies
     cool add <name> ...           Add a path or git dependency to cool.toml
+    cool fmt [path ...]           Reformat Cool source files
     cool test [path ...]          Run discovered or explicit Cool tests
     cool bench [path ...]         Compile and benchmark native Cool programs
     cool task [name|list ...]     Run or list manifest-defined project tasks
@@ -1708,6 +2246,7 @@ EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
     cool build --profile dev      # checked build using cool.toml or a file
+    cool build --debug --reproducible
     cool build --emit object      # compile to .o without linking
     cool build --target i386-unknown-linux-gnu --emit llvm-ir
     cool build --emit staticlib   # compile to lib<name>.a
@@ -1724,6 +2263,8 @@ EXAMPLES:
     cool add toolkit --path ../toolkit
     cool add theme --git https://github.com/acme/theme.git
     cool install                  # fetch git deps into .cool/deps and write cool.lock
+    cool publish --dry-run        # validate source package contents without archiving
+    cool fmt --check              # report files that need formatting
     cool test                     # run test_*.cool / *_test.cool under tests/
     cool bench                    # run bench_*.cool / *_bench.cool under benchmarks/
     cool task list                # list tasks from cool.toml
@@ -1835,6 +2376,14 @@ fn main() {
                 }
                 return;
             }
+            "fmt" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_fmt(&rest) {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
             "new" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_new(&rest) {
@@ -1894,6 +2443,22 @@ fn main() {
             "release" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_release(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "publish" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_publish(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "hashpath" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_hashpath(&rest) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

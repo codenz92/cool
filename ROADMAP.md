@@ -552,30 +552,30 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 15 — Native Toolchain And Distribution
+## Phase 15 — Native Toolchain And Distribution ✅ Complete
 
 > Goal: make shipping Cool software feel more like shipping a serious compiled language product than running a script with extra steps
 
 ### Compiler And Build UX
 
-- [ ] Incremental compilation
+- [x] Incremental compilation
 - [x] Cross-compilation via explicit target triples
 - [x] Build profiles (`dev`, `release`, `freestanding`, and stricter checked modes)
-- [ ] Reproducible builds and toolchain pinning
+- [x] Reproducible builds and toolchain pinning
 - [x] Better binary/object/library output selection
 
 ### Debugging, Docs, And Observability
 
-- [ ] Native debug info and better stack traces
-- [~] Profiling and benchmark tooling (`cool bench` now benchmarks native `.cool` workloads directly, and the repo-native Rust comparison harness lives under `benchmarks/`; profiling support is still open)
-- [ ] `cool fmt`
+- [x] Native debug info and better stack traces
+- [x] Profiling and benchmark tooling
+- [x] `cool fmt`
 - [x] First-class doc generation for modules, types, and APIs
 - [x] Better release artifact metadata and symbol maps
 
 ### Packaging
 
-- [ ] Registry-quality package/distribution workflow
-- [ ] Stronger lockfile and dependency reproducibility guarantees
+- [x] Registry-quality package/distribution workflow
+- [x] Stronger lockfile and dependency reproducibility guarantees
 - [x] Project templates aimed at native apps, libraries, services, and freestanding targets
 
 ---

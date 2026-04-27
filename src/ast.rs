@@ -70,7 +70,7 @@ pub enum FStringPart {
     Expr(Expr),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BinOp {
     Add,
@@ -97,7 +97,7 @@ pub enum BinOp {
     RShift,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaryOp {
     Neg,

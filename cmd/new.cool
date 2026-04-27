@@ -18,9 +18,11 @@ def standard_tasks(run_task, include_bundle_tasks, doc_task, extra_tasks):
     if include_bundle_tasks:
         tasks = tasks + "[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n"
         tasks = tasks + "[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n"
+    tasks = tasks + "[tasks.publish]\ndescription = \"Validate and package a source distribution\"\nrun = \"cool publish\"\n\n"
     tasks = tasks + "[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n\n"
     tasks = tasks + "[tasks.bench]\ndescription = \"Run native benchmarks\"\nrun = \"cool bench\"\n\n"
-    tasks = tasks + "[tasks.doc]\ndescription = \"Generate API docs\"\nrun = \"" + doc_task + "\"\n"
+    tasks = tasks + "[tasks.doc]\ndescription = \"Generate API docs\"\nrun = \"" + doc_task + "\"\n\n"
+    tasks = tasks + "[tasks.fmt]\ndescription = \"Format Cool source files\"\nrun = \"cool fmt\"\n"
     if extra_tasks != "":
         tasks = tasks + "\n" + extra_tasks
     return tasks
@@ -194,6 +196,8 @@ def print_instructions(name, template):
         print("    cool test                   # run library tests")
         print("    cool bench                  # run benchmarks/")
         print("    cool task doc               # write docs/API.md")
+        print("    cool task fmt               # reformat .cool sources")
+        print("    cool task publish           # package a source distribution")
     elif template == "service":
         print("    cool src/main.cool 9000     # run the echo service")
         print("    cool build                  # checked native build")
@@ -201,6 +205,8 @@ def print_instructions(name, template):
         print("    cool test                   # run tests/")
         print("    cool bench                  # run benchmarks/")
         print("    cool task doc               # write docs/API.md")
+        print("    cool task fmt               # reformat .cool sources")
+        print("    cool task publish           # package a source distribution")
     elif template == "freestanding":
         print("    cool build                  # emit a freestanding object file")
         print("    cool build --linker-script=link.ld")
@@ -208,6 +214,8 @@ def print_instructions(name, template):
         print("    cool test                   # run hosted tests/")
         print("    cool bench                  # run hosted benchmarks/")
         print("    cool task doc               # write docs/API.md")
+        print("    cool task fmt               # reformat .cool sources")
+        print("    cool task publish           # package a source distribution")
     else:
         print("    cool src/main.cool          # interpret")
         print("    cool build                  # checked native build")
@@ -217,6 +225,8 @@ def print_instructions(name, template):
         print("    cool test                   # run tests/")
         print("    cool bench                  # run benchmarks/")
         print("    cool task doc               # write docs/API.md")
+        print("    cool task fmt               # reformat .cool sources")
+        print("    cool task publish           # package a source distribution")
     print("    cool task list              # show project tasks")
 
 argv = sys.argv

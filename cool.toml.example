@@ -23,6 +23,17 @@ main = "src/main.cool"
 # profile = "dev"          # dev, release, freestanding, or strict
 # emit = "binary"          # binary, object, assembly, llvm-ir, or staticlib
 # target = "x86_64-unknown-linux-gnu"  # optional explicit LLVM target triple
+# incremental = true       # optional: enable the local native build cache
+# reproducible = true      # optional: normalize paths and deterministic tool output
+# debug = true             # optional: emit DWARF/line tables for native builds
+#
+# Optional: pin the external toolchain used for native builds.
+#
+# [toolchain]
+# cool = "1.0.0"
+# cc = "clang"
+# ar = "llvm-ar"
+# lld = "ld.lld"
 
 # Optional: dependencies, imported by dependency name
 #
@@ -31,7 +42,8 @@ main = "src/main.cool"
 # theme = { git = "https://github.com/acme/theme.git" }
 #
 # Use `cool add ...` to edit this table and `cool install` to fetch git deps
-# into .cool/deps and write cool.lock.
+# into .cool/deps and write cool.lock. Use `cool install --locked` in CI or
+# release flows to verify the existing lockfile and dependency checksums.
 
 # Optional: manifest tasks for `cool task`
 #
@@ -47,6 +59,10 @@ main = "src/main.cool"
 # description = "Run Cool tests"
 # run = "cool test"
 #
+# [tasks.publish]
+# description = "Validate and package a source distribution"
+# run = "cool publish"
+#
 # [tasks.bench]
 # description = "Run native benchmarks"
 # run = "cool bench"
@@ -54,3 +70,7 @@ main = "src/main.cool"
 # [tasks.doc]
 # description = "Generate API docs"
 # run = "cool doc --output docs/API.md"
+#
+# [tasks.fmt]
+# description = "Format Cool source files"
+# run = "cool fmt"

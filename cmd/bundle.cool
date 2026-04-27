@@ -139,6 +139,10 @@ def remove_tree(target):
         run_shell_checked("remove " + target, "rm -rf " + shell_quote(target))
 
 def build_project(project_root, cool_exe, cli_target):
+    lock_path = path.join(project_root, "cool.lock")
+    if not os["exists"](lock_path):
+        run_shell_checked("generate lockfile", "cd " + shell_quote(project_root) + " && " + shell_quote(cool_exe) + " install")
+    run_shell_checked("verify lockfile", "cd " + shell_quote(project_root) + " && " + shell_quote(cool_exe) + " install --locked")
     cmd = "cd " + shell_quote(project_root) + " && " + shell_quote(cool_exe) + " build"
     if cli_target != nil:
         cmd = cmd + " --target " + shell_quote(cli_target)
