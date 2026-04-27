@@ -48,3 +48,7 @@ main = "src/main.cool"
 # [tasks.bench]
 # description = "Run native benchmarks"
 # run = "cool bench"
+#
+# [tasks.doc]
+# description = "Generate API docs"
+# run = "cool doc --output docs/API.md"

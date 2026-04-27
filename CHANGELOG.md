@@ -18,6 +18,13 @@ All notable changes to the Cool language project.
 - `freestanding` profile makes manifest-driven `cool build` emit `.o` output by default without needing `--freestanding`
 - `cool new` now supports `--template app|lib|service|freestanding`, with template-specific manifests, starter source layouts, tasks, tests, and benchmarks
 
+### API Documentation
+
+- New `cool doc` subcommand generates first-class API docs for reachable modules, functions, classes, methods, structs, unions, and top-level bindings
+- Human-readable output supports Markdown (default) and standalone HTML; `--json` / `--format json` emits a structured report for tooling
+- With no file argument inside a project, `cool doc` uses `cool.toml`'s `main` entry and documents every reachable local module; `--private` includes private members and marks them in rendered output
+- `cool new` now scaffolds a starter `[tasks.doc]` task so fresh projects can write `docs/API.md` without extra setup
+
 ### Phase 12 — Static Semantic Core (In Progress)
 
 #### Typed Function Signatures

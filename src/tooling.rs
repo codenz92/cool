@@ -2,7 +2,7 @@ use crate::ast::{ExceptHandler, Expr, Program, Stmt, Visibility};
 use crate::lexer::Lexer;
 use crate::module_exports;
 use crate::parser::Parser;
-use crate::project::ModuleResolver;
+use crate::project::{CoolProject, ModuleResolver};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -149,6 +149,78 @@ pub struct SymbolIndexReport {
     pub modules_indexed: usize,
     pub symbols: Vec<SymbolLocation>,
     pub diagnostics: Vec<ToolingDiagnostic>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocReport {
+    pub entry: String,
+    pub modules: Vec<DocModule>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocModule {
+    pub name: String,
+    pub path: String,
+    pub is_entry: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    pub functions: Vec<DocFunction>,
+    pub classes: Vec<DocClass>,
+    pub types: Vec<DocType>,
+    pub bindings: Vec<DocBinding>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocFunction {
+    pub line: Option<usize>,
+    pub name: String,
+    pub kind: &'static str,
+    pub params: Vec<InspectParam>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocClass {
+    pub line: Option<usize>,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+    pub methods: Vec<DocFunction>,
+    pub class_bindings: Vec<DocBinding>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocType {
+    pub line: Option<usize>,
+    pub name: String,
+    pub kind: &'static str,
+    pub is_packed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+    pub fields: Vec<InspectStructField>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DocBinding {
+    pub line: Option<usize>,
+    pub name: String,
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub is_const: bool,
+    pub visibility: Visibility,
 }
 
 #[derive(Clone, Serialize)]
@@ -439,6 +511,35 @@ pub fn build_check_report(path: &Path, strict: bool) -> Result<CheckReport, Stri
     })
 }
 
+pub fn build_doc_report(path: &Path, include_private: bool) -> Result<DocReport, String> {
+    let graph = build_module_graph(path)?;
+    let errors: Vec<&ToolingDiagnostic> = graph
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        .collect();
+    if !errors.is_empty() {
+        let details = errors
+            .into_iter()
+            .map(format_tooling_diagnostic)
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(format!("doc: cannot generate docs due to source errors\n{details}"));
+    }
+
+    let name_map = infer_module_doc_names(&graph, Path::new(&graph.entry))?;
+    let modules = graph
+        .modules
+        .iter()
+        .map(|module| build_doc_module(module, &graph.entry, &name_map, include_private))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(DocReport {
+        entry: graph.entry,
+        modules,
+    })
+}
+
 pub fn build_module_graph(path: &Path) -> Result<ModuleGraph, String> {
     let canonical = canonical_existing(path)?;
     let source_dir = canonical
@@ -458,6 +559,616 @@ pub fn build_module_graph(path: &Path) -> Result<ModuleGraph, String> {
         modules: state.modules,
         diagnostics: state.diagnostics,
     })
+}
+
+fn infer_module_doc_names(graph: &ModuleGraph, entry_path: &Path) -> Result<HashMap<String, String>, String> {
+    let mut names = HashMap::new();
+    for module in &graph.modules {
+        for import in &module.imports {
+            let Some(resolved) = &import.resolved else {
+                continue;
+            };
+            names
+                .entry(resolved.clone())
+                .or_insert_with(|| import.specifier.clone());
+        }
+    }
+
+    let project = entry_path
+        .parent()
+        .and_then(|dir| CoolProject::discover(dir).ok().flatten());
+    let project_roots = if let Some(project) = &project {
+        Some(project.local_module_roots()?)
+    } else {
+        None
+    };
+
+    for module in &graph.modules {
+        names.entry(module.path.clone()).or_insert_with(|| {
+            derive_module_doc_name(Path::new(&module.path), project.as_ref(), project_roots.as_deref())
+        });
+    }
+
+    Ok(names)
+}
+
+fn derive_module_doc_name(path: &Path, project: Option<&CoolProject>, project_roots: Option<&[PathBuf]>) -> String {
+    if let Some(roots) = project_roots {
+        for root in roots {
+            if let Ok(relative) = path.strip_prefix(root) {
+                return module_name_from_relative(relative);
+            }
+        }
+    }
+
+    if let Some(project) = project {
+        if let Ok(relative) = path.strip_prefix(&project.root) {
+            return module_name_from_relative(relative);
+        }
+    }
+
+    module_name_from_relative(path.file_name().map(Path::new).unwrap_or(path))
+}
+
+fn module_name_from_relative(relative: &Path) -> String {
+    let mut stem_path = relative.to_path_buf();
+    if stem_path.extension().and_then(|ext| ext.to_str()) == Some("cool") {
+        stem_path.set_extension("");
+    }
+    let mut parts: Vec<String> = stem_path
+        .iter()
+        .filter_map(|part| part.to_str())
+        .map(|part| part.to_string())
+        .collect();
+    if parts.last().map(|part| part.as_str()) == Some("__init__") {
+        parts.pop();
+    }
+    if parts.is_empty() {
+        "main".to_string()
+    } else {
+        parts.join(".")
+    }
+}
+
+fn build_doc_module(
+    module: &ModuleGraphModule,
+    entry: &str,
+    names: &HashMap<String, String>,
+    include_private: bool,
+) -> Result<DocModule, String> {
+    let program = parse_file(Path::new(&module.path))?;
+    let name = names.get(&module.path).cloned().unwrap_or_else(|| module.path.clone());
+    let mut functions = Vec::new();
+    let mut classes = Vec::new();
+    let mut types = Vec::new();
+    let mut bindings = Vec::new();
+    let mut current_line = None;
+
+    for raw_stmt in &program {
+        let effective_visibility = effective_visibility(raw_stmt);
+        let is_public = module_exports::stmt_is_public_export(raw_stmt);
+        if !include_private && !is_public {
+            match module_exports::stmt_unwrap_visibility(raw_stmt).0 {
+                Stmt::SetLine(_) | Stmt::Expr(Expr::Str(_)) => {}
+                _ => continue,
+            }
+        }
+
+        let (stmt, _) = module_exports::stmt_unwrap_visibility(raw_stmt);
+        match stmt {
+            Stmt::SetLine(line) => current_line = Some(*line),
+            Stmt::FnDef {
+                name,
+                params,
+                return_type,
+                body,
+                ..
+            } => functions.push(DocFunction {
+                line: current_line,
+                name: name.clone(),
+                kind: "function",
+                params: inspect_params(params),
+                return_type: return_type.clone(),
+                doc: extract_docstring(body),
+                visibility: Some(effective_visibility),
+            }),
+            Stmt::ExternFn {
+                name,
+                params,
+                return_type,
+                ..
+            } => functions.push(DocFunction {
+                line: current_line,
+                name: name.clone(),
+                kind: "extern",
+                params: inspect_extern_params(params),
+                return_type: Some(return_type.clone()),
+                doc: None,
+                visibility: Some(effective_visibility),
+            }),
+            Stmt::Class { name, parent, body } => {
+                let (methods, class_bindings) = doc_class_body(body, include_private);
+                classes.push(DocClass {
+                    line: current_line,
+                    name: name.clone(),
+                    parent: parent.clone(),
+                    doc: extract_docstring(body),
+                    visibility: Some(effective_visibility),
+                    methods,
+                    class_bindings,
+                });
+            }
+            Stmt::Struct {
+                name,
+                fields,
+                is_packed,
+            } => types.push(DocType {
+                line: current_line,
+                name: name.clone(),
+                kind: "struct",
+                is_packed: *is_packed,
+                doc: None,
+                visibility: Some(effective_visibility),
+                fields: fields
+                    .iter()
+                    .map(|(field_name, type_name)| InspectStructField {
+                        name: field_name.clone(),
+                        type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
+            Stmt::Union { name, fields } => types.push(DocType {
+                line: current_line,
+                name: name.clone(),
+                kind: "union",
+                is_packed: false,
+                doc: None,
+                visibility: Some(effective_visibility),
+                fields: fields
+                    .iter()
+                    .map(|(field_name, type_name)| InspectStructField {
+                        name: field_name.clone(),
+                        type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
+            _ => {
+                if let Some(binding) = doc_binding(raw_stmt, current_line) {
+                    bindings.extend(binding);
+                }
+            }
+        }
+    }
+
+    Ok(DocModule {
+        name,
+        path: module.path.clone(),
+        is_entry: module.path == entry,
+        doc: extract_docstring(&program),
+        functions,
+        classes,
+        types,
+        bindings,
+    })
+}
+
+fn doc_class_body(body: &[Stmt], include_private: bool) -> (Vec<DocFunction>, Vec<DocBinding>) {
+    let mut methods = Vec::new();
+    let mut bindings = Vec::new();
+    let mut current_line = None;
+
+    for raw_stmt in body {
+        let visibility = effective_visibility(raw_stmt);
+        let is_public = module_exports::stmt_is_public_export(raw_stmt);
+        if !include_private && !is_public {
+            match module_exports::stmt_unwrap_visibility(raw_stmt).0 {
+                Stmt::SetLine(_) | Stmt::Expr(Expr::Str(_)) => {}
+                _ => continue,
+            }
+        }
+
+        match module_exports::stmt_unwrap_visibility(raw_stmt).0 {
+            Stmt::SetLine(line) => current_line = Some(*line),
+            Stmt::FnDef {
+                name,
+                params,
+                return_type,
+                body,
+                ..
+            } => methods.push(DocFunction {
+                line: current_line,
+                name: name.clone(),
+                kind: "method",
+                params: inspect_params(params),
+                return_type: return_type.clone(),
+                doc: extract_docstring(body),
+                visibility: Some(visibility),
+            }),
+            _ => {
+                if let Some(items) = doc_binding(raw_stmt, current_line) {
+                    bindings.extend(items);
+                }
+            }
+        }
+    }
+
+    (methods, bindings)
+}
+
+fn doc_binding(raw_stmt: &Stmt, line: Option<usize>) -> Option<Vec<DocBinding>> {
+    let visibility = effective_visibility(raw_stmt);
+    let (stmt, _) = module_exports::stmt_unwrap_visibility(raw_stmt);
+    let (kind, names, type_name, is_const) = match stmt {
+        Stmt::Assign { name, .. } => ("assign", vec![name.clone()], None, false),
+        Stmt::VarDecl {
+            name,
+            type_name,
+            is_const,
+            ..
+        } => (
+            if *is_const { "const" } else { "var" },
+            vec![name.clone()],
+            type_name.clone(),
+            *is_const,
+        ),
+        Stmt::Data { name, type_name, .. } => ("data", vec![name.clone()], Some(type_name.clone()), false),
+        _ => return None,
+    };
+
+    Some(
+        names
+            .into_iter()
+            .map(|name| DocBinding {
+                line,
+                name,
+                kind,
+                type_name: type_name.clone(),
+                is_const,
+                visibility,
+            })
+            .collect(),
+    )
+}
+
+fn extract_docstring(stmts: &[Stmt]) -> Option<String> {
+    for stmt in stmts {
+        match stmt {
+            Stmt::SetLine(_) => continue,
+            Stmt::Expr(Expr::Str(text)) => {
+                let doc = text.trim().to_string();
+                return if doc.is_empty() { None } else { Some(doc) };
+            }
+            Stmt::Visibility { stmt, .. } => match stmt.as_ref() {
+                Stmt::Expr(Expr::Str(text)) => {
+                    let doc = text.trim().to_string();
+                    return if doc.is_empty() { None } else { Some(doc) };
+                }
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn effective_visibility(stmt: &Stmt) -> Visibility {
+    if module_exports::stmt_is_public_export(stmt) {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    }
+}
+
+fn render_function_signature(function: &DocFunction) -> String {
+    let params = function
+        .params
+        .iter()
+        .map(render_param_signature)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let prefix = match function.kind {
+        "extern" => "extern def",
+        _ => "def",
+    };
+    match &function.return_type {
+        Some(return_type) => format!("{prefix} {}({}) -> {}", function.name, params, return_type),
+        None => format!("{prefix} {}({})", function.name, params),
+    }
+}
+
+fn render_param_signature(param: &InspectParam) -> String {
+    let mut name = String::new();
+    if param.is_kwarg {
+        name.push_str("**");
+    } else if param.is_vararg {
+        name.push('*');
+    }
+    name.push_str(&param.name);
+    if let Some(type_name) = &param.type_name {
+        name.push_str(": ");
+        name.push_str(type_name);
+    }
+    if param.has_default {
+        name.push_str(" = ...");
+    }
+    name
+}
+
+fn render_binding_signature(binding: &DocBinding) -> String {
+    let prefix = if binding.is_const {
+        "const"
+    } else {
+        match binding.kind {
+            "data" => "data",
+            "var" => "var",
+            _ => "let",
+        }
+    };
+    match &binding.type_name {
+        Some(type_name) => format!("{prefix} {}: {}", binding.name, type_name),
+        None => format!("{prefix} {}", binding.name),
+    }
+}
+
+fn render_markdown_visibility(visibility: Option<Visibility>) -> &'static str {
+    match visibility {
+        Some(Visibility::Private) => " _(private)_",
+        _ => "",
+    }
+}
+
+fn render_html_visibility(visibility: Option<Visibility>) -> &'static str {
+    match visibility {
+        Some(Visibility::Private) => " <span class=\"visibility\">private</span>",
+        _ => "",
+    }
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn render_doc_html_text(text: &str) -> String {
+    let paragraphs: Vec<String> = text
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| format!("<p>{}</p>", escape_html(part).replace('\n', "<br>")))
+        .collect();
+    paragraphs.join("")
+}
+
+pub fn render_doc_markdown(report: &DocReport) -> String {
+    let mut out = String::new();
+    out.push_str("# Cool API Docs\n\n");
+    out.push_str(&format!("Entry: `{}`\n\n", report.entry));
+
+    for module in &report.modules {
+        out.push_str(&format!("## Module `{}`\n\n", module.name));
+        out.push_str(&format!("Path: `{}`\n\n", module.path));
+        if let Some(doc) = &module.doc {
+            out.push_str(doc.trim());
+            out.push_str("\n\n");
+        }
+
+        if !module.functions.is_empty() {
+            out.push_str("### Functions\n\n");
+            for function in &module.functions {
+                out.push_str(&format!(
+                    "#### `{}`{}\n\n",
+                    render_function_signature(function),
+                    render_markdown_visibility(function.visibility)
+                ));
+                if let Some(doc) = &function.doc {
+                    out.push_str(doc.trim());
+                    out.push_str("\n\n");
+                }
+            }
+        }
+
+        if !module.classes.is_empty() {
+            out.push_str("### Classes\n\n");
+            for class in &module.classes {
+                let header = match &class.parent {
+                    Some(parent) => format!("class {}({})", class.name, parent),
+                    None => format!("class {}", class.name),
+                };
+                out.push_str(&format!(
+                    "#### `{header}`{}\n\n",
+                    render_markdown_visibility(class.visibility)
+                ));
+                if let Some(doc) = &class.doc {
+                    out.push_str(doc.trim());
+                    out.push_str("\n\n");
+                }
+                if !class.methods.is_empty() {
+                    out.push_str("##### Methods\n\n");
+                    for method in &class.methods {
+                        out.push_str(&format!(
+                            "###### `{}`{}\n\n",
+                            render_function_signature(method),
+                            render_markdown_visibility(method.visibility)
+                        ));
+                        if let Some(doc) = &method.doc {
+                            out.push_str(doc.trim());
+                            out.push_str("\n\n");
+                        }
+                    }
+                }
+                if !class.class_bindings.is_empty() {
+                    out.push_str("##### Bindings\n\n");
+                    for binding in &class.class_bindings {
+                        out.push_str(&format!(
+                            "- `{}`{}\n",
+                            render_binding_signature(binding),
+                            render_markdown_visibility(Some(binding.visibility))
+                        ));
+                    }
+                    out.push('\n');
+                }
+            }
+        }
+
+        if !module.types.is_empty() {
+            out.push_str("### Types\n\n");
+            for item in &module.types {
+                let header = match item.kind {
+                    "union" => format!("union {}", item.name),
+                    _ if item.is_packed => format!("packed struct {}", item.name),
+                    _ => format!("struct {}", item.name),
+                };
+                out.push_str(&format!(
+                    "#### `{header}`{}\n\n",
+                    render_markdown_visibility(item.visibility)
+                ));
+                if let Some(doc) = &item.doc {
+                    out.push_str(doc.trim());
+                    out.push_str("\n\n");
+                }
+                if !item.fields.is_empty() {
+                    out.push_str("Fields:\n");
+                    for field in &item.fields {
+                        out.push_str(&format!("- `{}`: `{}`\n", field.name, field.type_name));
+                    }
+                    out.push('\n');
+                }
+            }
+        }
+
+        if !module.bindings.is_empty() {
+            out.push_str("### Bindings\n\n");
+            for binding in &module.bindings {
+                out.push_str(&format!(
+                    "- `{}`{}\n",
+                    render_binding_signature(binding),
+                    render_markdown_visibility(Some(binding.visibility))
+                ));
+            }
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+pub fn render_doc_html(report: &DocReport) -> String {
+    let mut out = String::new();
+    out.push_str("<!doctype html><html><head><meta charset=\"utf-8\"><title>Cool API Docs</title>");
+    out.push_str(
+        "<style>body{font-family:ui-sans-serif,system-ui,sans-serif;max-width:980px;margin:40px auto;padding:0 20px;line-height:1.55}code{background:#f4f4f4;padding:0.1em 0.3em;border-radius:4px}pre{background:#f4f4f4;padding:12px;border-radius:8px;overflow:auto}h1,h2,h3,h4,h5{line-height:1.2}.visibility{color:#666;font-size:0.8em;text-transform:uppercase;letter-spacing:0.04em}ul{padding-left:20px}</style>",
+    );
+    out.push_str("</head><body>");
+    out.push_str("<h1>Cool API Docs</h1>");
+    out.push_str(&format!("<p>Entry: <code>{}</code></p>", escape_html(&report.entry)));
+
+    for module in &report.modules {
+        out.push_str(&format!("<h2>Module <code>{}</code></h2>", escape_html(&module.name)));
+        out.push_str(&format!("<p>Path: <code>{}</code></p>", escape_html(&module.path)));
+        if let Some(doc) = &module.doc {
+            out.push_str(&render_doc_html_text(doc));
+        }
+
+        if !module.functions.is_empty() {
+            out.push_str("<h3>Functions</h3>");
+            for function in &module.functions {
+                out.push_str(&format!(
+                    "<h4><code>{}</code>{}</h4>",
+                    escape_html(&render_function_signature(function)),
+                    render_html_visibility(function.visibility)
+                ));
+                if let Some(doc) = &function.doc {
+                    out.push_str(&render_doc_html_text(doc));
+                }
+            }
+        }
+
+        if !module.classes.is_empty() {
+            out.push_str("<h3>Classes</h3>");
+            for class in &module.classes {
+                let header = match &class.parent {
+                    Some(parent) => format!("class {}({})", class.name, parent),
+                    None => format!("class {}", class.name),
+                };
+                out.push_str(&format!(
+                    "<h4><code>{}</code>{}</h4>",
+                    escape_html(&header),
+                    render_html_visibility(class.visibility)
+                ));
+                if let Some(doc) = &class.doc {
+                    out.push_str(&render_doc_html_text(doc));
+                }
+                if !class.methods.is_empty() {
+                    out.push_str("<h5>Methods</h5>");
+                    for method in &class.methods {
+                        out.push_str(&format!(
+                            "<p><code>{}</code>{}</p>",
+                            escape_html(&render_function_signature(method)),
+                            render_html_visibility(method.visibility)
+                        ));
+                        if let Some(doc) = &method.doc {
+                            out.push_str(&render_doc_html_text(doc));
+                        }
+                    }
+                }
+                if !class.class_bindings.is_empty() {
+                    out.push_str("<p>Bindings:</p><ul>");
+                    for binding in &class.class_bindings {
+                        out.push_str(&format!(
+                            "<li><code>{}</code>{}</li>",
+                            escape_html(&render_binding_signature(binding)),
+                            render_html_visibility(Some(binding.visibility))
+                        ));
+                    }
+                    out.push_str("</ul>");
+                }
+            }
+        }
+
+        if !module.types.is_empty() {
+            out.push_str("<h3>Types</h3>");
+            for item in &module.types {
+                let header = match item.kind {
+                    "union" => format!("union {}", item.name),
+                    _ if item.is_packed => format!("packed struct {}", item.name),
+                    _ => format!("struct {}", item.name),
+                };
+                out.push_str(&format!(
+                    "<h4><code>{}</code>{}</h4>",
+                    escape_html(&header),
+                    render_html_visibility(item.visibility)
+                ));
+                if let Some(doc) = &item.doc {
+                    out.push_str(&render_doc_html_text(doc));
+                }
+                if !item.fields.is_empty() {
+                    out.push_str("<p>Fields:</p><ul>");
+                    for field in &item.fields {
+                        out.push_str(&format!(
+                            "<li><code>{}</code>: <code>{}</code></li>",
+                            escape_html(&field.name),
+                            escape_html(&field.type_name)
+                        ));
+                    }
+                    out.push_str("</ul>");
+                }
+            }
+        }
+
+        if !module.bindings.is_empty() {
+            out.push_str("<h3>Bindings</h3><ul>");
+            for binding in &module.bindings {
+                out.push_str(&format!(
+                    "<li><code>{}</code>{}</li>",
+                    escape_html(&render_binding_signature(binding)),
+                    render_html_visibility(Some(binding.visibility))
+                ));
+            }
+            out.push_str("</ul>");
+        }
+    }
+
+    out.push_str("</body></html>");
+    out
 }
 
 fn walk_module(path: &Path, resolver: &ModuleResolver, state: &mut ModuleGraphState) -> Result<(), String> {
@@ -1283,6 +1994,23 @@ fn diagnostic_sort_key(diagnostic: &ToolingDiagnostic) -> (u8, String, Option<us
         diagnostic.code,
         diagnostic.message.clone(),
     )
+}
+
+fn format_tooling_diagnostic(diagnostic: &ToolingDiagnostic) -> String {
+    let severity = match diagnostic.severity {
+        DiagnosticSeverity::Error => "error",
+        DiagnosticSeverity::Warning => "warning",
+    };
+    match diagnostic.line {
+        Some(line) => format!(
+            "{severity}[{}] {}:{}: {}",
+            diagnostic.code, diagnostic.path, line, diagnostic.message
+        ),
+        None => format!(
+            "{severity}[{}] {}: {}",
+            diagnostic.code, diagnostic.path, diagnostic.message
+        ),
+    }
 }
 
 fn symbol_sort_key(symbol: &SymbolLocation) -> (String, Option<usize>, u8, Option<String>, String, Option<String>) {

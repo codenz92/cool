@@ -10,7 +10,7 @@ def write_text_file(file_path, contents):
     with open(file_path, "w") as f:
         f.write(contents)
 
-def standard_tasks(run_task, include_bundle_tasks, extra_tasks):
+def standard_tasks(run_task, include_bundle_tasks, doc_task, extra_tasks):
     tasks = ""
     if run_task != "":
         tasks = tasks + "[tasks.run]\ndescription = \"Run the project\"\nrun = \"" + run_task + "\"\n\n"
@@ -19,7 +19,8 @@ def standard_tasks(run_task, include_bundle_tasks, extra_tasks):
         tasks = tasks + "[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n"
         tasks = tasks + "[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n"
     tasks = tasks + "[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n\n"
-    tasks = tasks + "[tasks.bench]\ndescription = \"Run native benchmarks\"\nrun = \"cool bench\"\n"
+    tasks = tasks + "[tasks.bench]\ndescription = \"Run native benchmarks\"\nrun = \"cool bench\"\n\n"
+    tasks = tasks + "[tasks.doc]\ndescription = \"Generate API docs\"\nrun = \"" + doc_task + "\"\n"
     if extra_tasks != "":
         tasks = tasks + "\n" + extra_tasks
     return tasks
@@ -31,7 +32,7 @@ def app_manifest(name):
     manifest = manifest + "main = \"src/main.cool\"\n\n"
     manifest = manifest + "[build]\nprofile = \"dev\"\n\n"
     manifest = manifest + "[bundle]\ninclude = []\n\n"
-    manifest = manifest + standard_tasks("cool src/main.cool", true, "")
+    manifest = manifest + standard_tasks("cool src/main.cool", true, "cool doc --output docs/API.md", "")
     return manifest
 
 def lib_manifest(name):
@@ -41,7 +42,12 @@ def lib_manifest(name):
     manifest = manifest + "main = \"examples/demo.cool\"\n"
     manifest = manifest + "sources = [\"src\", \"examples\"]\n\n"
     manifest = manifest + "[build]\nprofile = \"strict\"\n\n"
-    manifest = manifest + standard_tasks("cool examples/demo.cool", false, "")
+    manifest = manifest + standard_tasks(
+        "cool examples/demo.cool",
+        false,
+        "cool doc --output docs/API.md src/" + name + ".cool",
+        "",
+    )
     return manifest
 
 def service_manifest(name):
@@ -51,7 +57,7 @@ def service_manifest(name):
     manifest = manifest + "main = \"src/main.cool\"\n\n"
     manifest = manifest + "[build]\nprofile = \"dev\"\n\n"
     manifest = manifest + "[bundle]\ninclude = []\n\n"
-    manifest = manifest + standard_tasks("cool src/main.cool 9000", true, "")
+    manifest = manifest + standard_tasks("cool src/main.cool 9000", true, "cool doc --output docs/API.md", "")
     return manifest
 
 def freestanding_manifest(name):
@@ -63,6 +69,7 @@ def freestanding_manifest(name):
     manifest = manifest + standard_tasks(
         "",
         false,
+        "cool doc --output docs/API.md",
         "[tasks.kernel]\ndescription = \"Link a kernel image via LLD\"\nrun = \"cool build --linker-script=link.ld\"\n",
     )
     return manifest
@@ -186,18 +193,21 @@ def print_instructions(name, template):
         print("    cool build                  # strict checked native build")
         print("    cool test                   # run library tests")
         print("    cool bench                  # run benchmarks/")
+        print("    cool task doc               # write docs/API.md")
     elif template == "service":
         print("    cool src/main.cool 9000     # run the echo service")
         print("    cool build                  # checked native build")
         print("    cool bundle                 # package a distributable tarball")
         print("    cool test                   # run tests/")
         print("    cool bench                  # run benchmarks/")
+        print("    cool task doc               # write docs/API.md")
     elif template == "freestanding":
         print("    cool build                  # emit a freestanding object file")
         print("    cool build --linker-script=link.ld")
         print("                                # link a kernel image via LLD")
         print("    cool test                   # run hosted tests/")
         print("    cool bench                  # run hosted benchmarks/")
+        print("    cool task doc               # write docs/API.md")
     else:
         print("    cool src/main.cool          # interpret")
         print("    cool build                  # checked native build")
@@ -206,6 +216,7 @@ def print_instructions(name, template):
         print("    cool install                # fetch git dependencies")
         print("    cool test                   # run tests/")
         print("    cool bench                  # run benchmarks/")
+        print("    cool task doc               # write docs/API.md")
     print("    cool task list              # show project tasks")
 
 argv = sys.argv

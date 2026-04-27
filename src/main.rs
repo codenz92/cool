@@ -1161,6 +1161,108 @@ top-level imports and symbols."
     Ok(())
 }
 
+// ── `cool doc` ───────────────────────────────────────────────────────────────
+
+fn cmd_doc(args: &[&String]) -> Result<(), String> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum DocFormat {
+        Markdown,
+        Html,
+        Json,
+    }
+
+    let mut format = DocFormat::Markdown;
+    let mut include_private = false;
+    let mut output = None::<String>;
+    let mut file = None::<&str>;
+
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--json" => format = DocFormat::Json,
+            "--private" => include_private = true,
+            "--output" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool doc: --output requires a value".to_string())?;
+                output = Some(value.clone());
+            }
+            "--format" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool doc: --format requires a value".to_string())?;
+                format = match value.as_str() {
+                    "markdown" | "md" => DocFormat::Markdown,
+                    "html" => DocFormat::Html,
+                    "json" => DocFormat::Json,
+                    other => return Err(format!("cool doc: unsupported format '{other}'")),
+                };
+            }
+            "--help" | "-h" => {
+                println!(
+                    "\
+Usage: cool doc [--format markdown|html|json] [--private] [--output path] [file.cool]
+
+Generate API documentation for a Cool file or project entrypoint.
+
+Options:
+  --format <kind>  Output format: markdown (default), html, or json
+  --json           Shortcut for --format json
+  --private        Include private and underscore-prefixed top-level symbols
+  --output <path>  Write the rendered docs to a file instead of stdout
+
+With no file argument inside a project, `cool doc` uses the manifest main file."
+                );
+                return Ok(());
+            }
+            other if other.starts_with('-') => return Err(format!("cool doc: unexpected flag '{other}'")),
+            other => {
+                if file.is_some() {
+                    return Err(
+                        "Usage: cool doc [--format markdown|html|json] [--private] [--output path] [file.cool]"
+                            .to_string(),
+                    );
+                }
+                file = Some(other);
+            }
+        }
+    }
+
+    let target = match file {
+        Some(path) => PathBuf::from(path),
+        None => current_project("cool doc")?.main_path(),
+    };
+
+    let report = tooling::build_doc_report(&target, include_private)?;
+    let rendered = match format {
+        DocFormat::Markdown => tooling::render_doc_markdown(&report),
+        DocFormat::Html => tooling::render_doc_html(&report),
+        DocFormat::Json => {
+            serde_json::to_string_pretty(&report).map_err(|e| format!("cool doc: failed to encode JSON: {e}"))?
+        }
+    };
+
+    if let Some(output_path) = output {
+        let output_path = PathBuf::from(output_path);
+        if let Some(parent) = output_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .map_err(|e| format!("cool doc: cannot create '{}': {e}", parent.display()))?;
+            }
+        }
+        fs::write(&output_path, rendered)
+            .map_err(|e| format!("cool doc: cannot write '{}': {e}", output_path.display()))?;
+        println!("Wrote docs → {}", output_path.display());
+    } else {
+        print!("{rendered}");
+        if !rendered.ends_with('\n') {
+            println!();
+        }
+    }
+
+    Ok(())
+}
+
 // ── `cool check` ──────────────────────────────────────────────────────────────
 
 fn cmd_check(args: &[&String]) -> Result<(), String> {
@@ -1365,6 +1467,7 @@ USAGE:
     cool inspect <file.cool>      Print a JSON summary of top-level symbols
     cool symbols [file.cool]      Print a resolved JSON symbol index
     cool diff <before> <after>    Print a JSON summary of top-level changes
+    cool doc [file.cool]          Generate API docs for modules, types, and functions
     cool check [file.cool]        Statically check imports, cycles, symbols, and types
     cool modulegraph <file.cool>  Print the resolved import graph as JSON
     cool bundle                   Build and package the project into a distributable tarball
@@ -1394,6 +1497,7 @@ EXAMPLES:
     cool inspect hello.cool       # summarize top-level symbols as JSON
     cool symbols hello.cool       # index resolved symbol locations as JSON
     cool diff old.cool new.cool   # compare top-level imports and symbols
+    cool doc hello.cool           # generate markdown API docs
     cool check hello.cool         # statically check imports, cycles, symbols, and types
     cool modulegraph hello.cool   # resolve imports reachable from hello.cool
     cool add toolkit --path ../toolkit
@@ -1473,6 +1577,14 @@ fn main() {
             "diff" => {
                 let rest: Vec<&String> = args[2..].iter().collect();
                 if let Err(e) = cmd_diff(&rest) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "doc" => {
+                let rest: Vec<&String> = args[2..].iter().collect();
+                if let Err(e) = cmd_doc(&rest) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

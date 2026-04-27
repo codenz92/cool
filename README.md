@@ -423,6 +423,10 @@ cool test
 # Run native benchmarks
 cool bench
 
+# Generate API docs
+cool doc
+cool doc --format html --output docs/API.html
+
 # Add dependencies
 cool add toolkit --path ../toolkit
 cool add theme --git https://github.com/acme/theme.git
@@ -434,6 +438,7 @@ cool task list
 # Run a manifest task
 cool task build
 cool task bench
+cool task doc
 
 # Compile for release
 cool build                   # reads cool.toml, produces ./myapp
@@ -472,15 +477,19 @@ run = "cool test"
 [tasks.bench]
 description = "Run native benchmarks"
 run = "cool bench"
+
+[tasks.doc]
+description = "Generate API docs"
+run = "cool doc --output docs/API.md"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` emit `.o` output by default, and `release` keeps the plain hosted compile path. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool` and `benchmarks/bench_main.cool`, so both `cool test` and `cool bench` work immediately in new projects, and now supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` emit `.o` output by default, and `release` keeps the plain hosted compile path. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool`, `benchmarks/bench_main.cool`, and a starter `[tasks.doc]`, so `cool test`, `cool bench`, and `cool doc` work immediately in new projects; it also supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, and `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, and typed `def` call/return mismatches. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, and typed `def` call/return mismatches, and `cool doc [file.cool]` generates module/type/API docs as Markdown, HTML, or JSON. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search.
 
 ## VS Code
 
@@ -519,6 +528,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool diff <before.cool> <after.cool>` | Print a JSON summary of top-level changes |
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
 | `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, typed bindings, immutable reassignments, missing returns, export validation, and type mismatches; `--strict` enforces full annotations |
+| `cool doc [file.cool]` | Generate API docs as Markdown, HTML, or JSON |
 | `cool build` | Build the project described by `cool.toml` |
 | `cool build --profile <name> [file.cool]` | Build with `dev`, `release`, `freestanding`, or `strict` profile rules |
 | `cool build <file.cool>` | Compile a single file to a native binary |
@@ -538,6 +548,10 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 ### Native benchmarks
 
 Use `cool bench` inside a project to compile and time files under `benchmarks/` (or pass explicit `.cool` benchmark files/directories). For the Cool repo itself, the bundled harness in [benchmarks/README.md](/Users/jamie/cool-lang/benchmarks/README.md) still compares native Cool binaries against matched Rust binaries for integer loops, string processing, list/dict work, and raw-memory kernels.
+
+### API docs
+
+Use `cool doc` to turn a module graph into API documentation. By default it emits Markdown to stdout, but `--format html` and `--format json` are also supported, and `--output <path>` writes the result to disk. Inside a project, `cool doc` with no file argument uses the manifest `main` entry and documents every reachable local module; pass `--private` to include private functions, bindings, classes, and methods in the output.
 
 ---
 

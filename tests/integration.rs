@@ -2472,6 +2472,7 @@ fn test_cool_new_writes_project_table_manifest() {
     assert!(manifest.contains("[build]"));
     assert!(manifest.contains("profile = \"dev\""));
     assert!(manifest.contains("[tasks.bench]"));
+    assert!(manifest.contains("[tasks.doc]"));
     let gitignore = std::fs::read_to_string(workspace_dir.join("demo").join(".gitignore")).unwrap();
     assert!(gitignore.contains(".cool/"));
     assert!(gitignore.contains("*.elf"));
@@ -2500,6 +2501,7 @@ fn test_cool_new_library_template_scaffolds_and_builds_demo() {
     assert!(manifest.contains("main = \"examples/demo.cool\""));
     assert!(manifest.contains("sources = [\"src\", \"examples\"]"));
     assert!(manifest.contains("profile = \"strict\""));
+    assert!(manifest.contains("cool doc --output docs/API.md src/toolkit.cool"));
 
     let module_src = std::fs::read_to_string(project_dir.join("src").join("toolkit.cool")).unwrap();
     assert!(module_src.contains("public def add"));
@@ -3167,6 +3169,194 @@ packed struct Header:
     assert!(assignment_added
         .iter()
         .any(|item| { item["kind"].as_str() == Some("assign") && item["names"][0].as_str() == Some("total") }));
+}
+
+#[test]
+fn test_cool_doc_markdown_outputs_public_api() {
+    let temp_dir = unique_temp_dir("cool_doc_markdown");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    std::fs::write(
+        temp_dir.join("api.cool"),
+        r#""Module level docs."
+
+public const VERSION: str = "1.0"
+private const SECRET: str = "hidden"
+
+public def greet(name: str) -> str:
+    "Return a friendly greeting."
+    return "Hello, " + name
+
+private def hidden() -> str:
+    "Internal helper."
+    return SECRET
+
+public class Greeter:
+    "Friendly greeter."
+
+    title = "greeter"
+
+    public def hello(self, name: str) -> str:
+        "Return a greeting from the class."
+        return "Hello, " + name
+
+public struct Pair:
+    left: i32
+    right: i32
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["doc", "api.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("# Cool API Docs"));
+    assert!(stdout.contains("## Module `api`"));
+    assert!(stdout.contains("Module level docs."));
+    assert!(stdout.contains("#### `def greet(name: str) -> str`"));
+    assert!(stdout.contains("Return a friendly greeting."));
+    assert!(stdout.contains("#### `class Greeter`"));
+    assert!(stdout.contains("###### `def hello(self, name: str) -> str`"));
+    assert!(stdout.contains("Return a greeting from the class."));
+    assert!(stdout.contains("#### `struct Pair`"));
+    assert!(stdout.contains("- `const VERSION: str`"));
+    assert!(!stdout.contains("SECRET"));
+    assert!(!stdout.contains("def hidden() -> str"));
+}
+
+#[test]
+fn test_cool_doc_private_json_includes_private_symbols() {
+    let temp_dir = unique_temp_dir("cool_doc_private_json");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    std::fs::write(
+        temp_dir.join("api.cool"),
+        r#""API docs."
+
+public def greet(name: str) -> str:
+    return name
+
+private def hidden() -> str:
+    return "secret"
+
+private const SECRET: str = "hidden"
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&temp_dir, &["doc", "--private", "--json", "api.cool"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let modules = parsed["modules"].as_array().unwrap();
+    assert_eq!(modules.len(), 1);
+
+    let functions = modules[0]["functions"].as_array().unwrap();
+    assert!(functions.iter().any(|function| {
+        function["name"].as_str() == Some("greet") && function["visibility"].as_str() == Some("public")
+    }));
+    assert!(functions.iter().any(|function| {
+        function["name"].as_str() == Some("hidden") && function["visibility"].as_str() == Some("private")
+    }));
+
+    let bindings = modules[0]["bindings"].as_array().unwrap();
+    assert!(bindings.iter().any(|binding| {
+        binding["name"].as_str() == Some("SECRET") && binding["visibility"].as_str() == Some("private")
+    }));
+}
+
+#[test]
+fn test_cool_doc_uses_project_main_and_reachable_modules() {
+    let temp_dir = unique_temp_dir("cool_doc_project");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(temp_dir.join("app")).unwrap();
+    std::fs::create_dir_all(temp_dir.join("lib")).unwrap();
+
+    std::fs::write(
+        temp_dir.join("cool.toml"),
+        r#"[project]
+name = "docdemo"
+version = "0.1.0"
+main = "app/main.cool"
+sources = ["app", "lib"]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("app").join("main.cool"),
+        r#""Entry docs."
+
+import helper
+
+print(helper.answer())
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        temp_dir.join("lib").join("helper.cool"),
+        r#""Helper docs."
+
+public def answer() -> i32:
+    "Return the answer."
+    return 42
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&temp_dir, &["doc"]).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("## Module `main`"));
+    assert!(stdout.contains("Entry docs."));
+    assert!(stdout.contains("## Module `helper`"));
+    assert!(stdout.contains("Helper docs."));
+    assert!(stdout.contains("def answer() -> i32"));
+    assert!(stdout.contains("Return the answer."));
+}
+
+#[test]
+fn test_cool_doc_html_output_writes_file() {
+    let temp_dir = unique_temp_dir("cool_doc_html");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+
+    std::fs::write(
+        temp_dir.join("api.cool"),
+        r#""HTML docs."
+
+public def greet(name: str) -> str:
+    "Render greeting."
+    return "Hello, " + name
+"#,
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(
+        &temp_dir,
+        &["doc", "--format", "html", "--output", "docs/API.html", "api.cool"],
+    )
+    .unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Wrote docs"));
+
+    let html = std::fs::read_to_string(temp_dir.join("docs").join("API.html")).unwrap();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    assert!(html.contains("<!doctype html>"));
+    assert!(html.contains("<h1>Cool API Docs</h1>"));
+    assert!(html.contains("Module <code>api</code>"));
+    assert!(html.contains("Render greeting."));
 }
 
 #[test]
