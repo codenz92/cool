@@ -560,7 +560,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [ ] Incremental compilation
 - [ ] Cross-compilation via explicit target triples
-- [ ] Build profiles (`dev`, `release`, `freestanding`, and stricter checked modes)
+- [x] Build profiles (`dev`, `release`, `freestanding`, and stricter checked modes)
 - [ ] Reproducible builds and toolchain pinning
 - [ ] Better binary/object/library output selection
 
@@ -576,7 +576,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 - [ ] Registry-quality package/distribution workflow
 - [ ] Stronger lockfile and dependency reproducibility guarantees
-- [ ] Project templates aimed at native apps, libraries, services, and freestanding targets
+- [x] Project templates aimed at native apps, libraries, services, and freestanding targets
 
 ---
 

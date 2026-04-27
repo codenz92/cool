@@ -36,6 +36,7 @@ pub struct CoolProject {
     pub sources: Vec<String>,
     pub dependencies: Vec<DependencySpec>,
     pub linker_script: Option<String>,
+    pub build_profile: Option<String>,
 }
 
 fn canonical_or_path(path: PathBuf) -> PathBuf {
@@ -178,6 +179,19 @@ impl CoolProject {
             .ok_or_else(|| format!("cool.toml: invalid manifest path '{}'", manifest_path.display()))?;
         let manifest_dir = canonical_or_path(manifest_dir.to_path_buf());
 
+        let build_profile = match root.get("build") {
+            None => None,
+            Some(toml::Value::Table(table)) => {
+                parse_string_field(table.get("profile"), "profile", "cool.toml [build]")?
+            }
+            Some(other) => {
+                return Err(format!(
+                    "cool.toml: field 'build' must be a table, got {}",
+                    other.type_str()
+                ))
+            }
+        };
+
         let mut dependencies = Vec::new();
         if let Some(value) = root
             .get("dependencies")
@@ -276,6 +290,7 @@ impl CoolProject {
             sources: opt_string_list("sources")?,
             dependencies,
             linker_script: opt_string("linker_script")?,
+            build_profile,
         })
     }
 

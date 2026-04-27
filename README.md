@@ -31,7 +31,9 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - LLVM-native `extern def` declarations with `symbol:` and `cc:` metadata
 - LLVM-native ordinary `def` signatures with typed parameters and return types
 - Explicit module export control with `public` / `private` on top-level bindings and declarations
+- Build profiles for native workflows: `cool build --profile dev|release|freestanding|strict`
 - `cool build --freestanding` to emit object files for custom/freestanding link steps; `--linker-script=<path>` to link a kernel image (`.elf`) via LLD
+- `cool new --template app|lib|service|freestanding` for app, library, network-service, and freestanding scaffolds
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
@@ -407,6 +409,11 @@ cargo run --release --bin bench_compare -- --runs 5 --warmups 1
 cool new myapp
 cd myapp
 
+# Alternative scaffolds
+cool new toolkit --template lib
+cool new echoer --template service
+cool new kernelkit --template freestanding
+
 # Interpret during development
 cool src/main.cool
 
@@ -431,6 +438,7 @@ cool task bench
 # Compile for release
 cool build                   # reads cool.toml, produces ./myapp
 ./myapp
+cool build --profile strict  # checked build that requires annotated top-level defs
 cool build --freestanding    # reads cool.toml, produces ./myapp.o
 # (or set linker_script in cool.toml to produce ./myapp.elf via LLD)
 ```
@@ -445,6 +453,9 @@ main = "src/main.cool"
 output = "myapp"              # optional, defaults to name
 sources = ["src", "lib"]      # optional additional module roots
 linker_script = "link.ld"     # optional; enables kernel image output via LLD (cool build → myapp.elf)
+
+[build]
+profile = "dev"               # optional: dev, release, freestanding, or strict
 
 [dependencies]
 toolkit = { path = "../toolkit" }   # imported as `toolkit.*`
@@ -463,7 +474,7 @@ description = "Run native benchmarks"
 run = "cool bench"
 ```
 
-`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool` and `benchmarks/bench_main.cool`, so both `cool test` and `cool bench` work immediately in new projects, and includes starter tasks for `cool task`. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
+`cool build` accepts either the legacy flat-key manifest or the preferred `[project]` table shown above. `sources` extends module search roots for `import foo.bar`, and `[dependencies]` now supports both local `path` dependencies and vendored `git` dependencies. `[build].profile` controls the default build workflow: `dev` runs `cool check` before compile, `strict` runs `cool check --strict`, `freestanding` makes `cool build` emit `.o` output by default, and `release` keeps the plain hosted compile path. Use `cool add` to update `cool.toml`, and `cool install` to materialize git dependencies under `.cool/deps` and refresh `cool.lock`. `cool new` also scaffolds `tests/test_main.cool` and `benchmarks/bench_main.cool`, so both `cool test` and `cool bench` work immediately in new projects, and now supports `--template app|lib|service|freestanding` for different starting points. By default the benchmark runner discovers files named `bench_*.cool` or `*_bench.cool` under `benchmarks/`. By default the test runner discovers files named `test_*.cool` or `*_test.cool` under `tests/`. Use `cool test --vm` or `cool test --compile` to run the same files through the VM or native backend.
 
 `cool task` reads the `[tasks]` section from `cool.toml`. Task entries can be strings, lists of shell commands, or tables with `run`, `deps`, `cwd`, `env`, and `description` fields.
 
@@ -509,6 +520,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
 | `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, typed bindings, immutable reassignments, missing returns, export validation, and type mismatches; `--strict` enforces full annotations |
 | `cool build` | Build the project described by `cool.toml` |
+| `cool build --profile <name> [file.cool]` | Build with `dev`, `release`, `freestanding`, or `strict` profile rules |
 | `cool build <file.cool>` | Compile a single file to a native binary |
 | `cool build --freestanding [file.cool]` | Emit a freestanding object file (`.o`) without linking the hosted runtime |
 | `cool build --linker-script=<ld> [file.cool]` | Compile freestanding and link a kernel image (`.elf`) via LLD |
@@ -520,7 +532,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool add <name> ...` | Add a path or git dependency to `cool.toml` |
 | `cool test [path ...]` | Discover and run Cool tests |
 | `cool task [name|list ...]` | List or run manifest-defined project tasks |
-| `cool new <name>` | Scaffold a new Cool project |
+| `cool new <name> [--template kind]` | Scaffold an app, library, service, or freestanding project |
 | `cool help` | Show usage help |
 
 ### Native benchmarks

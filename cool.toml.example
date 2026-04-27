@@ -17,6 +17,11 @@ main = "src/main.cool"
 # (ld.lld) to link a kernel image: <output>.elf. Path is relative to this file.
 # linker_script = "link.ld"
 
+# Optional: default build profile for `cool build`
+#
+# [build]
+# profile = "dev"          # dev, release, freestanding, or strict
+
 # Optional: dependencies, imported by dependency name
 #
 # [dependencies]

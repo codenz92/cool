@@ -2014,6 +2014,121 @@ output = "demo-bin"
 }
 
 #[test]
+fn test_cool_build_profile_dev_runs_checks_before_compile() {
+    let project_dir = unique_temp_dir("cool_build_profile_dev");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+profile = "dev"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"dev profile\")\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Checking demo v0.2.0 (src/main.cool) [dev]"));
+    assert!(stdout.contains("Checked 1 module(s)"));
+    assert!(stdout.contains("Compiling demo v0.2.0 (src/main.cool) [dev]"));
+    assert!(project_dir.join("demo-bin").exists());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_profile_flag_strict_rejects_unannotated_top_level_defs() {
+    let temp = unique_temp_path("cool_build_profile_strict", "cool");
+    std::fs::write(&temp, "def greet(name):\n    return name\n\nprint(greet(\"hi\"))\n").unwrap();
+
+    let cwd = temp.parent().unwrap();
+    let file_name = temp.file_name().unwrap().to_str().unwrap();
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(cwd, &["build", "--profile", "strict", file_name]).unwrap();
+
+    let _ = std::fs::remove_file(&temp);
+    let _ = std::fs::remove_file(temp.with_extension(""));
+
+    assert_ne!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stdout.contains("Checking "));
+    assert!(stderr.contains("unannotated_param"));
+    assert!(stderr.contains("unannotated_return"));
+    assert!(stderr.contains("strict profile check failed"));
+}
+
+#[test]
+fn test_cool_build_profile_manifest_freestanding_emits_object_file() {
+    let project_dir = unique_temp_dir("cool_build_profile_freestanding");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+profile = "freestanding"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("main.cool"),
+        "def boot_entry():\n    return 7\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Compiling demo v0.2.0 (src/main.cool) [freestanding]"));
+    assert!(project_dir.join("demo-bin.o").exists());
+    assert!(!project_dir.join("demo-bin").exists());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
+fn test_cool_build_profile_flag_overrides_manifest_profile() {
+    let project_dir = unique_temp_dir("cool_build_profile_override");
+    let _ = std::fs::remove_dir_all(&project_dir);
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("cool.toml"),
+        r#"[project]
+name = "demo"
+version = "0.2.0"
+main = "src/main.cool"
+output = "demo-bin"
+
+[build]
+profile = "freestanding"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src").join("main.cool"), "print(\"override\")\n").unwrap();
+
+    let (stdout, stderr, code) = run_cool_subcommand_in_dir(&project_dir, &["build", "--profile", "release"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("Compiling demo v0.2.0 (src/main.cool)"));
+    assert!(!stdout.contains("freestanding"));
+    assert!(project_dir.join("demo-bin").exists());
+    assert!(!project_dir.join("demo-bin.o").exists());
+
+    let _ = std::fs::remove_dir_all(&project_dir);
+}
+
+#[test]
 fn test_cool_bundle_packages_project_via_cool_app() {
     let project_dir = unique_temp_dir("cool_project_bundle");
     let _ = std::fs::remove_dir_all(&project_dir);
@@ -2354,12 +2469,111 @@ fn test_cool_new_writes_project_table_manifest() {
     assert!(manifest.contains("[project]"));
     assert!(manifest.contains("name = \"demo\""));
     assert!(manifest.contains("main = \"src/main.cool\""));
+    assert!(manifest.contains("[build]"));
+    assert!(manifest.contains("profile = \"dev\""));
     assert!(manifest.contains("[tasks.bench]"));
     let gitignore = std::fs::read_to_string(workspace_dir.join("demo").join(".gitignore")).unwrap();
     assert!(gitignore.contains(".cool/"));
+    assert!(gitignore.contains("*.elf"));
+    assert!(gitignore.contains("dist/"));
     let benchmark =
         std::fs::read_to_string(workspace_dir.join("demo").join("benchmarks").join("bench_main.cool")).unwrap();
     assert!(benchmark.contains("def kernel"));
+
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+}
+
+#[test]
+fn test_cool_new_library_template_scaffolds_and_builds_demo() {
+    let workspace_dir = unique_temp_dir("cool_new_library_template");
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&workspace_dir, &["new", "toolkit", "--template", "lib"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[lib]"));
+
+    let project_dir = workspace_dir.join("toolkit");
+    let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
+    assert!(manifest.contains("main = \"examples/demo.cool\""));
+    assert!(manifest.contains("sources = [\"src\", \"examples\"]"));
+    assert!(manifest.contains("profile = \"strict\""));
+
+    let module_src = std::fs::read_to_string(project_dir.join("src").join("toolkit.cool")).unwrap();
+    assert!(module_src.contains("public def add"));
+    let test_src = std::fs::read_to_string(project_dir.join("tests").join("test_toolkit.cool")).unwrap();
+    assert!(test_src.contains("import toolkit"));
+
+    let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
+    assert!(build_stdout.contains("[strict]"));
+
+    let binary = project_dir.join("toolkit");
+    let output = Command::new(&binary).output().unwrap();
+    assert!(output.status.success());
+    let binary_stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(binary_stdout.contains("Hello, Cool!"));
+    assert!(binary_stdout.contains("42"));
+
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+}
+
+#[test]
+fn test_cool_new_service_template_scaffolds_socket_service() {
+    let workspace_dir = unique_temp_dir("cool_new_service_template");
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&workspace_dir, &["new", "echoer", "--template", "service"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[service]"));
+
+    let project_dir = workspace_dir.join("echoer");
+    let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
+    assert!(manifest.contains("profile = \"dev\""));
+    let service_src = std::fs::read_to_string(project_dir.join("src").join("main.cool")).unwrap();
+    assert!(service_src.contains("import socket"));
+    assert!(service_src.contains("listener = socket.listen"));
+
+    let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
+    assert!(project_dir.join("echoer").exists());
+
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+}
+
+#[test]
+fn test_cool_new_freestanding_template_scaffolds_kernel_project() {
+    let workspace_dir = unique_temp_dir("cool_new_freestanding_template");
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+
+    let (stdout, stderr, code) =
+        run_cool_subcommand_in_dir(&workspace_dir, &["new", "kernelkit", "--template", "freestanding"]).unwrap();
+    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(stderr.trim().is_empty());
+    assert!(stdout.contains("[freestanding]"));
+
+    let project_dir = workspace_dir.join("kernelkit");
+    let manifest = std::fs::read_to_string(project_dir.join("cool.toml")).unwrap();
+    assert!(manifest.contains("profile = \"freestanding\""));
+    assert!(std::fs::read_to_string(project_dir.join("link.ld"))
+        .unwrap()
+        .contains("ENTRY(_start)"));
+    let source = std::fs::read_to_string(project_dir.join("src").join("main.cool")).unwrap();
+    assert!(source.contains("import core"));
+    assert!(source.contains("entry: \"_start\""));
+    assert!(source.contains("core.page_size()"));
+
+    let (build_stdout, build_stderr, build_code) = run_cool_subcommand_in_dir(&project_dir, &["build"]).unwrap();
+    assert_eq!(build_code, 0, "stdout:\n{build_stdout}\nstderr:\n{build_stderr}");
+    assert!(build_stdout.contains("[freestanding]"));
+    assert!(project_dir.join("kernelkit.o").exists());
+    assert!(!project_dir.join("kernelkit").exists());
 
     let _ = std::fs::remove_dir_all(&workspace_dir);
 }

@@ -10,6 +10,14 @@ All notable changes to the Cool language project.
 - `cool new` now scaffolds `benchmarks/bench_main.cool` plus a starter `[tasks.bench]` manifest task so projects get a working benchmark path alongside `cool test`
 - Shared Rust-side benchmark helpers now back both `cool bench` and the repo's `bench_compare` maintainer harness, keeping timing/reporting logic aligned
 
+### Native Toolchain UX
+
+- `cool build` now supports named build profiles: `dev`, `release`, `freestanding`, and `strict`
+- Manifest-driven defaults via `[build] profile = "..."` in `cool.toml`; CLI `--profile` overrides the manifest setting
+- `dev` profile runs a checked build (`cool check` semantics) before native compile, while `strict` profile runs strict annotation checks (`cool check --strict`) before compile
+- `freestanding` profile makes manifest-driven `cool build` emit `.o` output by default without needing `--freestanding`
+- `cool new` now supports `--template app|lib|service|freestanding`, with template-specific manifests, starter source layouts, tasks, tests, and benchmarks
+
 ### Phase 12 — Static Semantic Core (In Progress)
 
 #### Typed Function Signatures

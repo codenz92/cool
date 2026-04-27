@@ -4,11 +4,209 @@ import path
 
 def usage():
     print("new v1.0 — scaffold a new Cool project")
-    print("  cool new <project-name>")
+    print("  cool new <project-name> [--template app|lib|service|freestanding]")
 
 def write_text_file(file_path, contents):
     with open(file_path, "w") as f:
         f.write(contents)
+
+def standard_tasks(run_task, include_bundle_tasks, extra_tasks):
+    tasks = ""
+    if run_task != "":
+        tasks = tasks + "[tasks.run]\ndescription = \"Run the project\"\nrun = \"" + run_task + "\"\n\n"
+    tasks = tasks + "[tasks.build]\ndescription = \"Build the project\"\nrun = \"cool build\"\n\n"
+    if include_bundle_tasks:
+        tasks = tasks + "[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n"
+        tasks = tasks + "[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n"
+    tasks = tasks + "[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n\n"
+    tasks = tasks + "[tasks.bench]\ndescription = \"Run native benchmarks\"\nrun = \"cool bench\"\n"
+    if extra_tasks != "":
+        tasks = tasks + "\n" + extra_tasks
+    return tasks
+
+def app_manifest(name):
+    manifest = "[project]\n"
+    manifest = manifest + "name = \"" + name + "\"\n"
+    manifest = manifest + "version = \"0.1.0\"\n"
+    manifest = manifest + "main = \"src/main.cool\"\n\n"
+    manifest = manifest + "[build]\nprofile = \"dev\"\n\n"
+    manifest = manifest + "[bundle]\ninclude = []\n\n"
+    manifest = manifest + standard_tasks("cool src/main.cool", true, "")
+    return manifest
+
+def lib_manifest(name):
+    manifest = "[project]\n"
+    manifest = manifest + "name = \"" + name + "\"\n"
+    manifest = manifest + "version = \"0.1.0\"\n"
+    manifest = manifest + "main = \"examples/demo.cool\"\n"
+    manifest = manifest + "sources = [\"src\", \"examples\"]\n\n"
+    manifest = manifest + "[build]\nprofile = \"strict\"\n\n"
+    manifest = manifest + standard_tasks("cool examples/demo.cool", false, "")
+    return manifest
+
+def service_manifest(name):
+    manifest = "[project]\n"
+    manifest = manifest + "name = \"" + name + "\"\n"
+    manifest = manifest + "version = \"0.1.0\"\n"
+    manifest = manifest + "main = \"src/main.cool\"\n\n"
+    manifest = manifest + "[build]\nprofile = \"dev\"\n\n"
+    manifest = manifest + "[bundle]\ninclude = []\n\n"
+    manifest = manifest + standard_tasks("cool src/main.cool 9000", true, "")
+    return manifest
+
+def freestanding_manifest(name):
+    manifest = "[project]\n"
+    manifest = manifest + "name = \"" + name + "\"\n"
+    manifest = manifest + "version = \"0.1.0\"\n"
+    manifest = manifest + "main = \"src/main.cool\"\n\n"
+    manifest = manifest + "[build]\nprofile = \"freestanding\"\n\n"
+    manifest = manifest + standard_tasks(
+        "",
+        false,
+        "[tasks.kernel]\ndescription = \"Link a kernel image via LLD\"\nrun = \"cool build --linker-script=link.ld\"\n",
+    )
+    return manifest
+
+def app_main(name):
+    return "# " + name + "\n\nprint(\"Hello from " + name + "!\")\n"
+
+def app_test():
+    return "assert 1 + 1 == 2\n"
+
+def generic_benchmark():
+    source = "def kernel(n):\n"
+    source = source + "    total = 0\n"
+    source = source + "    i = 0\n"
+    source = source + "    while i < n:\n"
+    source = source + "        total = total + (i % 7)\n"
+    source = source + "        i = i + 1\n"
+    source = source + "    return total\n\n"
+    source = source + "print(kernel(200000))\n"
+    return source
+
+def lib_module(name):
+    source = "public const VERSION: str = \"0.1.0\"\n\n"
+    source = source + "public def add(x: i32, y: i32) -> i32:\n"
+    source = source + "    return x + y\n\n"
+    source = source + "public def greet(person: str) -> str:\n"
+    source = source + "    return \"Hello, \" + person + \"!\"\n"
+    return source
+
+def lib_demo(name):
+    source = "import " + name + "\n\n"
+    source = source + "print(" + name + ".greet(\"Cool\"))\n"
+    source = source + "print(" + name + ".add(20, 22))\n"
+    return source
+
+def lib_test(name):
+    source = "import " + name + "\n\n"
+    source = source + "assert " + name + ".VERSION == \"0.1.0\"\n"
+    source = source + "assert " + name + ".add(2, 3) == 5\n"
+    source = source + "assert " + name + ".greet(\"world\") == \"Hello, world!\"\n"
+    return source
+
+def lib_benchmark(name):
+    source = "import " + name + "\n\n"
+    source = source + "def kernel(n):\n"
+    source = source + "    total = 0\n"
+    source = source + "    i = 0\n"
+    source = source + "    while i < n:\n"
+    source = source + "        total = total + " + name + ".add(i, 1)\n"
+    source = source + "        i = i + 1\n"
+    source = source + "    return total\n\n"
+    source = source + "print(kernel(120000))\n"
+    return source
+
+def service_main():
+    source = "import socket\n"
+    source = source + "import sys\n\n"
+    source = source + "host = \"127.0.0.1\"\n"
+    source = source + "port = 9000\n\n"
+    source = source + "if len(sys.argv) > 1:\n"
+    source = source + "    port = int(sys.argv[1])\n\n"
+    source = source + "listener = socket.listen(host, port)\n"
+    source = source + "print(\"Echo service listening on \" + host + \":\" + str(port))\n\n"
+    source = source + "while true:\n"
+    source = source + "    conn = listener.accept()\n"
+    source = source + "    line = conn.readline()\n"
+    source = source + "    if line != \"\":\n"
+    source = source + "        conn.send(\"echo: \" + line)\n"
+    source = source + "    conn.close()\n"
+    return source
+
+def freestanding_main():
+    source = "import core\n\n"
+    source = source + "def _start():\n"
+    source = source + "    entry: \"_start\"\n"
+    source = source + "    return core.page_size()\n"
+    return source
+
+def freestanding_linker_script():
+    source = "ENTRY(_start)\n"
+    source = source + "SECTIONS {\n"
+    source = source + "  . = 0x100000;\n"
+    source = source + "  .text : { *(.text*) }\n"
+    source = source + "  .rodata : { *(.rodata*) }\n"
+    source = source + "  .data : { *(.data*) }\n"
+    source = source + "  .bss : { *(.bss*) }\n"
+    source = source + "}\n"
+    return source
+
+def is_valid_template(name):
+    return name == "app" or name == "lib" or name == "service" or name == "freestanding"
+
+def print_tree(name, template):
+    print("  Created project '" + name + "' [" + template + "]")
+    print("  ├── cool.toml")
+    print("  ├── src/")
+    if template == "lib":
+        print("  │   └── " + name + ".cool")
+        print("  ├── examples/")
+        print("  │   └── demo.cool")
+        print("  ├── tests/")
+        print("  │   └── test_" + name + ".cool")
+        print("  ├── benchmarks/")
+        print("  │   └── bench_" + name + ".cool")
+    else:
+        print("  │   └── main.cool")
+        if template == "freestanding":
+            print("  ├── link.ld")
+        print("  ├── tests/")
+        print("  │   └── test_main.cool")
+        print("  ├── benchmarks/")
+        print("  │   └── bench_main.cool")
+    print("  └── .gitignore")
+
+def print_instructions(name, template):
+    print("")
+    print("  Run your project:")
+    print("    cd " + name)
+    if template == "lib":
+        print("    cool examples/demo.cool     # run the demo entry")
+        print("    cool build                  # strict checked native build")
+        print("    cool test                   # run library tests")
+        print("    cool bench                  # run benchmarks/")
+    elif template == "service":
+        print("    cool src/main.cool 9000     # run the echo service")
+        print("    cool build                  # checked native build")
+        print("    cool bundle                 # package a distributable tarball")
+        print("    cool test                   # run tests/")
+        print("    cool bench                  # run benchmarks/")
+    elif template == "freestanding":
+        print("    cool build                  # emit a freestanding object file")
+        print("    cool build --linker-script=link.ld")
+        print("                                # link a kernel image via LLD")
+        print("    cool test                   # run hosted tests/")
+        print("    cool bench                  # run hosted benchmarks/")
+    else:
+        print("    cool src/main.cool          # interpret")
+        print("    cool build                  # checked native build")
+        print("    cool bundle                 # package a distributable tarball")
+        print("    cool release                # bump version, bundle, and tag")
+        print("    cool install                # fetch git dependencies")
+        print("    cool test                   # run tests/")
+        print("    cool bench                  # run benchmarks/")
+    print("    cool task list              # show project tasks")
 
 argv = sys.argv
 
@@ -16,60 +214,69 @@ if len(argv) >= 2 and (argv[1] == "help" or argv[1] == "--help" or argv[1] == "-
     usage()
     exit(0)
 
-if len(argv) != 2:
+name = nil
+template = "app"
+i = 1
+while i < len(argv):
+    arg = argv[i]
+    if arg == "--template":
+        i = i + 1
+        if i >= len(argv):
+            raise "cool new: --template requires a value"
+        template = argv[i]
+    elif arg.startswith("--template="):
+        template = arg[11:]
+    elif arg.startswith("-"):
+        raise "cool new: unexpected flag '" + arg + "'"
+    elif name == nil:
+        name = arg
+    else:
+        raise "cool new: unexpected argument '" + arg + "'"
+    i = i + 1
+
+if name == nil:
     usage()
     exit(1)
 
-name = argv[1]
+if not is_valid_template(template):
+    raise "cool new: unknown template '" + template + "'"
+
 workspace_dir = os.getcwd()
 project_dir = path.join(workspace_dir, name)
 if os["exists"](project_dir):
     raise "cool new: directory '" + name + "' already exists"
 
+os["mkdir"](project_dir)
 os["mkdir"](path.join(project_dir, "src"))
 os["mkdir"](path.join(project_dir, "tests"))
 os["mkdir"](path.join(project_dir, "benchmarks"))
+if template == "lib":
+    os["mkdir"](path.join(project_dir, "examples"))
 
-manifest = "[project]\n"
-manifest = manifest + "name = \"" + name + "\"\n"
-manifest = manifest + "version = \"0.1.0\"\n"
-manifest = manifest + "main = \"src/main.cool\"\n\n"
-manifest = manifest + "[bundle]\ninclude = []\n\n"
-manifest = manifest + "[tasks.run]\ndescription = \"Run the app\"\nrun = \"cool src/main.cool\"\n\n"
-manifest = manifest + "[tasks.build]\ndescription = \"Build a native binary\"\nrun = \"cool build\"\n\n"
-manifest = manifest + "[tasks.bundle]\ndescription = \"Package a distributable tarball\"\nrun = \"cool bundle\"\n\n"
-manifest = manifest + "[tasks.release]\ndescription = \"Bump version, bundle, and tag a release\"\nrun = \"cool release\"\n\n"
-manifest = manifest + "[tasks.test]\ndescription = \"Run Cool tests\"\nrun = \"cool test\"\n"
-manifest = manifest + "\n[tasks.bench]\ndescription = \"Run native benchmarks\"\nrun = \"cool bench\"\n"
-write_text_file(path.join(project_dir, "cool.toml"), manifest)
+if template == "lib":
+    write_text_file(path.join(project_dir, "cool.toml"), lib_manifest(name))
+    write_text_file(path.join(project_dir, "src", name + ".cool"), lib_module(name))
+    write_text_file(path.join(project_dir, "examples", "demo.cool"), lib_demo(name))
+    write_text_file(path.join(project_dir, "tests", "test_" + name + ".cool"), lib_test(name))
+    write_text_file(path.join(project_dir, "benchmarks", "bench_" + name + ".cool"), lib_benchmark(name))
+elif template == "service":
+    write_text_file(path.join(project_dir, "cool.toml"), service_manifest(name))
+    write_text_file(path.join(project_dir, "src", "main.cool"), service_main())
+    write_text_file(path.join(project_dir, "tests", "test_main.cool"), app_test())
+    write_text_file(path.join(project_dir, "benchmarks", "bench_main.cool"), generic_benchmark())
+elif template == "freestanding":
+    write_text_file(path.join(project_dir, "cool.toml"), freestanding_manifest(name))
+    write_text_file(path.join(project_dir, "src", "main.cool"), freestanding_main())
+    write_text_file(path.join(project_dir, "link.ld"), freestanding_linker_script())
+    write_text_file(path.join(project_dir, "tests", "test_main.cool"), app_test())
+    write_text_file(path.join(project_dir, "benchmarks", "bench_main.cool"), generic_benchmark())
+else:
+    write_text_file(path.join(project_dir, "cool.toml"), app_manifest(name))
+    write_text_file(path.join(project_dir, "src", "main.cool"), app_main(name))
+    write_text_file(path.join(project_dir, "tests", "test_main.cool"), app_test())
+    write_text_file(path.join(project_dir, "benchmarks", "bench_main.cool"), generic_benchmark())
 
-main_src = "# " + name + "\n\nprint(\"Hello from " + name + "!\")\n"
-write_text_file(path.join(project_dir, "src", "main.cool"), main_src)
-write_text_file(path.join(project_dir, "tests", "test_main.cool"), "assert 1 + 1 == 2\n")
-write_text_file(
-    path.join(project_dir, "benchmarks", "bench_main.cool"),
-    "def kernel(n):\n    total = 0\n    i = 0\n    while i < n:\n        total = total + (i % 7)\n        i = i + 1\n    return total\n\nprint(kernel(200000))\n",
-)
-write_text_file(path.join(project_dir, ".gitignore"), name + "\n*.o\n.cool/\n")
+write_text_file(path.join(project_dir, ".gitignore"), name + "\n*.o\n*.elf\ndist/\n.cool/\n")
 
-print("  Created project '" + name + "'")
-print("  ├── cool.toml")
-print("  ├── src/")
-print("  │   └── main.cool")
-print("  ├── tests/")
-print("  │   └── test_main.cool")
-print("  ├── benchmarks/")
-print("  │   └── bench_main.cool")
-print("  └── .gitignore")
-print("")
-print("  Run your project:")
-print("    cd " + name)
-print("    cool src/main.cool          # interpret")
-print("    cool build                  # compile to native")
-print("    cool build --freestanding   # emit a freestanding object file")
-print("    cool bundle                 # package distributable tarball")
-print("    cool release                # bump version, bundle, and tag")
-print("    cool install                # fetch git dependencies")
-print("    cool test                   # run tests/")
-print("    cool bench                  # run benchmarks/")
-print("    cool task list              # show project tasks")
+print_tree(name, template)
+print_instructions(name, template)

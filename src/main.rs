@@ -237,6 +237,52 @@ impl TestMode {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BuildProfile {
+    Dev,
+    Release,
+    Freestanding,
+    Strict,
+}
+
+impl BuildProfile {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "dev" => Ok(Self::Dev),
+            "release" => Ok(Self::Release),
+            "freestanding" => Ok(Self::Freestanding),
+            "strict" => Ok(Self::Strict),
+            _ => Err(format!(
+                "unknown build profile '{raw}' (expected dev, release, freestanding, or strict)"
+            )),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Release => "release",
+            Self::Freestanding => "freestanding",
+            Self::Strict => "strict",
+        }
+    }
+
+    fn default_build_mode(self) -> llvm_codegen::NativeBuildMode {
+        match self {
+            Self::Freestanding => llvm_codegen::NativeBuildMode::Freestanding,
+            Self::Dev | Self::Release | Self::Strict => llvm_codegen::NativeBuildMode::Hosted,
+        }
+    }
+
+    fn strict_check(self) -> Option<bool> {
+        match self {
+            Self::Dev => Some(false),
+            Self::Strict => Some(true),
+            Self::Release | Self::Freestanding => None,
+        }
+    }
+}
+
 struct TestFailure {
     stdout: String,
     stderr: String,
@@ -729,6 +775,73 @@ Examples:
     }
 }
 
+fn resolve_build_profile(cli_profile: Option<&str>, manifest_profile: Option<&str>) -> Result<BuildProfile, String> {
+    match cli_profile.or(manifest_profile) {
+        Some(raw) => BuildProfile::parse(raw).map_err(|err| format!("cool build: {err}")),
+        None => Ok(BuildProfile::Release),
+    }
+}
+
+fn build_label(profile: BuildProfile, freestanding: bool, kernel_image: bool) -> String {
+    let mut parts = Vec::new();
+    if profile != BuildProfile::Release {
+        parts.push(profile.label().to_string());
+    }
+    if kernel_image {
+        parts.push("freestanding -> kernel image".to_string());
+    } else if freestanding && profile != BuildProfile::Freestanding {
+        parts.push("freestanding".to_string());
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", parts.join(", "))
+    }
+}
+
+fn run_build_profile_checks(target: &Path, profile: BuildProfile, display: &str) -> Result<(), String> {
+    let Some(strict) = profile.strict_check() else {
+        return Ok(());
+    };
+
+    println!("  Checking {display} [{}]", profile.label());
+    let report = tooling::build_check_report(target, strict)?;
+    let error_count = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == tooling::DiagnosticSeverity::Error)
+        .count();
+    let warning_count = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == tooling::DiagnosticSeverity::Warning)
+        .count();
+
+    for diagnostic in &report.diagnostics {
+        eprintln!("{}", format_tooling_diagnostic(diagnostic));
+    }
+
+    if error_count == 0 {
+        if warning_count == 0 {
+            println!("   Checked {} module(s)", report.modules_checked);
+        } else {
+            println!(
+                "   Checked {} module(s); 0 error(s), {} warning(s)",
+                report.modules_checked, warning_count
+            );
+        }
+        Ok(())
+    } else {
+        Err(format!(
+            "cool build: {} profile check failed with {} error(s), {} warning(s)",
+            profile.label(),
+            error_count,
+            warning_count
+        ))
+    }
+}
+
 // ── `cool build` ─────────────────────────────────────────────────────────────
 
 /// Build a Cool project or file to a native binary.
@@ -740,13 +853,24 @@ Examples:
 fn cmd_build(args: &[&String]) -> Result<(), String> {
     let mut freestanding = false;
     let mut linker_script_arg: Option<String> = None;
+    let mut profile_arg: Option<String> = None;
     let mut help = false;
     let mut file_arg = None::<&String>;
 
-    for arg in args {
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--freestanding" => freestanding = true,
             "--help" | "-h" => help = true,
+            "--profile" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "cool build: --profile requires a value".to_string())?;
+                profile_arg = Some(value.clone());
+            }
+            other if other.starts_with("--profile=") => {
+                profile_arg = Some(other["--profile=".len()..].to_string());
+            }
             other if other.starts_with("--linker-script=") => {
                 linker_script_arg = Some(other["--linker-script=".len()..].to_string());
             }
@@ -763,18 +887,21 @@ fn cmd_build(args: &[&String]) -> Result<(), String> {
     if help {
         println!(
             "\
-Usage: cool build [--freestanding] [--linker-script=<path>] [file.cool]
+Usage: cool build [--profile <name>] [--freestanding] [--linker-script=<path>] [file.cool]
 
 Build a Cool project from cool.toml or compile a single file.
 
 Options:
+  --profile <name>      Select a named build profile: dev, release, freestanding, or strict
   --freestanding          Emit an object file (.o) without linking the hosted Cool runtime
   --linker-script=<path>  Link the object file into a kernel image (.elf) using LLD and the
                           given GNU linker script; implies --freestanding
 
 Examples:
   cool build
+  cool build --profile dev
   cool build hello.cool
+  cool build --profile strict hello.cool
   cool build --freestanding
   cool build --freestanding hello.cool
   cool build --linker-script=link.ld hello.cool"
@@ -787,12 +914,6 @@ Examples:
         freestanding = true;
     }
 
-    let build_mode = if freestanding {
-        llvm_codegen::NativeBuildMode::Freestanding
-    } else {
-        llvm_codegen::NativeBuildMode::Hosted
-    };
-
     match file_arg {
         // ── cool build  (no extra args) ───────────────────────────────────
         None => {
@@ -804,6 +925,9 @@ Examples:
             }
 
             let project = CoolProject::from_manifest_path(manifest_path)?;
+            let profile = resolve_build_profile(profile_arg.as_deref(), project.build_profile.as_deref())?;
+
+            freestanding = freestanding || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding;
 
             // CLI flag overrides cool.toml; cool.toml linker_script implies freestanding.
             let effective_linker_script: Option<PathBuf> = match &linker_script_arg {
@@ -832,6 +956,8 @@ Examples:
             }
 
             let source = fs::read_to_string(&main_path).map_err(|e| format!("cool build: {e}"))?;
+            let display = format!("{} v{} ({})", project.name, project.version, project.main);
+            run_build_profile_checks(&main_path, profile, &display)?;
 
             let obj_path_buf = if freestanding {
                 PathBuf::from(project.output_name()).with_extension("o")
@@ -839,21 +965,8 @@ Examples:
                 PathBuf::from(project.output_name())
             };
 
-            let label = if effective_linker_script.is_some() {
-                "[freestanding → kernel image]"
-            } else if freestanding {
-                "[freestanding]"
-            } else {
-                ""
-            };
-            if label.is_empty() {
-                println!("  Compiling {} v{} ({})", project.name, project.version, project.main);
-            } else {
-                println!(
-                    "  Compiling {} v{} ({}) {}",
-                    project.name, project.version, project.main, label
-                );
-            }
+            let label = build_label(profile, freestanding, effective_linker_script.is_some());
+            println!("  Compiling {display}{label}");
 
             let t0 = std::time::Instant::now();
             compile_to_native_with_mode(&source, &obj_path_buf, &main_path, build_mode)?;
@@ -877,6 +990,9 @@ Examples:
 
         // ── cool build <file.cool>  ───────────────────────────────────────
         Some(file_arg) => {
+            let profile = resolve_build_profile(profile_arg.as_deref(), None)?;
+            freestanding = freestanding || profile.default_build_mode() == llvm_codegen::NativeBuildMode::Freestanding;
+
             let file_path = Path::new(file_arg.as_str());
             if !file_path.exists() {
                 return Err(format!("cool build: file not found: {}", file_arg));
@@ -886,6 +1002,12 @@ Examples:
             }
 
             let source = fs::read_to_string(file_path).map_err(|e| format!("cool build: {e}"))?;
+            run_build_profile_checks(file_path, profile, &file_path.display().to_string())?;
+            let build_mode = if freestanding {
+                llvm_codegen::NativeBuildMode::Freestanding
+            } else {
+                llvm_codegen::NativeBuildMode::Hosted
+            };
 
             let obj_path = file_path.with_extension("o");
             let output_path = if freestanding {
@@ -894,13 +1016,8 @@ Examples:
                 file_path.with_extension("")
             };
 
-            if linker_script_arg.is_some() {
-                println!("  Compiling {} [freestanding → kernel image] ...", file_path.display());
-            } else if freestanding {
-                println!("  Compiling {} [freestanding] ...", file_path.display());
-            } else {
-                println!("  Compiling {} ...", file_path.display());
-            }
+            let label = build_label(profile, freestanding, linker_script_arg.is_some());
+            println!("  Compiling {}{} ...", file_path.display(), label);
 
             let t0 = std::time::Instant::now();
             compile_to_native_with_mode(&source, &output_path, file_path, build_mode)?;
@@ -1174,7 +1291,7 @@ Resolve a Cool entry file and print its reachable file/module imports as pretty 
 
 /// Scaffold a new Cool project.
 ///
-/// cool new <name>
+/// cool new <name> [--template kind]
 fn cmd_new(args: &[&String]) -> Result<(), String> {
     let new_app = new_command_path();
     run_bundled_app("cool new", &new_app, args, &[])
@@ -1236,6 +1353,7 @@ Cool 1.0.0 — a native-first high-level systems language
 
 USAGE:
     cool build                    Build the project described by cool.toml
+    cool build --profile <name>   Build with dev/release/freestanding/strict profile rules
     cool build <file.cool>        Compile a single file to a native binary
     cool build --freestanding     Build a freestanding object file (.o)
     cool build --linker-script=<ld>  Link a kernel image (.elf) via LLD
@@ -1257,6 +1375,7 @@ USAGE:
     cool bench [path ...]         Compile and benchmark native Cool programs
     cool task [name|list ...]     Run or list manifest-defined project tasks
     cool new <name>               Scaffold a new Cool project
+    cool new <name> --template <kind>  Scaffold app/lib/service/freestanding templates
     cool lsp                      Start the language server (LSP) on stdin/stdout
     cool help                     Show this help message
 
@@ -1267,6 +1386,8 @@ FLAGS:
 EXAMPLES:
     cool hello.cool               # interpret hello.cool
     cool build hello.cool         # compile hello.cool → ./hello (native binary)
+    cool build --profile dev      # checked build using cool.toml or a file
+    cool build --profile strict hello.cool
     cool build --freestanding            # compile cool.toml project → ./name.o
     cool build --linker-script=link.ld   # compile + link → ./name.elf
     cool ast hello.cool           # dump the parsed AST as JSON
@@ -1282,6 +1403,7 @@ EXAMPLES:
     cool bench                    # run bench_*.cool / *_bench.cool under benchmarks/
     cool task list                # list tasks from cool.toml
     cool new myapp                # create myapp/ project
+    cool new toolkit --template lib
     cool build                    # compile using myapp/cool.toml
 
 NOTES:
