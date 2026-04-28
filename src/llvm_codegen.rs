@@ -4096,6 +4096,302 @@ static void json_dump_value(CoolStrBuf* sb, CoolVal v) {
     }
 }
 
+static CoolVal cool_json_clone(CoolVal v) {
+    if (v.tag == TAG_LIST || v.tag == TAG_TUPLE) {
+        CoolList* src = (CoolList*)(intptr_t)v.payload;
+        CoolVal out = v.tag == TAG_TUPLE ? cool_tuple_make(cv_int(src->length)) : cool_list_make(cv_int(src->length));
+        CoolList* dst = (CoolList*)(intptr_t)out.payload;
+        for (int64_t i = 0; i < src->length; i++) {
+            ((CoolVal*)dst->data)[i] = cool_json_clone(((CoolVal*)src->data)[i]);
+        }
+        dst->length = src->length;
+        return out;
+    }
+    if (v.tag == TAG_DICT) {
+        CoolDict* src = (CoolDict*)(intptr_t)v.payload;
+        CoolVal out = cool_dict_new();
+        for (int64_t i = 0; i < src->len; i++) {
+            cool_dict_set(out, cool_json_clone(src->keys[i]), cool_json_clone(src->vals[i]));
+        }
+        return out;
+    }
+    return v;
+}
+
+static CoolVal cool_json_parse_document(const char* src, const char* context) {
+    const char* p = src;
+    CoolVal out = json_parse_value(&p);
+    json_skip_ws(&p);
+    if (*p != '\0') {
+        fprintf(stderr, "ValueError: %s trailing characters\n", context);
+        exit(1);
+    }
+    return out;
+}
+
+static CoolVal cool_json_loads_lines(CoolVal src_v) {
+    const char* src = cool_to_str(src_v);
+    CoolVal out = cool_list_make(cv_int(0));
+    const char* line = src;
+    while (*line) {
+        const char* end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        while (len > 0 && isspace((unsigned char)line[0])) {
+            line++;
+            len--;
+        }
+        while (len > 0 && isspace((unsigned char)line[len - 1])) len--;
+        if (len > 0) {
+            char* buf = (char*)malloc(len + 1);
+            memcpy(buf, line, len);
+            buf[len] = '\0';
+            cool_list_push(out, cool_json_parse_document(buf, "json.loads_lines()"));
+            free(buf);
+        }
+        if (!end) break;
+        line = end + 1;
+    }
+    return out;
+}
+
+static char* cool_json_dumps_lines(CoolVal seq_v) {
+    if (seq_v.tag != TAG_LIST && seq_v.tag != TAG_TUPLE) {
+        fprintf(stderr, "TypeError: json.dumps_lines() requires a list or tuple\n");
+        exit(1);
+    }
+    CoolList* seq = (CoolList*)(intptr_t)seq_v.payload;
+    CoolStrBuf sb;
+    sb_init(&sb);
+    for (int64_t i = 0; i < seq->length; i++) {
+        if (i > 0) sb_push_char(&sb, '\n');
+        json_dump_value(&sb, ((CoolVal*)seq->data)[i]);
+    }
+    return sb.data;
+}
+
+static char* cool_json_pointer_decode_segment(const char* src, size_t len) {
+    char* out = (char*)malloc(len + 1);
+    size_t w = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (src[i] == '~' && i + 1 < len) {
+            if (src[i + 1] == '0') {
+                out[w++] = '~';
+                i++;
+                continue;
+            }
+            if (src[i + 1] == '1') {
+                out[w++] = '/';
+                i++;
+                continue;
+            }
+        }
+        out[w++] = src[i];
+    }
+    out[w] = '\0';
+    return out;
+}
+
+static int cool_json_parse_index(const char* src, int64_t* out_index) {
+    if (!src || *src == '\0') return 0;
+    char* end = NULL;
+    long long value = strtoll(src, &end, 10);
+    if (!end || *end != '\0' || value < 0) return 0;
+    *out_index = (int64_t)value;
+    return 1;
+}
+
+static CoolVal cool_json_pointer_lookup(CoolVal value, const char* pointer, int* found) {
+    if (!pointer || pointer[0] == '\0') {
+        *found = 1;
+        return cool_json_clone(value);
+    }
+    if (pointer[0] != '/') {
+        fprintf(stderr, "ValueError: json.pointer() requires a JSON Pointer starting with '/'\n");
+        exit(1);
+    }
+    CoolVal current = cool_json_clone(value);
+    const char* segment = pointer + 1;
+    while (1) {
+        const char* slash = strchr(segment, '/');
+        size_t len = slash ? (size_t)(slash - segment) : strlen(segment);
+        char* token = cool_json_pointer_decode_segment(segment, len);
+        if (current.tag == TAG_DICT) {
+            CoolVal key = cv_str(token);
+            if (!cool_truthy(cool_dict_contains(current, key))) {
+                free(token);
+                *found = 0;
+                return cv_nil();
+            }
+            current = cool_json_clone(cool_dict_get_opt(current, key));
+        } else if (current.tag == TAG_LIST || current.tag == TAG_TUPLE) {
+            int64_t index = 0;
+            if (!cool_json_parse_index(token, &index)) {
+                free(token);
+                *found = 0;
+                return cv_nil();
+            }
+            CoolList* seq = (CoolList*)(intptr_t)current.payload;
+            if (index < 0 || index >= seq->length) {
+                free(token);
+                *found = 0;
+                return cv_nil();
+            }
+            current = cool_json_clone(((CoolVal*)seq->data)[index]);
+        } else {
+            free(token);
+            *found = 0;
+            return cv_nil();
+        }
+        free(token);
+        if (!slash) break;
+        segment = slash + 1;
+    }
+    *found = 1;
+    return current;
+}
+
+static int cool_json_is_spec_key(const char* name) {
+    return strcmp(name, "$from") == 0 || strcmp(name, "$default") == 0 || strcmp(name, "$coerce") == 0 ||
+           strcmp(name, "$each") == 0 || strcmp(name, "$literal") == 0;
+}
+
+static CoolVal cool_json_coerce(CoolVal value, const char* kind) {
+    if (strcmp(kind, "str") == 0 || strcmp(kind, "string") == 0) return cv_str(strdup(cool_to_str(value)));
+    if (strcmp(kind, "int") == 0 || strcmp(kind, "integer") == 0) {
+        if (value.tag == TAG_INT) return value;
+        if (value.tag == TAG_FLOAT) return cv_int((int64_t)cv_to_float(value));
+        if (value.tag == TAG_BOOL) return cv_int(value.payload ? 1 : 0);
+        if (value.tag == TAG_STR) {
+            char* end = NULL;
+            long long parsed = strtoll((const char*)(intptr_t)value.payload, &end, 10);
+            if (end && *end == '\0') return cv_int((int64_t)parsed);
+        }
+        fprintf(stderr, "TypeError: json.transform() cannot coerce value to int\n");
+        exit(1);
+    }
+    if (strcmp(kind, "float") == 0 || strcmp(kind, "number") == 0) {
+        if (value.tag == TAG_INT || value.tag == TAG_FLOAT) return cv_float(cv_to_float(value));
+        if (value.tag == TAG_BOOL) return cv_float(value.payload ? 1.0 : 0.0);
+        if (value.tag == TAG_STR) {
+            char* end = NULL;
+            double parsed = strtod((const char*)(intptr_t)value.payload, &end);
+            if (end && *end == '\0') return cv_float(parsed);
+        }
+        fprintf(stderr, "TypeError: json.transform() cannot coerce value to float\n");
+        exit(1);
+    }
+    if (strcmp(kind, "bool") == 0 || strcmp(kind, "boolean") == 0) return cv_bool(cool_truthy(value));
+    if (strcmp(kind, "list") == 0) {
+        if (value.tag == TAG_LIST) return cool_json_clone(value);
+        if (value.tag == TAG_TUPLE) {
+            CoolList* src = (CoolList*)(intptr_t)value.payload;
+            CoolVal out = cool_list_make(cv_int(src->length));
+            CoolList* dst = (CoolList*)(intptr_t)out.payload;
+            for (int64_t i = 0; i < src->length; i++) ((CoolVal*)dst->data)[i] = cool_json_clone(((CoolVal*)src->data)[i]);
+            dst->length = src->length;
+            return out;
+        }
+        fprintf(stderr, "TypeError: json.transform() cannot coerce value to list\n");
+        exit(1);
+    }
+    if (strcmp(kind, "dict") == 0 || strcmp(kind, "object") == 0) {
+        if (value.tag == TAG_DICT) return cool_json_clone(value);
+        fprintf(stderr, "TypeError: json.transform() cannot coerce value to dict\n");
+        exit(1);
+    }
+    fprintf(stderr, "ValueError: json.transform() unsupported coercion '%s'\n", kind);
+    exit(1);
+}
+
+static CoolVal cool_json_transform(CoolVal source, CoolVal spec) {
+    if (spec.tag == TAG_STR) {
+        const char* pointer = (const char*)(intptr_t)spec.payload;
+        if (pointer[0] == '\0' || pointer[0] == '/') {
+            int found = 0;
+            CoolVal out = cool_json_pointer_lookup(source, pointer, &found);
+            return found ? out : cv_nil();
+        }
+        return cool_json_clone(spec);
+    }
+    if (spec.tag == TAG_LIST || spec.tag == TAG_TUPLE) {
+        CoolList* src = (CoolList*)(intptr_t)spec.payload;
+        CoolVal out = spec.tag == TAG_TUPLE ? cool_tuple_make(cv_int(src->length)) : cool_list_make(cv_int(src->length));
+        CoolList* dst = (CoolList*)(intptr_t)out.payload;
+        for (int64_t i = 0; i < src->length; i++) {
+            ((CoolVal*)dst->data)[i] = cool_json_transform(source, ((CoolVal*)src->data)[i]);
+        }
+        dst->length = src->length;
+        return out;
+    }
+    if (spec.tag == TAG_DICT) {
+        if (cool_truthy(cool_dict_contains(spec, cv_str("$literal")))) {
+            return cool_json_clone(cool_dict_get_opt(spec, cv_str("$literal")));
+        }
+        CoolVal current = cool_json_clone(source);
+        if (cool_truthy(cool_dict_contains(spec, cv_str("$from")))) {
+            CoolVal path = cool_dict_get_opt(spec, cv_str("$from"));
+            if (path.tag != TAG_STR) {
+                fprintf(stderr, "TypeError: json.transform() $from must be a string pointer\n");
+                exit(1);
+            }
+            int found = 0;
+            current = cool_json_pointer_lookup(source, (const char*)(intptr_t)path.payload, &found);
+            if (!found) current = cv_nil();
+        }
+        if (current.tag == TAG_NIL && cool_truthy(cool_dict_contains(spec, cv_str("$default")))) {
+            current = cool_json_clone(cool_dict_get_opt(spec, cv_str("$default")));
+        }
+        if (cool_truthy(cool_dict_contains(spec, cv_str("$each")))) {
+            CoolVal each_spec = cool_dict_get_opt(spec, cv_str("$each"));
+            if (current.tag == TAG_NIL) {
+                current = cool_list_make(cv_int(0));
+            } else if (current.tag == TAG_LIST || current.tag == TAG_TUPLE) {
+                CoolList* src = (CoolList*)(intptr_t)current.payload;
+                CoolVal out = cool_list_make(cv_int(src->length));
+                CoolList* dst = (CoolList*)(intptr_t)out.payload;
+                for (int64_t i = 0; i < src->length; i++) {
+                    ((CoolVal*)dst->data)[i] = cool_json_transform(((CoolVal*)src->data)[i], each_spec);
+                }
+                dst->length = src->length;
+                current = out;
+            } else {
+                fprintf(stderr, "TypeError: json.transform() $each requires a list or tuple source\n");
+                exit(1);
+            }
+        }
+        if (cool_truthy(cool_dict_contains(spec, cv_str("$coerce")))) {
+            CoolVal kind = cool_dict_get_opt(spec, cv_str("$coerce"));
+            if (kind.tag != TAG_STR) {
+                fprintf(stderr, "TypeError: json.transform() $coerce must be a string\n");
+                exit(1);
+            }
+            current = cool_json_coerce(current, (const char*)(intptr_t)kind.payload);
+        }
+        CoolDict* dict = (CoolDict*)(intptr_t)spec.payload;
+        int has_shape = 0;
+        for (int64_t i = 0; i < dict->len; i++) {
+            if (dict->keys[i].tag == TAG_STR &&
+                !cool_json_is_spec_key((const char*)(intptr_t)dict->keys[i].payload)) {
+                has_shape = 1;
+                break;
+            }
+        }
+        if (!has_shape) return current;
+        CoolVal out = cool_dict_new();
+        for (int64_t i = 0; i < dict->len; i++) {
+            if (dict->keys[i].tag != TAG_STR) {
+                fprintf(stderr, "TypeError: json.transform() spec keys must be strings\n");
+                exit(1);
+            }
+            const char* key = (const char*)(intptr_t)dict->keys[i].payload;
+            if (cool_json_is_spec_key(key)) continue;
+            cool_dict_set(out, cv_str(strdup(key)), cool_json_transform(current, dict->vals[i]));
+        }
+        return out;
+    }
+    return cool_json_clone(spec);
+}
+
 static void toml_raisef(const char* fmt, ...) {
     char buf[512];
     va_list ap;
@@ -7475,23 +7771,22 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
     }
 
     if (strcmp(module, "json") == 0) {
-        if (strcmp(name, "loads") == 0 && nargs == 1) {
-            const char* src = cool_to_str(args[0]);
-            const char* p = src;
-            CoolVal out = json_parse_value(&p);
-            json_skip_ws(&p);
-            if (*p != '\0') {
-                fprintf(stderr, "ValueError: json.loads() trailing characters\n");
-                exit(1);
-            }
-            return out;
-        }
+        if (strcmp(name, "loads") == 0 && nargs == 1) return cool_json_parse_document(cool_to_str(args[0]), "json.loads()");
         if (strcmp(name, "dumps") == 0 && nargs == 1) {
             CoolStrBuf sb;
             sb_init(&sb);
             json_dump_value(&sb, args[0]);
             return cv_str(sb.data);
         }
+        if (strcmp(name, "loads_lines") == 0 && nargs == 1) return cool_json_loads_lines(args[0]);
+        if (strcmp(name, "dumps_lines") == 0 && nargs == 1) return cv_str(cool_json_dumps_lines(args[0]));
+        if (strcmp(name, "pointer") == 0 && (nargs == 2 || nargs == 3)) {
+            int found = 0;
+            CoolVal out = cool_json_pointer_lookup(args[0], cool_to_str(args[1]), &found);
+            if (found) return out;
+            return nargs == 3 ? cool_json_clone(args[2]) : cv_nil();
+        }
+        if (strcmp(name, "transform") == 0 && nargs == 2) return cool_json_transform(args[0], args[1]);
     }
 
     if (strcmp(module, "toml") == 0) {

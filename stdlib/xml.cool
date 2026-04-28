@@ -1,0 +1,294 @@
+def _fail(message):
+    raise "xml: " + message
+
+def escape(text):
+    value = str(text)
+    value = value.replace("&", "&amp;")
+    value = value.replace("<", "&lt;")
+    value = value.replace(">", "&gt;")
+    value = value.replace("\"", "&quot;")
+    value = value.replace("'", "&apos;")
+    return value
+
+def unescape(text):
+    value = str(text)
+    value = value.replace("&lt;", "<")
+    value = value.replace("&gt;", ">")
+    value = value.replace("&quot;", "\"")
+    value = value.replace("&apos;", "'")
+    value = value.replace("&#39;", "'")
+    value = value.replace("&amp;", "&")
+    return value
+
+def text(value):
+    return {"type": "text", "text": str(value)}
+
+def element(name, attrs=nil, children=nil):
+    out = {"type": "element", "name": str(name), "attrs": {}, "children": []}
+    if attrs != nil:
+        for pair in attrs.items():
+            out["attrs"][str(pair[0])] = str(pair[1])
+    if children != nil:
+        for child in children:
+            if type(child) == "dict":
+                out["children"].append(child)
+            else:
+                out["children"].append(text(child))
+    return out
+
+def _state(text):
+    return {"text": str(text), "index": 0}
+
+def _peek(state, width=1):
+    start = state["index"]
+    return state["text"][start:start + int(width)]
+
+def _starts_with(state, value):
+    return state["text"][state["index"]:].startswith(str(value))
+
+def _advance(state, count=1):
+    state["index"] = state["index"] + int(count)
+
+def _skip_ws(state):
+    source = state["text"]
+    while state["index"] < len(source):
+        ch = source[state["index"]]
+        if ch == " " or ch == "\t" or ch == "\r" or ch == "\n":
+            state["index"] = state["index"] + 1
+        else:
+            break
+
+def _consume(state, token):
+    if not _starts_with(state, token):
+        _fail("expected '" + str(token) + "'")
+    _advance(state, len(token))
+
+def _consume_until(state, token):
+    rest = state["text"][state["index"]:]
+    end_rel = rest.find(token)
+    if end_rel < 0:
+        _fail("unterminated '" + str(token) + "' section")
+    start = state["index"]
+    state["index"] = start + end_rel + len(token)
+    return state["text"][start:start + end_rel]
+
+def _skip_misc(state):
+    while true:
+        _skip_ws(state)
+        if _starts_with(state, "<?"):
+            _consume(state, "<?")
+            _consume_until(state, "?>")
+            continue
+        if _starts_with(state, "<!--"):
+            _consume(state, "<!--")
+            _consume_until(state, "-->")
+            continue
+        break
+
+def _is_name_char(ch):
+    if (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9"):
+        return true
+    return ch == "_" or ch == "-" or ch == ":" or ch == "."
+
+def _parse_name(state):
+    source = state["text"]
+    start = state["index"]
+    while state["index"] < len(source) and _is_name_char(source[state["index"]]):
+        state["index"] = state["index"] + 1
+    if start == state["index"]:
+        _fail("expected a name")
+    return source[start:state["index"]]
+
+def _parse_attr_value(state):
+    quote = _peek(state)
+    if quote != "\"" and quote != "'":
+        _fail("attribute values must be quoted")
+    _advance(state)
+    source = state["text"]
+    start = state["index"]
+    while state["index"] < len(source) and source[state["index"]] != quote:
+        state["index"] = state["index"] + 1
+    if state["index"] >= len(source):
+        _fail("unterminated attribute value")
+    value = source[start:state["index"]]
+    _advance(state)
+    return unescape(value)
+
+def _parse_attrs(state):
+    attrs = {}
+    while true:
+        _skip_ws(state)
+        next_two = _peek(state, 2)
+        next_one = _peek(state)
+        if next_two == "/>" or next_one == ">":
+            return attrs
+        name = _parse_name(state)
+        _skip_ws(state)
+        _consume(state, "=")
+        _skip_ws(state)
+        attrs[name] = _parse_attr_value(state)
+
+def _parse_text_node(state):
+    source = state["text"]
+    start = state["index"]
+    while state["index"] < len(source) and source[state["index"]] != "<":
+        state["index"] = state["index"] + 1
+    return text(unescape(source[start:state["index"]]))
+
+def _parse_children(state, name):
+    children = []
+    while true:
+        if _starts_with(state, "</"):
+            _consume(state, "</")
+            close_name = _parse_name(state)
+            if close_name != name:
+                _fail("expected closing tag </" + name + ">")
+            _skip_ws(state)
+            _consume(state, ">")
+            return children
+        if _starts_with(state, "<!--"):
+            _consume(state, "<!--")
+            _consume_until(state, "-->")
+            continue
+        if _starts_with(state, "<?"):
+            _consume(state, "<?")
+            _consume_until(state, "?>")
+            continue
+        if _starts_with(state, "<![CDATA["):
+            _consume(state, "<![CDATA[")
+            children.append(text(_consume_until(state, "]]>")))
+            continue
+        if _starts_with(state, "<"):
+            children.append(_parse_element(state))
+            continue
+        node = _parse_text_node(state)
+        if node["text"] != "":
+            children.append(node)
+
+def _parse_element(state):
+    _consume(state, "<")
+    name = _parse_name(state)
+    attrs = _parse_attrs(state)
+    if _starts_with(state, "/>"):
+        _consume(state, "/>")
+        return element(name, attrs, [])
+    _consume(state, ">")
+    return element(name, attrs, _parse_children(state, name))
+
+def loads(text):
+    state = _state(text)
+    _skip_misc(state)
+    node = _parse_element(state)
+    _skip_misc(state)
+    if state["index"] != len(state["text"]):
+        _fail("unexpected trailing content")
+    return node
+
+def parse(text):
+    return loads(text)
+
+def _dump_attrs(attrs):
+    parts = []
+    for pair in attrs.items():
+        parts.append(str(pair[0]) + "=\"" + escape(pair[1]) + "\"")
+    if len(parts) == 0:
+        return ""
+    return " " + " ".join(parts)
+
+def _all_text(children):
+    for child in children:
+        if child.get("type") != "text":
+            return false
+    return true
+
+def _indent(level, token):
+    out = ""
+    i = 0
+    while i < level:
+        out = out + token
+        i = i + 1
+    return out
+
+def _dump_node(node, pretty, indent, level):
+    kind = node.get("type")
+    if kind == "text":
+        return escape(node.get("text", ""))
+    if kind != "element":
+        _fail("dumps() only supports text and element nodes")
+    name = node.get("name", "")
+    attrs = _dump_attrs(node.get("attrs", {}))
+    children = node.get("children", [])
+    if len(children) == 0:
+        return "<" + name + attrs + "/>"
+    if not pretty or _all_text(children):
+        out = "<" + name + attrs + ">"
+        for child in children:
+            out = out + _dump_node(child, pretty, indent, level + 1)
+        return out + "</" + name + ">"
+    pad = _indent(level, indent)
+    inner_pad = _indent(level + 1, indent)
+    parts = ["<" + name + attrs + ">"]
+    for child in children:
+        rendered = _dump_node(child, pretty, indent, level + 1)
+        if child.get("type") == "text":
+            parts.append(inner_pad + rendered)
+        else:
+            parts.append(inner_pad + rendered)
+    parts.append(pad + "</" + name + ">")
+    return "\n".join(parts)
+
+def dumps(node, pretty=false, indent="  "):
+    rendered = _dump_node(node, pretty, str(indent), 0)
+    if pretty and node.get("type") == "element" and len(node.get("children", [])) > 0 and not _all_text(node.get("children", [])):
+        return rendered
+    return rendered
+
+def _text_content(node, out):
+    kind = node.get("type")
+    if kind == "text":
+        out.append(node.get("text", ""))
+        return
+    if kind == "element":
+        for child in node.get("children", []):
+            _text_content(child, out)
+
+def text_content(node):
+    out = []
+    _text_content(node, out)
+    return "".join(out)
+
+def _split_path(path):
+    parts = []
+    for part in str(path).split("/"):
+        if part != "":
+            parts.append(part)
+    return parts
+
+def _find_all(nodes, parts, index):
+    if index >= len(parts):
+        return nodes
+    next_nodes = []
+    for node in nodes:
+        if node.get("type") != "element":
+            continue
+        for child in node.get("children", []):
+            if child.get("type") == "element" and child.get("name") == parts[index]:
+                next_nodes.append(child)
+    return _find_all(next_nodes, parts, index + 1)
+
+def find_all(node, path):
+    parts = _split_path(path)
+    if len(parts) == 0:
+        return [node]
+    roots = [node]
+    if node.get("type") == "element" and node.get("name") == parts[0]:
+        roots = _find_all([node], parts, 1)
+        if len(roots) > 0:
+            return roots
+    return _find_all([node], parts, 0)
+
+def find(node, path):
+    matches = find_all(node, path)
+    if len(matches) == 0:
+        return nil
+    return matches[0]

@@ -181,14 +181,14 @@
 - [x] `toml` module — parse and write TOML for project/config tooling
 - [x] `yaml` module — config-oriented YAML subset for mappings, sequences, scalars, and null values
 - [x] `sqlite` module — path-based embedded database access with queries, params, and scalar reads
-- [ ] `json` extensions — schema-aware JSON transforms and streaming helpers
-- [ ] `xml` module — lightweight XML parsing and serialization helpers
+- [x] `json` extensions — NDJSON line helpers plus JSON Pointer / schema-style transform helpers across interpreter, VM, and native builds
+- [x] `xml` module — lightweight XML parsing, serialization, text extraction, and path helpers
 - [x] `html` module — escaping/unescaping plus small DOM/text extraction helpers
 - [x] `base64` module — base64 encode/decode for strings and bytes-like data
 - [x] `codec` module — pluggable encoders/decoders for text and binary formats
 - [x] `bytes` module — byte strings, hex helpers, slicing, and binary encoding utilities
-- [ ] `unicode` module — code point categories, normalization, width, and grapheme helpers
-- [ ] `locale` module — locale-aware formatting, parsing, and language/region helpers
+- [x] `unicode` module — code point categories, normalization, width, and grapheme helpers
+- [x] `locale` module — locale-aware formatting, parsing, and language/region helpers
 - [x] `config` module — `.json`, `.ini`, and `.env` style configuration loading helpers
 - [x] `schema` module — typed validation rules for dicts, lists, configs, and API payloads
 

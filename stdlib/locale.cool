@@ -1,0 +1,269 @@
+def _language_names():
+    return {
+        "ar": "Arabic",
+        "de": "German",
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "hi": "Hindi",
+        "it": "Italian",
+        "ja": "Japanese",
+        "ko": "Korean",
+        "nl": "Dutch",
+        "pl": "Polish",
+        "pt": "Portuguese",
+        "ru": "Russian",
+        "sv": "Swedish",
+        "zh": "Chinese",
+    }
+
+def _region_names():
+    return {
+        "AE": "United Arab Emirates",
+        "AU": "Australia",
+        "BR": "Brazil",
+        "CA": "Canada",
+        "CN": "China",
+        "DE": "Germany",
+        "ES": "Spain",
+        "FR": "France",
+        "GB": "United Kingdom",
+        "IN": "India",
+        "IT": "Italy",
+        "JP": "Japan",
+        "KR": "South Korea",
+        "PL": "Poland",
+        "RU": "Russia",
+        "SA": "Saudi Arabia",
+        "SE": "Sweden",
+        "TW": "Taiwan",
+        "US": "United States",
+    }
+
+def _language_defaults():
+    return {
+        "ar": "ar-SA",
+        "de": "de-DE",
+        "en": "en-US",
+        "es": "es-ES",
+        "fr": "fr-FR",
+        "it": "it-IT",
+        "ja": "ja-JP",
+        "ko": "ko-KR",
+        "nl": "en-US",
+        "pl": "pl-PL",
+        "pt": "pt-BR",
+        "ru": "ru-RU",
+        "sv": "sv-SE",
+        "zh": "zh-CN",
+    }
+
+def _locale_profiles():
+    return {
+        "ar-SA": {"decimal": ".", "group": ",", "currency_first": false, "currency_space": true},
+        "de-DE": {"decimal": ",", "group": ".", "currency_first": false, "currency_space": true},
+        "en-GB": {"decimal": ".", "group": ",", "currency_first": true, "currency_space": false},
+        "en-US": {"decimal": ".", "group": ",", "currency_first": true, "currency_space": false},
+        "es-ES": {"decimal": ",", "group": ".", "currency_first": false, "currency_space": true},
+        "fr-FR": {"decimal": ",", "group": " ", "currency_first": false, "currency_space": true},
+        "it-IT": {"decimal": ",", "group": ".", "currency_first": true, "currency_space": false},
+        "ja-JP": {"decimal": ".", "group": ",", "currency_first": true, "currency_space": false},
+        "ko-KR": {"decimal": ".", "group": ",", "currency_first": true, "currency_space": false},
+        "pl-PL": {"decimal": ",", "group": " ", "currency_first": false, "currency_space": true},
+        "pt-BR": {"decimal": ",", "group": ".", "currency_first": true, "currency_space": false},
+        "ru-RU": {"decimal": ",", "group": " ", "currency_first": false, "currency_space": true},
+        "sv-SE": {"decimal": ",", "group": " ", "currency_first": false, "currency_space": true},
+        "zh-CN": {"decimal": ".", "group": ",", "currency_first": true, "currency_space": false},
+    }
+
+def _currency_symbols():
+    return {
+        "AUD": "$",
+        "BRL": "R$",
+        "CAD": "$",
+        "CNY": "¥",
+        "EUR": "€",
+        "GBP": "£",
+        "JPY": "¥",
+        "KRW": "₩",
+        "PLN": "zł",
+        "RUB": "₽",
+        "SAR": "﷼",
+        "SEK": "kr",
+        "USD": "$",
+    }
+
+def _fail(message):
+    raise "locale: " + message
+
+def _title(text):
+    value = str(text)
+    if value == "":
+        return value
+    return value[0].upper() + value[1:].lower()
+
+def _parts_to_tag(parts):
+    out = [parts["language"]]
+    if parts["script"] != nil:
+        out.append(parts["script"])
+    if parts["region"] != nil:
+        out.append(parts["region"])
+    for part in parts["variants"]:
+        out.append(part.lower())
+    return "-".join(out)
+
+def parse(tag):
+    raw = str(tag).replace("_", "-").strip()
+    if raw == "":
+        _fail("parse() requires a locale tag")
+    parts = raw.split("-")
+    language = parts[0].lower()
+    script = nil
+    region = nil
+    variants = []
+    i = 1
+    while i < len(parts):
+        part = parts[i]
+        if len(part) == 4 and script == nil:
+            script = _title(part)
+        elif (len(part) == 2 or len(part) == 3) and region == nil:
+            region = part.upper()
+        elif part != "":
+            variants.append(part.lower())
+        i = i + 1
+    parts = {
+        "language": language,
+        "script": script,
+        "region": region,
+        "variants": variants,
+    }
+    parts["tag"] = _parts_to_tag(parts)
+    return parts
+
+def normalize(tag):
+    if type(tag) == "dict":
+        return _parts_to_tag(tag)
+    return _parts_to_tag(parse(tag))
+
+def language_name(code):
+    key = str(code).lower()
+    return _language_names().get(key, key)
+
+def region_name(code):
+    key = str(code).upper()
+    return _region_names().get(key, key)
+
+def _profile(tag):
+    parsed = parse(tag)
+    normalized = parsed["tag"]
+    profiles = _locale_profiles()
+    if normalized in profiles:
+        return profiles[normalized]
+    fallback = _language_defaults().get(parsed["language"], "en-US")
+    return profiles.get(fallback, profiles["en-US"])
+
+def _option(options, name, default):
+    if options != nil and name in options:
+        return options[name]
+    return default
+
+def _group_digits(digits, separator):
+    if len(digits) <= 3:
+        return digits
+    out = ""
+    count = 0
+    index = len(digits) - 1
+    while index >= 0:
+        out = digits[index] + out
+        count = count + 1
+        if index > 0 and count % 3 == 0:
+            out = separator + out
+        index = index - 1
+    return out
+
+def _fixed_parts(value, precision):
+    rounded = round(float(value), int(precision))
+    negative = rounded < 0
+    text = str(abs(rounded))
+    if "." not in text:
+        if precision > 0:
+            text = text + "." + ("0" * precision)
+        return {"negative": negative, "integer": text, "fraction": ""}
+    pieces = text.split(".")
+    fraction = pieces[1]
+    while len(fraction) < precision:
+        fraction = fraction + "0"
+    if precision == 0:
+        fraction = ""
+    return {"negative": negative, "integer": pieces[0], "fraction": fraction[:precision]}
+
+def number(value, tag="en-US", options=nil):
+    opts = options
+    if opts == nil:
+        opts = {}
+    profile = _profile(tag)
+    precision = _option(opts, "precision", nil)
+    if precision == nil:
+        if type(value) == "int":
+            precision = 0
+        else:
+            precision = 2
+    parts = _fixed_parts(value, precision)
+    integer = parts["integer"]
+    if _option(opts, "group", true) == true:
+        integer = _group_digits(integer, profile["group"])
+    out = integer
+    if precision > 0:
+        out = out + profile["decimal"] + parts["fraction"]
+    if parts["negative"]:
+        out = "-" + out
+    return out
+
+def parse_number(text, tag="en-US"):
+    profile = _profile(tag)
+    value = str(text).strip()
+    value = value.replace(profile["group"], "")
+    value = value.replace(" ", "")
+    value = value.replace("\u00A0", "")
+    if profile["decimal"] != ".":
+        value = value.replace(profile["decimal"], ".")
+    if "." in value:
+        return float(value)
+    return int(value)
+
+def currency(value, code, tag="en-US", options=nil):
+    opts = options
+    if opts == nil:
+        opts = {}
+    profile = _profile(tag)
+    symbol = _currency_symbols().get(str(code).upper(), str(code).upper())
+    amount = number(value, tag, {"precision": _option(opts, "precision", 2), "group": _option(opts, "group", true)})
+    spacer = ""
+    if profile["currency_space"]:
+        spacer = " "
+    if profile["currency_first"]:
+        return symbol + spacer + amount
+    return amount + spacer + symbol
+
+def match(requested, available):
+    if available == nil or len(available) == 0:
+        return nil
+    want = parse(requested)
+    normalized = want["tag"]
+    language = want["language"]
+    language_region = language
+    if want["region"] != nil:
+        language_region = language + "-" + want["region"]
+    normalized_available = []
+    for item in available:
+        normalized_available.append(normalize(item))
+    for item in normalized_available:
+        if item == normalized:
+            return item
+    for item in normalized_available:
+        if item == language_region:
+            return item
+    for item in normalized_available:
+        if parse(item)["language"] == language:
+            return item
+    return normalized_available[0]

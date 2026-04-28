@@ -2648,6 +2648,36 @@ impl VM {
                         };
                         Ok(VmValue::Str(self.json_dumps(&v)))
                     }
+                    "loads_lines" => {
+                        let s = match args.first() {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => return Err(self.err("json.loads_lines requires a string")),
+                        };
+                        self.json_loads_lines(&s)
+                    }
+                    "dumps_lines" => {
+                        let v = match args.first() {
+                            Some(v) => v.clone(),
+                            _ => return Err(self.err("json.dumps_lines requires a value")),
+                        };
+                        Ok(VmValue::Str(self.json_dumps_lines(&v)?))
+                    }
+                    "pointer" => {
+                        let value = args.first().ok_or_else(|| self.err("json.pointer requires a value"))?;
+                        let pointer = match args.get(1) {
+                            Some(VmValue::Str(s)) => s.clone(),
+                            _ => return Err(self.err("json.pointer requires a string pointer")),
+                        };
+                        let default = args.get(2).cloned().unwrap_or(VmValue::Nil);
+                        Ok(self.json_pointer_lookup(value, &pointer)?.unwrap_or(default))
+                    }
+                    "transform" => {
+                        let value = args
+                            .first()
+                            .ok_or_else(|| self.err("json.transform requires a value"))?;
+                        let spec = args.get(1).ok_or_else(|| self.err("json.transform requires a spec"))?;
+                        self.json_transform_value(value, spec)
+                    }
                     _ => Err(self.err(&format!("unknown json function '{}'", fname))),
                 }
             }
@@ -4867,6 +4897,274 @@ impl VM {
         }
     }
 
+    fn json_clone_value(value: &VmValue) -> VmValue {
+        match value {
+            VmValue::List(items) => VmValue::List(Rc::new(RefCell::new(
+                items.borrow().iter().map(Self::json_clone_value).collect(),
+            ))),
+            VmValue::Dict(map) => {
+                let mut out = VmDict::new();
+                let map = map.borrow();
+                for (key, value) in map.keys.iter().zip(map.vals.iter()) {
+                    out.set(Self::json_clone_value(key), Self::json_clone_value(value));
+                }
+                VmValue::Dict(Rc::new(RefCell::new(out)))
+            }
+            VmValue::Tuple(items) => VmValue::Tuple(Rc::new(items.iter().map(Self::json_clone_value).collect())),
+            other => other.clone(),
+        }
+    }
+
+    fn json_loads_lines(&mut self, s: &str) -> Result<VmValue, String> {
+        let mut values = Vec::new();
+        for line in s.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            values.push(self.json_loads(trimmed)?);
+        }
+        Ok(VmValue::List(Rc::new(RefCell::new(values))))
+    }
+
+    fn json_dumps_lines(&self, value: &VmValue) -> Result<String, String> {
+        match value {
+            VmValue::List(items) => Ok(items
+                .borrow()
+                .iter()
+                .map(|item| self.json_dumps(item))
+                .collect::<Vec<_>>()
+                .join("\n")),
+            VmValue::Tuple(items) => Ok(items
+                .iter()
+                .map(|item| self.json_dumps(item))
+                .collect::<Vec<_>>()
+                .join("\n")),
+            other => Err(self.err(&format!(
+                "json.dumps_lines expects a list or tuple, got {}",
+                other.type_name()
+            ))),
+        }
+    }
+
+    fn json_pointer_decode_token(token: &str) -> String {
+        let mut out = String::new();
+        let mut chars = token.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '~' {
+                match chars.next() {
+                    Some('0') => out.push('~'),
+                    Some('1') => out.push('/'),
+                    Some(other) => {
+                        out.push('~');
+                        out.push(other);
+                    }
+                    None => out.push('~'),
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    fn json_pointer_lookup(&self, value: &VmValue, pointer: &str) -> Result<Option<VmValue>, String> {
+        if pointer.is_empty() {
+            return Ok(Some(Self::json_clone_value(value)));
+        }
+        if !pointer.starts_with('/') {
+            return Err(self.err("JSON Pointer must be empty or start with '/'"));
+        }
+        let mut current = Self::json_clone_value(value);
+        for raw in pointer.split('/').skip(1) {
+            let token = Self::json_pointer_decode_token(raw);
+            current = match current {
+                VmValue::Dict(map) => match map.borrow().get(&VmValue::Str(token)) {
+                    Some(next) => Self::json_clone_value(&next),
+                    None => return Ok(None),
+                },
+                VmValue::List(items) => {
+                    let index = token.parse::<usize>().map_err(|_| {
+                        self.err(&format!("list index '{}' is not a valid non-negative integer", token))
+                    })?;
+                    match items.borrow().get(index) {
+                        Some(next) => Self::json_clone_value(next),
+                        None => return Ok(None),
+                    }
+                }
+                VmValue::Tuple(items) => {
+                    let index = token.parse::<usize>().map_err(|_| {
+                        self.err(&format!("tuple index '{}' is not a valid non-negative integer", token))
+                    })?;
+                    match items.get(index) {
+                        Some(next) => Self::json_clone_value(next),
+                        None => return Ok(None),
+                    }
+                }
+                _ => return Ok(None),
+            };
+        }
+        Ok(Some(current))
+    }
+
+    fn json_special_spec_key(key: &str) -> bool {
+        matches!(key, "$from" | "$default" | "$coerce" | "$each" | "$literal")
+    }
+
+    fn json_coerce_value(&self, value: &VmValue, kind: &str) -> Result<VmValue, String> {
+        match kind {
+            "str" | "string" => Ok(VmValue::Str(value.to_string())),
+            "int" | "integer" => match value {
+                VmValue::Int(n) => Ok(VmValue::Int(*n)),
+                VmValue::Float(f) => Ok(VmValue::Int(*f as i64)),
+                VmValue::Bool(b) => Ok(VmValue::Int(if *b { 1 } else { 0 })),
+                VmValue::Str(s) => s
+                    .trim()
+                    .parse::<i64>()
+                    .map(VmValue::Int)
+                    .map_err(|e| self.err(&format!("cannot coerce '{}' to int: {}", s, e))),
+                other => Err(self.err(&format!("cannot coerce {} to int", other.type_name()))),
+            },
+            "float" | "number" => match value {
+                VmValue::Int(n) => Ok(VmValue::Float(*n as f64)),
+                VmValue::Float(f) => Ok(VmValue::Float(*f)),
+                VmValue::Bool(b) => Ok(VmValue::Float(if *b { 1.0 } else { 0.0 })),
+                VmValue::Str(s) => s
+                    .trim()
+                    .parse::<f64>()
+                    .map(VmValue::Float)
+                    .map_err(|e| self.err(&format!("cannot coerce '{}' to float: {}", s, e))),
+                other => Err(self.err(&format!("cannot coerce {} to float", other.type_name()))),
+            },
+            "bool" | "boolean" => Ok(VmValue::Bool(value.is_truthy())),
+            "list" => match value {
+                VmValue::List(_) => Ok(Self::json_clone_value(value)),
+                VmValue::Tuple(items) => Ok(VmValue::List(Rc::new(RefCell::new(
+                    items.iter().map(Self::json_clone_value).collect(),
+                )))),
+                other => Err(self.err(&format!("cannot coerce {} to list", other.type_name()))),
+            },
+            "dict" | "object" => match value {
+                VmValue::Dict(_) => Ok(Self::json_clone_value(value)),
+                other => Err(self.err(&format!("cannot coerce {} to dict", other.type_name()))),
+            },
+            other => Err(self.err(&format!("unsupported coercion '{}'", other))),
+        }
+    }
+
+    fn json_transform_value(&self, source: &VmValue, spec: &VmValue) -> Result<VmValue, String> {
+        match spec {
+            VmValue::Str(pointer) if pointer.is_empty() || pointer.starts_with('/') => {
+                Ok(self.json_pointer_lookup(source, pointer)?.unwrap_or(VmValue::Nil))
+            }
+            VmValue::List(items) => Ok(VmValue::List(Rc::new(RefCell::new(
+                items
+                    .borrow()
+                    .iter()
+                    .map(|item| self.json_transform_value(source, item))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )))),
+            VmValue::Tuple(items) => Ok(VmValue::Tuple(Rc::new(
+                items
+                    .iter()
+                    .map(|item| self.json_transform_value(source, item))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ))),
+            VmValue::Dict(map) => {
+                let literal = map.borrow().get(&VmValue::Str("$literal".to_string()));
+                if let Some(value) = literal {
+                    return Ok(Self::json_clone_value(&value));
+                }
+
+                let from_value = map.borrow().get(&VmValue::Str("$from".to_string()));
+                let default_value = map.borrow().get(&VmValue::Str("$default".to_string()));
+                let each_value = map.borrow().get(&VmValue::Str("$each".to_string()));
+                let coerce_value = map.borrow().get(&VmValue::Str("$coerce".to_string()));
+
+                let mut current = if let Some(path) = from_value {
+                    match path {
+                        VmValue::Str(pointer) => self
+                            .json_pointer_lookup(source, pointer.as_str())?
+                            .unwrap_or(VmValue::Nil),
+                        other => {
+                            return Err(self.err(&format!("$from must be a string pointer, got {}", other.type_name())))
+                        }
+                    }
+                } else {
+                    Self::json_clone_value(source)
+                };
+
+                if matches!(current, VmValue::Nil) {
+                    if let Some(default) = default_value {
+                        current = Self::json_clone_value(&default);
+                    }
+                }
+
+                if let Some(each_spec) = each_value {
+                    current = match current {
+                        VmValue::Nil => VmValue::List(Rc::new(RefCell::new(Vec::new()))),
+                        VmValue::List(items) => VmValue::List(Rc::new(RefCell::new(
+                            items
+                                .borrow()
+                                .iter()
+                                .map(|item| self.json_transform_value(item, &each_spec))
+                                .collect::<Result<Vec<_>, _>>()?,
+                        ))),
+                        VmValue::Tuple(items) => VmValue::List(Rc::new(RefCell::new(
+                            items
+                                .iter()
+                                .map(|item| self.json_transform_value(item, &each_spec))
+                                .collect::<Result<Vec<_>, _>>()?,
+                        ))),
+                        other => {
+                            return Err(self.err(&format!(
+                                "$each requires a list or tuple source, got {}",
+                                other.type_name()
+                            )))
+                        }
+                    };
+                }
+
+                let entries: Vec<(String, VmValue)> = map
+                    .borrow()
+                    .keys
+                    .iter()
+                    .zip(map.borrow().vals.iter())
+                    .map(|(key, value)| match key {
+                        VmValue::Str(name) => Ok((name.clone(), value.clone())),
+                        other => Err(self.err(&format!(
+                            "transform spec keys must be strings, got {}",
+                            other.type_name()
+                        ))),
+                    })
+                    .collect::<Result<_, _>>()?;
+                let has_shape_keys = entries.iter().any(|(name, _)| !Self::json_special_spec_key(name));
+
+                if let Some(kind) = coerce_value {
+                    let name = match kind {
+                        VmValue::Str(s) => s.clone(),
+                        other => return Err(self.err(&format!("$coerce must be a string, got {}", other.type_name()))),
+                    };
+                    current = self.json_coerce_value(&current, &name)?;
+                }
+
+                if has_shape_keys {
+                    let mut out = VmDict::new();
+                    for (name, value) in entries {
+                        if Self::json_special_spec_key(&name) {
+                            continue;
+                        }
+                        out.set(VmValue::Str(name), self.json_transform_value(&current, &value)?);
+                    }
+                    Ok(VmValue::Dict(Rc::new(RefCell::new(out))))
+                } else {
+                    Ok(current)
+                }
+            }
+            other => Ok(Self::json_clone_value(other)),
+        }
+    }
+
     fn vm_value_to_toml_data(&self, value: &VmValue) -> Result<TomlData, String> {
         match value {
             VmValue::Int(n) => Ok(TomlData::Int(*n)),
@@ -5702,8 +6000,9 @@ impl VM {
                 }
             }
             "json" => {
-                set(&mut d, "loads", bf("json.loads"));
-                set(&mut d, "dumps", bf("json.dumps"));
+                for fname in &["loads", "dumps", "loads_lines", "dumps_lines", "pointer", "transform"] {
+                    set(&mut d, fname, bf(&format!("json.{}", fname)));
+                }
             }
             "toml" => {
                 set(&mut d, "loads", bf("toml.loads"));

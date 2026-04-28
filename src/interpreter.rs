@@ -1502,14 +1502,12 @@ impl Interpreter {
             }
             "json" => {
                 let mut map = IndexedMap::new();
-                map.set(
-                    Value::Str("loads".to_string()),
-                    Value::BuiltinFn("json.loads".to_string()),
-                );
-                map.set(
-                    Value::Str("dumps".to_string()),
-                    Value::BuiltinFn("json.dumps".to_string()),
-                );
+                for fn_name in &["loads", "dumps", "loads_lines", "dumps_lines", "pointer", "transform"] {
+                    map.set(
+                        Value::Str((*fn_name).to_string()),
+                        Value::BuiltinFn(format!("json.{}", fn_name)),
+                    );
+                }
                 env.set_local("json".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
             }
             "toml" => {
@@ -5231,6 +5229,38 @@ class Stack:
                     .ok_or_else(|| self.err("json.dumps() requires 1 argument"))?;
                 Ok(Value::Str(json_dumps(&v)))
             }
+            "loads_lines" => {
+                let s = req_str_arg(&args, 0, "json.loads_lines")?;
+                json_parse_lines(&s).map_err(|e| self.err(&format!("json.loads_lines() error: {}", e)))
+            }
+            "dumps_lines" => {
+                let value = args
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| self.err("json.dumps_lines() requires 1 argument"))?;
+                Ok(Value::Str(
+                    json_dumps_lines(&value).map_err(|e| self.err(&format!("json.dumps_lines() error: {}", e)))?,
+                ))
+            }
+            "pointer" => {
+                let value = args
+                    .first()
+                    .ok_or_else(|| self.err("json.pointer() requires a value argument"))?;
+                let pointer = req_str_arg(&args, 1, "json.pointer")?;
+                let default = args.get(2).cloned().unwrap_or(Value::Nil);
+                Ok(json_pointer_lookup(value, &pointer)
+                    .map_err(|e| self.err(&format!("json.pointer() error: {}", e)))?
+                    .unwrap_or(default))
+            }
+            "transform" => {
+                let value = args
+                    .first()
+                    .ok_or_else(|| self.err("json.transform() requires a value argument"))?;
+                let spec = args
+                    .get(1)
+                    .ok_or_else(|| self.err("json.transform() requires a spec argument"))?;
+                json_transform_value(value, spec).map_err(|e| self.err(&format!("json.transform() error: {}", e)))
+            }
             _ => Err(self.err(&format!("json has no function '{}'", name))),
         }
     }
@@ -6635,6 +6665,258 @@ fn json_parse_object(chars: &mut std::iter::Peekable<std::str::Chars>) -> Result
         }
     }
     Ok(Value::Dict(Rc::new(RefCell::new(map))))
+}
+
+fn json_clone_value(value: &Value) -> Value {
+    match value {
+        Value::List(items) => Value::List(Rc::new(RefCell::new(
+            items.borrow().iter().map(json_clone_value).collect(),
+        ))),
+        Value::Dict(map) => {
+            let mut out = IndexedMap::new();
+            for (key, value) in map.borrow().iter() {
+                out.set(json_clone_value(key), json_clone_value(value));
+            }
+            Value::Dict(Rc::new(RefCell::new(out)))
+        }
+        Value::Tuple(items) => Value::Tuple(Rc::new(items.iter().map(json_clone_value).collect())),
+        other => other.clone(),
+    }
+}
+
+fn json_parse_lines(s: &str) -> Result<Value, String> {
+    let mut values = Vec::new();
+    for line in s.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        values.push(json_parse(trimmed)?);
+    }
+    Ok(Value::List(Rc::new(RefCell::new(values))))
+}
+
+fn json_dumps_lines(value: &Value) -> Result<String, String> {
+    match value {
+        Value::List(items) => Ok(items.borrow().iter().map(json_dumps).collect::<Vec<_>>().join("\n")),
+        Value::Tuple(items) => Ok(items.iter().map(json_dumps).collect::<Vec<_>>().join("\n")),
+        other => Err(format!(
+            "json.dumps_lines() expects a list or tuple, got {}",
+            other.type_name()
+        )),
+    }
+}
+
+fn json_pointer_decode_token(token: &str) -> String {
+    let mut out = String::new();
+    let mut chars = token.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '~' {
+            match chars.next() {
+                Some('0') => out.push('~'),
+                Some('1') => out.push('/'),
+                Some(other) => {
+                    out.push('~');
+                    out.push(other);
+                }
+                None => out.push('~'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn json_pointer_lookup(value: &Value, pointer: &str) -> Result<Option<Value>, String> {
+    if pointer.is_empty() {
+        return Ok(Some(json_clone_value(value)));
+    }
+    if !pointer.starts_with('/') {
+        return Err("JSON Pointer must be empty or start with '/'".to_string());
+    }
+    let mut current = json_clone_value(value);
+    for raw in pointer.split('/').skip(1) {
+        let token = json_pointer_decode_token(raw);
+        current = match current {
+            Value::Dict(map) => match map.borrow().get(&Value::Str(token)) {
+                Some(next) => json_clone_value(&next),
+                None => return Ok(None),
+            },
+            Value::List(items) => {
+                let index = token
+                    .parse::<usize>()
+                    .map_err(|_| format!("list index '{}' is not a valid non-negative integer", token))?;
+                match items.borrow().get(index) {
+                    Some(next) => json_clone_value(next),
+                    None => return Ok(None),
+                }
+            }
+            Value::Tuple(items) => {
+                let index = token
+                    .parse::<usize>()
+                    .map_err(|_| format!("tuple index '{}' is not a valid non-negative integer", token))?;
+                match items.get(index) {
+                    Some(next) => json_clone_value(next),
+                    None => return Ok(None),
+                }
+            }
+            _ => return Ok(None),
+        };
+    }
+    Ok(Some(current))
+}
+
+fn json_special_spec_key(key: &str) -> bool {
+    matches!(key, "$from" | "$default" | "$coerce" | "$each" | "$literal")
+}
+
+fn json_coerce_value(value: &Value, kind: &str) -> Result<Value, String> {
+    match kind {
+        "str" | "string" => Ok(Value::Str(format!("{}", value))),
+        "int" | "integer" => match value {
+            Value::Int(n) => Ok(Value::Int(*n)),
+            Value::Float(f) => Ok(Value::Int(*f as i64)),
+            Value::Bool(b) => Ok(Value::Int(if *b { 1 } else { 0 })),
+            Value::Str(s) => s
+                .trim()
+                .parse::<i64>()
+                .map(Value::Int)
+                .map_err(|e| format!("cannot coerce '{}' to int: {}", s, e)),
+            other => Err(format!("cannot coerce {} to int", other.type_name())),
+        },
+        "float" | "number" => match value {
+            Value::Int(n) => Ok(Value::Float(*n as f64)),
+            Value::Float(f) => Ok(Value::Float(*f)),
+            Value::Bool(b) => Ok(Value::Float(if *b { 1.0 } else { 0.0 })),
+            Value::Str(s) => s
+                .trim()
+                .parse::<f64>()
+                .map(Value::Float)
+                .map_err(|e| format!("cannot coerce '{}' to float: {}", s, e)),
+            other => Err(format!("cannot coerce {} to float", other.type_name())),
+        },
+        "bool" | "boolean" => Ok(Value::Bool(value.is_truthy())),
+        "list" => match value {
+            Value::List(_) => Ok(json_clone_value(value)),
+            Value::Tuple(items) => Ok(Value::List(Rc::new(RefCell::new(
+                items.iter().map(json_clone_value).collect(),
+            )))),
+            other => Err(format!("cannot coerce {} to list", other.type_name())),
+        },
+        "dict" | "object" => match value {
+            Value::Dict(_) => Ok(json_clone_value(value)),
+            other => Err(format!("cannot coerce {} to dict", other.type_name())),
+        },
+        other => Err(format!("unsupported coercion '{}'", other)),
+    }
+}
+
+fn json_transform_value(source: &Value, spec: &Value) -> Result<Value, String> {
+    match spec {
+        Value::Str(pointer) if pointer.is_empty() || pointer.starts_with('/') => {
+            Ok(json_pointer_lookup(source, pointer)?.unwrap_or(Value::Nil))
+        }
+        Value::List(items) => Ok(Value::List(Rc::new(RefCell::new(
+            items
+                .borrow()
+                .iter()
+                .map(|item| json_transform_value(source, item))
+                .collect::<Result<Vec<_>, _>>()?,
+        )))),
+        Value::Tuple(items) => Ok(Value::Tuple(Rc::new(
+            items
+                .iter()
+                .map(|item| json_transform_value(source, item))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))),
+        Value::Dict(map) => {
+            let literal = map.borrow().get(&Value::Str("$literal".to_string()));
+            if let Some(value) = literal {
+                return Ok(json_clone_value(&value));
+            }
+
+            let from_value = map.borrow().get(&Value::Str("$from".to_string()));
+            let default_value = map.borrow().get(&Value::Str("$default".to_string()));
+            let each_value = map.borrow().get(&Value::Str("$each".to_string()));
+            let coerce_value = map.borrow().get(&Value::Str("$coerce".to_string()));
+
+            let mut current = if let Some(path) = from_value {
+                match path {
+                    Value::Str(pointer) => json_pointer_lookup(source, pointer.as_str())?.unwrap_or(Value::Nil),
+                    other => return Err(format!("$from must be a string pointer, got {}", other.type_name())),
+                }
+            } else {
+                json_clone_value(source)
+            };
+
+            if matches!(current, Value::Nil) {
+                if let Some(default) = default_value {
+                    current = json_clone_value(&default);
+                }
+            }
+
+            if let Some(each_spec) = each_value {
+                current = match current {
+                    Value::Nil => Value::List(Rc::new(RefCell::new(Vec::new()))),
+                    Value::List(items) => Value::List(Rc::new(RefCell::new(
+                        items
+                            .borrow()
+                            .iter()
+                            .map(|item| json_transform_value(item, &each_spec))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ))),
+                    Value::Tuple(items) => Value::List(Rc::new(RefCell::new(
+                        items
+                            .iter()
+                            .map(|item| json_transform_value(item, &each_spec))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ))),
+                    other => {
+                        return Err(format!(
+                            "$each requires a list or tuple source, got {}",
+                            other.type_name()
+                        ))
+                    }
+                };
+            }
+
+            let entries: Vec<(String, Value)> = map
+                .borrow()
+                .iter()
+                .map(|(key, value)| match key {
+                    Value::Str(name) => Ok((name.clone(), value.clone())),
+                    other => Err(format!(
+                        "transform spec keys must be strings, got {}",
+                        other.type_name()
+                    )),
+                })
+                .collect::<Result<_, _>>()?;
+            let has_shape_keys = entries.iter().any(|(name, _)| !json_special_spec_key(name));
+
+            if let Some(kind) = coerce_value {
+                let name = match kind {
+                    Value::Str(s) => s.clone(),
+                    other => return Err(format!("$coerce must be a string, got {}", other.type_name())),
+                };
+                current = json_coerce_value(&current, &name)?;
+            }
+
+            if has_shape_keys {
+                let mut out = IndexedMap::new();
+                for (name, value) in entries {
+                    if json_special_spec_key(&name) {
+                        continue;
+                    }
+                    out.set(Value::Str(name), json_transform_value(&current, &value)?);
+                }
+                Ok(Value::Dict(Rc::new(RefCell::new(out))))
+            } else {
+                Ok(current)
+            }
+        }
+        other => Ok(json_clone_value(other)),
+    }
 }
 
 // ── FFI dispatch ──────────────────────────────────────────────────────────────

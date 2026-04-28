@@ -237,6 +237,59 @@ print(len(bad["errors"]) >= 2)
     source_path
 }
 
+fn write_phase6_pass2_suite(dir: &PathBuf) -> PathBuf {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    let source_path = dir.join("main.cool");
+    fs::write(
+        &source_path,
+        r#"import json
+import locale
+import unicode
+import xml
+
+docs = json.loads_lines("{\"name\":\"Ada\"}\n{\"name\":\"Lin\",\"n\":2}\n")
+roundtrip = json.loads_lines(json.dumps_lines(docs))
+print(roundtrip[0]["name"])
+print(roundtrip[1]["n"])
+data = json.loads("{\"user\":{\"id\":\"7\",\"name\":\"Ada\"},\"items\":[{\"name\":\"a\",\"count\":\"2\"},{\"name\":\"b\",\"count\":1}]}")
+print(json.pointer(data, "/user/name"))
+print(json.pointer(data, "/missing", "fallback"))
+projected = json.transform(data, {
+    "id": {"$from": "/user/id", "$coerce": "int"},
+    "items": {"$from": "/items", "$each": {"name": "/name", "count": {"$from": "/count", "$coerce": "int"}}},
+    "missing": {"$from": "/missing", "$default": "fallback"},
+})
+print(projected["id"])
+print(projected["items"][0]["count"] + projected["items"][1]["count"])
+print(projected["missing"])
+root = xml.loads("<note priority='high'><title>Hello</title><body>Hi <![CDATA[<raw>]]></body></note>")
+print(root["name"])
+print(xml.find(root, "title")["children"][0]["text"])
+print(xml.text_content(root))
+print(xml.dumps(root).find("priority=\"high\"") >= 0)
+print(unicode.category("é"))
+print(unicode.normalize("e" + chr(769), "nfc"))
+print(unicode.normalize("ﬁ", "nfkc"))
+print(unicode.grapheme_len("👩‍💻a"))
+print(unicode.width("A🙂👩‍💻"))
+print(unicode.codepoints("A🙂")[1])
+print(unicode.width("🇬🇧"))
+info = locale.parse("fr_fr")
+print(locale.normalize("fr_fr"))
+print(info["language"])
+print(locale.language_name("ja"))
+print(locale.region_name("GB"))
+print(locale.number(12345.5, "fr-FR"))
+print(locale.parse_number("12 345,5", "fr-FR"))
+print(locale.currency(19.5, "EUR", "fr-FR"))
+print(locale.match("en-AU", ["fr-FR", "en-GB", "de-DE"]))
+"#,
+    )
+    .unwrap();
+    source_path
+}
+
 fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().unwrap();
@@ -2794,6 +2847,46 @@ fn test_llvm_phase6_data_stdlib_modules() {
             "true",
             "false",
             "true",
+        ]
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_pass2_stdlib_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_pass2");
+    let source_path = write_phase6_pass2_suite(&temp_dir);
+    let result = compile_and_run_native_path(&source_path).unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "Ada",
+            "2",
+            "Ada",
+            "fallback",
+            "7",
+            "3",
+            "fallback",
+            "note",
+            "Hello",
+            "HelloHi <raw>",
+            "true",
+            "Ll",
+            "é",
+            "fi",
+            "2",
+            "5",
+            "128578",
+            "2",
+            "fr-FR",
+            "fr",
+            "Japanese",
+            "United Kingdom",
+            "12 345,50",
+            "12345.5",
+            "19,50 €",
+            "en-GB",
         ]
     );
     let _ = fs::remove_dir_all(&temp_dir);

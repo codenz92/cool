@@ -429,6 +429,56 @@ print(len(bad["errors"]) >= 2)
     std::fs::write(dir.join("settings.ini"), "[db]\nport = 5432\n").unwrap();
 }
 
+fn write_phase6_pass2_suite(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("main.cool"),
+        r#"import json
+import locale
+import unicode
+import xml
+
+docs = json.loads_lines("{\"name\":\"Ada\"}\n{\"name\":\"Lin\",\"n\":2}\n")
+roundtrip = json.loads_lines(json.dumps_lines(docs))
+print(roundtrip[0]["name"])
+print(roundtrip[1]["n"])
+data = json.loads("{\"user\":{\"id\":\"7\",\"name\":\"Ada\"},\"items\":[{\"name\":\"a\",\"count\":\"2\"},{\"name\":\"b\",\"count\":1}]}")
+print(json.pointer(data, "/user/name"))
+print(json.pointer(data, "/missing", "fallback"))
+projected = json.transform(data, {
+    "id": {"$from": "/user/id", "$coerce": "int"},
+    "items": {"$from": "/items", "$each": {"name": "/name", "count": {"$from": "/count", "$coerce": "int"}}},
+    "missing": {"$from": "/missing", "$default": "fallback"},
+})
+print(projected["id"])
+print(projected["items"][0]["count"] + projected["items"][1]["count"])
+print(projected["missing"])
+root = xml.loads("<note priority='high'><title>Hello</title><body>Hi <![CDATA[<raw>]]></body></note>")
+print(root["name"])
+print(xml.find(root, "title")["children"][0]["text"])
+print(xml.text_content(root))
+print(xml.dumps(root).find("priority=\"high\"") >= 0)
+print(unicode.category("é"))
+print(unicode.normalize("e" + chr(769), "nfc"))
+print(unicode.normalize("ﬁ", "nfkc"))
+print(unicode.grapheme_len("👩‍💻a"))
+print(unicode.width("A🙂👩‍💻"))
+print(unicode.codepoints("A🙂")[1])
+print(unicode.width("🇬🇧"))
+info = locale.parse("fr_fr")
+print(locale.normalize("fr_fr"))
+print(info["language"])
+print(locale.language_name("ja"))
+print(locale.region_name("GB"))
+print(locale.number(12345.5, "fr-FR"))
+print(locale.parse_number("12 345,5", "fr-FR"))
+print(locale.currency(19.5, "EUR", "fr-FR"))
+print(locale.match("en-AU", ["fr-FR", "en-GB", "de-DE"]))
+"#,
+    )
+    .unwrap();
+}
+
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     let status = Command::new("cp")
         .args(["-R", src.to_str().unwrap(), dst.to_str().unwrap()])
@@ -6870,6 +6920,88 @@ fn test_phase6_data_stdlib_modules_in_vm() {
             "true",
             "false",
             "true",
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_pass2_stdlib_modules_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_phase6_pass2_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_pass2_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &[]).unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "Ada",
+            "2",
+            "Ada",
+            "fallback",
+            "7",
+            "3",
+            "fallback",
+            "note",
+            "Hello",
+            "HelloHi <raw>",
+            "true",
+            "Ll",
+            "é",
+            "fi",
+            "2",
+            "5",
+            "128578",
+            "2",
+            "fr-FR",
+            "fr",
+            "Japanese",
+            "United Kingdom",
+            "12 345,50",
+            "12345.5",
+            "19,50 €",
+            "en-GB",
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_pass2_stdlib_modules_in_vm() {
+    let temp_dir = unique_temp_dir("cool_phase6_pass2_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_pass2_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "Ada",
+            "2",
+            "Ada",
+            "fallback",
+            "7",
+            "3",
+            "fallback",
+            "note",
+            "Hello",
+            "HelloHi <raw>",
+            "true",
+            "Ll",
+            "é",
+            "fi",
+            "2",
+            "5",
+            "128578",
+            "2",
+            "fr-FR",
+            "fr",
+            "Japanese",
+            "United Kingdom",
+            "12 345,50",
+            "12345.5",
+            "19,50 €",
+            "en-GB",
         ]
     );
     let _ = std::fs::remove_dir_all(&temp_dir);

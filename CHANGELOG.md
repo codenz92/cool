@@ -11,6 +11,13 @@ All notable changes to the Cool language project.
 - `config` now loads `.json`, `.toml`, `.yaml`, `.ini`, and `.env` styles with format inference plus deep merge and `${NAME}` environment expansion helpers, while `schema` provides reusable `string` / `integer` / `number` / `boolean` / `list_of` / `shape` / `one_of` rules with structured error reporting
 - Cross-runtime `ord()` / `chr()` parity is now in place, and the LLVM runtime now treats string length, indexing, slicing, and `for ch in text` iteration in UTF-8 code points instead of raw bytes so the new modules behave consistently in native builds
 
+### Phase 6 Follow-on — Data Modules (Pass 2)
+
+- `import json` now goes beyond basic parse/serialize: `loads_lines()` / `dumps_lines()` cover newline-delimited JSON streams, `pointer()` exposes JSON Pointer lookup with defaults, and `transform()` applies schema-style projections/coercions consistently across interpreter, VM, and native builds
+- New bundled `stdlib/xml.cool` adds lightweight XML parsing/serialization plus `text_content()`, `find()`, and `find_all()` helpers for tag-path extraction and small document manipulation
+- New bundled `stdlib/unicode.cool` adds Unicode category lookup, canonical/compatibility normalization, display-width estimation, and grapheme-cluster helpers, backed by generated lookup helpers so the same APIs work in native builds as well as the interpreter and VM
+- New bundled `stdlib/locale.cool` adds locale tag parsing/normalization, language/region naming helpers, locale matching, locale-aware number parsing/formatting, and currency formatting
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers
