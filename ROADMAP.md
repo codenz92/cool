@@ -201,10 +201,10 @@
 - [x] `process` module — PID info, signals, environment inspection, and runtime metadata
 - [x] `platform` module — OS/arch/runtime detection and host capability helpers
 - [x] `subprocess` module — structured process spawning, exit codes, stdout/stderr capture
-- [ ] `daemon` module — service lifecycle helpers, PID files, logs, and restart policies
-- [ ] `sandbox` module — constrained command/file execution helpers for safer automation
-- [ ] `sync` module — file/state synchronization, conflict detection, and reconciliation helpers
-- [ ] `store` module — key-value persistence, namespaces, and transactional update helpers
+- [x] `daemon` module — service lifecycle helpers, PID files, logs, and restart policies
+- [x] `sandbox` module — constrained command/file execution helpers for safer automation
+- [x] `sync` module — file/state synchronization, conflict detection, and reconciliation helpers
+- [x] `store` module — key-value persistence, namespaces, and transactional update helpers
 
 #### Networking And Services
 

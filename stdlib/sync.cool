@@ -1,0 +1,423 @@
+import glob
+import hashlib
+import json
+import os
+import path
+import process
+
+private def _fail(message):
+    raise "sync: " + message
+
+private def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+private def _resolve_root(root):
+    if root == nil:
+        return _normalize(process.cwd())
+    if str(root).strip() == "":
+        return _normalize(process.cwd())
+    root = _normalize(root)
+    if path.isabs(root):
+        return root
+    return _normalize(path.join(process.cwd(), root))
+
+private def _resolve_under(root, rel_path):
+    rel_path = _normalize(rel_path)
+    if rel_path == "." or rel_path == "":
+        return root
+    return _normalize(path.join(root, rel_path))
+
+private def _ensure_dir(dir_path):
+    dir_path = _normalize(dir_path)
+    if dir_path == "" or dir_path == ".":
+        return dir_path
+    if os.exists(dir_path):
+        return dir_path
+    parent = _normalize(path.dirname(dir_path))
+    if parent != dir_path and parent != "":
+        _ensure_dir(parent)
+    if not os.exists(dir_path):
+        os.mkdir(dir_path)
+    return dir_path
+
+private def _read_text(file_path):
+    if not os.exists(file_path):
+        return nil
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _write_text(file_path, text):
+    _ensure_dir(path.dirname(file_path))
+    f = open(file_path, "w")
+    f.write(str(text))
+    f.close()
+    return file_path
+
+private def _remove_path(target_path):
+    target_path = _normalize(target_path)
+    if not os.exists(target_path):
+        return false
+    if os.isdir(target_path):
+        entries = os.listdir(target_path)
+        entries.sort()
+        for name in entries:
+            _remove_path(path.join(target_path, str(name)))
+        os.rmdir(target_path)
+        return true
+    os.remove(target_path)
+    return true
+
+private def _option(options, key, default_value):
+    if options == nil:
+        return default_value
+    if key not in options:
+        return default_value
+    return options[key]
+
+private def _options(options):
+    mode = str(_option(options, "conflicts", "error")).strip().lower()
+    if mode == "":
+        mode = "error"
+    if mode != "error" and mode != "source" and mode != "dest":
+        _fail("unknown conflict mode '" + mode + "'")
+    return {
+        "delete": _option(options, "delete", true),
+        "hidden": _option(options, "hidden", true),
+        "include_dirs": _option(options, "include_dirs", true),
+        "conflicts": mode,
+    }
+
+private def _relative_path(root, candidate):
+    root = _normalize(root)
+    candidate = _normalize(candidate)
+    if candidate == root:
+        return "."
+    prefix = root
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    if candidate.startswith(prefix):
+        return candidate[len(prefix):]
+    return path.basename(candidate)
+
+private def _file_hash(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return hashlib.sha256(text)
+
+private def _entry(rel_path, stat, digest=nil):
+    return {
+        "path": rel_path,
+        "kind": stat["kind"],
+        "size": stat["size"],
+        "mtime_ns": stat["mtime_ns"],
+        "sha256": digest,
+    }
+
+private def _snapshot_map(root, options=nil):
+    cfg = _options(options)
+    root = _resolve_root(root)
+    out = {}
+    stat = os.stat(root)
+    if stat == nil:
+        return out
+    if stat["kind"] != "dir":
+        out["."] = _entry(".", stat, _file_hash(root))
+        return out
+    candidates = glob.walk(root, cfg["include_dirs"], cfg["hidden"])
+    for candidate in candidates:
+        candidate = _normalize(candidate)
+        rel_path = _relative_path(root, candidate)
+        if rel_path == ".":
+            continue
+        stat = os.stat(candidate)
+        if stat == nil:
+            continue
+        digest = nil
+        if stat["kind"] == "file":
+            digest = _file_hash(candidate)
+        out[rel_path] = _entry(rel_path, stat, digest)
+    return out
+
+private def _map_to_entries(values):
+    keys = values.keys()
+    keys.sort()
+    out = []
+    for key in keys:
+        out.append(values[key])
+    return out
+
+private def _entries_to_map(entries):
+    out = {}
+    if entries == nil:
+        return out
+    for entry in entries:
+        if type(entry) == "dict" and "path" in entry:
+            out[str(entry["path"])] = entry
+    return out
+
+private def _snapshot_payload(value):
+    if value == nil:
+        return []
+    if type(value) == "str":
+        raw = _read_text(value)
+        if raw == nil:
+            return []
+        if str(raw).strip() == "":
+            return []
+        decoded = json.loads(raw)
+        if type(decoded) == "dict" and "entries" in decoded:
+            return decoded["entries"]
+        return decoded
+    if type(value) == "dict" and "entries" in value:
+        return value["entries"]
+    return value
+
+private def _same_entry(left, right):
+    if left == nil:
+        return left == right
+    if right == nil:
+        return left == right
+    if left["kind"] != right["kind"]:
+        return false
+    if left["kind"] == "dir":
+        return true
+    return left["size"] == right["size"] and left["sha256"] == right["sha256"]
+
+private def _state_changed(base, current):
+    if base == nil and current == nil:
+        return false
+    if base == nil:
+        return true
+    if current == nil:
+        return true
+    return not _same_entry(base, current)
+
+private def _conflict(reason, rel_path, source_entry, dest_entry, base_entry):
+    return {
+        "kind": "conflict",
+        "reason": reason,
+        "path": rel_path,
+        "source": source_entry,
+        "dest": dest_entry,
+        "baseline": base_entry,
+    }
+
+private def _sorted_actions(actions, deepest_first=false):
+    out = []
+    for action in actions:
+        out.append(action)
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            left = out[i]["path"]
+            right = out[j]["path"]
+            swap = false
+            if deepest_first:
+                if len(right) > len(left):
+                    swap = true
+                elif len(right) == len(left) and right < left:
+                    swap = true
+            elif right < left:
+                swap = true
+            if swap:
+                temp = out[i]
+                out[i] = out[j]
+                out[j] = temp
+            j += 1
+        i += 1
+    return out
+
+def snapshot(root, options=nil):
+    return _map_to_entries(_snapshot_map(root, options))
+
+def save_snapshot(file_path, entries):
+    file_path = _normalize(file_path)
+    payload = {
+        "entries": _snapshot_payload(entries),
+    }
+    _write_text(file_path, json.dumps(payload))
+    return file_path
+
+def load_snapshot(file_path):
+    return _snapshot_payload(file_path)
+
+def find(entries, rel_path):
+    rel_path = str(rel_path)
+    for entry in _snapshot_payload(entries):
+        if entry["path"] == rel_path:
+            return entry
+    return nil
+
+def paths(entries):
+    out = []
+    for entry in _snapshot_payload(entries):
+        out.append(entry["path"])
+    out.sort()
+    return out
+
+def reconcile(source_root, dest_root, baseline=nil, options=nil):
+    cfg = _options(options)
+    source_root = _resolve_root(source_root)
+    dest_root = _resolve_root(dest_root)
+    source_map = _snapshot_map(source_root, cfg)
+    dest_map = _snapshot_map(dest_root, cfg)
+    base_map = _entries_to_map(_snapshot_payload(baseline))
+    detect_conflicts = baseline != nil
+
+    paths = {}
+    for rel_path in source_map.keys():
+        paths[rel_path] = true
+    for rel_path in dest_map.keys():
+        paths[rel_path] = true
+
+    actions = []
+    conflicts = []
+    rel_paths = paths.keys()
+    rel_paths.sort()
+    for rel_path in rel_paths:
+        source_entry = nil
+        dest_entry = nil
+        base_entry = nil
+        if rel_path in source_map:
+            source_entry = source_map[rel_path]
+        if rel_path in dest_map:
+            dest_entry = dest_map[rel_path]
+        if rel_path in base_map:
+            base_entry = base_map[rel_path]
+
+        if _same_entry(source_entry, dest_entry):
+            continue
+
+        if detect_conflicts:
+            if _state_changed(base_entry, source_entry):
+                if _state_changed(base_entry, dest_entry):
+                    conflicts.append(_conflict("diverged", rel_path, source_entry, dest_entry, base_entry))
+                    continue
+
+        if source_entry != nil:
+            reason = "create"
+            if dest_entry != nil:
+                reason = "update"
+            actions.append({
+                "kind": "copy",
+                "reason": reason,
+                "path": rel_path,
+                "entry": source_entry,
+            })
+        elif cfg["delete"] == true:
+            actions.append({
+                "kind": "delete",
+                "reason": "delete",
+                "path": rel_path,
+                "entry": dest_entry,
+            })
+    return {
+        "source_root": source_root,
+        "dest_root": dest_root,
+        "baseline": _map_to_entries(base_map),
+        "source": _map_to_entries(source_map),
+        "dest": _map_to_entries(dest_map),
+        "actions": actions,
+        "conflicts": conflicts,
+        "next": _map_to_entries(source_map),
+        "options": cfg,
+    }
+
+private def _resolved_actions(plan, mode):
+    actions = []
+    for action in plan["actions"]:
+        actions.append(action)
+    if mode == "source":
+        for conflict in plan["conflicts"]:
+            if conflict["source"] != nil:
+                reason = "conflict-copy"
+                if conflict["dest"] == nil:
+                    reason = "conflict-create"
+                actions.append({
+                    "kind": "copy",
+                    "reason": reason,
+                    "path": conflict["path"],
+                    "entry": conflict["source"],
+                })
+            elif plan["options"]["delete"] == true:
+                actions.append({
+                    "kind": "delete",
+                    "reason": "conflict-delete",
+                    "path": conflict["path"],
+                    "entry": conflict["dest"],
+                })
+    return actions
+
+def apply(plan):
+    source_root = _resolve_root(plan["source_root"])
+    dest_root = _resolve_root(plan["dest_root"])
+    actions = plan["actions"]
+    applied = []
+
+    source_stat = os.stat(source_root)
+    if source_stat != nil:
+        if source_stat["kind"] == "dir":
+            _ensure_dir(dest_root)
+
+    copy_actions = []
+    delete_actions = []
+    for action in actions:
+        if action["kind"] == "delete":
+            delete_actions.append(action)
+        else:
+            copy_actions.append(action)
+
+    copy_actions = _sorted_actions(copy_actions, false)
+    delete_actions = _sorted_actions(delete_actions, true)
+
+    for action in copy_actions:
+        rel_path = action["path"]
+        source_path = _resolve_under(source_root, rel_path)
+        dest_path = _resolve_under(dest_root, rel_path)
+        stat = os.stat(source_path)
+        if stat == nil:
+            continue
+        if stat["kind"] == "dir":
+            _ensure_dir(dest_path)
+        else:
+            _ensure_dir(path.dirname(dest_path))
+            _write_text(dest_path, _read_text(source_path))
+        applied.append(action)
+
+    for action in delete_actions:
+        dest_path = _resolve_under(dest_root, action["path"])
+        if _remove_path(dest_path):
+            applied.append(action)
+
+    return applied
+
+def sync_dirs(source_root, dest_root, baseline=nil, options=nil):
+    baseline_path = nil
+    baseline_entries = baseline
+    if type(baseline) == "str":
+        baseline_path = _normalize(baseline)
+        if os.exists(baseline_path):
+            baseline_entries = load_snapshot(baseline_path)
+        else:
+            baseline_entries = nil
+    plan = reconcile(source_root, dest_root, baseline_entries, options)
+    mode = plan["options"]["conflicts"]
+    if len(plan["conflicts"]) > 0:
+        if mode == "error":
+            plan["applied"] = []
+            return plan
+
+    resolved = _resolved_actions(plan, mode)
+    apply_plan = {
+        "source_root": plan["source_root"],
+        "dest_root": plan["dest_root"],
+        "actions": resolved,
+    }
+    plan["applied"] = apply(apply_plan)
+    if baseline_path != nil:
+        save_snapshot(baseline_path, plan["next"])
+    return plan

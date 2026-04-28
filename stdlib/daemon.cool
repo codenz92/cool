@@ -1,0 +1,544 @@
+import json
+import os
+import path
+import process
+import subprocess
+import tempfile
+import time
+
+private def _fail(message):
+    raise "daemon: " + message
+
+private def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+private def _ensure_dir(dir_path):
+    dir_path = _normalize(dir_path)
+    if dir_path == "" or dir_path == ".":
+        return dir_path
+    if os.exists(dir_path):
+        return dir_path
+    parent = _normalize(path.dirname(dir_path))
+    if parent != dir_path and parent != "":
+        _ensure_dir(parent)
+    if not os.exists(dir_path):
+        os.mkdir(dir_path)
+    return dir_path
+
+private def _safe_name(name):
+    text = str(name).strip()
+    if text == "":
+        _fail("service name cannot be empty")
+    text = text.replace("/", "-")
+    text = text.replace("\\", "-")
+    text = text.replace(" ", "-")
+    return text
+
+private def _default_root():
+    return _normalize(path.join(tempfile.temp_root(), "cool-daemons"))
+
+private def _shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+private def _read_text(file_path):
+    if not os.exists(file_path):
+        return nil
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _write_text(file_path, text):
+    f = open(file_path, "w")
+    f.write(str(text))
+    f.close()
+
+private def _truncate_file(file_path):
+    f = open(file_path, "w")
+    f.close()
+
+private def _write_pid_file(pid_path, pid):
+    _write_text(pid_path, str(int(pid)))
+    return nil
+
+private def _option(options, key, default_value):
+    if options == nil:
+        return default_value
+    if key not in options:
+        return default_value
+    return options[key]
+
+private def _restart_mode(value):
+    text = str(value).strip().lower().replace("_", "-")
+    if text == "" or text == "never":
+        return "never"
+    if text == "always":
+        return "always"
+    if text == "on-failure":
+        return "on-failure"
+    _fail("unknown restart policy '" + str(value) + "'")
+
+private def _command_or(service, command):
+    if command != nil and str(command).strip() != "":
+        return str(command)
+    if service.command != nil and str(service.command).strip() != "":
+        return str(service.command)
+    _fail("service '" + service.name + "' has no command configured")
+
+private def _env_prefix(env_map):
+    if env_map == nil:
+        return ""
+    if type(env_map) != "dict":
+        return ""
+    if len(env_map) == 0:
+        return ""
+    parts = ["env"]
+    keys = env_map.keys()
+    keys.sort()
+    for key in keys:
+        parts.append(str(key) + "=" + _shell_quote(env_map[key]))
+    return " ".join(parts) + " "
+
+private def _read_json(file_path):
+    raw = _read_text(file_path)
+    if raw == nil:
+        return {}
+    if str(raw).strip() == "":
+        return {}
+    value = json.loads(raw)
+    if type(value) != "dict":
+        _fail("metadata file '" + file_path + "' is not a JSON object")
+    return value
+
+private def _write_service_metadata(meta_path, name, command, work_dir, stdout_path, stderr_path, pid_path, exit_path, env_map, restart_policy_name, max_restarts, restart_delay, restart_count, stopped):
+    _write_text(
+        meta_path,
+        json.dumps({
+            "name": name,
+            "command": str(command),
+            "work_dir": work_dir,
+            "started_at": time.time(),
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+            "pid_path": pid_path,
+            "exit_path": exit_path,
+            "env": env_map,
+            "restart": restart_policy_name,
+            "max_restarts": max_restarts,
+            "restart_delay": restart_delay,
+            "restart_count": int(restart_count),
+            "stopped": stopped,
+        }),
+    )
+
+private def _metadata_from_path(meta_path):
+    if not os.exists(meta_path):
+        return {}
+    return _read_json(meta_path)
+
+private def _read_pid_file(pid_path):
+    raw = _read_text(pid_path)
+    if raw == nil:
+        return nil
+    if str(raw).strip() == "":
+        return nil
+    return int(str(raw).strip())
+
+private def _pid_file_running(pid_path):
+    pid = _read_pid_file(pid_path)
+    if pid == nil:
+        return false
+    return process.is_alive(pid)
+
+private def _restart_count_from_meta(meta_path):
+    meta = _metadata_from_path(meta_path)
+    if "restart_count" not in meta:
+        return 0
+    return int(meta["restart_count"])
+
+private def _mark_stopped_meta(meta_path):
+    meta = _metadata_from_path(meta_path)
+    if len(meta) == 0:
+        return nil
+    meta["stopped"] = true
+    _write_text(meta_path, json.dumps(meta))
+    return nil
+
+private def _should_restart_state(pid_path, meta_path, exit_path, restart_policy_name, max_restarts):
+    if _pid_file_running(pid_path):
+        return false
+    meta = _metadata_from_path(meta_path)
+    if len(meta) == 0:
+        return false
+    if _option(meta, "stopped", false) == true:
+        return false
+    policy = _restart_mode(_option(meta, "restart", restart_policy_name))
+    if policy == "never":
+        return false
+    limit = _option(meta, "max_restarts", max_restarts)
+    if limit != nil:
+        if _restart_count_from_meta(meta_path) >= int(limit):
+            return false
+    raw_exit = _read_text(exit_path)
+    exit_code = nil
+    if raw_exit != nil:
+        if str(raw_exit).strip() != "":
+            exit_code = int(str(raw_exit).strip())
+    if policy == "always":
+        return true
+    return exit_code != nil and exit_code != 0
+
+private def _wait_for_pid_path(pid_path, timeout=nil, interval=0.02):
+    deadline = nil
+    if timeout != nil:
+        deadline = time.monotonic() + float(timeout)
+    while _pid_file_running(pid_path):
+        if deadline != nil:
+            if time.monotonic() >= deadline:
+                return false
+        time.sleep(interval)
+    return true
+
+private def _stop_service_paths(pid_path, meta_path, signal, timeout, kill_after):
+    pid = _read_pid_file(pid_path)
+    if pid == nil:
+        _mark_stopped_meta(meta_path)
+        return false
+    _mark_stopped_meta(meta_path)
+    if not process.is_alive(pid):
+        if os.exists(pid_path):
+            os.remove(pid_path)
+        return false
+    process.send(pid, signal)
+    if _wait_for_pid_path(pid_path, timeout):
+        if os.exists(pid_path):
+            os.remove(pid_path)
+        return true
+    process.kill(pid)
+    _wait_for_pid_path(pid_path, kill_after)
+    if os.exists(pid_path):
+        os.remove(pid_path)
+    return true
+
+class Service:
+    def __init__(self, name, options=nil):
+        self.name = _safe_name(name)
+        if options == nil:
+            options = {}
+        root = _default_root()
+        if "root" in options:
+            root = _normalize(options["root"])
+        self.root = _ensure_dir(root)
+        self.dir = _ensure_dir(path.join(self.root, self.name))
+        self.work_dir = process.cwd()
+        if "work_dir" in options:
+            self.work_dir = _normalize(options["work_dir"])
+        self.command = nil
+        if "command" in options:
+            self.command = str(options["command"])
+        self.env = {}
+        if "env" in options:
+            if type(options["env"]) == "dict":
+                self.env = options["env"]
+        self.restart_policy_name = _restart_mode(_option(options, "restart", "never"))
+        self.max_restarts = _option(options, "max_restarts", nil)
+        if self.max_restarts != nil:
+            self.max_restarts = int(self.max_restarts)
+        self.restart_delay = float(_option(options, "restart_delay", 0.0))
+        self.pid_path = path.join(self.dir, "service.pid")
+        self.stdout_path = path.join(self.dir, "stdout.log")
+        self.stderr_path = path.join(self.dir, "stderr.log")
+        self.exit_path = path.join(self.dir, "exit.code")
+        self.meta_path = path.join(self.dir, "service.json")
+
+    def logs(self):
+        return {
+            "stdout": self.stdout_path,
+            "stderr": self.stderr_path,
+            "exit": self.exit_path,
+        }
+
+    def policy(self):
+        return {
+            "restart": self.restart_policy_name,
+            "max_restarts": self.max_restarts,
+            "restart_delay": self.restart_delay,
+        }
+
+    def read_pid(self):
+        return _read_pid_file(self.pid_path)
+
+    def write_pid(self, pid):
+        return _write_pid_file(self.pid_path, pid)
+
+    def metadata(self):
+        return _metadata_from_path(self.meta_path)
+
+    def _write_metadata(self, command, restart_count=0, stopped=false):
+        _write_service_metadata(
+            self.meta_path,
+            self.name,
+            command,
+            self.work_dir,
+            self.stdout_path,
+            self.stderr_path,
+            self.pid_path,
+            self.exit_path,
+            self.env,
+            self.restart_policy_name,
+            self.max_restarts,
+            self.restart_delay,
+            restart_count,
+            stopped,
+        )
+
+    def _mark_stopped(self):
+        return _mark_stopped_meta(self.meta_path)
+
+    def is_running(self):
+        return _pid_file_running(self.pid_path)
+
+    def restart_count(self):
+        return _restart_count_from_meta(self.meta_path)
+
+    def should_restart(self):
+        return _should_restart_state(
+            self.pid_path,
+            self.meta_path,
+            self.exit_path,
+            self.restart_policy_name,
+            self.max_restarts,
+        )
+
+    def status(self):
+        pid = _read_pid_file(self.pid_path)
+        exit_code = nil
+        raw_exit = _read_text(self.exit_path)
+        if raw_exit != nil:
+            if str(raw_exit).strip() != "":
+                exit_code = int(str(raw_exit).strip())
+        meta = _metadata_from_path(self.meta_path)
+        return {
+            "name": self.name,
+            "running": _pid_file_running(self.pid_path),
+            "pid": pid,
+            "work_dir": self.work_dir,
+            "stdout_path": self.stdout_path,
+            "stderr_path": self.stderr_path,
+            "exit_path": self.exit_path,
+            "exit_code": exit_code,
+            "restart_policy": _option(meta, "restart", self.restart_policy_name),
+            "restart_count": int(_option(meta, "restart_count", 0)),
+            "should_restart": _should_restart_state(
+                self.pid_path,
+                self.meta_path,
+                self.exit_path,
+                self.restart_policy_name,
+                self.max_restarts,
+            ),
+        }
+
+    def start(self):
+        if _pid_file_running(self.pid_path):
+            return _read_pid_file(self.pid_path)
+        command = _command_or(self, nil)
+        _ensure_dir(self.dir)
+        _truncate_file(self.stdout_path)
+        _truncate_file(self.stderr_path)
+        if os.exists(self.exit_path):
+            os.remove(self.exit_path)
+        launch = "( cd " + _shell_quote(self.work_dir) + " && "
+        launch = launch + _env_prefix(self.env)
+        launch = launch + "sh -c " + _shell_quote(command)
+        launch = launch + " > " + _shell_quote(self.stdout_path)
+        launch = launch + " 2> " + _shell_quote(self.stderr_path)
+        launch = launch + "; code=$?; printf '%s' \"$code\" > " + _shell_quote(self.exit_path)
+        launch = launch + " ) & printf '%s' $!"
+        pid = int(subprocess.check_output(launch).strip())
+        _write_pid_file(self.pid_path, pid)
+        _write_service_metadata(
+            self.meta_path,
+            self.name,
+            command,
+            self.work_dir,
+            self.stdout_path,
+            self.stderr_path,
+            self.pid_path,
+            self.exit_path,
+            self.env,
+            self.restart_policy_name,
+            self.max_restarts,
+            self.restart_delay,
+            0,
+            false,
+        )
+        return pid
+
+    def start_command(self, command):
+        self.command = str(command)
+        return self.start()
+
+    def maintain(self):
+        if not _should_restart_state(
+            self.pid_path,
+            self.meta_path,
+            self.exit_path,
+            self.restart_policy_name,
+            self.max_restarts,
+        ):
+            return false
+        meta = _metadata_from_path(self.meta_path)
+        delay = float(_option(meta, "restart_delay", self.restart_delay))
+        if delay > 0:
+            time.sleep(delay)
+        command = _option(meta, "command", self.command)
+        restart_count = int(_option(meta, "restart_count", 0)) + 1
+        _ensure_dir(self.dir)
+        if os.exists(self.exit_path):
+            os.remove(self.exit_path)
+        launch = "( cd " + _shell_quote(self.work_dir) + " && "
+        launch = launch + _env_prefix(self.env)
+        launch = launch + "sh -c " + _shell_quote(command)
+        launch = launch + " > " + _shell_quote(self.stdout_path)
+        launch = launch + " 2> " + _shell_quote(self.stderr_path)
+        launch = launch + "; code=$?; printf '%s' \"$code\" > " + _shell_quote(self.exit_path)
+        launch = launch + " ) & printf '%s' $!"
+        pid = int(subprocess.check_output(launch).strip())
+        _write_pid_file(self.pid_path, pid)
+        _write_service_metadata(
+            self.meta_path,
+            self.name,
+            command,
+            self.work_dir,
+            self.stdout_path,
+            self.stderr_path,
+            self.pid_path,
+            self.exit_path,
+            self.env,
+            self.restart_policy_name,
+            self.max_restarts,
+            self.restart_delay,
+            restart_count,
+            false,
+        )
+        return true
+
+    def wait(self, timeout=nil, interval=0.02):
+        deadline = nil
+        if timeout != nil:
+            deadline = time.monotonic() + float(timeout)
+        if not _wait_for_pid_path(self.pid_path, timeout, interval):
+            return false
+        while not os.exists(self.exit_path):
+            if deadline != nil:
+                if time.monotonic() >= deadline:
+                    return false
+            time.sleep(interval)
+        return true
+
+    def stop(self, signal="term", timeout=0.25, kill_after=0.25):
+        return _stop_service_paths(self.pid_path, self.meta_path, signal, timeout, kill_after)
+
+    def restart(self):
+        _stop_service_paths(self.pid_path, self.meta_path, "term", 0.25, 0.25)
+        command = _command_or(self, nil)
+        _ensure_dir(self.dir)
+        _truncate_file(self.stdout_path)
+        _truncate_file(self.stderr_path)
+        if os.exists(self.exit_path):
+            os.remove(self.exit_path)
+        launch = "( cd " + _shell_quote(self.work_dir) + " && "
+        launch = launch + _env_prefix(self.env)
+        launch = launch + "sh -c " + _shell_quote(command)
+        launch = launch + " > " + _shell_quote(self.stdout_path)
+        launch = launch + " 2> " + _shell_quote(self.stderr_path)
+        launch = launch + "; code=$?; printf '%s' \"$code\" > " + _shell_quote(self.exit_path)
+        launch = launch + " ) & printf '%s' $!"
+        pid = int(subprocess.check_output(launch).strip())
+        _write_pid_file(self.pid_path, pid)
+        _write_service_metadata(
+            self.meta_path,
+            self.name,
+            command,
+            self.work_dir,
+            self.stdout_path,
+            self.stderr_path,
+            self.pid_path,
+            self.exit_path,
+            self.env,
+            self.restart_policy_name,
+            self.max_restarts,
+            self.restart_delay,
+            0,
+            false,
+        )
+        return pid
+
+    def restart_command(self, command):
+        self.command = str(command)
+        return self.restart()
+
+    def tail(self):
+        file_path = self.stdout_path
+        text = _read_text(file_path)
+        if text == nil:
+            return ""
+        if text == "":
+            return ""
+        values = str(text).split("\n")
+        if len(values) > 0:
+            if values[-1] == "":
+                values = values[:-1]
+        start = len(values) - 10
+        if start < 0:
+            start = 0
+        out = []
+        idx = start
+        while idx < len(values):
+            out.append(values[idx])
+            idx += 1
+        return "\n".join(out)
+
+    def tail_stream(self, stream, lines):
+        file_path = self.stdout_path
+        if str(stream) == "stderr":
+            file_path = self.stderr_path
+        text = _read_text(file_path)
+        if text == nil:
+            return ""
+        if text == "":
+            return ""
+        values = str(text).split("\n")
+        if len(values) > 0:
+            if values[-1] == "":
+                values = values[:-1]
+        start = len(values) - int(lines)
+        if start < 0:
+            start = 0
+        out = []
+        idx = start
+        while idx < len(values):
+            out.append(values[idx])
+            idx += 1
+        return "\n".join(out)
+
+    def cleanup(self, remove_logs=false):
+        _mark_stopped_meta(self.meta_path)
+        if _pid_file_running(self.pid_path):
+            _stop_service_paths(self.pid_path, self.meta_path, "term", 0.25, 0.25)
+        if os.exists(self.pid_path):
+            os.remove(self.pid_path)
+        if os.exists(self.meta_path):
+            os.remove(self.meta_path)
+        if os.exists(self.exit_path):
+            os.remove(self.exit_path)
+        if remove_logs:
+            if os.exists(self.stdout_path):
+                os.remove(self.stdout_path)
+            if os.exists(self.stderr_path):
+                os.remove(self.stderr_path)
+        return nil
+
+def service(name, options=nil):
+    return Service(name, options)

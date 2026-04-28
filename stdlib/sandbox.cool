@@ -1,0 +1,356 @@
+import os
+import path
+import platform
+import process
+import subprocess
+
+private def _fail(message):
+    raise "sandbox: " + message
+
+private def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+private def _shell_quote(text):
+    text = str(text)
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+private def _option(options, key, default_value):
+    if options == nil:
+        return default_value
+    if key not in options:
+        return default_value
+    return options[key]
+
+private def _ensure_dir(dir_path):
+    dir_path = _normalize(dir_path)
+    if dir_path == "" or dir_path == ".":
+        return dir_path
+    if os.exists(dir_path):
+        return dir_path
+    parent = _normalize(path.dirname(dir_path))
+    if parent != dir_path and parent != "":
+        _ensure_dir(parent)
+    if not os.exists(dir_path):
+        os.mkdir(dir_path)
+    return dir_path
+
+private def _resolve_root(root):
+    if root == nil:
+        return _normalize(process.cwd())
+    if str(root).strip() == "":
+        return _normalize(process.cwd())
+    root = _normalize(root)
+    if path.isabs(root):
+        return root
+    return _normalize(path.join(process.cwd(), root))
+
+private def _resolve_path(root, file_path):
+    file_path = _normalize(file_path)
+    if path.isabs(file_path):
+        return file_path
+    return _normalize(path.join(root, file_path))
+
+private def _path_list(root, value, default_value):
+    if value == nil:
+        value = default_value
+    if value == false:
+        return []
+    kind = type(value)
+    out = []
+    if kind == "list" or kind == "tuple":
+        for item in value:
+            out.append(_resolve_path(root, item))
+        return out
+    out.append(_resolve_path(root, value))
+    return out
+
+private def _name_list(value):
+    if value == nil:
+        return []
+    kind = type(value)
+    out = []
+    if kind == "list" or kind == "tuple":
+        for item in value:
+            out.append(str(item))
+        return out
+    out.append(str(value))
+    return out
+
+private def _is_within(base, candidate):
+    base = _normalize(base)
+    candidate = _normalize(candidate)
+    if base == candidate:
+        return true
+    if base == "/":
+        return candidate.startswith("/")
+    prefix = base
+    if not prefix.endswith("/"):
+        prefix = prefix + "/"
+    return candidate.startswith(prefix)
+
+private def _contains_name(values, candidate):
+    candidate = str(candidate)
+    for value in values:
+        value = str(value)
+        if value == "*" or value == candidate:
+            return true
+    return false
+
+private def _command_name(command):
+    text = str(command).strip()
+    if text == "":
+        _fail("command cannot be empty")
+    parts = text.split()
+    if len(parts) == 0:
+        _fail("command cannot be empty")
+    return parts[0]
+
+private def _env_prefix(env_map):
+    if env_map == nil:
+        return ""
+    if type(env_map) != "dict":
+        return ""
+    if len(env_map) == 0:
+        return ""
+    parts = ["env"]
+    keys = env_map.keys()
+    keys.sort()
+    for key in keys:
+        parts.append(str(key) + "=" + _shell_quote(env_map[key]))
+    return " ".join(parts) + " "
+
+private def _sandbox_allowed_path(sandbox, allowlist, file_path):
+    resolved = _resolve_path(sandbox.root, file_path)
+    for allowed in allowlist:
+        if _is_within(allowed, resolved):
+            return true
+    return false
+
+private def _sandbox_require_read(sandbox, file_path, context):
+    if _sandbox_allowed_path(sandbox, sandbox.read_paths, file_path):
+        return _resolve_path(sandbox.root, file_path)
+    _fail(context + ": read denied for '" + str(file_path) + "'")
+
+private def _sandbox_require_write(sandbox, file_path, context):
+    if _sandbox_allowed_path(sandbox, sandbox.write_paths, file_path):
+        return _resolve_path(sandbox.root, file_path)
+    _fail(context + ": write denied for '" + str(file_path) + "'")
+
+private def _sandbox_require_command(sandbox, command):
+    if sandbox.process_allowed != true:
+        _fail("process denied for '" + str(command) + "'")
+    name = _command_name(command)
+    if _contains_name(sandbox.commands, name) or _contains_name(sandbox.commands, str(command).strip()):
+        return name
+    _fail("command denied for '" + str(command) + "'")
+
+private def _sandbox_require_env_name(sandbox, name, context):
+    if _contains_name(sandbox.env_names, name):
+        return str(name)
+    _fail(context + ": env denied for '" + str(name) + "'")
+
+private def _sandbox_checked_env(sandbox, options):
+    if options == nil:
+        return {}
+    if "env" not in options:
+        return {}
+    env_map = options["env"]
+    if type(env_map) != "dict":
+        _fail("run options env must be a dict")
+    keys = env_map.keys()
+    for key in keys:
+        _sandbox_require_env_name(sandbox, key, "run()")
+    return env_map
+
+private def _sandbox_checked_cwd(sandbox, options):
+    cwd = sandbox.root
+    if options != nil:
+        if "cwd" in options:
+            cwd = _sandbox_require_write(sandbox, options["cwd"], "run()")
+    if not os.exists(cwd):
+        if _sandbox_allowed_path(sandbox, sandbox.write_paths, cwd):
+            _ensure_dir(cwd)
+    return cwd
+
+private def _sandbox_prepare_command(sandbox, command, options):
+    _sandbox_require_command(sandbox, command)
+    cwd = _sandbox_checked_cwd(sandbox, options)
+    env_map = _sandbox_checked_env(sandbox, options)
+    launch = "( cd " + _shell_quote(cwd) + " && "
+    launch = launch + _env_prefix(env_map)
+    launch = launch + "sh -c " + _shell_quote(command)
+    launch = launch + " )"
+    return launch
+
+class Sandbox:
+    def __init__(self, options=nil):
+        if options == nil:
+            options = {}
+        self.root = _resolve_root(_option(options, "root", nil))
+        self.read_paths = _path_list(self.root, _option(options, "read", nil), [self.root])
+        self.write_paths = _path_list(self.root, _option(options, "write", nil), [self.root])
+        self.process_allowed = _option(options, "process", false) == true
+        self.commands = _name_list(_option(options, "commands", []))
+        self.env_names = _name_list(_option(options, "env", []))
+
+    def describe(self):
+        return {
+            "root": self.root,
+            "read_paths": self.read_paths,
+            "write_paths": self.write_paths,
+            "process": self.process_allowed,
+            "commands": self.commands,
+            "env": self.env_names,
+            "capabilities": platform.capabilities(),
+        }
+
+    def _allowed_path(self, allowlist, file_path):
+        return _sandbox_allowed_path(self, allowlist, file_path)
+
+    def _require_read(self, file_path, context):
+        return _sandbox_require_read(self, file_path, context)
+
+    def _require_write(self, file_path, context):
+        return _sandbox_require_write(self, file_path, context)
+
+    def _require_command(self, command):
+        return _sandbox_require_command(self, command)
+
+    def _require_env_name(self, name, context):
+        return _sandbox_require_env_name(self, name, context)
+
+    def _checked_env(self, options):
+        return _sandbox_checked_env(self, options)
+
+    def _checked_cwd(self, options):
+        return _sandbox_checked_cwd(self, options)
+
+    def _prepare_command(self, command, options):
+        return _sandbox_prepare_command(self, command, options)
+
+    def can_read(self, file_path):
+        return _sandbox_allowed_path(self, self.read_paths, file_path)
+
+    def can_write(self, file_path):
+        return _sandbox_allowed_path(self, self.write_paths, file_path)
+
+    def can_run(self, command):
+        if self.process_allowed != true:
+            return false
+        name = _command_name(command)
+        return _contains_name(self.commands, name) or _contains_name(self.commands, str(command).strip())
+
+    def exists(self, file_path):
+        target = _sandbox_require_read(self, file_path, "exists()")
+        return os.exists(target)
+
+    def stat(self, file_path):
+        target = _sandbox_require_read(self, file_path, "stat()")
+        return os.stat(target)
+
+    def listdir(self, dir_path="."):
+        target = _sandbox_require_read(self, dir_path, "listdir()")
+        if not os.exists(target):
+            return []
+        entries = os.listdir(target)
+        entries.sort()
+        return entries
+
+    def read_text(self, file_path):
+        target = _sandbox_require_read(self, file_path, "read_text()")
+        if not os.exists(target):
+            return nil
+        f = open(target, "r")
+        text = f.read()
+        f.close()
+        return text
+
+    def write_text(self, file_path, text):
+        target = _sandbox_require_write(self, file_path, "write_text()")
+        _ensure_dir(path.dirname(target))
+        f = open(target, "w")
+        f.write(str(text))
+        f.close()
+        return target
+
+    def append_text(self, file_path, text):
+        target = _sandbox_require_write(self, file_path, "append_text()")
+        _ensure_dir(path.dirname(target))
+        f = open(target, "a")
+        f.write(str(text))
+        f.close()
+        return target
+
+    def mkdir(self, dir_path):
+        target = _sandbox_require_write(self, dir_path, "mkdir()")
+        _ensure_dir(target)
+        return target
+
+    def remove(self, target_path):
+        target = _sandbox_require_write(self, target_path, "remove()")
+        if not os.exists(target):
+            return false
+        if os.isdir(target):
+            entries = os.listdir(target)
+            entries.sort()
+            for name in entries:
+                self.remove(path.join(target, str(name)))
+            os.rmdir(target)
+            return true
+        os.remove(target)
+        return true
+
+    def getenv(self, name, default=nil):
+        name = _sandbox_require_env_name(self, name, "getenv()")
+        value = os.getenv(name)
+        if value == nil:
+            return default
+        return value
+
+    def environ(self):
+        if _contains_name(self.env_names, "*"):
+            return os.environ()
+        env_map = os.environ()
+        out = {}
+        for name in self.env_names:
+            if name in env_map:
+                out[name] = env_map[name]
+        return out
+
+    def run(self, command, options=nil):
+        launch = _sandbox_prepare_command(self, command, options)
+        timeout = _option(options, "timeout", nil)
+        if timeout == nil:
+            return subprocess.run(launch)
+        return subprocess.run(launch, timeout)
+
+    def call(self, command, options=nil):
+        launch = _sandbox_prepare_command(self, command, options)
+        timeout = _option(options, "timeout", nil)
+        if timeout == nil:
+            return subprocess.call(launch)
+        return subprocess.call(launch, timeout)
+
+    def check_output(self, command, options=nil):
+        launch = _sandbox_prepare_command(self, command, options)
+        timeout = _option(options, "timeout", nil)
+        if timeout == nil:
+            return subprocess.check_output(launch)
+        return subprocess.check_output(launch, timeout)
+
+def open_sandbox(options=nil):
+    return Sandbox(options)
+
+def workspace(root=nil, options=nil):
+    if options == nil:
+        options = {}
+    options["root"] = root
+    return Sandbox(options)
+
+def trusted(root=nil):
+    return Sandbox({
+        "root": root,
+        "process": true,
+        "commands": ["*"],
+        "env": ["*"],
+    })

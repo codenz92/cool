@@ -39,7 +39,12 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/tempfile.cool` adds temporary file/directory creation plus cleanup-aware `TempFile` / `TempDir` handles, `mkstemp()` / `mkdtemp()`, and recursive cleanup helpers for normal hosted workflows
 - New bundled `stdlib/process.cool` adds PID/PPID inspection, environment snapshots, signal helpers, liveness checks, and runtime/capability metadata without forcing callers down to raw `os.*` plumbing
 - New bundled `stdlib/fswatch.cool` adds polling-based file watching with snapshots, diffs, ignore patterns, timeout-aware `watch()`, and change extraction helpers for rebuild loops, editors, and automation
+- New bundled `stdlib/store.cool` adds file-backed namespaced key-value persistence, snapshots, increments, and transactional commit/rollback helpers that behave consistently across interpreter, VM, and native builds
+- New bundled `stdlib/daemon.cool` adds hosted service lifecycle helpers with PID files, stdout/stderr logs, exit-code sidecars, cleanup, and restart-policy maintenance flows for long-running automation
+- New bundled `stdlib/sandbox.cool` adds constrained file/process helpers around explicit roots, allowlisted commands, and allowlisted environment access so automation code can tighten its own working envelope on top of manifest capabilities
+- New bundled `stdlib/sync.cool` adds directory snapshots, persisted baseline state, conflict detection, and source/destination reconciliation helpers for backup, mirroring, and workflow state handoff
 - The shared `import os` runtime surface now includes `stat()`, `tmpdir()`, `environ()`, `getpid()`, `getppid()`, `is_alive()`, `kill()`, and `rmdir()` across interpreter, VM, and hosted native builds so the new stdlib modules sit on the same capability-enforced substrate
+- While landing the new tranche, the stdlib implementation was also hardened against real cross-runtime differences: helper exports are now private where appropriate, interpreter-visible exception scopes no longer leak into the public APIs, and the native backend path avoids unsupported constructs such as forward class references, `del`, and method/default-argument dispatch traps
 
 ### Signature Capability
 

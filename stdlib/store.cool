@@ -1,0 +1,286 @@
+import json
+import os
+import path
+import tempfile
+
+private def _fail(message):
+    raise "store: " + message
+
+private def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+private def _default_root():
+    return _normalize(path.join(".cool", "store"))
+
+private def _ensure_dir(dir_path):
+    dir_path = _normalize(dir_path)
+    if dir_path == "" or dir_path == ".":
+        return dir_path
+    if os.exists(dir_path):
+        return dir_path
+    parent = _normalize(path.dirname(dir_path))
+    if parent != dir_path and parent != "":
+        _ensure_dir(parent)
+    if not os.exists(dir_path):
+        os.mkdir(dir_path)
+    return dir_path
+
+private def _read_text(file_path):
+    if not os.exists(file_path):
+        return nil
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _write_text_atomic(file_path, text):
+    dir_path = path.dirname(file_path)
+    _ensure_dir(dir_path)
+    temp_path = tempfile.mkstemp(".tmp-", ".json", dir_path)
+    f = open(temp_path, "w")
+    f.write(str(text))
+    f.close()
+    os.rename(temp_path, file_path)
+
+private def _namespace_name(name):
+    text = str(name).strip()
+    if text == "":
+        _fail("namespace names cannot be empty")
+    if text == "." or text == "..":
+        _fail("namespace names cannot be '.' or '..'")
+    if text.find("/") >= 0 or text.find("\\") >= 0:
+        _fail("namespace names may not contain path separators")
+    return text
+
+private def _namespace_file(root, name):
+    return _normalize(path.join(root, _namespace_name(name) + ".json"))
+
+private def _deep_clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for pair in value.items():
+            out[pair[0]] = _deep_clone(pair[1])
+        return out
+    if kind == "list":
+        out = []
+        for item in value:
+            out.append(_deep_clone(item))
+        return out
+    if kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_deep_clone(item))
+        return out
+    return clone(value)
+
+private def _load_map(file_path):
+    raw = _read_text(file_path)
+    if raw == nil or str(raw).strip() == "":
+        return {}
+    value = json.loads(raw)
+    if type(value) != "dict":
+        _fail("namespace file '" + file_path + "' is not a JSON object")
+    return value
+
+private def _save_map(file_path, data):
+    _write_text_atomic(file_path, json.dumps(data))
+
+private def _without_key(data, key):
+    out = {}
+    for pair in data.items():
+        if pair[0] != key:
+            out[pair[0]] = pair[1]
+    return out
+
+class Transaction:
+    def __init__(self, namespace):
+        self.namespace = namespace
+        self.original = namespace.snapshot()
+        self.data = _deep_clone(self.original)
+        self.closed = false
+
+    def _ensure_open(self):
+        if self.closed:
+            _fail("transaction is closed")
+
+    def get(self, key, default=nil):
+        self._ensure_open()
+        key = str(key)
+        if key in self.data:
+            return self.data[key]
+        return default
+
+    def has(self, key):
+        self._ensure_open()
+        return str(key) in self.data
+
+    def set(self, key, value):
+        self._ensure_open()
+        self.data[str(key)] = value
+        return value
+
+    def delete(self, key):
+        self._ensure_open()
+        key = str(key)
+        if key not in self.data:
+            return false
+        self.data = _without_key(self.data, key)
+        return true
+
+    def clear(self):
+        self._ensure_open()
+        self.data = {}
+        return nil
+
+    def increment(self, key, amount=1):
+        self._ensure_open()
+        current = self.get(key, 0)
+        next_value = int(current) + int(amount)
+        self.set(key, next_value)
+        return next_value
+
+    def keys(self):
+        self._ensure_open()
+        keys = self.data.keys()
+        keys.sort()
+        return keys
+
+    def items(self):
+        self._ensure_open()
+        out = []
+        keys = self.keys()
+        for key in keys:
+            out.append((key, self.data[key]))
+        return out
+
+    def commit(self):
+        self._ensure_open()
+        self.namespace.save(self.data)
+        self.closed = true
+        return _deep_clone(self.data)
+
+    def rollback(self):
+        self._ensure_open()
+        self.data = _deep_clone(self.original)
+        self.closed = true
+        return _deep_clone(self.data)
+
+    def __close__(self):
+        if self.closed:
+            return nil
+        self.rollback()
+        return nil
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type=nil, exc=nil, tb=nil):
+        self.__close__()
+        return nil
+
+class Namespace:
+    def __init__(self, store, name):
+        self.store = store
+        self.name = _namespace_name(name)
+        self.file_path = _namespace_file(store.root, self.name)
+
+    def load(self):
+        return _load_map(self.file_path)
+
+    def save(self, data):
+        _save_map(self.file_path, data)
+        return nil
+
+    def get(self, key, default=nil):
+        data = _load_map(self.file_path)
+        key = str(key)
+        if key in data:
+            return data[key]
+        return default
+
+    def has(self, key):
+        data = _load_map(self.file_path)
+        return str(key) in data
+
+    def set(self, key, value):
+        data = _load_map(self.file_path)
+        data[str(key)] = value
+        _save_map(self.file_path, data)
+        return value
+
+    def delete(self, key):
+        data = _load_map(self.file_path)
+        key = str(key)
+        if key not in data:
+            return false
+        _save_map(self.file_path, _without_key(data, key))
+        return true
+
+    def clear(self):
+        _save_map(self.file_path, {})
+        return nil
+
+    def keys(self):
+        data = _load_map(self.file_path)
+        keys = data.keys()
+        keys.sort()
+        return keys
+
+    def items(self):
+        data = _load_map(self.file_path)
+        out = []
+        keys = data.keys()
+        keys.sort()
+        for key in keys:
+            out.append((key, data[key]))
+        return out
+
+    def size(self):
+        return len(_load_map(self.file_path))
+
+    def snapshot(self):
+        return _deep_clone(_load_map(self.file_path))
+
+    def increment(self, key, amount=1):
+        current = self.get(key, 0)
+        next_value = int(current) + int(amount)
+        self.set(key, next_value)
+        return next_value
+
+    def transaction(self):
+        return Transaction(self)
+
+class Store:
+    def __init__(self, root=nil):
+        if root == nil:
+            root = _default_root()
+        self.root = _ensure_dir(_normalize(root))
+
+    def namespace(self, name):
+        return Namespace(self, name)
+
+    def namespaces(self):
+        names = []
+        if not os.exists(self.root):
+            return names
+        entries = os.listdir(self.root)
+        entries.sort()
+        for entry in entries:
+            entry = str(entry)
+            if entry.endswith(".json"):
+                names.append(entry[:-5])
+        return names
+
+    def has_namespace(self, name):
+        return os.exists(_namespace_file(self.root, name))
+
+    def remove_namespace(self, name):
+        file_path = _namespace_file(self.root, name)
+        if not os.exists(file_path):
+            return false
+        os.remove(file_path)
+        return true
+
+def open_store(root=nil):
+    return Store(root)

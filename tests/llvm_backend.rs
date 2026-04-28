@@ -164,6 +164,10 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
 }
 
 fn compile_and_run_native_path(source_path: &PathBuf) -> Result<String, String> {
+    compile_and_run_native_path_with_env(source_path, &[])
+}
+
+fn compile_and_run_native_path_with_env(source_path: &PathBuf, envs: &[(&str, &str)]) -> Result<String, String> {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let binary_path = source_path.with_extension("");
 
@@ -179,10 +183,12 @@ fn compile_and_run_native_path(source_path: &PathBuf) -> Result<String, String> 
         return Err(format!("{stdout}{stderr}"));
     }
 
-    let run_output = Command::new(&binary_path)
-        .current_dir(source_path.parent().unwrap_or_else(|| std::path::Path::new(".")))
-        .output()
-        .map_err(|e| e.to_string())?;
+    let mut run_cmd = Command::new(&binary_path);
+    run_cmd.current_dir(source_path.parent().unwrap_or_else(|| std::path::Path::new(".")));
+    for (key, value) in envs {
+        run_cmd.env(key, value);
+    }
+    let run_output = run_cmd.output().map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&binary_path);
 
     if run_output.status.success() {
@@ -289,6 +295,128 @@ print(locale.parse_number("12 345,5", "fr-FR"))
 print(locale.currency(19.5, "EUR", "fr-FR"))
 print(locale.match("en-AU", ["fr-FR", "en-GB", "de-DE"]))
 "#,
+    )
+    .unwrap();
+    source_path
+}
+
+fn write_phase6_pass3_suite(dir: &PathBuf) -> PathBuf {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    let source_path = dir.join("main.cool");
+    let base = cool_quote_path(dir);
+    fs::write(
+        &source_path,
+        format!(
+            r#"import daemon
+import os
+import path
+import sandbox
+import store
+import sync
+
+base = "{base}"
+
+db = store.open_store(path.join(base, "nested", "state", "db"))
+prefs = db.namespace("prefs")
+prefs.set("theme", "amber")
+prefs.increment("count", 2)
+tx = prefs.transaction()
+tx.set("draft", "temp")
+tx.rollback()
+print(prefs.get("draft", "missing"))
+tx = prefs.transaction()
+tx.set("draft", "kept")
+tx.commit()
+print(prefs.get("draft"))
+print(db.namespaces()[0])
+print(prefs.size())
+
+svc = daemon.service("demo", {{"root": path.join(base, "services", "runtime"), "command": "printf service-ready"}})
+pid = svc.start()
+print(pid > 0)
+print(svc.wait(1.0))
+print(svc.status()["exit_code"] == 0)
+print(svc.tail() == "service-ready")
+retry = daemon.service("retry", {{
+    "root": path.join(base, "services", "runtime"),
+    "command": "printf retry && exit 1",
+    "restart": "on-failure",
+    "max_restarts": 1,
+    "restart_delay": 0.01,
+}})
+retry.start()
+retry.wait(1.0)
+print(retry.should_restart())
+print(retry.maintain())
+retry.wait(1.0)
+print(retry.status()["restart_count"] == 1)
+retry.cleanup(true)
+svc.cleanup(true)
+print(not path.exists(svc.stdout_path))
+
+box = sandbox.open_sandbox({{
+    "root": path.join(base, "workspace"),
+    "process": true,
+    "commands": ["printf"],
+    "env": ["COOL_PHASE6_SB"],
+}})
+box.write_text("notes/todo.txt", "safe")
+print(box.read_text("notes/todo.txt"))
+print(box.check_output("printf sand") == "sand")
+print(box.getenv("COOL_PHASE6_SB") == "allowed")
+try:
+    box.write_text(path.join(path.dirname(base), "outside.txt"), "bad")
+    print(false)
+except as err:
+    print(str(err).find("write denied") >= 0)
+try:
+    box.run("uname")
+    print(false)
+except as err:
+    print(str(err).find("command denied") >= 0)
+try:
+    box.getenv("HOME")
+    print(false)
+except as err:
+    print(str(err).find("env denied") >= 0)
+
+src = path.join(base, "sync-src")
+dst = path.join(base, "sync-dst")
+os.mkdir(src)
+os.mkdir(path.join(src, "dir"))
+f = open(path.join(src, "dir", "item.txt"), "w")
+f.write("shared-one")
+f.close()
+first = sync.sync_dirs(src, dst, path.join(base, "sync-state", "state.json"))
+print(len(first["conflicts"]) == 0)
+f = open(path.join(src, "dir", "item.txt"), "w")
+f.write("source-two")
+f.close()
+f = open(path.join(src, "new.txt"), "w")
+f.write("new")
+f.close()
+f = open(path.join(dst, "dir", "item.txt"), "w")
+f.write("dest-two")
+f.close()
+f = open(path.join(dst, "extra.txt"), "w")
+f.write("extra")
+f.close()
+plan = sync.reconcile(src, dst, path.join(base, "sync-state", "state.json"))
+print(len(plan["conflicts"]) == 1)
+print(plan["conflicts"][0]["path"] == "dir/item.txt")
+applied = sync.sync_dirs(src, dst, path.join(base, "sync-state", "state.json"), {{"conflicts": "source"}})
+after = sync.snapshot(dst)
+print(sync.find(after, "new.txt") != nil)
+print(sync.find(after, "extra.txt") == nil)
+f = open(path.join(dst, "dir", "item.txt"), "r")
+print(f.read())
+f.close()
+saved = sync.load_snapshot(path.join(base, "sync-state", "state.json"))
+print(sync.find(saved, "new.txt") != nil)
+print(len(applied["applied"]) == 3)
+"#
+        ),
     )
     .unwrap();
     source_path
@@ -3121,6 +3249,46 @@ fn test_llvm_phase6_pass2_stdlib_modules() {
             "12345.5",
             "19,50 €",
             "en-GB",
+        ]
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_pass3_stdlib_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_pass3");
+    let source_path = write_phase6_pass3_suite(&temp_dir);
+    let result = compile_and_run_native_path_with_env(&source_path, &[("COOL_PHASE6_SB", "allowed")]).unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "missing",
+            "kept",
+            "prefs",
+            "3",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "safe",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "true",
+            "source-two",
+            "true",
+            "true",
         ]
     );
     let _ = fs::remove_dir_all(&temp_dir);
