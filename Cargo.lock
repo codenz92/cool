@@ -120,6 +120,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "inkwell",
+ "libc",
  "libloading",
  "md5",
  "object",

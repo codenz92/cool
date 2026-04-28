@@ -195,10 +195,10 @@
 #### Filesystem And OS
 
 - [x] `path` module — path normalization, basename/dirname, extension helpers, and path splitting
-- [ ] `glob` module — wildcard path matching and recursive file discovery
-- [ ] `tempfile` module — temporary files/directories with cleanup helpers
-- [ ] `fswatch` module — file watching for rebuild loops, editors, and automation
-- [ ] `process` module — PID info, signals, environment inspection, and runtime metadata
+- [x] `glob` module — wildcard path matching and recursive file discovery
+- [x] `tempfile` module — temporary files/directories with cleanup helpers
+- [x] `fswatch` module — file watching for rebuild loops, editors, and automation
+- [x] `process` module — PID info, signals, environment inspection, and runtime metadata
 - [x] `platform` module — OS/arch/runtime detection and host capability helpers
 - [x] `subprocess` module — structured process spawning, exit codes, stdout/stderr capture
 - [ ] `daemon` module — service lifecycle helpers, PID files, logs, and restart policies
@@ -438,7 +438,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ### Flagship Cool Software
 
-- [ ] A real package manager or project tool written in Cool
+- [x] A real package manager or project tool written in Cool
 - [x] A build/task runner that demonstrates modules, subprocesses, and packaging
 - [x] A flagship TUI or networked app — `browse` (TUI file browser with two-pane layout, directory traversal, file preview, arrow-key navigation, written entirely in Cool)
 

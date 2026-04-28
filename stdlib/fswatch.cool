@@ -1,0 +1,201 @@
+import glob
+import os
+import path
+import time
+
+def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+def _list_paths(value):
+    if value == nil:
+        return ["."]
+    kind = type(value)
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_normalize(item))
+        return out
+    return [_normalize(value)]
+
+def _option(options, key, default_value):
+    if options == nil or key not in options:
+        return default_value
+    return options[key]
+
+def _options(options):
+    return {
+        "recursive": _option(options, "recursive", true),
+        "include_dirs": _option(options, "include_dirs", true),
+        "hidden": _option(options, "hidden", false),
+        "ignore": _option(options, "ignore", []),
+    }
+
+def _matches_ignore(candidate, patterns):
+    if patterns == nil:
+        return false
+    base = path.basename(candidate)
+    for pattern in patterns:
+        pattern = str(pattern)
+        if glob.matches(pattern, candidate) or glob.matches(pattern, base):
+            return true
+    return false
+
+def _scan_one(root, cfg):
+    root = _normalize(root)
+    out = {}
+    root_stat = os.stat(root)
+    if root_stat == nil:
+        return out
+    if root_stat["kind"] != "dir":
+        if not _matches_ignore(root, cfg["ignore"]):
+            out[root] = root_stat
+        return out
+    if cfg["include_dirs"]:
+        if not _matches_ignore(root, cfg["ignore"]):
+            out[root] = root_stat
+    if cfg["recursive"]:
+        for candidate in glob.walk(root, cfg["include_dirs"], cfg["hidden"]):
+            candidate = _normalize(candidate)
+            if _matches_ignore(candidate, cfg["ignore"]):
+                continue
+            stat = os.stat(candidate)
+            if stat != nil:
+                out[candidate] = stat
+    else:
+        entries = os.listdir(root)
+        entries.sort()
+        for name in entries:
+            name = str(name)
+            if not cfg["hidden"] and name.startswith("."):
+                continue
+            candidate = _normalize(path.join(root, name))
+            if os.isdir(candidate):
+                if cfg["include_dirs"]:
+                    if _matches_ignore(candidate, cfg["ignore"]):
+                        continue
+                    stat = os.stat(candidate)
+                    if stat != nil:
+                        out[candidate] = stat
+            else:
+                if _matches_ignore(candidate, cfg["ignore"]):
+                    continue
+                stat = os.stat(candidate)
+                if stat != nil:
+                    out[candidate] = stat
+    return out
+
+def snapshot(paths=".", options=nil):
+    cfg = _options(options)
+    out = []
+    for root in _list_paths(paths):
+        root = _normalize(root)
+        root_stat = os.stat(root)
+        if root_stat == nil:
+            continue
+        if root_stat["kind"] != "dir":
+            if not _matches_ignore(root, cfg["ignore"]):
+                out.append({"path": root, "stat": root_stat})
+            continue
+        if cfg["include_dirs"] and not _matches_ignore(root, cfg["ignore"]):
+            out.append({"path": root, "stat": root_stat})
+        if cfg["recursive"]:
+            candidates = glob.walk(root, cfg["include_dirs"], cfg["hidden"])
+        else:
+            candidates = []
+            entries = os.listdir(root)
+            entries.sort()
+            for name in entries:
+                name = str(name)
+                if not cfg["hidden"] and name.startswith("."):
+                    continue
+                candidate = _normalize(path.join(root, name))
+                if os.isdir(candidate):
+                    if cfg["include_dirs"]:
+                        candidates.append(candidate)
+                else:
+                    candidates.append(candidate)
+        for candidate in candidates:
+            candidate = _normalize(candidate)
+            if _matches_ignore(candidate, cfg["ignore"]):
+                continue
+            stat = os.stat(candidate)
+            if stat != nil:
+                found = false
+                for entry in out:
+                    if entry["path"] == candidate:
+                        found = true
+                        break
+                if not found:
+                    out.append({"path": candidate, "stat": stat})
+    return out
+
+def _changed(before, after):
+    return before["kind"] != after["kind"] or before["size"] != after["size"] or before["mtime_ns"] != after["mtime_ns"]
+
+def _find_entry(entries, candidate):
+    for entry in entries:
+        if entry["path"] == candidate:
+            return entry
+    return nil
+
+def diff(before, after):
+    events = []
+    for previous in before:
+        key = previous["path"]
+        current = _find_entry(after, key)
+        if current == nil:
+            events.append({
+                "kind": "deleted",
+                "path": key,
+                "previous": previous["stat"],
+            })
+        elif _changed(previous["stat"], current["stat"]):
+            events.append({
+                "kind": "modified",
+                "path": key,
+                "previous": previous["stat"],
+                "current": current["stat"],
+            })
+    for current in after:
+        key = current["path"]
+        if _find_entry(before, key) == nil:
+            events.append({
+                "kind": "created",
+                "path": key,
+                "current": current["stat"],
+            })
+    return events
+
+def changed_paths(events):
+    out = []
+    seen = {}
+    for event in events:
+        candidate = str(event["path"])
+        if seen.get(candidate, false):
+            continue
+        seen[candidate] = true
+        out.append(candidate)
+    out.sort()
+    return out
+
+def watch(paths=".", interval=0.25, timeout=nil, options=nil):
+    cfg = _options(options)
+    wait_seconds = float(interval)
+    if wait_seconds < 0.01:
+        wait_seconds = 0.01
+    deadline = nil
+    if timeout != nil:
+        deadline = time.monotonic() + float(timeout)
+    previous = snapshot(paths, cfg)
+    while true:
+        time.sleep(wait_seconds)
+        current = snapshot(paths, cfg)
+        events = diff(previous, current)
+        if len(events) > 0:
+            return events
+        if deadline != nil and time.monotonic() >= deadline:
+            return []
+        previous = current
+
+def await_change(paths=".", interval=0.25, timeout=nil, options=nil):
+    return watch(paths, interval, timeout, options)

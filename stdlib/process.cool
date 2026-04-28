@@ -1,0 +1,108 @@
+import os
+import platform
+
+def pid():
+    return os.getpid()
+
+def ppid():
+    return os.getppid()
+
+def cwd():
+    return os.getcwd()
+
+def getenv(name, default=nil):
+    value = os.getenv(str(name))
+    if value == nil:
+        return default
+    return value
+
+def environ():
+    return os.environ()
+
+def capabilities():
+    return platform.capabilities()
+
+def runtime():
+    return platform.runtime()
+
+def runtime_profile():
+    return platform.runtime_profile()
+
+def signals():
+    return {
+        "hup": 1,
+        "int": 2,
+        "quit": 3,
+        "kill": 9,
+        "alarm": 14,
+        "term": 15,
+    }
+
+def signal_number(signal):
+    if type(signal) == "int":
+        return int(signal)
+    if signal == nil:
+        return 15
+    text = str(signal).strip().lower()
+    if text.startswith("sig"):
+        text = text[3:]
+    if text == "hup":
+        return 1
+    if text == "int":
+        return 2
+    if text == "quit":
+        return 3
+    if text == "kill":
+        return 9
+    if text == "alarm":
+        return 14
+    if text == "term":
+        return 15
+    raise "process: unknown signal '" + str(signal) + "'"
+
+def signal_name(number):
+    number = int(number)
+    if number == 1:
+        return "HUP"
+    if number == 2:
+        return "INT"
+    if number == 3:
+        return "QUIT"
+    if number == 9:
+        return "KILL"
+    if number == 14:
+        return "ALARM"
+    if number == 15:
+        return "TERM"
+    return nil
+
+def is_alive(target_pid):
+    return os.is_alive(int(target_pid))
+
+def send(target_pid, signal="term"):
+    return os.kill(int(target_pid), signal_number(signal))
+
+def interrupt(target_pid):
+    return send(target_pid, "int")
+
+def terminate(target_pid):
+    return send(target_pid, "term")
+
+def kill(target_pid):
+    return send(target_pid, "kill")
+
+def info():
+    return {
+        "pid": pid(),
+        "ppid": ppid(),
+        "cwd": cwd(),
+        "runtime": runtime(),
+        "runtime_profile": runtime_profile(),
+        "os": platform.os(),
+        "arch": platform.arch(),
+        "family": platform.family(),
+        "capabilities": capabilities(),
+    }
+
+def describe():
+    return info()

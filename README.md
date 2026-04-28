@@ -27,7 +27,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - List comprehensions, lambda expressions, ternary expressions
 - `nonlocal` / `global`, `assert`, `with` / context managers
 - `import math`, `import os`, `import sys`, `import path`, `import platform`, `import core`, `import csv`, `import datetime`, `import hashlib`, `import toml`, `import yaml`, `import sqlite`, `import http`, `import argparse`, `import logging`, `import test`
-- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket` (`http` requires host `curl`)
+- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket`, `import glob`, `import tempfile`, `import process`, and `import fswatch` (`http` requires host `curl`)
 - `import ffi` — call C functions from shared libraries at runtime
 - Project-level capability policy via `[capabilities]` in `cool.toml` for file, network, env, and process access
 - LLVM-native `extern def` declarations with symbol/link/ownership metadata
@@ -45,6 +45,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `import jobs` for structured concurrency: tasks, channels, deadlines, cancellation, and process/network orchestration
 - Bundled typed error helpers: `import option` and `import result`
 - Bundled data/text modules: `import bytes`, `import base64`, `import codec`, `import html`, `import xml`, `import unicode`, `import locale`, `import config`, and `import schema`
+- Bundled filesystem/OS modules: `import glob`, `import tempfile`, `import process`, and `import fswatch`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
@@ -145,6 +146,28 @@ print(html.extract_title("<title>Hi</title>"))
 ```
 
 Package/bundle metadata and `cool pkg capabilities` expose the same permission set so projects can audit what an app or dependency expects before running it.
+
+### Filesystem Modules
+
+Bundled filesystem/process helpers cover discovery, temp paths, runtime metadata, and polling-based file watching:
+
+```python
+import fswatch
+import glob
+import process
+import tempfile
+
+matches = glob.glob("**/*.cool", ".")
+tmp = tempfile.named_dir("demo-")
+print(tmp.path)
+print(process.pid(), process.runtime())
+
+before = fswatch.snapshot("src")
+# ... edit files ...
+after = fswatch.snapshot("src")
+print(fswatch.changed_paths(fswatch.diff(before, after)))
+close(tmp)
+```
 
 ### Jobs Module
 
@@ -960,6 +983,10 @@ stdlib/
   bytes.cool        Byte strings, hex, UTF-8, and binary packing helpers
   base64.cool       Base64 encode/decode on byte lists and text
   codec.cool        Pluggable codec dispatch for text/binary formats
+  glob.cool         Wildcard matching and recursive file discovery
+  tempfile.cool     Temporary files/directories with cleanup-aware handles
+  process.cool      PID/env/signal/runtime inspection helpers
+  fswatch.cool      Polling file watching with snapshots and diffs
   html.cool         Escaping, tag stripping, and small extraction helpers
   xml.cool          Lightweight XML parsing, text extraction, and serialization
   unicode.cool      Unicode categories, normalization, width, and grapheme helpers

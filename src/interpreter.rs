@@ -1469,11 +1469,19 @@ impl Interpreter {
                 os_fn!("listdir");
                 os_fn!("exists");
                 os_fn!("isdir");
+                os_fn!("stat");
+                os_fn!("tmpdir");
                 os_fn!("getenv");
+                os_fn!("environ");
+                os_fn!("getpid");
+                os_fn!("getppid");
+                os_fn!("is_alive");
+                os_fn!("kill");
                 os_fn!("join");
                 os_fn!("path");
                 os_fn!("mkdir");
                 os_fn!("remove");
+                os_fn!("rmdir");
                 os_fn!("rename");
                 os_fn!("popen");
                 env.set_local("os".to_string(), Value::Dict(Rc::new(RefCell::new(map))));
@@ -3948,6 +3956,41 @@ class Stack:
                 };
                 Ok(Value::Bool(std::path::Path::new(&path).is_dir()))
             }
+            "stat" => {
+                self.require_file_capability("os.stat()")?;
+                let path = match args.get(0) {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("os.stat() requires a path string")),
+                };
+                match std::fs::metadata(&path) {
+                    Ok(metadata) => {
+                        let modified = metadata.modified().ok();
+                        let mtime_ns = modified
+                            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|duration| duration.as_nanos() as i64)
+                            .unwrap_or(0);
+                        let mtime = mtime_ns as f64 / 1_000_000_000.0;
+                        Ok(self.dict_value(vec![
+                            ("path", Value::Str(path)),
+                            ("exists", Value::Bool(true)),
+                            (
+                                "kind",
+                                Value::Str(if metadata.is_dir() { "dir" } else { "file" }.to_string()),
+                            ),
+                            ("is_dir", Value::Bool(metadata.is_dir())),
+                            ("size", Value::Int(metadata.len() as i64)),
+                            ("mtime", Value::Float(mtime)),
+                            ("mtime_ns", Value::Int(mtime_ns)),
+                        ]))
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Value::Nil),
+                    Err(err) => Err(self.err(&format!("os.stat() error: {}", err))),
+                }
+            }
+            "tmpdir" => {
+                self.require_file_capability("os.tmpdir()")?;
+                Ok(Value::Str(std::env::temp_dir().to_string_lossy().to_string()))
+            }
             "getenv" => {
                 self.require_env_capability("os.getenv()")?;
                 let name = match args.get(0) {
@@ -3958,6 +4001,81 @@ class Stack:
                     Ok(v) => Value::Str(v),
                     Err(_) => Value::Nil,
                 })
+            }
+            "environ" => {
+                self.require_env_capability("os.environ()")?;
+                let mut map = IndexedMap::new();
+                for (name, value) in std::env::vars() {
+                    map.set(Value::Str(name), Value::Str(value));
+                }
+                Ok(Value::Dict(Rc::new(RefCell::new(map))))
+            }
+            "getpid" => {
+                self.require_process_capability("os.getpid()")?;
+                Ok(Value::Int(std::process::id() as i64))
+            }
+            "getppid" => {
+                self.require_process_capability("os.getppid()")?;
+                #[cfg(unix)]
+                {
+                    Ok(Value::Int(unsafe { libc::getppid() as i64 }))
+                }
+                #[cfg(not(unix))]
+                {
+                    Ok(Value::Nil)
+                }
+            }
+            "is_alive" => {
+                self.require_process_capability("os.is_alive()")?;
+                let pid = match args.get(0) {
+                    Some(Value::Int(n)) => *n as libc::pid_t,
+                    _ => return Err(self.err("os.is_alive() requires a pid integer")),
+                };
+                #[cfg(unix)]
+                {
+                    let rc = unsafe { libc::kill(pid, 0) };
+                    if rc == 0 {
+                        Ok(Value::Bool(true))
+                    } else {
+                        let err = std::io::Error::last_os_error();
+                        if err.raw_os_error() == Some(libc::EPERM) {
+                            Ok(Value::Bool(true))
+                        } else if err.raw_os_error() == Some(libc::ESRCH) {
+                            Ok(Value::Bool(false))
+                        } else {
+                            Err(self.err(&format!("os.is_alive() error: {}", err)))
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    Ok(Value::Bool(std::process::id() as i64 == pid as i64))
+                }
+            }
+            "kill" => {
+                self.require_process_capability("os.kill()")?;
+                let pid = match args.get(0) {
+                    Some(Value::Int(n)) => *n as libc::pid_t,
+                    _ => return Err(self.err("os.kill() requires a pid integer")),
+                };
+                let signal = match args.get(1) {
+                    Some(Value::Int(n)) => *n as i32,
+                    None => 15,
+                    _ => return Err(self.err("os.kill() signal must be an integer")),
+                };
+                #[cfg(unix)]
+                {
+                    let rc = unsafe { libc::kill(pid, signal) };
+                    if rc == 0 {
+                        Ok(Value::Bool(true))
+                    } else {
+                        Err(self.err(&format!("os.kill() error: {}", std::io::Error::last_os_error())))
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    Err(self.err("os.kill() is only supported on unix hosts"))
+                }
             }
             "join" | "path" => {
                 if args.is_empty() {
@@ -3990,6 +4108,15 @@ class Stack:
                     _ => return Err(self.err("os.remove() requires a path string")),
                 };
                 std::fs::remove_file(&path).map_err(|e| self.err(&format!("os.remove() error: {}", e)))?;
+                Ok(Value::Nil)
+            }
+            "rmdir" => {
+                self.require_file_capability("os.rmdir()")?;
+                let path = match args.get(0) {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("os.rmdir() requires a path string")),
+                };
+                std::fs::remove_dir(&path).map_err(|e| self.err(&format!("os.rmdir() error: {}", e)))?;
                 Ok(Value::Nil)
             }
             "rename" => {

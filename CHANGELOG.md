@@ -33,6 +33,14 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/unicode.cool` adds Unicode category lookup, canonical/compatibility normalization, display-width estimation, and grapheme-cluster helpers, backed by generated lookup helpers so the same APIs work in native builds as well as the interpreter and VM
 - New bundled `stdlib/locale.cool` adds locale tag parsing/normalization, language/region naming helpers, locale matching, locale-aware number parsing/formatting, and currency formatting
 
+### Phase 6 Follow-on — Filesystem And OS Modules
+
+- New bundled `stdlib/glob.cool` adds wildcard path matching, recursive discovery, `**` traversal, and explicit `glob.matches()` / `glob.glob()` / `glob.walk()` helpers that behave consistently across interpreter, VM, and native builds
+- New bundled `stdlib/tempfile.cool` adds temporary file/directory creation plus cleanup-aware `TempFile` / `TempDir` handles, `mkstemp()` / `mkdtemp()`, and recursive cleanup helpers for normal hosted workflows
+- New bundled `stdlib/process.cool` adds PID/PPID inspection, environment snapshots, signal helpers, liveness checks, and runtime/capability metadata without forcing callers down to raw `os.*` plumbing
+- New bundled `stdlib/fswatch.cool` adds polling-based file watching with snapshots, diffs, ignore patterns, timeout-aware `watch()`, and change extraction helpers for rebuild loops, editors, and automation
+- The shared `import os` runtime surface now includes `stat()`, `tmpdir()`, `environ()`, `getpid()`, `getppid()`, `is_alive()`, `kill()`, and `rmdir()` across interpreter, VM, and hosted native builds so the new stdlib modules sit on the same capability-enforced substrate
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

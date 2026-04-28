@@ -1,0 +1,173 @@
+import os
+import path
+import random
+import time
+
+def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+def temp_root():
+    root = os.tmpdir()
+    if root == nil or root == "":
+        root = "/tmp"
+    return _normalize(root)
+
+def _ensure_dir(dir_path):
+    dir_path = _normalize(dir_path)
+    if not os.exists(dir_path):
+        os.mkdir(dir_path)
+    return dir_path
+
+def _candidate_name(prefix, suffix):
+    nonce = str(int(time.time() * 1000000))
+    salt = str(random.randint(1000, 999999))
+    return str(prefix) + nonce + "-" + salt + str(suffix)
+
+def _target_path(target):
+    if type(target) == "str":
+        return _normalize(target)
+    return _normalize(target.path)
+
+def _cleanup_path(target_path):
+    target_path = _normalize(target_path)
+    if not os.exists(target_path):
+        return false
+    if os.isdir(target_path):
+        entries = os.listdir(target_path)
+        entries.sort()
+        for name in entries:
+            _cleanup_path(path.join(target_path, str(name)))
+        os.rmdir(target_path)
+        return true
+    os.remove(target_path)
+    return true
+
+def cleanup(target):
+    removed = _cleanup_path(_target_path(target))
+    if type(target) != "str":
+        target.closed = true
+    return removed
+
+def remove(target):
+    return cleanup(target)
+
+def mkstemp(prefix="cool-", suffix="", dir=nil):
+    base = temp_root()
+    if dir != nil:
+        base = _normalize(dir)
+    _ensure_dir(base)
+    attempt = 0
+    while attempt < 1024:
+        candidate = _normalize(path.join(base, _candidate_name(prefix, suffix)))
+        if not os.exists(candidate):
+            f = open(candidate, "w")
+            f.close()
+            return candidate
+        attempt += 1
+    raise "tempfile: could not allocate a temporary file in " + base
+
+def mkdtemp(prefix="cool-", suffix="", dir=nil):
+    base = temp_root()
+    if dir != nil:
+        base = _normalize(dir)
+    _ensure_dir(base)
+    attempt = 0
+    while attempt < 1024:
+        candidate = _normalize(path.join(base, _candidate_name(prefix, suffix)))
+        if not os.exists(candidate):
+            os.mkdir(candidate)
+            return candidate
+        attempt += 1
+    raise "tempfile: could not allocate a temporary directory in " + base
+
+class TempFile:
+    def __init__(self, file_path):
+        self.path = _normalize(file_path)
+        self.cleanup_on_close = true
+        self.closed = false
+
+    def open_file(self, mode="r"):
+        return open(self.path, mode)
+
+    def keep(self):
+        self.cleanup_on_close = false
+        return self.path
+
+    def exists(self):
+        return os.exists(self.path)
+
+    def remove(self):
+        if self.closed:
+            return false
+        removed = _cleanup_path(self.path)
+        self.closed = true
+        return removed
+
+    def __close__(self):
+        if self.closed:
+            return nil
+        if self.cleanup_on_close:
+            self.remove()
+        else:
+            self.closed = true
+        return nil
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type=nil, exc=nil, tb=nil):
+        self.__close__()
+        return nil
+
+class TempDir:
+    def __init__(self, dir_path):
+        self.path = _normalize(dir_path)
+        self.cleanup_on_close = true
+        self.closed = false
+
+    def join(self, name):
+        return _normalize(path.join(self.path, str(name)))
+
+    def mkdir(self, name):
+        dir_path = self.join(name)
+        os.mkdir(dir_path)
+        return dir_path
+
+    def keep(self):
+        self.cleanup_on_close = false
+        return self.path
+
+    def exists(self):
+        return os.exists(self.path)
+
+    def remove(self):
+        if self.closed:
+            return false
+        removed = _cleanup_path(self.path)
+        self.closed = true
+        return removed
+
+    def __close__(self):
+        if self.closed:
+            return nil
+        if self.cleanup_on_close:
+            self.remove()
+        else:
+            self.closed = true
+        return nil
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type=nil, exc=nil, tb=nil):
+        self.__close__()
+        return nil
+
+def named_file(prefix="cool-", suffix="", dir=nil):
+    return TempFile(mkstemp(prefix, suffix, dir))
+
+def named_dir(prefix="cool-", suffix="", dir=nil):
+    return TempDir(mkdtemp(prefix, suffix, dir))
+
+def tempdir(prefix="cool-", suffix="", dir=nil):
+    return named_dir(prefix, suffix, dir)

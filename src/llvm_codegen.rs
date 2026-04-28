@@ -638,6 +638,79 @@ static CoolVal cool_platform_stdlib_split(void) {
     return out;
 }
 
+#if !defined(_WIN32)
+extern char** environ;
+#endif
+
+static char** cool_envp(void) {
+#ifdef __APPLE__
+    return *_NSGetEnviron();
+#elif defined(_WIN32)
+    return _environ;
+#else
+    return environ;
+#endif
+}
+
+static const char* cool_tmpdir_path(void) {
+    const char* value = getenv("TMPDIR");
+    if (!value || !value[0]) value = getenv("TEMP");
+    if (!value || !value[0]) value = getenv("TMP");
+    if (!value || !value[0]) value = "/tmp";
+    return value;
+}
+
+static int64_t cool_stat_mtime_nanos(const struct stat* st) {
+#if defined(__APPLE__)
+    return ((int64_t)st->st_mtimespec.tv_sec * 1000000000LL) + (int64_t)st->st_mtimespec.tv_nsec;
+#elif defined(__linux__)
+    return ((int64_t)st->st_mtim.tv_sec * 1000000000LL) + (int64_t)st->st_mtim.tv_nsec;
+#else
+    return (int64_t)st->st_mtime * 1000000000LL;
+#endif
+}
+
+static CoolVal cool_os_stat_value(const char* path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        if (errno == ENOENT || errno == ENOTDIR) return cv_nil();
+        fprintf(stderr, "RuntimeError: os.stat failed\n");
+        exit(1);
+    }
+    int64_t mtime_ns = cool_stat_mtime_nanos(&st);
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("path"), cv_str(strdup(path)));
+    cool_dict_set(out, cv_str("exists"), cv_bool(1));
+    cool_dict_set(out, cv_str("kind"), cv_str(S_ISDIR(st.st_mode) ? "dir" : "file"));
+    cool_dict_set(out, cv_str("is_dir"), cv_bool(S_ISDIR(st.st_mode)));
+    cool_dict_set(out, cv_str("size"), cv_int((int64_t)st.st_size));
+    cool_dict_set(out, cv_str("mtime"), cv_float((double)mtime_ns / 1000000000.0));
+    cool_dict_set(out, cv_str("mtime_ns"), cv_int(mtime_ns));
+    return out;
+}
+
+static CoolVal cool_os_environ(void) {
+    CoolVal out = cool_dict_new();
+    char** envp = cool_envp();
+    if (!envp) return out;
+    for (char** current = envp; *current; current++) {
+        const char* entry = *current;
+        const char* eq = strchr(entry, '=');
+        if (!eq) continue;
+        size_t key_len = (size_t)(eq - entry);
+        char* key = (char*)malloc(key_len + 1);
+        memcpy(key, entry, key_len);
+        key[key_len] = '\0';
+        cool_dict_set(out, cv_str(key), cv_str(strdup(eq + 1)));
+    }
+    return out;
+}
+
+static int cool_pid_alive(pid_t pid) {
+    if (kill(pid, 0) == 0) return 1;
+    return errno == EPERM;
+}
+
 CoolVal cool_format_hex(CoolVal value) {
     char buf[2 + (sizeof(uint64_t) * 2) + 1];
     snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)(uint64_t)value.payload);
@@ -7501,12 +7574,47 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             struct stat st;
             return cv_bool(stat(path, &st) == 0 && S_ISDIR(st.st_mode));
         }
+        if (strcmp(name, "stat") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.stat()");
+            return cool_os_stat_value(cool_to_str(args[0]));
+        }
+        if (strcmp(name, "tmpdir") == 0 && nargs == 0) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.tmpdir()");
+            return cv_str(strdup(cool_tmpdir_path()));
+        }
         if (strcmp(name, "getenv") == 0 && nargs == 1) {
             if (!COOL_CAP_ENV) cool_capability_denied("env", "os.getenv()");
             const char* name_arg = cool_to_str(args[0]);
             const char* value = getenv(name_arg);
             if (!value) return cv_nil();
             return cv_str(strdup(value));
+        }
+        if (strcmp(name, "environ") == 0 && nargs == 0) {
+            if (!COOL_CAP_ENV) cool_capability_denied("env", "os.environ()");
+            return cool_os_environ();
+        }
+        if (strcmp(name, "getpid") == 0 && nargs == 0) {
+            if (!COOL_CAP_PROCESS) cool_capability_denied("process", "os.getpid()");
+            return cv_int((int64_t)getpid());
+        }
+        if (strcmp(name, "getppid") == 0 && nargs == 0) {
+            if (!COOL_CAP_PROCESS) cool_capability_denied("process", "os.getppid()");
+            return cv_int((int64_t)getppid());
+        }
+        if (strcmp(name, "is_alive") == 0 && nargs == 1) {
+            if (!COOL_CAP_PROCESS) cool_capability_denied("process", "os.is_alive()");
+            pid_t pid = (pid_t)cool_to_int(args[0]).payload;
+            return cv_bool(cool_pid_alive(pid));
+        }
+        if (strcmp(name, "kill") == 0 && (nargs == 1 || nargs == 2)) {
+            if (!COOL_CAP_PROCESS) cool_capability_denied("process", "os.kill()");
+            pid_t pid = (pid_t)cool_to_int(args[0]).payload;
+            int signal = nargs == 2 ? (int)cool_to_int(args[1]).payload : SIGTERM;
+            if (kill(pid, signal) != 0) {
+                fprintf(stderr, "RuntimeError: os.kill failed\n");
+                exit(1);
+            }
+            return cv_bool(1);
         }
         if (strcmp(name, "popen") == 0 && nargs == 1) {
             if (!COOL_CAP_PROCESS) cool_capability_denied("process", "os.popen()");
@@ -7574,6 +7682,15 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
             const char* path = cool_to_str(args[0]);
             if (remove(path) != 0) {
                 fprintf(stderr, "RuntimeError: os.remove failed\n");
+                exit(1);
+            }
+            return cv_nil();
+        }
+        if (strcmp(name, "rmdir") == 0 && nargs == 1) {
+            if (!COOL_CAP_FILE) cool_capability_denied("file", "os.rmdir()");
+            const char* path = cool_to_str(args[0]);
+            if (rmdir(path) != 0) {
+                fprintf(stderr, "RuntimeError: os.rmdir failed\n");
                 exit(1);
             }
             return cv_nil();

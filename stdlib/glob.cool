@@ -1,0 +1,254 @@
+import os
+import path
+
+def _normalize(value):
+    text = path.normalize(str(value)).replace("\\", "/")
+    while text.find("//") >= 0:
+        text = text.replace("//", "/")
+    if len(text) > 1 and text.endswith("/"):
+        while len(text) > 1 and text.endswith("/"):
+            text = text[:-1]
+    if text == "":
+        return "."
+    return text
+
+def _split_path(value):
+    normalized = _normalize(value)
+    parts = []
+    for raw in normalized.split("/"):
+        segment = str(raw)
+        if segment == "" or segment == ".":
+            continue
+        parts.append(segment)
+    return {
+        "absolute": normalized.startswith("/"),
+        "segments": parts,
+    }
+
+def _render(root, rel):
+    if rel == nil or rel == "" or rel == ".":
+        return _normalize(root)
+    return _normalize(path.join(root, rel))
+
+def _join_rel(prefix, rel):
+    if prefix == nil or prefix == "" or prefix == ".":
+        return rel
+    if rel == nil or rel == "" or rel == ".":
+        return _normalize(prefix)
+    return _normalize(path.join(prefix, rel))
+
+def _walk_collect(root, current_rel, include_dirs, hidden):
+    out = []
+    current_path = _render(root, current_rel)
+    if current_rel != "" and include_dirs:
+        out.append(current_rel)
+    entries = os.listdir(current_path)
+    entries.sort()
+    for name in entries:
+        name = str(name)
+        if not hidden and name.startswith("."):
+            continue
+        child_rel = _join_rel(current_rel, name)
+        child_path = _render(root, child_rel)
+        if os.isdir(child_path):
+            for child in _walk_collect(root, child_rel, include_dirs, hidden):
+                out.append(child)
+        else:
+            out.append(child_rel)
+    return out
+
+def _walk_relative(root, include_dirs=false, hidden=false):
+    root = _normalize(root)
+    if not os.exists(root):
+        return []
+    if not os.isdir(root):
+        return [""]
+    return _walk_collect(root, "", include_dirs, hidden)
+
+def walk(root=".", include_dirs=false, hidden=false):
+    root = _normalize(root)
+    out = []
+    if not os.exists(root):
+        return out
+    if os.isdir(root):
+        if include_dirs:
+            out.append(root)
+        for rel in _walk_relative(root, include_dirs, hidden):
+            out.append(_render(root, rel))
+        return out
+    out.append(root)
+    return out
+
+def _find_char(text, target, start=0):
+    idx = int(start)
+    while idx < len(text):
+        if text[idx] == target:
+            return idx
+        idx += 1
+    return -1
+
+def _segment_has_magic(segment):
+    text = str(segment)
+    return text.find("*") >= 0 or text.find("?") >= 0 or text.find("[") >= 0
+
+def has_magic(pattern):
+    info = _split_path(pattern)
+    for segment in info["segments"]:
+        if segment == "**" or _segment_has_magic(segment):
+            return true
+    return false
+
+def _class_match(spec, ch):
+    text = str(spec)
+    idx = 0
+    negate = false
+    if len(text) > 0 and (text[0] == "!" or text[0] == "^"):
+        negate = true
+        idx = 1
+    matched = false
+    while idx < len(text):
+        current = text[idx]
+        if idx + 2 < len(text) and text[idx + 1] == "-" and text[idx + 2] != "]":
+            if ord(current) <= ord(ch) and ord(ch) <= ord(text[idx + 2]):
+                matched = true
+            idx += 3
+        else:
+            if current == ch:
+                matched = true
+            idx += 1
+    if negate:
+        return not matched
+    return matched
+
+def _match_segment_at(pattern, p_idx, text, t_idx):
+    while p_idx < len(pattern):
+        char = pattern[p_idx]
+        if char == "*":
+            while p_idx + 1 < len(pattern) and pattern[p_idx + 1] == "*":
+                p_idx += 1
+            if p_idx == len(pattern) - 1:
+                return true
+            scan = t_idx
+            while scan <= len(text):
+                if _match_segment_at(pattern, p_idx + 1, text, scan):
+                    return true
+                scan += 1
+            return false
+        if t_idx >= len(text):
+            return false
+        if char == "?":
+            p_idx += 1
+            t_idx += 1
+            continue
+        if char == "[":
+            close = _find_char(pattern, "]", p_idx + 1)
+            if close < 0:
+                if text[t_idx] != char:
+                    return false
+                p_idx += 1
+                t_idx += 1
+                continue
+            if not _class_match(pattern[p_idx + 1:close], text[t_idx]):
+                return false
+            p_idx = close + 1
+            t_idx += 1
+            continue
+        if text[t_idx] != char:
+            return false
+        p_idx += 1
+        t_idx += 1
+    return t_idx == len(text)
+
+def _match_segment(pattern, text):
+    return _match_segment_at(str(pattern), 0, str(text), 0)
+
+def _match_parts(pattern_parts, p_idx, candidate_parts, c_idx):
+    if p_idx >= len(pattern_parts):
+        return c_idx >= len(candidate_parts)
+    part = pattern_parts[p_idx]
+    if part == "**":
+        if p_idx == len(pattern_parts) - 1:
+            return true
+        scan = c_idx
+        while scan <= len(candidate_parts):
+            if _match_parts(pattern_parts, p_idx + 1, candidate_parts, scan):
+                return true
+            scan += 1
+        return false
+    if c_idx >= len(candidate_parts):
+        return false
+    if not _match_segment(part, candidate_parts[c_idx]):
+        return false
+    return _match_parts(pattern_parts, p_idx + 1, candidate_parts, c_idx + 1)
+
+def matches(pattern, candidate):
+    pattern_info = _split_path(pattern)
+    candidate_info = _split_path(candidate)
+    if pattern_info["absolute"] != candidate_info["absolute"]:
+        return false
+    return _match_parts(pattern_info["segments"], 0, candidate_info["segments"], 0)
+
+def _anchor_from_pattern(segments):
+    out = []
+    for segment in segments:
+        if segment == "**" or _segment_has_magic(segment):
+            break
+        out.append(segment)
+    return out
+
+def _collect_unique(values):
+    out = []
+    seen = {}
+    for value in values:
+        key = str(value)
+        if seen.get(key, false):
+            continue
+        seen[key] = true
+        out.append(key)
+    out.sort()
+    return out
+
+def glob(pattern, root=".", include_dirs=false, hidden=false):
+    pattern = _normalize(pattern)
+    scan_hidden = hidden or pattern.startswith(".") or pattern.find("/.") >= 0
+    results = []
+    if path.isabs(pattern):
+        info = _split_path(pattern)
+        anchor_parts = _anchor_from_pattern(info["segments"])
+        base = "/"
+        if len(anchor_parts) > 0:
+            base = "/" + "/".join(anchor_parts)
+        for candidate in walk(base, true, scan_hidden):
+            if not include_dirs and os.isdir(candidate):
+                continue
+            if matches(pattern, candidate):
+                results.append(candidate)
+        return _collect_unique(results)
+    root = _normalize(root)
+    if not os.exists(root):
+        return []
+    candidates = []
+    if os.isdir(root):
+        if include_dirs:
+            candidates.append("")
+        for rel in _walk_relative(root, true, scan_hidden):
+            candidates.append(rel)
+    else:
+        candidates.append(path.basename(root))
+        root = path.dirname(root)
+    for candidate_rel in candidates:
+        full = _render(root, candidate_rel)
+        if not include_dirs and os.exists(full) and os.isdir(full):
+            continue
+        match_path = candidate_rel
+        if match_path == nil or match_path == "":
+            match_path = path.basename(full)
+        if matches(pattern, match_path):
+            results.append(full)
+    return _collect_unique(results)
+
+def rglob(root, pattern="*", include_dirs=false, hidden=false):
+    nested = str(pattern)
+    if nested == "" or nested == ".":
+        nested = "*"
+    return glob("**/" + nested, root, include_dirs, hidden)

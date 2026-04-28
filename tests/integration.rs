@@ -22,6 +22,10 @@ fn unique_temp_dir(stem: &str) -> std::path::PathBuf {
     unique_temp_path(stem, "dir")
 }
 
+fn cool_quote_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn cool_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cool")
 }
@@ -477,6 +481,136 @@ print(locale.match("en-AU", ["fr-FR", "en-GB", "de-DE"]))
 "#,
     )
     .unwrap();
+}
+
+fn phase6_filesystem_os_source(base: &std::path::Path) -> String {
+    let base = cool_quote_path(base);
+    format!(
+        r#"import fswatch
+import glob
+import os
+import path
+import process
+import tempfile
+
+base = "{base}"
+os.mkdir(path.join(base, "src"))
+os.mkdir(path.join(base, "src", "nested"))
+os.mkdir(path.join(base, "docs"))
+f = open(path.join(base, "src", "main.cool"), "w")
+f.write("main\n")
+f.close()
+f = open(path.join(base, "src", "nested", "helper.cool"), "w")
+f.write("helper\n")
+f.close()
+f = open(path.join(base, "docs", "readme.txt"), "w")
+f.write("docs\n")
+f.close()
+f = open(path.join(base, ".hidden.cool"), "w")
+f.write("hidden\n")
+f.close()
+
+print(glob.matches("src/**/*.cool", "src/nested/helper.cool"))
+matches = glob.glob("**/*.cool", base)
+print(len(matches))
+print(path.basename(matches[0]))
+print(path.basename(matches[1]))
+hidden = glob.glob("*.cool", base, false, true)
+print(len(hidden))
+walked = glob.walk(path.join(base, "src"), true, false)
+print(len(walked))
+tmp_file = tempfile.named_file("note-", ".txt", base)
+print(path.basename(tmp_file.path).startswith("note-"))
+f = tmp_file.open_file("w")
+f.write("note")
+f.close()
+print(tmp_file.exists())
+close(tmp_file)
+print(path.exists(tmp_file.path))
+tmp_dir = tempfile.named_dir("work-", "", base)
+f = open(tmp_dir.join("child.txt"), "w")
+f.write("child")
+f.close()
+tmp_dir.keep()
+close(tmp_dir)
+print(path.exists(tmp_dir.path))
+tempfile.cleanup(tmp_dir)
+print(path.exists(tmp_dir.path))
+plain_dir = tempfile.mkdtemp("dir-", "", base)
+print(path.basename(plain_dir).startswith("dir-"))
+tempfile.cleanup(plain_dir)
+plain_file = tempfile.mkstemp("plain-", ".log", base)
+print(path.basename(plain_file).startswith("plain-"))
+tempfile.cleanup(plain_file)
+print(process.pid() > 0)
+parent = process.ppid()
+print(parent == nil or parent >= 0)
+print(process.getenv("COOL_PHASE6_TOKEN") == "present")
+env_map = process.environ()
+print(env_map["COOL_PHASE6_TOKEN"])
+print(process.is_alive(process.pid()))
+print(process.signal_number("term"))
+print(process.signal_name(15))
+print(process.info()["runtime"])
+snap_before = fswatch.snapshot(base, {{"hidden": true, "include_dirs": false}})
+tempfile.cleanup(path.join(base, "docs", "readme.txt"))
+f = open(path.join(base, "src", "nested", "helper.cool"), "w")
+f.write("helper updated and longer\n")
+f.close()
+f = open(path.join(base, "new.cool"), "w")
+f.write("new\n")
+f.close()
+snap_after = fswatch.snapshot(base, {{"hidden": true, "include_dirs": false}})
+events = fswatch.diff(snap_before, snap_after)
+print(len(events))
+created = false
+deleted = false
+modified = false
+for event in events:
+    kind = event["kind"]
+    if kind == "created" and path.basename(event["path"]) == "new.cool":
+        created = true
+    if kind == "deleted" and path.basename(event["path"]) == "readme.txt":
+        deleted = true
+    if kind == "modified" and path.basename(event["path"]) == "helper.cool":
+        modified = true
+print(created)
+print(deleted)
+print(modified)
+print(len(fswatch.watch(base, 0.01, 0.03, {{"hidden": true, "include_dirs": false}})) == 0)
+"#
+    )
+}
+
+fn expected_phase6_filesystem_os_lines(runtime: &str) -> Vec<String> {
+    vec![
+        "true".to_string(),
+        "2".to_string(),
+        "main.cool".to_string(),
+        "helper.cool".to_string(),
+        "1".to_string(),
+        "4".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "present".to_string(),
+        "true".to_string(),
+        "15".to_string(),
+        "TERM".to_string(),
+        runtime.to_string(),
+        "3".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+    ]
 }
 
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
@@ -7136,6 +7270,38 @@ fn test_phase6_pass2_stdlib_modules_in_vm() {
             "en-GB",
         ]
     );
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_filesystem_os_modules_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_phase6_fs_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let output = run_cool_with_args_and_env(
+        &phase6_filesystem_os_source(&temp_dir),
+        &[],
+        &[("COOL_PHASE6_TOKEN", "present")],
+    )
+    .unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_filesystem_os_lines("interpreter"));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_filesystem_os_modules_in_vm() {
+    let temp_dir = unique_temp_dir("cool_phase6_fs_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).unwrap();
+    let output = run_cool_with_args_and_env(
+        &phase6_filesystem_os_source(&temp_dir),
+        &["--vm"],
+        &[("COOL_PHASE6_TOKEN", "present")],
+    )
+    .unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_filesystem_os_lines("vm"));
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
