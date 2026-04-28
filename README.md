@@ -27,7 +27,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - List comprehensions, lambda expressions, ternary expressions
 - `nonlocal` / `global`, `assert`, `with` / context managers
 - `import math`, `import os`, `import sys`, `import path`, `import platform`, `import core`, `import csv`, `import datetime`, `import hashlib`, `import toml`, `import yaml`, `import sqlite`, `import http`, `import argparse`, `import logging`, `import test`
-- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket`, `import glob`, `import tempfile`, `import process`, `import fswatch`, `import daemon`, `import sandbox`, `import sync`, and `import store` (`http` requires host `curl`)
+- `import string`, `import list`, `import json`, `import re`, `import time`, `import random`, `import collections`, `import subprocess`, `import socket`, `import url`, `import websocket`, `import rpc`, `import graphql`, `import mail`, `import feed`, `import calendar`, `import cluster`, `import glob`, `import tempfile`, `import process`, `import fswatch`, `import daemon`, `import sandbox`, `import sync`, and `import store` (`http` requires host `curl`)
 - `import ffi` — call C functions from shared libraries at runtime
 - Project-level capability policy via `[capabilities]` in `cool.toml` for file, network, env, and process access
 - LLVM-native `extern def` declarations with symbol/link/ownership metadata
@@ -46,6 +46,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Bundled typed error helpers: `import option` and `import result`
 - Bundled data/text modules: `import bytes`, `import base64`, `import codec`, `import html`, `import xml`, `import unicode`, `import locale`, `import config`, and `import schema`
 - Bundled filesystem/OS modules: `import glob`, `import tempfile`, `import process`, `import fswatch`, `import daemon`, `import sandbox`, `import sync`, and `import store`
+- Bundled networking/service modules: `import url`, `import websocket`, `import rpc`, `import graphql`, `import mail`, `import feed`, `import calendar`, and `import cluster`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
@@ -191,6 +192,43 @@ svc.start()
 svc.wait(1.0)
 print(svc.status()["exit_code"])
 close(tmp)
+```
+
+### Networking Modules
+
+Bundled networking/service helpers now cover URL parsing, TCP/UDP sockets, websockets, RPC-style routing, GraphQL, mail workflows, feeds, recurring calendars, and simple cluster coordination:
+
+```python
+import calendar
+import graphql
+import rpc
+import socket
+import url
+import websocket
+
+def handle_sum(params, message):
+    return params["a"] + params["b"]
+
+parsed = url.parse("ws://127.0.0.1:9000/chat?room=ops")
+print(parsed["scheme"], parsed["host"], parsed["path"])
+
+udp = socket.connect_udp("127.0.0.1", 9001)
+udp.send_bytes([1, 2, 3])
+print(udp.recv_bytes(16))
+
+routes = rpc.router()
+rpc.register(routes, "sum", handle_sum)
+reply = rpc.dispatch(routes, rpc.request(1, "sum", {"a": 2, "b": 3}))
+print(reply["result"])
+
+query = graphql.operation("query", [graphql.field("status")])
+print(graphql.render(query))
+
+req = websocket.request("ws://127.0.0.1:9000/chat")
+print(req["headers"]["Sec-WebSocket-Key"])
+
+rule = {"start": "2024-01-01 09:00:00", "freq": "daily", "count": 3}
+print(calendar.format_time(calendar.occurrences(rule, 3)[1]))
 ```
 
 ### Jobs Module
@@ -456,7 +494,7 @@ cool build --linker-script=link.ld hello.cool  # emits → ./hello.o, then links
 
 `--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`. `--entry <symbol>` / `[build].entry` let you control the final linker entry for no-libc or kernel-style outputs, while `--cpu` / `--cpu-features` thread target tuning through the LLVM target machine.
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, top-level typed parameters/return types, and generic defs lowered onto the shared dynamic runtime), enums/tagged unions with `match`, generic structs/unions, classes with `__init__`, inheritance, methods, `implements`, and `super()`, `print()`, `str()`, `isinstance()`, `copy()`, `clone()`, `close()`, `panic()`, `abort()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `runtime_profile`, `memory_model`, `panic_policy`, `thread_safety`, `stdlib_split`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), bundled `import std.memory` / `import std.runtime`, native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`, `loads_lines`, `dumps_lines`, `pointer`, `transform`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, top-level typed parameters/return types, and generic defs lowered onto the shared dynamic runtime), enums/tagged unions with `match`, generic structs/unions, classes with `__init__`, inheritance, methods, `implements`, and `super()`, `print()`, `str()`, `isinstance()`, `copy()`, `clone()`, `close()`, `panic()`, `abort()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `runtime_profile`, `memory_model`, `panic_policy`, `thread_safety`, `stdlib_split`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), bundled `import std.memory` / `import std.runtime`, native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import socket` (`connect`, `listen`, `accept`, `connect_udp`, `bind_udp`, `send`, `recv`, `sendto`, `recvfrom`, address helpers, and byte APIs), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`, `loads_lines`, `dumps_lines`, `pointer`, `transform`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** closures/lambdas.
 
@@ -484,6 +522,8 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import yaml` (`loads`, `dumps`) | ✅ | ✅ | ✅ |
 | `import sqlite` (`execute`, `query`, `scalar`) | ✅ | ✅ | ✅ |
 | `import http` (`get`, `post`, `head`, `getjson`; requires `curl`) | ✅ | ✅ | ✅ |
+| `import socket` (`connect`, `listen`, `accept`, `connect_udp`, `bind_udp`, `send`, `recv`, `sendto`, `recvfrom`, address helpers, byte APIs) | ✅ | ✅ | ✅ |
+| Bundled networking modules (`url`, `websocket`, `rpc`, `graphql`, `mail`, `feed`, `calendar`, `cluster`) | ✅ | ✅ | ✅ |
 | `import argparse` (`parse`, `help`) | ✅ | ✅ | ✅ |
 | `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`) | ✅ | ✅ | ✅ |
 | `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`) | ✅ | ✅ | ✅ |

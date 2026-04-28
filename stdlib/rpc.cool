@@ -1,0 +1,101 @@
+import json
+
+private def _fail(message):
+    raise "rpc: " + message
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+def request(id, method, params=nil):
+    msg = {"jsonrpc": "2.0", "id": id, "method": str(method)}
+    if params != nil:
+        msg["params"] = params
+    return msg
+
+def notification(method, params=nil):
+    msg = {"jsonrpc": "2.0", "method": str(method)}
+    if params != nil:
+        msg["params"] = params
+    return msg
+
+def response(id, result=nil):
+    msg = {"jsonrpc": "2.0", "id": id}
+    msg["result"] = result
+    return msg
+
+def error(id, code, message, data=nil):
+    err = {"code": int(code), "message": str(message)}
+    if data != nil:
+        err["data"] = data
+    return {"jsonrpc": "2.0", "id": id, "error": err}
+
+def is_request(message):
+    return type(message) == "dict" and message.get("method") != nil and message.get("id") != nil
+
+def is_notification(message):
+    return type(message) == "dict" and message.get("method") != nil and message.get("id") == nil
+
+def is_response(message):
+    return type(message) == "dict" and message.get("id") != nil and message.get("result") != nil
+
+def is_error(message):
+    return type(message) == "dict" and message.get("error") != nil
+
+def encode(message):
+    return json.dumps(message)
+
+def decode(text):
+    return json.loads(str(text))
+
+def router():
+    return {}
+
+def register(routes, name, handler):
+    routes[str(name)] = handler
+    return routes
+
+private def _lookup_handler(routes, method):
+    if type(routes) == "dict" and method in routes:
+        return routes[method]
+    return nil
+
+def dispatch(routes, message):
+    if type(message) != "dict":
+        return error(nil, -32600, "invalid request")
+    method = message.get("method")
+    if method == nil:
+        return error(message.get("id"), -32600, "invalid request")
+    handler = _lookup_handler(routes, method)
+    if handler == nil:
+        return error(message.get("id"), -32601, "method not found", {"method": method})
+    try:
+        result = handler(message.get("params"), message)
+        if message.get("id") == nil:
+            return nil
+        return response(message.get("id"), result)
+    except as err:
+        return error(message.get("id"), -32000, str(err))
+
+def serve_line(conn, routes):
+    raw = conn.readline()
+    if raw == "":
+        return nil
+    msg = decode(raw)
+    reply = dispatch(routes, msg)
+    if reply != nil:
+        conn.send(encode(reply) + "\n")
+    return reply
+
+def call_line(conn, method, params=nil, id=1):
+    conn.send(encode(request(id, method, params)) + "\n")
+    reply = decode(conn.readline())
+    if is_error(reply):
+        err = _get(reply, "error", {})
+        _fail(str(_get(err, "message", "remote error")))
+    return reply.get("result")
+
+def notify_line(conn, method, params=nil):
+    conn.send(encode(notification(method, params)) + "\n")
+    return nil

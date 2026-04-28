@@ -46,6 +46,16 @@ All notable changes to the Cool language project.
 - The shared `import os` runtime surface now includes `stat()`, `tmpdir()`, `environ()`, `getpid()`, `getppid()`, `is_alive()`, `kill()`, and `rmdir()` across interpreter, VM, and hosted native builds so the new stdlib modules sit on the same capability-enforced substrate
 - While landing the new tranche, the stdlib implementation was also hardened against real cross-runtime differences: helper exports are now private where appropriate, interpreter-visible exception scopes no longer leak into the public APIs, and the native backend path avoids unsupported constructs such as forward class references, `del`, and method/default-argument dispatch traps
 
+### Phase 6 Follow-on — Networking And Services Modules
+
+- `import socket` now covers TCP plus UDP across interpreter, VM, and native builds: `connect_udp()`, `bind_udp()`, `sendto()` / `recvfrom()`, `local_addr()` / `peer_addr()`, and binary-safe `send_bytes()` / `recv_bytes()` / `sendto_bytes()` / `recvfrom_bytes()` are available alongside the existing stream APIs
+- New bundled `stdlib/url.cool` adds URL parsing, formatting, joining, query-string encode/decode, and percent escaping so higher-level network helpers do not have to reimplement URL logic ad hoc
+- New bundled `stdlib/websocket.cool` adds client handshakes, server-side `accept_client()` flows, frame encode/decode, text/JSON/binary helpers, and ping/pong/close handling that now behaves consistently in interpreter, VM, and hosted native builds
+- New bundled `stdlib/rpc.cool`, `stdlib/graphql.cool`, and `stdlib/feed.cool` add JSON-RPC style routing, GraphQL query/render/execute helpers, and RSS/Atom polling plus feed rendering on top of the shared HTTP/socket surface
+- New bundled `stdlib/mail.cool` and `stdlib/calendar.cool` add SMTP/IMAP-style workflows plus recurrence, agenda, reminder, and date-range planning helpers for automation-heavy apps and tools
+- New bundled `stdlib/cluster.cool` adds simple distributed coordination primitives on top of `store`: membership, leases, barriers, leader selection, and file-backed state for multi-node experiments
+- While landing the networking tranche, the bundled modules were tightened for true cross-runtime parity: native builds now reject fewer stdlib portability traps because the new code avoids open-ended slice forms and string-method argument patterns that the interpreter/VM had tolerated more loosely
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

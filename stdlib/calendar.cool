@@ -1,0 +1,252 @@
+import datetime
+
+private def _fail(message):
+    raise "calendar: " + message
+
+private def _pad(value, width):
+    text = str(int(value))
+    while len(text) < int(width):
+        text = "0" + text
+    return text
+
+private def _timestamp(value, fmt=nil):
+    if value == nil:
+        return nil
+    kind = type(value)
+    if kind == "int" or kind == "float":
+        return float(value)
+    if fmt == nil:
+        return datetime.parse(str(value))
+    return datetime.parse(str(value), str(fmt))
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _days_in_month(year, month):
+    m = int(month)
+    if m == 1 or m == 3 or m == 5 or m == 7 or m == 8 or m == 10 or m == 12:
+        return 31
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        return 30
+    leap = (int(year) % 4 == 0 and int(year) % 100 != 0) or (int(year) % 400 == 0)
+    if leap:
+        return 29
+    return 28
+
+private def _compose(parts):
+    text = _pad(parts["year"], 4) + "-" + _pad(parts["month"], 2) + "-" + _pad(parts["day"], 2)
+    text = text + " " + _pad(parts["hour"], 2) + ":" + _pad(parts["minute"], 2) + ":" + _pad(parts["second"], 2)
+    return datetime.parse(text)
+
+private def _add_months(timestamp, months):
+    parts = datetime.parts(timestamp)
+    total = (parts["year"] * 12) + (parts["month"] - 1) + int(months)
+    year = int(total / 12)
+    month = total - (year * 12) + 1
+    day = parts["day"]
+    limit = _days_in_month(year, month)
+    if day > limit:
+        day = limit
+    return _compose({
+        "year": year,
+        "month": month,
+        "day": day,
+        "hour": parts["hour"],
+        "minute": parts["minute"],
+        "second": parts["second"],
+    })
+
+private def _weekdays(spec, start_ts):
+    if _get(spec, "byweekday") != nil:
+        out = []
+        for item in _get(spec, "byweekday"):
+            out.append(int(item))
+        return out
+    return [datetime.parts(start_ts)["weekday"]]
+
+private def _normalize(spec):
+    if type(spec) != "dict":
+        _fail("rule() expects a dict")
+    freq = str(_get(spec, "freq", "once")).strip().lower()
+    allowed = ["once", "secondly", "minutely", "hourly", "daily", "weekly", "monthly", "yearly"]
+    if freq not in allowed:
+        _fail("unsupported frequency '" + freq + "'")
+    start = _timestamp(_get(spec, "start", datetime.now()), spec.get("format"))
+    interval = int(_get(spec, "interval", 1))
+    if interval < 1:
+        _fail("interval must be >= 1")
+    rule = {
+        "freq": freq,
+        "start": start,
+        "interval": interval,
+        "count": _get(spec, "count"),
+        "until": _timestamp(_get(spec, "until"), spec.get("format")),
+    }
+    if _get(spec, "byweekday") != nil:
+        rule["byweekday"] = _weekdays(spec, start)
+    return rule
+
+def rule(spec):
+    return _normalize(spec)
+
+private def _limit(rule, generated):
+    if _get(rule, "count") == nil:
+        return false
+    return generated >= int(_get(rule, "count"))
+
+private def _duration_for(freq, interval):
+    step = int(interval)
+    if freq == "secondly":
+        return step
+    if freq == "minutely":
+        return step * 60
+    if freq == "hourly":
+        return step * 3600
+    if freq == "daily":
+        return step * 86400
+    return nil
+
+def next(spec, after=nil):
+    hits = occurrences(spec, 1, after)
+    if len(hits) == 0:
+        return nil
+    return hits[0]
+
+def occurrences(spec, limit=10, after=nil):
+    rule = _normalize(spec)
+    out = []
+    max_items = int(limit)
+    if max_items < 0:
+        max_items = 0
+    start = rule["start"]
+    cutoff = _timestamp(after)
+    if cutoff == nil:
+        cutoff = start - 0.000001
+    generated = 0
+    until = _get(rule, "until")
+
+    if rule["freq"] == "once":
+        if not _limit(rule, generated):
+            generated = 1
+            if (until == nil or start <= until) and start > cutoff and len(out) < max_items:
+                out.append(start)
+        return out
+
+    step = _duration_for(rule["freq"], rule["interval"])
+    if step != nil:
+        current = start
+        while len(out) < max_items:
+            if until != nil and current > until:
+                break
+            if _limit(rule, generated):
+                break
+            generated = generated + 1
+            if current > cutoff:
+                out.append(current)
+            current = datetime.add_seconds(current, step)
+        return out
+
+    if rule["freq"] == "weekly":
+        weekdays = _weekdays(rule, start)
+        current = start
+        start_weekday = datetime.parts(start)["weekday"]
+        while len(out) < max_items:
+            if until != nil and current > until:
+                break
+            if _limit(rule, generated):
+                break
+            parts = datetime.parts(current)
+            delta_days = int(datetime.diff_seconds(current, start) / 86400)
+            weeks = int(delta_days / 7)
+            if weeks % rule["interval"] == 0 and parts["weekday"] in weekdays:
+                generated = generated + 1
+                if current > cutoff:
+                    out.append(current)
+            current = datetime.add_seconds(current, 86400)
+        return out
+
+    current = start
+    while len(out) < max_items:
+        if until != nil and current > until:
+            break
+        if _limit(rule, generated):
+            break
+        generated = generated + 1
+        if current > cutoff:
+            out.append(current)
+        if rule["freq"] == "monthly":
+            current = _add_months(current, rule["interval"])
+        else:
+            current = _add_months(current, rule["interval"] * 12)
+    return out
+
+def between(spec, range_start, range_end, limit=100):
+    start_ts = _timestamp(range_start)
+    end_ts = _timestamp(range_end)
+    if start_ts == nil or end_ts == nil:
+        _fail("between() requires both range_start and range_end")
+    if end_ts < start_ts:
+        return []
+    hits = occurrences(spec, int(limit), datetime.add_seconds(start_ts, -0.000001))
+    out = []
+    for item in hits:
+        if item >= start_ts and item <= end_ts:
+            out.append(item)
+    return out
+
+def reminder(title, when_ts, lead_seconds=0, meta=nil):
+    fire = _timestamp(when_ts)
+    lead = float(lead_seconds)
+    out = {
+        "title": str(title),
+        "at": fire,
+        "lead_seconds": lead,
+        "remind_at": datetime.add_seconds(fire, -lead),
+    }
+    if meta != nil:
+        out["meta"] = copy(meta)
+    return out
+
+def plan(title, schedule_rule, count=10):
+    hits = occurrences(schedule_rule, int(count))
+    out = []
+    for item in hits:
+        out.append({"title": str(title), "at": item})
+    return out
+
+def agenda(items, range_start, range_end):
+    start_ts = _timestamp(range_start)
+    end_ts = _timestamp(range_end)
+    out = []
+    for item in items:
+        if type(item) != "dict":
+            continue
+        if item.get("rule") != nil:
+            for hit in between(item.get("rule"), start_ts, end_ts, _get(item, "limit", 32)):
+                out.append({
+                    "title": _get(item, "title", ""),
+                    "at": hit,
+                    "meta": item.get("meta"),
+                })
+            continue
+        point = _timestamp(item.get("at"))
+        if point != nil and point >= start_ts and point <= end_ts:
+            out.append(copy(item))
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if _get(out[j], "at", 0) < _get(out[i], "at", 0):
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+def format_time(timestamp, fmt=nil):
+    if fmt == nil:
+        return datetime.format(_timestamp(timestamp))
+    return datetime.format(_timestamp(timestamp), str(fmt))

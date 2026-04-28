@@ -1,0 +1,191 @@
+import datetime
+import hashlib
+import http
+import xml
+
+private def _fail(message):
+    raise "feed: " + message
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _first_text(node, path, fallback=""):
+    found = xml.find(node, path)
+    if found == nil:
+        return fallback
+    return xml.text_content(found)
+
+private def _all_texts(node, path):
+    out = []
+    for item in xml.find_all(node, path):
+        out.append(xml.text_content(item))
+    return out
+
+private def _entry_link(node):
+    for link in xml.find_all(node, "link"):
+        attrs = _get(link, "attrs", {})
+        if _get(attrs, "rel") == "alternate" and _get(attrs, "href") != nil:
+            return _get(attrs, "href")
+        if _get(attrs, "href") != nil:
+            return _get(attrs, "href")
+    return ""
+
+private def _rss_item(node):
+    link = _first_text(node, "link")
+    guid = _first_text(node, "guid")
+    title = _first_text(node, "title")
+    item_id = guid
+    if item_id == "":
+        item_id = link
+    if item_id == "":
+        item_id = hashlib.sha1(title + "|" + _first_text(node, "pubDate"))
+    return {
+        "id": item_id,
+        "title": title,
+        "link": link,
+        "summary": _first_text(node, "description"),
+        "content": _first_text(node, "content"),
+        "published": _first_text(node, "pubDate"),
+        "updated": _first_text(node, "pubDate"),
+        "authors": _all_texts(node, "author"),
+        "tags": _all_texts(node, "category"),
+    }
+
+private def _atom_entry(node):
+    link = _entry_link(node)
+    item_id = _first_text(node, "id")
+    if item_id == "":
+        item_id = link
+    if item_id == "":
+        item_id = hashlib.sha1(_first_text(node, "title") + "|" + _first_text(node, "updated"))
+    authors = []
+    for author in xml.find_all(node, "author"):
+        name = _first_text(author, "name")
+        if name != "":
+            authors.append(name)
+    return {
+        "id": item_id,
+        "title": _first_text(node, "title"),
+        "link": link,
+        "summary": _first_text(node, "summary"),
+        "content": _first_text(node, "content"),
+        "published": _first_text(node, "published"),
+        "updated": _first_text(node, "updated"),
+        "authors": authors,
+        "tags": _all_texts(node, "category"),
+    }
+
+def parse(text):
+    root = xml.loads(text)
+    if root.get("name") == "rss":
+        channel = xml.find(root, "channel")
+        if channel == nil:
+            _fail("rss feed is missing a channel")
+        items = []
+        for item in xml.find_all(channel, "item"):
+            items.append(_rss_item(item))
+        return {
+            "kind": "rss",
+            "title": _first_text(channel, "title"),
+            "link": _first_text(channel, "link"),
+            "subtitle": _first_text(channel, "description"),
+            "updated": _first_text(channel, "lastBuildDate"),
+            "items": items,
+        }
+    if root.get("name") == "feed":
+        items = []
+        for item in xml.find_all(root, "entry"):
+            items.append(_atom_entry(item))
+        return {
+            "kind": "atom",
+            "title": _first_text(root, "title"),
+            "link": _entry_link(root),
+            "subtitle": _first_text(root, "subtitle"),
+            "updated": _first_text(root, "updated"),
+            "items": items,
+        }
+    _fail("unsupported feed root '" + str(root.get("name")) + "'")
+
+def item_key(item):
+    if item.get("id") != "":
+        return item.get("id")
+    if item.get("link") != "":
+        return item.get("link")
+    return hashlib.sha1(str(item))
+
+def dedupe(items, seen=nil):
+    known = {}
+    if seen != nil:
+        if type(seen) == "dict":
+            for pair in seen.items():
+                known[pair[0]] = pair[1]
+        else:
+            for item in seen:
+                known[str(item)] = true
+    fresh = []
+    for item in items:
+        key = item_key(item)
+        if key in known:
+            continue
+        known[key] = true
+        fresh.append(item)
+    out_seen = []
+    for pair in known.items():
+        out_seen.append(pair[0])
+    out_seen.sort()
+    return {"items": fresh, "seen": out_seen}
+
+def poll(target, state=nil, headers=nil):
+    body = http.get(str(target), headers)
+    parsed = parse(body)
+    remembered = []
+    if type(state) == "dict":
+        remembered = _get(state, "seen", [])
+    result = dedupe(_get(parsed, "items", []), remembered)
+    return {
+        "feed": parsed,
+        "items": _get(parsed, "items", []),
+        "new": result["items"],
+        "seen": result["seen"],
+        "fetched_at": datetime.now(),
+    }
+
+def render(feed, kind="rss"):
+    items = []
+    for item in _get(feed, "items", []):
+        rendered = xml.element("item", {}, [
+            xml.element("title", {}, [_get(item, "title", "")]),
+            xml.element("link", {}, [_get(item, "link", "")]),
+            xml.element("guid", {}, [item_key(item)]),
+            xml.element("description", {}, [_get(item, "summary", _get(item, "content", ""))]),
+        ])
+        items.append(rendered)
+    if str(kind).lower() == "atom":
+        entries = []
+        for item in _get(feed, "items", []):
+            rendered = xml.element("entry", {}, [
+                xml.element("id", {}, [item_key(item)]),
+                xml.element("title", {}, [_get(item, "title", "")]),
+                xml.element("updated", {}, [_get(item, "updated", _get(item, "published", ""))]),
+                xml.element("link", {"href": _get(item, "link", "")}, []),
+                xml.element("summary", {}, [_get(item, "summary", _get(item, "content", ""))]),
+            ])
+            entries.append(rendered)
+        root = xml.element("feed", {"xmlns": "http://www.w3.org/2005/Atom"}, [
+            xml.element("title", {}, [_get(feed, "title", "")]),
+            xml.element("updated", {}, [_get(feed, "updated", "")]),
+        ])
+        for entry in entries:
+            _get(root, "children", []).append(entry)
+        return xml.dumps(root, true)
+    channel = xml.element("channel", {}, [
+        xml.element("title", {}, [_get(feed, "title", "")]),
+        xml.element("link", {}, [_get(feed, "link", "")]),
+        xml.element("description", {}, [_get(feed, "subtitle", "")]),
+    ])
+    for item in items:
+        _get(channel, "children", []).append(item)
+    root = xml.element("rss", {"version": "2.0"}, [channel])
+    return xml.dumps(root, true)

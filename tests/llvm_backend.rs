@@ -1,6 +1,6 @@
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Mutex;
@@ -867,6 +867,278 @@ fn spawn_http_test_server(expected_requests: usize) -> (String, thread::JoinHand
         );
     });
     (base_url, handle)
+}
+
+fn spawn_graphql_feed_server() -> (String, String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let graphql_url = format!("http://{addr}/graphql");
+    let feed_url = format!("http://{addr}/feed");
+    let handle = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            let first_line = request.lines().next().unwrap_or("");
+            let (status, body, content_type) = if first_line.starts_with("POST /graphql ") {
+                (
+                    "200 OK",
+                    r#"{"data":{"status":"ok","echo":"hi"}}"#.to_string(),
+                    "application/json",
+                )
+            } else if first_line.starts_with("GET /feed ") {
+                (
+                    "200 OK",
+                    "<rss version='2.0'><channel><title>T</title><link>https://x</link><description>D</description><item><title>A</title><link>https://x/a</link></item></channel></rss>".to_string(),
+                    "application/rss+xml",
+                )
+            } else {
+                ("404 Not Found", "missing".to_string(), "text/plain")
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    (graphql_url, feed_url, handle)
+}
+
+fn spawn_smtp_test_server() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(b"220 mail.test ESMTP\r\n").unwrap();
+        let reader_stream = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(reader_stream);
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            if line.starts_with("HELO ") {
+                stream.write_all(b"250 hello\r\n").unwrap();
+            } else if line.starts_with("MAIL FROM:") || line.starts_with("RCPT TO:") {
+                stream.write_all(b"250 ok\r\n").unwrap();
+            } else if line.starts_with("DATA") {
+                stream.write_all(b"354 end with .\r\n").unwrap();
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).unwrap() == 0 {
+                        break;
+                    }
+                    if line == ".\r\n" {
+                        break;
+                    }
+                }
+                stream.write_all(b"250 queued\r\n").unwrap();
+            } else if line.starts_with("QUIT") {
+                stream.write_all(b"221 bye\r\n").unwrap();
+                break;
+            } else {
+                stream.write_all(b"250 ok\r\n").unwrap();
+            }
+        }
+    });
+    (port, handle)
+}
+
+fn spawn_imap_test_server() -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.write_all(b"* OK IMAP4rev1 ready\r\n").unwrap();
+        let reader_stream = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(reader_stream);
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            let trimmed = line.trim_end();
+            let mut parts = trimmed.splitn(3, ' ');
+            let tag = parts.next().unwrap_or("");
+            let command = parts.next().unwrap_or("").to_ascii_uppercase();
+            if command == "CAPABILITY" {
+                stream
+                    .write_all(
+                        format!("* CAPABILITY IMAP4rev1 STARTTLS\r\n{tag} OK CAPABILITY completed\r\n").as_bytes(),
+                    )
+                    .unwrap();
+            } else if command == "NOOP" {
+                stream
+                    .write_all(format!("{tag} OK NOOP completed\r\n").as_bytes())
+                    .unwrap();
+            } else if command == "LOGOUT" {
+                stream
+                    .write_all(format!("* BYE logging out\r\n{tag} OK LOGOUT completed\r\n").as_bytes())
+                    .unwrap();
+                break;
+            } else {
+                stream
+                    .write_all(format!("{tag} BAD unsupported\r\n").as_bytes())
+                    .unwrap();
+            }
+        }
+    });
+    (port, handle)
+}
+
+fn spawn_udp_echo_server(expected_packets: usize) -> (u16, thread::JoinHandle<()>) {
+    let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = socket.local_addr().unwrap().port();
+    let handle = thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        for _ in 0..expected_packets {
+            let (n, addr) = socket.recv_from(&mut buf).unwrap();
+            socket.send_to(&buf[..n], addr).unwrap();
+        }
+    });
+    (port, handle)
+}
+
+fn spawn_websocket_echo_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("ws://127.0.0.1:{port}/echo");
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        assert!(request.starts_with("GET /echo HTTP/1.1"));
+        assert!(request.contains("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="));
+        stream.write_all(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n",
+        )
+        .unwrap();
+
+        let mut header = [0u8; 2];
+        stream.read_exact(&mut header).unwrap();
+        assert_eq!(header[0], 0x81);
+        let masked = (header[1] & 0x80) != 0;
+        assert!(masked);
+        let len = (header[1] & 0x7f) as usize;
+        let payload_len = if len == 126 {
+            let mut ext = [0u8; 2];
+            stream.read_exact(&mut ext).unwrap();
+            u16::from_be_bytes(ext) as usize
+        } else {
+            len
+        };
+        let mut mask = [0u8; 4];
+        stream.read_exact(&mut mask).unwrap();
+        let mut payload = vec![0u8; payload_len];
+        stream.read_exact(&mut payload).unwrap();
+        for (idx, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[idx % 4];
+        }
+        assert_eq!(String::from_utf8(payload).unwrap(), "cool");
+        stream.write_all(&[0x81, 0x04, b'p', b'o', b'n', b'g']).unwrap();
+        let _ = stream.read(&mut [0u8; 32]);
+    });
+    (url, handle)
+}
+
+fn run_native_websocket_server_case() -> Vec<String> {
+    let _guard = LLVM_BUILD_LOCK.lock().unwrap();
+    let port_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = port_listener.local_addr().unwrap().port();
+    drop(port_listener);
+
+    let cwd = std::env::current_dir().unwrap();
+    let source_path = cwd.join(unique_test_path("temp_llvm_ws_server", "cool"));
+    let binary_path = source_path.with_extension("");
+    fs::write(
+        &source_path,
+        format!(
+            r#"import websocket
+
+listener = websocket.listen("127.0.0.1", {port})
+conn = websocket.accept_client(listener)
+print(conn["request"]["path"])
+print(websocket.recv_text(conn))
+websocket.send_text(conn, "ack")
+websocket.close(conn)
+"#
+        ),
+    )
+    .unwrap();
+
+    let build_output = Command::new(cool_bin())
+        .args(["build", source_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        build_output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let child = Command::new(&binary_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut stream = loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => break stream,
+            Err(_) => {
+                assert!(
+                    Instant::now() < deadline,
+                    "native websocket server did not start in time"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+
+    stream
+        .write_all(
+            b"GET /srv HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+        )
+        .unwrap();
+    let response = read_http_request(&mut stream);
+    assert!(response.starts_with("HTTP/1.1 101"), "response:\n{response}");
+    assert!(
+        response.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+        "response:\n{response}"
+    );
+
+    let payload = b"client";
+    let mask = [1u8, 2, 3, 4];
+    let mut frame = vec![0x81, 0x80 | payload.len() as u8];
+    frame.extend_from_slice(&mask);
+    for (idx, byte) in payload.iter().enumerate() {
+        frame.push(*byte ^ mask[idx % 4]);
+    }
+    stream.write_all(&frame).unwrap();
+
+    let mut header = [0u8; 2];
+    stream.read_exact(&mut header).unwrap();
+    assert_eq!(header[0], 0x81);
+    let len = (header[1] & 0x7f) as usize;
+    let mut reply = vec![0u8; len];
+    stream.read_exact(&mut reply).unwrap();
+    assert_eq!(String::from_utf8(reply).unwrap(), "ack");
+
+    let _ = stream.read(&mut [0u8; 32]);
+    drop(stream);
+
+    let output = child.wait_with_output().unwrap();
+    cleanup_native_artifacts(&source_path, &binary_path);
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| line.to_string())
+        .collect()
 }
 
 #[test]
@@ -3307,6 +3579,138 @@ fn test_llvm_phase6_filesystem_os_modules() {
     let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_filesystem_os_lines("native"));
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_network_core_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_network_core");
+    let cluster_root = cool_quote_path(&temp_dir.join("cluster-root"));
+    let result = compile_and_run_native(&format!(
+        r#"import calendar
+import cluster
+import path
+import rpc
+import url
+
+def handle_sum(params, message):
+    return params["a"] + params["b"]
+
+u = url.parse("https://user:pass@example.com:8443/a/b?q=1#frag")
+print(u["host"])
+print(url.join("https://example.com/a/b", "../c"))
+print(url.encode_query({{"a": "1 2", "b": ["x", "y"]}}))
+routes = rpc.router()
+rpc.register(routes, "sum", handle_sum)
+print(rpc.dispatch(routes, rpc.request(1, "sum", {{"a": 2, "b": 3}}))["result"])
+print(rpc.dispatch(routes, rpc.request(2, "missing", nil))["error"]["code"])
+hits = calendar.occurrences({{"start": "2024-01-01 09:00:00", "freq": "daily", "count": 3}}, 3)
+print(len(hits))
+print(calendar.format_time(hits[1]))
+c = cluster.open_cluster("{cluster_root}", "demo", 30)
+cluster.join(c, "node-a", {{"role": "leader"}})
+cluster.join(c, "node-b", {{"role": "worker"}})
+print(cluster.leader(c)["id"])
+print(cluster.claim(c, "lease", "node-a"))
+print(cluster.barrier(c, "ready", "node-a", 1)["ready"])
+"#
+    ))
+    .unwrap();
+    let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "example.com".to_string(),
+            "https://example.com/c".to_string(),
+            "a=1+2&b=x&b=y".to_string(),
+            "5".to_string(),
+            "-32601".to_string(),
+            "3".to_string(),
+            "2024-01-02 09:00:00".to_string(),
+            "node-a".to_string(),
+            "true".to_string(),
+            "true".to_string(),
+        ]
+    );
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_graphql_feed_mail_and_socket_modules() {
+    let (graphql_url, feed_url, http_handle) = spawn_graphql_feed_server();
+    let (smtp_port, smtp_handle) = spawn_smtp_test_server();
+    let (imap_port, imap_handle) = spawn_imap_test_server();
+    let (udp_port, udp_handle) = spawn_udp_echo_server(4);
+    let (ws_url, ws_handle) = spawn_websocket_echo_server();
+    let result = compile_and_run_native(&format!(
+        r#"import feed
+import graphql
+import mail
+import socket
+import websocket
+
+query = graphql.operation("query", [graphql.field("status"), graphql.field("echo", nil, [graphql.arg("value", "hi")])])
+gql = graphql.execute("{graphql_url}", query)
+print(graphql.extract(gql, "/status"))
+print(graphql.extract(gql, "/echo"))
+msg = mail.message("from@example.com", ["to@example.com"], "Hi", "Body")
+smtp = mail.smtp_send("127.0.0.1", {smtp_port}, msg, "cool.test")
+print(smtp["recipients"][0])
+imap = mail.imap_run("127.0.0.1", {imap_port}, ["CAPABILITY"])
+print(imap["banner"].find("IMAP4rev1") >= 0)
+polled = feed.poll("{feed_url}")
+print(polled["feed"]["title"])
+print(len(polled["new"]))
+udp = socket.connect_udp("127.0.0.1", {udp_port})
+udp.send("ping")
+print(udp.recv(16))
+udp.send_bytes([0, 1, 2, 255])
+raw = udp.recv_bytes(16)
+print(raw[3])
+bind = socket.bind_udp("127.0.0.1", 0)
+bind.sendto("127.0.0.1", {udp_port}, "from-bind")
+packet = bind.recvfrom(32)
+print(packet[0])
+bind.sendto_bytes("127.0.0.1", {udp_port}, [9, 8, 7])
+packet2 = bind.recvfrom_bytes(32)
+bytes2 = packet2[0]
+print(bytes2[1])
+ws = websocket.connect("{ws_url}", nil, "dGhlIHNhbXBsZSBub25jZQ==")
+websocket.send_text(ws, "cool")
+print(websocket.recv_text(ws))
+websocket.close(ws)
+"#
+    ))
+    .unwrap();
+    let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "ok".to_string(),
+            "hi".to_string(),
+            "to@example.com".to_string(),
+            "true".to_string(),
+            "T".to_string(),
+            "1".to_string(),
+            "ping".to_string(),
+            "255".to_string(),
+            "from-bind".to_string(),
+            "8".to_string(),
+            "pong".to_string(),
+        ]
+    );
+    http_handle.join().unwrap();
+    smtp_handle.join().unwrap();
+    imap_handle.join().unwrap();
+    udp_handle.join().unwrap();
+    ws_handle.join().unwrap();
+}
+
+#[test]
+fn test_llvm_websocket_server_support() {
+    assert_eq!(
+        run_native_websocket_server_case(),
+        vec!["/srv".to_string(), "client".to_string()]
+    );
 }
 
 #[test]

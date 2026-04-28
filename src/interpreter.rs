@@ -305,6 +305,7 @@ pub struct FileHandle {
 pub enum SocketKind {
     Stream(std::net::TcpStream),
     Listener(std::net::TcpListener),
+    Datagram(std::net::UdpSocket),
 }
 
 impl std::fmt::Debug for SocketKind {
@@ -312,6 +313,7 @@ impl std::fmt::Debug for SocketKind {
         match self {
             SocketKind::Stream(s) => write!(f, "Stream({:?})", s),
             SocketKind::Listener(l) => write!(f, "Listener({:?})", l),
+            SocketKind::Datagram(s) => write!(f, "Datagram({:?})", s),
         }
     }
 }
@@ -1817,7 +1819,7 @@ impl Interpreter {
             }
             "socket" => {
                 let mut map = IndexedMap::new();
-                for fn_name in &["connect", "listen"] {
+                for fn_name in &["connect", "listen", "connect_udp", "bind_udp"] {
                     map.set(
                         Value::Str(fn_name.to_string()),
                         Value::BuiltinFn(format!("socket.{}", fn_name)),
@@ -5933,6 +5935,46 @@ class Stack:
                     peer: addr,
                 }))))
             }
+            "connect_udp" => {
+                let host = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.connect_udp() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(Value::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.connect_udp() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let bind_addr = if host.contains(':') { "[::]:0" } else { "0.0.0.0:0" };
+                let socket = std::net::UdpSocket::bind(bind_addr)
+                    .map_err(|e| self.err(&format!("socket.connect_udp() bind error: {e}")))?;
+                socket
+                    .connect(&addr)
+                    .map_err(|e| self.err(&format!("socket.connect_udp() error: {e}")))?;
+                Ok(Value::Socket(Rc::new(RefCell::new(SocketHandle {
+                    kind: SocketKind::Datagram(socket),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
+            "bind_udp" => {
+                let host = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.bind_udp() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(Value::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.bind_udp() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let socket =
+                    std::net::UdpSocket::bind(&addr).map_err(|e| self.err(&format!("socket.bind_udp() error: {e}")))?;
+                Ok(Value::Socket(Rc::new(RefCell::new(SocketHandle {
+                    kind: SocketKind::Datagram(socket),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
             other => Err(self.err(&format!("socket has no function '{other}'"))),
         }
     }
@@ -5967,7 +6009,64 @@ class Stack:
                             .map_err(|e| self.err(&format!("socket.send() error: {e}")))?;
                         Ok(Value::Int(bytes.len() as i64))
                     }
+                    SocketKind::Datagram(socket) => {
+                        let bytes = data.as_bytes();
+                        let written = socket
+                            .send(bytes)
+                            .map_err(|e| self.err(&format!("socket.send() error: {e}")))?;
+                        Ok(Value::Int(written as i64))
+                    }
                     SocketKind::Listener(_) => Err(self.err("send() on server socket")),
+                }
+            }
+            "send_bytes" => {
+                let payload = match args.into_iter().next() {
+                    Some(Value::Str(s)) => s.into_bytes(),
+                    Some(Value::List(items)) => {
+                        let borrowed = items.borrow();
+                        let mut out = Vec::with_capacity(borrowed.len());
+                        for item in borrowed.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("send_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(Value::Tuple(items)) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("send_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(_) => return Err(self.err("send_bytes() requires a string, list, or tuple")),
+                    None => return Err(self.err("send_bytes() requires 1 argument")),
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("send_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Stream(stream) => {
+                        use std::io::Write as IoWrite;
+                        stream
+                            .write_all(&payload)
+                            .map_err(|e| self.err(&format!("socket.send_bytes() error: {e}")))?;
+                        Ok(Value::Int(payload.len() as i64))
+                    }
+                    SocketKind::Datagram(socket) => {
+                        let written = socket
+                            .send(&payload)
+                            .map_err(|e| self.err(&format!("socket.send_bytes() error: {e}")))?;
+                        Ok(Value::Int(written as i64))
+                    }
+                    SocketKind::Listener(_) => Err(self.err("send_bytes() on server socket")),
                 }
             }
             "recv" => {
@@ -5989,7 +6088,47 @@ class Stack:
                             .map_err(|e| self.err(&format!("socket.recv() error: {e}")))?;
                         Ok(Value::Str(String::from_utf8_lossy(&buf[..n]).to_string()))
                     }
+                    SocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let n = socket
+                            .recv(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv() error: {e}")))?;
+                        Ok(Value::Str(String::from_utf8_lossy(&buf[..n]).to_string()))
+                    }
                     SocketKind::Listener(_) => Err(self.err("recv() on server socket")),
+                }
+            }
+            "recv_bytes" => {
+                let size = match args.into_iter().next() {
+                    Some(Value::Int(n)) => n as usize,
+                    Some(_) => return Err(self.err("recv_bytes() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recv_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Stream(stream) => {
+                        use std::io::Read;
+                        let mut buf = vec![0u8; size];
+                        let n = stream
+                            .read(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv_bytes() error: {e}")))?;
+                        Ok(Value::List(Rc::new(RefCell::new(
+                            buf[..n].iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                        ))))
+                    }
+                    SocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let n = socket
+                            .recv(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv_bytes() error: {e}")))?;
+                        Ok(Value::List(Rc::new(RefCell::new(
+                            buf[..n].iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                        ))))
+                    }
+                    SocketKind::Listener(_) => Err(self.err("recv_bytes() on server socket")),
                 }
             }
             "readline" => {
@@ -6016,6 +6155,7 @@ class Stack:
                         }
                         Ok(Value::Str(line))
                     }
+                    SocketKind::Datagram(_) => Err(self.err("readline() on datagram socket")),
                     SocketKind::Listener(_) => Err(self.err("readline() on server socket")),
                 }
             }
@@ -6036,7 +6176,179 @@ class Stack:
                             peer,
                         }))))
                     }
+                    SocketKind::Datagram(_) => Err(self.err("accept() on datagram socket")),
                     SocketKind::Stream(_) => Err(self.err("accept() on client socket")),
+                }
+            }
+            "sendto" => {
+                let host = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("sendto() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(Value::Int(p)) => *p as u16,
+                    _ => return Err(self.err("sendto() requires an integer port")),
+                };
+                let data = match args.get(2) {
+                    Some(Value::Str(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => return Err(self.err("sendto() requires 3 arguments")),
+                };
+                let addr = format!("{host}:{port}");
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("sendto() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Datagram(socket) => {
+                        let written = socket
+                            .send_to(data.as_bytes(), &addr)
+                            .map_err(|e| self.err(&format!("socket.sendto() error: {e}")))?;
+                        Ok(Value::Int(written as i64))
+                    }
+                    SocketKind::Stream(_) => Err(self.err("sendto() on client socket")),
+                    SocketKind::Listener(_) => Err(self.err("sendto() on server socket")),
+                }
+            }
+            "sendto_bytes" => {
+                let host = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    _ => return Err(self.err("sendto_bytes() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(Value::Int(p)) => *p as u16,
+                    _ => return Err(self.err("sendto_bytes() requires an integer port")),
+                };
+                let payload = match args.get(2) {
+                    Some(Value::Str(s)) => s.clone().into_bytes(),
+                    Some(Value::List(items)) => {
+                        let borrowed = items.borrow();
+                        let mut out = Vec::with_capacity(borrowed.len());
+                        for item in borrowed.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("sendto_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(Value::Tuple(items)) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("sendto_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(_) => return Err(self.err("sendto_bytes() requires a string, list, or tuple")),
+                    None => return Err(self.err("sendto_bytes() requires 3 arguments")),
+                };
+                let addr = format!("{host}:{port}");
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("sendto_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Datagram(socket) => {
+                        let written = socket
+                            .send_to(&payload, &addr)
+                            .map_err(|e| self.err(&format!("socket.sendto_bytes() error: {e}")))?;
+                        Ok(Value::Int(written as i64))
+                    }
+                    SocketKind::Stream(_) => Err(self.err("sendto_bytes() on client socket")),
+                    SocketKind::Listener(_) => Err(self.err("sendto_bytes() on server socket")),
+                }
+            }
+            "recvfrom" => {
+                let size = match args.into_iter().next() {
+                    Some(Value::Int(n)) => n as usize,
+                    Some(_) => return Err(self.err("recvfrom() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recvfrom() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let (n, addr) = socket
+                            .recv_from(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recvfrom() error: {e}")))?;
+                        Ok(Value::Tuple(Rc::new(vec![
+                            Value::Str(String::from_utf8_lossy(&buf[..n]).to_string()),
+                            Value::Str(addr.ip().to_string()),
+                            Value::Int(addr.port() as i64),
+                        ])))
+                    }
+                    SocketKind::Stream(_) => Err(self.err("recvfrom() on client socket")),
+                    SocketKind::Listener(_) => Err(self.err("recvfrom() on server socket")),
+                }
+            }
+            "recvfrom_bytes" => {
+                let size = match args.into_iter().next() {
+                    Some(Value::Int(n)) => n as usize,
+                    Some(_) => return Err(self.err("recvfrom_bytes() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recvfrom_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    SocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let (n, addr) = socket
+                            .recv_from(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recvfrom_bytes() error: {e}")))?;
+                        Ok(Value::Tuple(Rc::new(vec![
+                            Value::List(Rc::new(RefCell::new(
+                                buf[..n].iter().map(|byte| Value::Int(*byte as i64)).collect(),
+                            ))),
+                            Value::Str(addr.ip().to_string()),
+                            Value::Int(addr.port() as i64),
+                        ])))
+                    }
+                    SocketKind::Stream(_) => Err(self.err("recvfrom_bytes() on client socket")),
+                    SocketKind::Listener(_) => Err(self.err("recvfrom_bytes() on server socket")),
+                }
+            }
+            "local_addr" => {
+                let sh = sh_rc.borrow();
+                let addr = match &sh.kind {
+                    SocketKind::Stream(stream) => stream
+                        .local_addr()
+                        .map(|addr| addr.to_string())
+                        .map_err(|e| self.err(&format!("socket.local_addr() error: {e}")))?,
+                    SocketKind::Listener(listener) => listener
+                        .local_addr()
+                        .map(|addr| addr.to_string())
+                        .map_err(|e| self.err(&format!("socket.local_addr() error: {e}")))?,
+                    SocketKind::Datagram(socket) => socket
+                        .local_addr()
+                        .map(|addr| addr.to_string())
+                        .map_err(|e| self.err(&format!("socket.local_addr() error: {e}")))?,
+                };
+                Ok(Value::Str(addr))
+            }
+            "peer_addr" => {
+                let sh = sh_rc.borrow();
+                match &sh.kind {
+                    SocketKind::Stream(stream) => Ok(Value::Str(
+                        stream
+                            .peer_addr()
+                            .map(|addr| addr.to_string())
+                            .map_err(|e| self.err(&format!("socket.peer_addr() error: {e}")))?,
+                    )),
+                    SocketKind::Datagram(socket) => match socket.peer_addr() {
+                        Ok(addr) => Ok(Value::Str(addr.to_string())),
+                        Err(_) => Ok(Value::Nil),
+                    },
+                    SocketKind::Listener(_) => Ok(Value::Nil),
                 }
             }
             "close" => {

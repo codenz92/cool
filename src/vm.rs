@@ -3599,7 +3599,8 @@ impl VM {
 
     fn vm_socket_method(&self, receiver: VmValue, name: &str) -> Result<VmValue, String> {
         match name {
-            "send" | "recv" | "readline" | "accept" | "close" => {
+            "send" | "send_bytes" | "recv" | "recv_bytes" | "readline" | "accept" | "sendto" | "sendto_bytes"
+            | "recvfrom" | "recvfrom_bytes" | "local_addr" | "peer_addr" | "close" => {
                 Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("socket.{}", name)))
             }
             "__enter__" => Ok(VmValue::BoundBuiltin(
@@ -3651,6 +3652,46 @@ impl VM {
                     peer: addr,
                 }))))
             }
+            "connect_udp" => {
+                let host = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.connect_udp() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(VmValue::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.connect_udp() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let bind_addr = if host.contains(':') { "[::]:0" } else { "0.0.0.0:0" };
+                let socket = std::net::UdpSocket::bind(bind_addr)
+                    .map_err(|e| self.err(&format!("socket.connect_udp() bind error: {e}")))?;
+                socket
+                    .connect(&addr)
+                    .map_err(|e| self.err(&format!("socket.connect_udp() error: {e}")))?;
+                Ok(VmValue::Socket(Rc::new(RefCell::new(VmSocket {
+                    kind: VmSocketKind::Datagram(socket),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
+            "bind_udp" => {
+                let host = match args.first() {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("socket.bind_udp() requires a host string")),
+                };
+                let port = match args.get(1) {
+                    Some(VmValue::Int(p)) => *p as u16,
+                    _ => return Err(self.err("socket.bind_udp() requires an integer port")),
+                };
+                let addr = format!("{host}:{port}");
+                let socket =
+                    std::net::UdpSocket::bind(&addr).map_err(|e| self.err(&format!("socket.bind_udp() error: {e}")))?;
+                Ok(VmValue::Socket(Rc::new(RefCell::new(VmSocket {
+                    kind: VmSocketKind::Datagram(socket),
+                    closed: false,
+                    peer: addr,
+                }))))
+            }
             "__enter__" => Ok(args.first().cloned().unwrap_or(VmValue::Nil)),
             "__exit__" => {
                 if let Some(VmValue::Socket(sh)) = args.first() {
@@ -3681,7 +3722,68 @@ impl VM {
                             .map_err(|e| self.err(&format!("socket.send() error: {e}")))?;
                         Ok(VmValue::Int(bytes.len() as i64))
                     }
+                    VmSocketKind::Datagram(socket) => {
+                        let bytes = data.as_bytes();
+                        let written = socket
+                            .send(bytes)
+                            .map_err(|e| self.err(&format!("socket.send() error: {e}")))?;
+                        Ok(VmValue::Int(written as i64))
+                    }
                     VmSocketKind::Listener(_) => Err(self.err("send() on server socket")),
+                }
+            }
+            "send_bytes" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.send_bytes() requires a socket")),
+                };
+                let payload = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone().into_bytes(),
+                    Some(VmValue::List(items)) => {
+                        let borrowed = items.borrow();
+                        let mut out = Vec::with_capacity(borrowed.len());
+                        for item in borrowed.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("send_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(VmValue::Tuple(items)) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("send_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(_) => return Err(self.err("send_bytes() requires a string, list, or tuple")),
+                    None => return Err(self.err("send_bytes() requires 1 argument")),
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("send_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Stream(stream) => {
+                        use std::io::Write as IoWrite;
+                        stream
+                            .write_all(&payload)
+                            .map_err(|e| self.err(&format!("socket.send_bytes() error: {e}")))?;
+                        Ok(VmValue::Int(payload.len() as i64))
+                    }
+                    VmSocketKind::Datagram(socket) => {
+                        let written = socket
+                            .send(&payload)
+                            .map_err(|e| self.err(&format!("socket.send_bytes() error: {e}")))?;
+                        Ok(VmValue::Int(written as i64))
+                    }
+                    VmSocketKind::Listener(_) => Err(self.err("send_bytes() on server socket")),
                 }
             }
             "recv" => {
@@ -3707,7 +3809,51 @@ impl VM {
                             .map_err(|e| self.err(&format!("socket.recv() error: {e}")))?;
                         Ok(VmValue::Str(String::from_utf8_lossy(&buf[..n]).to_string()))
                     }
+                    VmSocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let n = socket
+                            .recv(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv() error: {e}")))?;
+                        Ok(VmValue::Str(String::from_utf8_lossy(&buf[..n]).to_string()))
+                    }
                     VmSocketKind::Listener(_) => Err(self.err("recv() on server socket")),
+                }
+            }
+            "recv_bytes" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.recv_bytes() requires a socket")),
+                };
+                let size = match args.get(1) {
+                    Some(VmValue::Int(n)) => *n as usize,
+                    Some(_) => return Err(self.err("recv_bytes() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recv_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Stream(stream) => {
+                        use std::io::Read;
+                        let mut buf = vec![0u8; size];
+                        let n = stream
+                            .read(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv_bytes() error: {e}")))?;
+                        Ok(VmValue::List(Rc::new(RefCell::new(
+                            buf[..n].iter().map(|byte| VmValue::Int(*byte as i64)).collect(),
+                        ))))
+                    }
+                    VmSocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let n = socket
+                            .recv(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recv_bytes() error: {e}")))?;
+                        Ok(VmValue::List(Rc::new(RefCell::new(
+                            buf[..n].iter().map(|byte| VmValue::Int(*byte as i64)).collect(),
+                        ))))
+                    }
+                    VmSocketKind::Listener(_) => Err(self.err("recv_bytes() on server socket")),
                 }
             }
             "readline" => {
@@ -3738,6 +3884,7 @@ impl VM {
                         }
                         Ok(VmValue::Str(line))
                     }
+                    VmSocketKind::Datagram(_) => Err(self.err("readline() on datagram socket")),
                     VmSocketKind::Listener(_) => Err(self.err("readline() on server socket")),
                 }
             }
@@ -3762,7 +3909,203 @@ impl VM {
                             peer,
                         }))))
                     }
+                    VmSocketKind::Datagram(_) => Err(self.err("accept() on datagram socket")),
                     VmSocketKind::Stream(_) => Err(self.err("accept() on client socket")),
+                }
+            }
+            "sendto" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.sendto() requires a socket")),
+                };
+                let host = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("sendto() requires a host string")),
+                };
+                let port = match args.get(2) {
+                    Some(VmValue::Int(p)) => *p as u16,
+                    _ => return Err(self.err("sendto() requires an integer port")),
+                };
+                let data = match args.get(3) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => return Err(self.err("sendto() requires 3 arguments")),
+                };
+                let addr = format!("{host}:{port}");
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("sendto() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Datagram(socket) => {
+                        let written = socket
+                            .send_to(data.as_bytes(), &addr)
+                            .map_err(|e| self.err(&format!("socket.sendto() error: {e}")))?;
+                        Ok(VmValue::Int(written as i64))
+                    }
+                    VmSocketKind::Stream(_) => Err(self.err("sendto() on client socket")),
+                    VmSocketKind::Listener(_) => Err(self.err("sendto() on server socket")),
+                }
+            }
+            "sendto_bytes" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.sendto_bytes() requires a socket")),
+                };
+                let host = match args.get(1) {
+                    Some(VmValue::Str(s)) => s.clone(),
+                    _ => return Err(self.err("sendto_bytes() requires a host string")),
+                };
+                let port = match args.get(2) {
+                    Some(VmValue::Int(p)) => *p as u16,
+                    _ => return Err(self.err("sendto_bytes() requires an integer port")),
+                };
+                let payload = match args.get(3) {
+                    Some(VmValue::Str(s)) => s.clone().into_bytes(),
+                    Some(VmValue::List(items)) => {
+                        let borrowed = items.borrow();
+                        let mut out = Vec::with_capacity(borrowed.len());
+                        for item in borrowed.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("sendto_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(VmValue::Tuple(items)) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items.iter() {
+                            let value = self.coerce_to_int(item)?;
+                            if !(0..=255).contains(&value) {
+                                return Err(self.err("sendto_bytes() requires byte values in range 0..255"));
+                            }
+                            out.push(value as u8);
+                        }
+                        out
+                    }
+                    Some(_) => return Err(self.err("sendto_bytes() requires a string, list, or tuple")),
+                    None => return Err(self.err("sendto_bytes() requires 3 arguments")),
+                };
+                let addr = format!("{host}:{port}");
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("sendto_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Datagram(socket) => {
+                        let written = socket
+                            .send_to(&payload, &addr)
+                            .map_err(|e| self.err(&format!("socket.sendto_bytes() error: {e}")))?;
+                        Ok(VmValue::Int(written as i64))
+                    }
+                    VmSocketKind::Stream(_) => Err(self.err("sendto_bytes() on client socket")),
+                    VmSocketKind::Listener(_) => Err(self.err("sendto_bytes() on server socket")),
+                }
+            }
+            "recvfrom" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.recvfrom() requires a socket")),
+                };
+                let size = match args.get(1) {
+                    Some(VmValue::Int(n)) => *n as usize,
+                    Some(_) => return Err(self.err("recvfrom() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recvfrom() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let (n, addr) = socket
+                            .recv_from(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recvfrom() error: {e}")))?;
+                        Ok(VmValue::Tuple(Rc::new(vec![
+                            VmValue::Str(String::from_utf8_lossy(&buf[..n]).to_string()),
+                            VmValue::Str(addr.ip().to_string()),
+                            VmValue::Int(addr.port() as i64),
+                        ])))
+                    }
+                    VmSocketKind::Stream(_) => Err(self.err("recvfrom() on client socket")),
+                    VmSocketKind::Listener(_) => Err(self.err("recvfrom() on server socket")),
+                }
+            }
+            "recvfrom_bytes" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.recvfrom_bytes() requires a socket")),
+                };
+                let size = match args.get(1) {
+                    Some(VmValue::Int(n)) => *n as usize,
+                    Some(_) => return Err(self.err("recvfrom_bytes() requires an integer size")),
+                    None => 4096,
+                };
+                let mut sh = sh_rc.borrow_mut();
+                if sh.closed {
+                    return Err(self.err("recvfrom_bytes() on closed socket"));
+                }
+                match &mut sh.kind {
+                    VmSocketKind::Datagram(socket) => {
+                        let mut buf = vec![0u8; size];
+                        let (n, addr) = socket
+                            .recv_from(&mut buf)
+                            .map_err(|e| self.err(&format!("socket.recvfrom_bytes() error: {e}")))?;
+                        Ok(VmValue::Tuple(Rc::new(vec![
+                            VmValue::List(Rc::new(RefCell::new(
+                                buf[..n].iter().map(|byte| VmValue::Int(*byte as i64)).collect(),
+                            ))),
+                            VmValue::Str(addr.ip().to_string()),
+                            VmValue::Int(addr.port() as i64),
+                        ])))
+                    }
+                    VmSocketKind::Stream(_) => Err(self.err("recvfrom_bytes() on client socket")),
+                    VmSocketKind::Listener(_) => Err(self.err("recvfrom_bytes() on server socket")),
+                }
+            }
+            "local_addr" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.local_addr() requires a socket")),
+                };
+                let sh = sh_rc.borrow();
+                let addr = match &sh.kind {
+                    VmSocketKind::Stream(stream) => stream
+                        .local_addr()
+                        .map(|addr| addr.to_string())
+                        .map_err(|e| self.err(&format!("socket.local_addr() error: {e}")))?,
+                    VmSocketKind::Listener(listener) => listener
+                        .local_addr()
+                        .map(|addr| addr.to_string())
+                        .map_err(|e| self.err(&format!("socket.local_addr() error: {e}")))?,
+                    VmSocketKind::Datagram(socket) => socket
+                        .local_addr()
+                        .map(|addr| addr.to_string())
+                        .map_err(|e| self.err(&format!("socket.local_addr() error: {e}")))?,
+                };
+                Ok(VmValue::Str(addr))
+            }
+            "peer_addr" => {
+                let sh_rc = match args.first() {
+                    Some(VmValue::Socket(s)) => s.clone(),
+                    _ => return Err(self.err("socket.peer_addr() requires a socket")),
+                };
+                let sh = sh_rc.borrow();
+                match &sh.kind {
+                    VmSocketKind::Stream(stream) => Ok(VmValue::Str(
+                        stream
+                            .peer_addr()
+                            .map(|addr| addr.to_string())
+                            .map_err(|e| self.err(&format!("socket.peer_addr() error: {e}")))?,
+                    )),
+                    VmSocketKind::Datagram(socket) => match socket.peer_addr() {
+                        Ok(addr) => Ok(VmValue::Str(addr.to_string())),
+                        Err(_) => Ok(VmValue::Nil),
+                    },
+                    VmSocketKind::Listener(_) => Ok(VmValue::Nil),
                 }
             }
             "close" => {
@@ -6321,7 +6664,7 @@ impl VM {
                 }
             }
             "socket" => {
-                for fname in &["connect", "listen"] {
+                for fname in &["connect", "listen", "connect_udp", "bind_udp"] {
                     set(&mut d, fname, bf(&format!("socket.{}", fname)));
                 }
             }

@@ -1,0 +1,190 @@
+import socket
+
+private def _fail(message):
+    raise "mail: " + message
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _tail(text, start):
+    source = str(text)
+    begin = int(start)
+    if begin < 0:
+        begin = 0
+    if begin > len(source):
+        begin = len(source)
+    return source[begin:len(source)]
+
+private def _rstrip_chars(text, chars):
+    source = str(text)
+    trim = str(chars)
+    end = len(source)
+    while end > 0 and trim.find(source[end - 1]) >= 0:
+        end = end - 1
+    return source[0:end]
+
+private def _normalize_address(value):
+    if type(value) == "dict":
+        if value.get("email") == nil:
+            _fail("address dicts require an email field")
+        return {
+            "email": str(value.get("email")).strip(),
+            "name": value.get("name"),
+        }
+    return {"email": str(value).strip(), "name": nil}
+
+def address(email, name=nil):
+    return _normalize_address({"email": email, "name": name})
+
+private def _address_value(addr):
+    item = _normalize_address(addr)
+    if item.get("name") == nil or str(item.get("name")).strip() == "":
+        return item.get("email")
+    return str(item.get("name")) + " <" + item.get("email") + ">"
+
+private def _recipient_list(value):
+    if value == nil:
+        return []
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_normalize_address(item))
+        return out
+    return [_normalize_address(value)]
+
+def message(sender, recipients, subject, body, headers=nil):
+    out = {
+        "from": _normalize_address(sender),
+        "to": _recipient_list(recipients),
+        "subject": str(subject),
+        "body": str(body),
+        "headers": {},
+    }
+    if headers != nil:
+        for pair in headers.items():
+            out["headers"][str(pair[0])] = str(pair[1])
+    return out
+
+def render(msg):
+    parts = []
+    parts.append("From: " + _address_value(msg.get("from")))
+    to_values = []
+    for item in _get(msg, "to", []):
+        to_values.append(_address_value(item))
+    parts.append("To: " + ", ".join(to_values))
+    parts.append("Subject: " + str(_get(msg, "subject", "")))
+    for pair in _get(msg, "headers", {}).items():
+        parts.append(str(pair[0]) + ": " + str(pair[1]))
+    parts.append("")
+    parts.append(str(_get(msg, "body", "")))
+    return "\r\n".join(parts)
+
+def parse_headers(raw):
+    out = {}
+    current = nil
+    for line in str(raw).split("\n"):
+        clean = _rstrip_chars(line, "\r")
+        if clean == "":
+            break
+        if (clean.startswith(" ") or clean.startswith("\t")) and current != nil:
+            out[current] = out[current] + " " + clean.strip()
+            continue
+        idx = clean.find(":")
+        if idx < 0:
+            continue
+        current = clean[0:idx].strip()
+        out[current] = _tail(clean, idx + 1).strip()
+    return out
+
+private def _smtp_read(conn):
+    lines = []
+    while true:
+        line = conn.readline()
+        if line == "":
+            break
+        clean = _rstrip_chars(line, "\r\n")
+        lines.append(clean)
+        if len(clean) >= 4 and clean[3] == " ":
+            break
+    if len(lines) == 0:
+        _fail("unexpected EOF from smtp server")
+    code = int(lines[len(lines) - 1][0:3])
+    return {"code": code, "lines": lines, "text": "\n".join(lines)}
+
+private def _smtp_expect(conn, expected_prefix, command=nil):
+    reply = _smtp_read(conn)
+    prefix = str(int(expected_prefix))
+    if not str(reply["code"]).startswith(prefix):
+        if command == nil:
+            _fail("smtp server replied with " + str(reply["code"]))
+        _fail("smtp command '" + str(command) + "' failed with " + str(reply["code"]) + ": " + reply["text"])
+    return reply
+
+private def _smtp_cmd(conn, line, expected_prefix):
+    conn.send(str(line) + "\r\n")
+    return _smtp_expect(conn, expected_prefix, line)
+
+def smtp_send(host, port, msg, helo=nil):
+    sender = _normalize_address(msg.get("from"))
+    recipients = _recipient_list(_get(msg, "to", []))
+    if len(recipients) == 0:
+        _fail("smtp_send() requires at least one recipient")
+    conn = socket.connect(str(host), int(port))
+    banner = _smtp_expect(conn, 2)
+    hello = helo
+    if hello == nil:
+        hello = "cool-lang.local"
+    hello_reply = _smtp_cmd(conn, "HELO " + str(hello), 2)
+    _smtp_cmd(conn, "MAIL FROM:<" + sender.get("email") + ">", 2)
+    delivered = []
+    for item in recipients:
+        _smtp_cmd(conn, "RCPT TO:<" + item.get("email") + ">", 2)
+        delivered.append(item.get("email"))
+    _smtp_cmd(conn, "DATA", 3)
+    body = render(msg).replace("\n.", "\n..")
+    conn.send(body + "\r\n.\r\n")
+    accepted = _smtp_expect(conn, 2)
+    quit_reply = _smtp_cmd(conn, "QUIT", 2)
+    close(conn)
+    return {
+        "banner": banner,
+        "hello": hello_reply,
+        "accepted": accepted,
+        "quit": quit_reply,
+        "recipients": delivered,
+    }
+
+private def _imap_collect(conn, tag):
+    lines = []
+    done = false
+    while not done:
+        line = conn.readline()
+        if line == "":
+            break
+        clean = _rstrip_chars(line, "\r\n")
+        lines.append(clean)
+        if clean.startswith(str(tag) + " "):
+            done = true
+    return lines
+
+def imap_run(host, port, commands):
+    conn = socket.connect(str(host), int(port))
+    banner = _rstrip_chars(conn.readline(), "\r\n")
+    replies = []
+    index = 1
+    for command in commands:
+        tag = "A" + str(index)
+        conn.send(tag + " " + str(command) + "\r\n")
+        replies.append({"tag": tag, "command": str(command), "lines": _imap_collect(conn, tag)})
+        index = index + 1
+    conn.send("ZZZ LOGOUT\r\n")
+    logout = _imap_collect(conn, "ZZZ")
+    close(conn)
+    return {"banner": banner, "replies": replies, "logout": logout}
+
+def imap_lines(reply):
+    if type(reply) == "dict":
+        return _get(reply, "lines", [])
+    return []

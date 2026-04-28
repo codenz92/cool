@@ -365,6 +365,23 @@ CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
 CoolVal cool_file_open(CoolVal, CoolVal);
 CoolVal cool_close(CoolVal);
+CoolVal cool_socket_connect(CoolVal, CoolVal);
+CoolVal cool_socket_listen(CoolVal, CoolVal);
+CoolVal cool_socket_connect_udp(CoolVal, CoolVal);
+CoolVal cool_socket_bind_udp(CoolVal, CoolVal);
+CoolVal cool_socket_send(CoolVal, CoolVal);
+CoolVal cool_socket_send_bytes(CoolVal, CoolVal);
+CoolVal cool_socket_sendto(CoolVal, CoolVal, CoolVal, CoolVal);
+CoolVal cool_socket_sendto_bytes(CoolVal, CoolVal, CoolVal, CoolVal);
+CoolVal cool_socket_recv(CoolVal, CoolVal);
+CoolVal cool_socket_recv_bytes(CoolVal, CoolVal);
+CoolVal cool_socket_recvfrom(CoolVal, CoolVal);
+CoolVal cool_socket_recvfrom_bytes(CoolVal, CoolVal);
+CoolVal cool_socket_readline(CoolVal);
+CoolVal cool_socket_accept(CoolVal);
+CoolVal cool_socket_local_addr(CoolVal);
+CoolVal cool_socket_peer_addr(CoolVal);
+CoolVal cool_socket_close(CoolVal);
 void cool_panic(CoolVal);
 void cool_abort_now(void);
 CoolVal cool_abs(CoolVal);
@@ -2594,14 +2611,92 @@ CoolVal cool_file_close(CoolVal file) {
 
 /* ── Socket runtime ────────────────────────────────────────────────── */
 
-typedef struct { int fd; int is_server; int closed; } CoolSocket;
+enum {
+    COOL_SOCKET_STREAM = 0,
+    COOL_SOCKET_LISTENER = 1,
+    COOL_SOCKET_DGRAM = 2,
+};
+
+typedef struct {
+    int fd;
+    int kind;
+    int closed;
+    int connected;
+} CoolSocket;
+
 static CoolSocket* cv_sock_ptr(CoolVal v) { return (CoolSocket*)(intptr_t)v.payload; }
 static CoolVal cv_sock(CoolSocket* s) { CoolVal v; v.tag = TAG_SOCKET; v.payload = (int64_t)(intptr_t)s; return v; }
 
-static CoolVal make_socket(int fd, int is_server) {
+static CoolVal make_socket(int fd, int kind, int connected) {
     CoolSocket* s = (CoolSocket*)malloc(sizeof(CoolSocket));
-    s->fd = fd; s->is_server = is_server; s->closed = 0;
+    s->fd = fd; s->kind = kind; s->closed = 0; s->connected = connected;
     return cv_sock(s);
+}
+
+static char* cool_socket_format_addr(const struct sockaddr* addr, socklen_t addr_len) {
+    char host[NI_MAXHOST];
+    char serv[NI_MAXSERV];
+    if (getnameinfo(addr, addr_len, host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+        return NULL;
+    }
+    int has_colon = strchr(host, ':') != NULL;
+    size_t needed = strlen(host) + strlen(serv) + 4;
+    char* out = (char*)malloc(needed);
+    if (!out) return NULL;
+    if (has_colon) snprintf(out, needed, "[%s]:%s", host, serv);
+    else snprintf(out, needed, "%s:%s", host, serv);
+    return out;
+}
+
+static CoolVal cool_socket_addr_value(int fd, int want_peer) {
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
+    int rc = want_peer ? getpeername(fd, (struct sockaddr*)&addr, &addr_len) : getsockname(fd, (struct sockaddr*)&addr, &addr_len);
+    if (rc < 0) return cv_nil();
+    char* text = cool_socket_format_addr((const struct sockaddr*)&addr, addr_len);
+    if (!text) return cv_nil();
+    return cv_str(text);
+}
+
+static uint8_t* cool_socket_bytes_arg(CoolVal value, size_t* out_len, const char* context) {
+    if (value.tag == TAG_STR) {
+        const char* text = (const char*)(intptr_t)value.payload;
+        size_t len = strlen(text);
+        uint8_t* out = (uint8_t*)malloc(len ? len : 1);
+        if (!out) {
+            fprintf(stderr, "%s out of memory\n", context); exit(1);
+        }
+        if (len > 0) memcpy(out, text, len);
+        *out_len = len;
+        return out;
+    }
+    if (value.tag == TAG_LIST || value.tag == TAG_TUPLE) {
+        CoolList* list = (CoolList*)(intptr_t)value.payload;
+        size_t len = (size_t)list->length;
+        uint8_t* out = (uint8_t*)malloc(len ? len : 1);
+        if (!out) {
+            fprintf(stderr, "%s out of memory\n", context); exit(1);
+        }
+        CoolVal* items = (CoolVal*)list->data;
+        for (size_t i = 0; i < len; i++) {
+            CoolVal item = items[i];
+            if (item.tag != TAG_INT || item.payload < 0 || item.payload > 255) {
+                fprintf(stderr, "%s requires a string or byte list/tuple\n", context); exit(1);
+            }
+            out[i] = (uint8_t)item.payload;
+        }
+        *out_len = len;
+        return out;
+    }
+    fprintf(stderr, "%s requires a string or byte list/tuple\n", context); exit(1);
+}
+
+static CoolVal cool_socket_bytes_value(const uint8_t* data, size_t len) {
+    CoolVal out = cool_list_make(cv_int((int64_t)len));
+    for (size_t i = 0; i < len; i++) {
+        cool_list_push(out, cv_int((int64_t)data[i]));
+    }
+    return out;
 }
 
 CoolVal cool_socket_connect(CoolVal host_v, CoolVal port_v) {
@@ -2624,7 +2719,7 @@ CoolVal cool_socket_connect(CoolVal host_v, CoolVal port_v) {
         fprintf(stderr, "socket.connect() error: connect() failed\n"); exit(1);
     }
     freeaddrinfo(res);
-    return make_socket(fd, 0);
+    return make_socket(fd, COOL_SOCKET_STREAM, 1);
 }
 
 CoolVal cool_socket_listen(CoolVal host_v, CoolVal port_v) {
@@ -2648,7 +2743,53 @@ CoolVal cool_socket_listen(CoolVal host_v, CoolVal port_v) {
     if (listen(fd, 16) < 0) {
         close(fd); fprintf(stderr, "socket.listen() error: listen() failed\n"); exit(1);
     }
-    return make_socket(fd, 1);
+    return make_socket(fd, COOL_SOCKET_LISTENER, 0);
+}
+
+CoolVal cool_socket_connect_udp(CoolVal host_v, CoolVal port_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.connect_udp()");
+    }
+    const char* host = (const char*)(intptr_t)host_v.payload;
+    int port = (int)port_v.payload;
+    char port_str[16]; snprintf(port_str, sizeof(port_str), "%d", port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        fprintf(stderr, "socket.connect_udp() error: could not resolve %s\n", host); exit(1);
+    }
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); fprintf(stderr, "socket.connect_udp() error: socket() failed\n"); exit(1); }
+    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        close(fd); freeaddrinfo(res);
+        fprintf(stderr, "socket.connect_udp() error: connect() failed\n"); exit(1);
+    }
+    freeaddrinfo(res);
+    return make_socket(fd, COOL_SOCKET_DGRAM, 1);
+}
+
+CoolVal cool_socket_bind_udp(CoolVal host_v, CoolVal port_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.bind_udp()");
+    }
+    const char* host = (const char*)(intptr_t)host_v.payload;
+    int port = (int)port_v.payload;
+    char port_str[16]; snprintf(port_str, sizeof(port_str), "%d", port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        fprintf(stderr, "socket.bind_udp() error: could not resolve %s\n", host); exit(1);
+    }
+    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (fd < 0) { freeaddrinfo(res); fprintf(stderr, "socket.bind_udp() error: socket() failed\n"); exit(1); }
+    if (bind(fd, res->ai_addr, res->ai_addrlen) < 0) {
+        close(fd); freeaddrinfo(res);
+        fprintf(stderr, "socket.bind_udp() error: bind() failed\n"); exit(1);
+    }
+    freeaddrinfo(res);
+    return make_socket(fd, COOL_SOCKET_DGRAM, 0);
 }
 
 CoolVal cool_socket_send(CoolVal sock_v, CoolVal data_v) {
@@ -2656,10 +2797,79 @@ CoolVal cool_socket_send(CoolVal sock_v, CoolVal data_v) {
         cool_capability_denied("network", "socket.send()");
     }
     CoolSocket* s = cv_sock_ptr(sock_v);
-    if (s->closed || s->is_server) { fprintf(stderr, "socket.send() on invalid socket\n"); exit(1); }
+    if (s->closed || s->kind == COOL_SOCKET_LISTENER) { fprintf(stderr, "socket.send() on invalid socket\n"); exit(1); }
     const char* data = (const char*)(intptr_t)data_v.payload;
-    ssize_t n = write(s->fd, data, strlen(data));
+    ssize_t n = send(s->fd, data, strlen(data), 0);
     return cv_int(n < 0 ? 0 : (int64_t)n);
+}
+
+CoolVal cool_socket_send_bytes(CoolVal sock_v, CoolVal data_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.send_bytes()");
+    }
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->kind == COOL_SOCKET_LISTENER) { fprintf(stderr, "socket.send_bytes() on invalid socket\n"); exit(1); }
+    size_t len = 0;
+    uint8_t* data = cool_socket_bytes_arg(data_v, &len, "socket.send_bytes()");
+    ssize_t n = send(s->fd, data, len, 0);
+    free(data);
+    if (n < 0) n = 0;
+    return cv_int((int64_t)n);
+}
+
+CoolVal cool_socket_sendto(CoolVal sock_v, CoolVal host_v, CoolVal port_v, CoolVal data_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.sendto()");
+    }
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->kind != COOL_SOCKET_DGRAM) {
+        fprintf(stderr, "socket.sendto() on invalid socket\n"); exit(1);
+    }
+    const char* host = (const char*)(intptr_t)host_v.payload;
+    int port = (int)port_v.payload;
+    const char* data = (const char*)(intptr_t)data_v.payload;
+    char port_str[16]; snprintf(port_str, sizeof(port_str), "%d", port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        fprintf(stderr, "socket.sendto() error: could not resolve %s\n", host); exit(1);
+    }
+    ssize_t n = sendto(s->fd, data, strlen(data), 0, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    if (n < 0) {
+        fprintf(stderr, "socket.sendto() error: sendto() failed\n"); exit(1);
+    }
+    return cv_int((int64_t)n);
+}
+
+CoolVal cool_socket_sendto_bytes(CoolVal sock_v, CoolVal host_v, CoolVal port_v, CoolVal data_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.sendto_bytes()");
+    }
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->kind != COOL_SOCKET_DGRAM) {
+        fprintf(stderr, "socket.sendto_bytes() on invalid socket\n"); exit(1);
+    }
+    const char* host = (const char*)(intptr_t)host_v.payload;
+    int port = (int)port_v.payload;
+    size_t len = 0;
+    uint8_t* data = cool_socket_bytes_arg(data_v, &len, "socket.sendto_bytes()");
+    char port_str[16]; snprintf(port_str, sizeof(port_str), "%d", port);
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        free(data);
+        fprintf(stderr, "socket.sendto_bytes() error: could not resolve %s\n", host); exit(1);
+    }
+    ssize_t n = sendto(s->fd, data, len, 0, res->ai_addr, res->ai_addrlen);
+    free(data);
+    freeaddrinfo(res);
+    if (n < 0) {
+        fprintf(stderr, "socket.sendto_bytes() error: sendto() failed\n"); exit(1);
+    }
+    return cv_int((int64_t)n);
 }
 
 CoolVal cool_socket_recv(CoolVal sock_v, CoolVal size_v) {
@@ -2667,14 +2877,88 @@ CoolVal cool_socket_recv(CoolVal sock_v, CoolVal size_v) {
         cool_capability_denied("network", "socket.recv()");
     }
     CoolSocket* s = cv_sock_ptr(sock_v);
-    if (s->closed || s->is_server) { fprintf(stderr, "socket.recv() on invalid socket\n"); exit(1); }
+    if (s->closed || s->kind == COOL_SOCKET_LISTENER) { fprintf(stderr, "socket.recv() on invalid socket\n"); exit(1); }
     int size = (int)size_v.payload;
     if (size <= 0) size = 4096;
     char* buf = (char*)malloc(size + 1);
-    ssize_t n = read(s->fd, buf, size);
+    ssize_t n = recv(s->fd, buf, size, 0);
     if (n < 0) n = 0;
     buf[n] = '\0';
     return cv_str(buf);
+}
+
+CoolVal cool_socket_recv_bytes(CoolVal sock_v, CoolVal size_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.recv_bytes()");
+    }
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->kind == COOL_SOCKET_LISTENER) { fprintf(stderr, "socket.recv_bytes() on invalid socket\n"); exit(1); }
+    int size = (int)size_v.payload;
+    if (size <= 0) size = 4096;
+    uint8_t* buf = (uint8_t*)malloc((size_t)size);
+    ssize_t n = recv(s->fd, buf, size, 0);
+    if (n < 0) n = 0;
+    CoolVal out = cool_socket_bytes_value(buf, (size_t)n);
+    free(buf);
+    return out;
+}
+
+CoolVal cool_socket_recvfrom(CoolVal sock_v, CoolVal size_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.recvfrom()");
+    }
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->kind != COOL_SOCKET_DGRAM) {
+        fprintf(stderr, "socket.recvfrom() on invalid socket\n"); exit(1);
+    }
+    int size = (int)size_v.payload;
+    if (size <= 0) size = 4096;
+    char* buf = (char*)malloc(size + 1);
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
+    ssize_t n = recvfrom(s->fd, buf, size, 0, (struct sockaddr*)&addr, &addr_len);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    char host[NI_MAXHOST];
+    char serv[NI_MAXSERV];
+    if (getnameinfo((struct sockaddr*)&addr, addr_len, host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+        strcpy(host, "");
+        strcpy(serv, "0");
+    }
+    CoolVal out = cool_tuple_make(cv_int(3));
+    cool_list_push(out, cv_str(buf));
+    cool_list_push(out, cv_str(host));
+    cool_list_push(out, cv_int((int64_t)atoi(serv)));
+    return out;
+}
+
+CoolVal cool_socket_recvfrom_bytes(CoolVal sock_v, CoolVal size_v) {
+    if (!COOL_CAP_NETWORK) {
+        cool_capability_denied("network", "socket.recvfrom_bytes()");
+    }
+    CoolSocket* s = cv_sock_ptr(sock_v);
+    if (s->closed || s->kind != COOL_SOCKET_DGRAM) {
+        fprintf(stderr, "socket.recvfrom_bytes() on invalid socket\n"); exit(1);
+    }
+    int size = (int)size_v.payload;
+    if (size <= 0) size = 4096;
+    uint8_t* buf = (uint8_t*)malloc((size_t)size);
+    struct sockaddr_storage addr;
+    socklen_t addr_len = sizeof(addr);
+    ssize_t n = recvfrom(s->fd, buf, size, 0, (struct sockaddr*)&addr, &addr_len);
+    if (n < 0) n = 0;
+    char host[NI_MAXHOST];
+    char serv[NI_MAXSERV];
+    if (getnameinfo((struct sockaddr*)&addr, addr_len, host, sizeof(host), serv, sizeof(serv), NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+        strcpy(host, "");
+        strcpy(serv, "0");
+    }
+    CoolVal out = cool_tuple_make(cv_int(3));
+    cool_list_push(out, cool_socket_bytes_value(buf, (size_t)n));
+    cool_list_push(out, cv_str(host));
+    cool_list_push(out, cv_int((int64_t)atoi(serv)));
+    free(buf);
+    return out;
 }
 
 CoolVal cool_socket_readline(CoolVal sock_v) {
@@ -2682,13 +2966,13 @@ CoolVal cool_socket_readline(CoolVal sock_v) {
         cool_capability_denied("network", "socket.readline()");
     }
     CoolSocket* s = cv_sock_ptr(sock_v);
-    if (s->closed || s->is_server) { fprintf(stderr, "socket.readline() on invalid socket\n"); exit(1); }
+    if (s->closed || s->kind != COOL_SOCKET_STREAM) { fprintf(stderr, "socket.readline() on invalid socket\n"); exit(1); }
     size_t cap = 256;
     char* buf = (char*)malloc(cap);
     size_t len = 0;
     char ch;
     while (1) {
-        ssize_t n = read(s->fd, &ch, 1);
+        ssize_t n = recv(s->fd, &ch, 1, 0);
         if (n <= 0) break;
         if (len + 1 >= cap) { cap *= 2; buf = (char*)realloc(buf, cap); }
         buf[len++] = ch;
@@ -2703,12 +2987,20 @@ CoolVal cool_socket_accept(CoolVal sock_v) {
         cool_capability_denied("network", "socket.accept()");
     }
     CoolSocket* s = cv_sock_ptr(sock_v);
-    if (s->closed || !s->is_server) { fprintf(stderr, "socket.accept() on non-server socket\n"); exit(1); }
+    if (s->closed || s->kind != COOL_SOCKET_LISTENER) { fprintf(stderr, "socket.accept() on non-server socket\n"); exit(1); }
     struct sockaddr_storage peer_addr;
     socklen_t peer_len = sizeof(peer_addr);
     int client_fd = accept(s->fd, (struct sockaddr*)&peer_addr, &peer_len);
     if (client_fd < 0) { fprintf(stderr, "socket.accept() error: accept() failed\n"); exit(1); }
-    return make_socket(client_fd, 0);
+    return make_socket(client_fd, COOL_SOCKET_STREAM, 1);
+}
+
+CoolVal cool_socket_local_addr(CoolVal sock_v) {
+    return cool_socket_addr_value(cv_sock_ptr(sock_v)->fd, 0);
+}
+
+CoolVal cool_socket_peer_addr(CoolVal sock_v) {
+    return cool_socket_addr_value(cv_sock_ptr(sock_v)->fd, 1);
 }
 
 CoolVal cool_socket_close(CoolVal sock_v) {
@@ -2835,12 +3127,22 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
     }
     if (obj.tag == TAG_SOCKET) {
         CoolVal a0 = nargs > 0 ? g_method_args[1] : cv_nil();
+        CoolVal a1 = nargs > 1 ? g_method_args[2] : cv_nil();
+        CoolVal a2 = nargs > 2 ? g_method_args[3] : cv_nil();
         if (strcmp(builtin_name, "__enter__") == 0) return obj;
         if (strcmp(builtin_name, "__exit__") == 0) return cool_socket_close(obj);
         if (strcmp(builtin_name, "send") == 0 && nargs == 1) return cool_socket_send(obj, a0);
+        if (strcmp(builtin_name, "send_bytes") == 0 && nargs == 1) return cool_socket_send_bytes(obj, a0);
         if (strcmp(builtin_name, "recv") == 0 && (nargs == 0 || nargs == 1)) return cool_socket_recv(obj, nargs == 1 ? a0 : cv_int(4096));
+        if (strcmp(builtin_name, "recv_bytes") == 0 && (nargs == 0 || nargs == 1)) return cool_socket_recv_bytes(obj, nargs == 1 ? a0 : cv_int(4096));
         if (strcmp(builtin_name, "readline") == 0 && nargs == 0) return cool_socket_readline(obj);
         if (strcmp(builtin_name, "accept") == 0 && nargs == 0) return cool_socket_accept(obj);
+        if (strcmp(builtin_name, "sendto") == 0 && nargs == 3) return cool_socket_sendto(obj, a0, a1, a2);
+        if (strcmp(builtin_name, "sendto_bytes") == 0 && nargs == 3) return cool_socket_sendto_bytes(obj, a0, a1, a2);
+        if (strcmp(builtin_name, "recvfrom") == 0 && (nargs == 0 || nargs == 1)) return cool_socket_recvfrom(obj, nargs == 1 ? a0 : cv_int(4096));
+        if (strcmp(builtin_name, "recvfrom_bytes") == 0 && (nargs == 0 || nargs == 1)) return cool_socket_recvfrom_bytes(obj, nargs == 1 ? a0 : cv_int(4096));
+        if (strcmp(builtin_name, "local_addr") == 0 && nargs == 0) return cool_socket_local_addr(obj);
+        if (strcmp(builtin_name, "peer_addr") == 0 && nargs == 0) return cool_socket_peer_addr(obj);
         if (strcmp(builtin_name, "close") == 0 && nargs == 0) return cool_socket_close(obj);
     }
 
@@ -7867,6 +8169,8 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
     if (strcmp(module, "socket") == 0) {
         if (strcmp(name, "connect") == 0 && nargs == 2) return cool_socket_connect(args[0], args[1]);
         if (strcmp(name, "listen") == 0 && nargs == 2) return cool_socket_listen(args[0], args[1]);
+        if (strcmp(name, "connect_udp") == 0 && nargs == 2) return cool_socket_connect_udp(args[0], args[1]);
+        if (strcmp(name, "bind_udp") == 0 && nargs == 2) return cool_socket_bind_udp(args[0], args[1]);
     }
 
     if (strcmp(module, "term") == 0) {

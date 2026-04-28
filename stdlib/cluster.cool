@@ -1,0 +1,198 @@
+import datetime
+import os
+import path
+import store
+
+private def _fail(message):
+    raise "cluster: " + message
+
+private def _copy_map(value):
+    out = {}
+    if value == nil:
+        return out
+    for pair in value.items():
+        out[pair[0]] = pair[1]
+    return out
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+def open_cluster(root=nil, name="default", ttl=30):
+    base = str(root if root != nil else ".cool")
+    if not path.isabs(base):
+        base = path.join(os.getcwd(), base)
+    db = store.open_store(path.join(base, "cluster", str(name)))
+    return {
+        "name": str(name),
+        "ttl": float(ttl),
+        "db": db,
+        "members_ns": db.namespace("members"),
+        "leases_ns": db.namespace("leases"),
+        "barriers_ns": db.namespace("barriers"),
+    }
+
+private def _members_ns(cluster):
+    return cluster.get("members_ns")
+
+private def _leases_ns(cluster):
+    return cluster.get("leases_ns")
+
+private def _barriers_ns(cluster):
+    return cluster.get("barriers_ns")
+
+private def _now():
+    return datetime.now()
+
+private def _prune_members(cluster, now=nil):
+    if now == nil:
+        now = _now()
+    ttl = float(_get(cluster, "ttl", 30))
+    ns = _members_ns(cluster)
+    alive = []
+    for pair in ns.items():
+        item = pair[1]
+        heartbeat = float(_get(item, "heartbeat", 0))
+        if heartbeat + ttl >= now:
+            alive.append((pair[0], item))
+        else:
+            ns.delete(pair[0])
+    return alive
+
+private def _prune_leases(cluster, now=nil):
+    if now == nil:
+        now = _now()
+    ns = _leases_ns(cluster)
+    active = {}
+    for pair in ns.items():
+        lease = pair[1]
+        if float(_get(lease, "expires", 0)) >= now:
+            active[pair[0]] = lease
+        else:
+            ns.delete(pair[0])
+    return active
+
+private def _prune_barriers(cluster, now=nil):
+    if now == nil:
+        now = _now()
+    ns = _barriers_ns(cluster)
+    active = {}
+    for pair in ns.items():
+        barrier = pair[1]
+        expires = float(_get(barrier, "expires", 0))
+        if expires < now:
+            ns.delete(pair[0])
+            continue
+        members = {}
+        for item in _get(barrier, "members", {}).items():
+            if float(item[1]) <= expires:
+                members[item[0]] = item[1]
+        barrier["members"] = members
+        ns.set(pair[0], barrier)
+        active[pair[0]] = barrier
+    return active
+
+def heartbeat(cluster, node_id, meta=nil):
+    now = _now()
+    record = {"id": str(node_id), "heartbeat": now, "meta": _copy_map(meta)}
+    _members_ns(cluster).set(str(node_id), record)
+    return record
+
+def join(cluster, node_id, meta=nil):
+    return heartbeat(cluster, node_id, meta)
+
+def leave(cluster, node_id):
+    return _members_ns(cluster).delete(str(node_id))
+
+def members(cluster):
+    items = _prune_members(cluster)
+    out = []
+    ids = []
+    index = {}
+    for item in items:
+        ids.append(item[0])
+        index[item[0]] = item[1]
+    ids.sort()
+    for node_id in ids:
+        out.append(index[node_id])
+    return out
+
+def member(cluster, node_id):
+    _prune_members(cluster)
+    return _members_ns(cluster).get(str(node_id))
+
+def leader(cluster):
+    items = _prune_members(cluster)
+    if len(items) == 0:
+        return nil
+    best = items[0][1]
+    best_id = items[0][0]
+    i = 1
+    while i < len(items):
+        if items[i][0] < best_id:
+            best_id = items[i][0]
+            best = items[i][1]
+        i = i + 1
+    return best
+
+def claim(cluster, lease_name, owner, ttl=nil, meta=nil):
+    now = _now()
+    ttl_value = float(ttl if ttl != nil else _get(cluster, "ttl", 30))
+    _prune_leases(cluster, now)
+    ns = _leases_ns(cluster)
+    current = ns.get(str(lease_name))
+    owner_id = str(owner)
+    if current != nil and current.get("owner") != owner_id and float(_get(current, "expires", 0)) >= now:
+        return false
+    lease = {
+        "name": str(lease_name),
+        "owner": owner_id,
+        "expires": datetime.add_seconds(now, ttl_value),
+        "meta": _copy_map(meta),
+    }
+    ns.set(str(lease_name), lease)
+    return true
+
+def lease(cluster, lease_name):
+    _prune_leases(cluster)
+    return _leases_ns(cluster).get(str(lease_name))
+
+def release(cluster, lease_name, owner=nil):
+    current = lease(cluster, lease_name)
+    if current == nil:
+        return false
+    if owner != nil and current.get("owner") != str(owner):
+        return false
+    return _leases_ns(cluster).delete(str(lease_name))
+
+def barrier(cluster, name, node_id, expected, ttl=nil):
+    now = _now()
+    ttl_value = float(ttl if ttl != nil else _get(cluster, "ttl", 30))
+    barriers = _prune_barriers(cluster, now)
+    key = str(name)
+    entry = _get(barriers, key, {"members": {}, "expected": int(expected)})
+    entry["expected"] = int(expected)
+    entry["expires"] = datetime.add_seconds(now, ttl_value)
+    members = _get(entry, "members", {})
+    members[str(node_id)] = now
+    entry["members"] = members
+    _barriers_ns(cluster).set(key, entry)
+    arrived = entry["members"].keys()
+    arrived.sort()
+    ready = len(arrived) >= int(expected)
+    return {
+        "name": key,
+        "ready": ready,
+        "expected": int(expected),
+        "arrived": arrived,
+        "remaining": int(expected) - len(arrived),
+    }
+
+def status(cluster):
+    return {
+        "name": cluster.get("name"),
+        "members": members(cluster),
+        "leases": _prune_leases(cluster),
+        "barriers": _prune_barriers(cluster),
+    }

@@ -1,0 +1,432 @@
+import bytes
+
+private def _fail(message):
+    raise "url: " + message
+
+private def _safe_chars(extra):
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~" + str(extra)
+
+private def _is_hex_digit(ch):
+    code = ord(ch)
+    return (code >= 48 and code <= 57) or (code >= 65 and code <= 70) or (code >= 97 and code <= 102)
+
+private def _hex_value(ch):
+    lower = str(ch).lower()
+    code = ord(lower)
+    if code >= 48 and code <= 57:
+        return code - 48
+    if code >= 97 and code <= 102:
+        return code - 87
+    _fail("invalid percent-escape digit '" + str(ch) + "'")
+
+private def _trim_empty_tail(parts):
+    if len(parts) == 0:
+        return parts
+    if parts[len(parts) - 1] == "":
+        return parts[0:len(parts) - 1]
+    return parts
+
+private def _tail(text, start):
+    source = str(text)
+    begin = int(start)
+    if begin < 0:
+        begin = 0
+    if begin > len(source):
+        begin = len(source)
+    return source[begin:len(source)]
+
+private def _split_once(text, token):
+    idx = str(text).find(str(token))
+    if idx < 0:
+        return [str(text), nil]
+    source = str(text)
+    return [source[0:idx], _tail(source, idx + len(str(token)))]
+
+private def _last_split_once(text, token):
+    source = str(text)
+    marker = str(token)
+    parts = source.split(marker)
+    if len(parts) <= 1:
+        return [source, nil]
+    head = parts[0]
+    i = 1
+    while i < len(parts) - 1:
+        head = head + marker + parts[i]
+        i = i + 1
+    return [head, parts[len(parts) - 1]]
+
+private def _count_char(text, target):
+    total = 0
+    for ch in str(text):
+        if ch == target:
+            total = total + 1
+    return total
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _last_index(text, token):
+    source = str(text)
+    marker = str(token)
+    idx = -1
+    pos = 0
+    width = len(marker)
+    if width == 0:
+        return len(source)
+    while pos + width <= len(source):
+        if source[pos:pos + width] == marker:
+            idx = pos
+        pos = pos + 1
+    return idx
+
+private def _encode_scalar(value, plus):
+    safe = ""
+    text = str(value)
+    out = ""
+    for ch in text:
+        if plus and ch == " ":
+            out = out + "+"
+            continue
+        if _safe_chars(safe).find(ch) >= 0:
+            out = out + ch
+            continue
+        for byte in bytes.from_string(ch):
+            digits = bytes.hex([byte], true)
+            out = out + "%" + digits
+        continue
+    return out
+
+def percent_encode(text, safe=""):
+    extra = str(safe)
+    out = ""
+    for ch in str(text):
+        if _safe_chars(extra).find(ch) >= 0:
+            out = out + ch
+            continue
+        for byte in bytes.from_string(ch):
+            digits = bytes.hex([byte], true)
+            out = out + "%" + digits
+    return out
+
+def percent_decode(text, plus_as_space=false):
+    source = str(text)
+    out = []
+    i = 0
+    while i < len(source):
+        ch = source[i]
+        if plus_as_space and ch == "+":
+            out.append(32)
+            i = i + 1
+            continue
+        if ch == "%" and i + 2 < len(source) and _is_hex_digit(source[i + 1]) and _is_hex_digit(source[i + 2]):
+            out.append((_hex_value(source[i + 1]) << 4) | _hex_value(source[i + 2]))
+            i = i + 3
+            continue
+        out.append(ord(ch))
+        i = i + 1
+    return bytes.to_string(out)
+
+private def _normalize_segments(parts, absolute):
+    out = []
+    for part in parts:
+        if part == "" or part == ".":
+            continue
+        if part == "..":
+            if len(out) > 0 and out[len(out) - 1] != "..":
+                out = out[0:len(out) - 1]
+            elif not absolute:
+                out.append("..")
+            continue
+        out.append(part)
+    return out
+
+private def _normalize_path(path, keep_trailing=false):
+    text = str(path)
+    absolute = text.startswith("/")
+    trailing = keep_trailing and len(text) > 1 and text.endswith("/")
+    segments = _normalize_segments(text.split("/"), absolute)
+    joined = "/".join(segments)
+    if absolute:
+        joined = "/" + joined
+    if joined == "":
+        if absolute:
+            joined = "/"
+        elif trailing:
+            joined = ""
+    if trailing and joined != "/" and not joined.endswith("/"):
+        joined = joined + "/"
+    return joined
+
+private def _parse_authority(authority):
+    out = {
+        "authority": str(authority),
+        "username": nil,
+        "password": nil,
+        "host": "",
+        "port": nil,
+    }
+    auth = str(authority)
+    hostport = auth
+    if auth.find("@") >= 0:
+        pieces = _last_split_once(auth, "@")
+        creds = pieces[0]
+        hostport = pieces[1]
+        cred_parts = _split_once(creds, ":")
+        out["username"] = percent_decode(cred_parts[0])
+        if cred_parts[1] != nil:
+            out["password"] = percent_decode(cred_parts[1])
+    if hostport.startswith("["):
+        close = hostport.find("]")
+        if close < 0:
+            _fail("unterminated IPv6 host")
+        out["host"] = hostport[1:close]
+        if close + 1 < len(hostport) and hostport[close + 1] == ":":
+            port_text = _tail(hostport, close + 2)
+            if port_text != "":
+                out["port"] = int(port_text)
+        return out
+    if _count_char(hostport, ":") == 1:
+        pieces = _split_once(hostport, ":")
+        out["host"] = pieces[0]
+        if pieces[1] != nil and pieces[1] != "":
+            out["port"] = int(pieces[1])
+        return out
+    out["host"] = hostport
+    return out
+
+private def _default_port_for(scheme):
+    lower = str(scheme).lower()
+    if lower == "http" or lower == "ws":
+        return 80
+    if lower == "https" or lower == "wss":
+        return 443
+    if lower == "smtp":
+        return 25
+    if lower == "imap":
+        return 143
+    return nil
+
+def parse(value):
+    source = str(value).strip()
+    fragment = nil
+    query = nil
+    scheme = nil
+    authority = nil
+    rest = source
+
+    hash_idx = rest.find("#")
+    if hash_idx >= 0:
+        fragment = _tail(rest, hash_idx + 1)
+        rest = rest[0:hash_idx]
+
+    query_idx = rest.find("?")
+    if query_idx >= 0:
+        query = _tail(rest, query_idx + 1)
+        rest = rest[0:query_idx]
+
+    scheme_sep = rest.find("://")
+    if scheme_sep >= 0:
+        scheme = rest[0:scheme_sep].lower()
+        rest = _tail(rest, scheme_sep + 3)
+    elif rest.startswith("//"):
+        rest = _tail(rest, 2)
+    else:
+        colon = rest.find(":")
+        slash = rest.find("/")
+        if colon > 0 and (slash < 0 or colon < slash):
+            scheme = rest[0:colon].lower()
+            rest = _tail(rest, colon + 1)
+            if rest.startswith("//"):
+                rest = _tail(rest, 2)
+
+    path = rest
+    if scheme != nil or source.startswith("//"):
+        slash = rest.find("/")
+        if slash >= 0:
+            authority = rest[0:slash]
+            path = _tail(rest, slash)
+        else:
+            authority = rest
+            path = "/"
+
+    if path == "":
+        path = "/"
+
+    auth = _parse_authority(authority if authority != nil else "")
+    out = {
+        "scheme": scheme,
+        "authority": auth["authority"],
+        "netloc": auth["authority"],
+        "username": auth["username"],
+        "password": auth["password"],
+        "host": auth["host"],
+        "port": auth["port"],
+        "default_port": _default_port_for(scheme),
+        "path": path,
+        "query": query,
+        "fragment": fragment,
+    }
+    out["query_values"] = decode_query(query if query != nil else "")
+    return out
+
+private def _format_authority(parts):
+    host = str(_get(parts, "host", ""))
+    if host == "":
+        return ""
+    out = ""
+    username = parts.get("username")
+    if username != nil:
+        out = out + percent_encode(username)
+        password = parts.get("password")
+        if password != nil:
+            out = out + ":" + percent_encode(password)
+        out = out + "@"
+    if host.find(":") >= 0 and not host.startswith("["):
+        out = out + "[" + host + "]"
+    else:
+        out = out + host
+    port = parts.get("port")
+    if port != nil:
+        out = out + ":" + str(int(port))
+    return out
+
+def format(parts):
+    data = copy(parts)
+    scheme = data.get("scheme")
+    authority = data.get("authority")
+    if authority == nil or authority == "":
+        authority = _format_authority(data)
+    path = str(_get(data, "path", ""))
+    if authority != "" and path == "":
+        path = "/"
+    out = ""
+    if scheme != nil:
+        out = out + str(scheme) + ":"
+    if authority != nil and authority != "":
+        out = out + "//" + str(authority)
+    out = out + path
+    query = data.get("query")
+    if query == nil and "query_values" in data:
+        query = encode_query(_get(data, "query_values", {}))
+    if query != nil and str(query) != "":
+        out = out + "?" + str(query)
+    fragment = data.get("fragment")
+    if fragment != nil and str(fragment) != "":
+        out = out + "#" + str(fragment)
+    return out
+
+def join(base, relative):
+    rel = str(relative)
+    if rel == "":
+        return format(parse(base))
+    parsed_rel = parse(rel)
+    if parsed_rel.get("scheme") != nil:
+        return format(parsed_rel)
+    parsed_base = parse(base)
+    if rel.startswith("//"):
+        parsed_rel["scheme"] = parsed_base.get("scheme")
+        return format(parsed_rel)
+    if rel.startswith("#"):
+        parsed_base["fragment"] = _tail(rel, 1)
+        return format(parsed_base)
+    if rel.startswith("?"):
+        parsed_base["query"] = _tail(rel, 1)
+        parsed_base["fragment"] = nil
+        return format(parsed_base)
+    if rel.startswith("/"):
+        parsed_base["path"] = _normalize_path(rel, rel.endswith("/"))
+        parsed_base["query"] = parsed_rel.get("query")
+        parsed_base["fragment"] = parsed_rel.get("fragment")
+        return format(parsed_base)
+    base_path = str(_get(parsed_base, "path", "/"))
+    if base_path == "":
+        base_path = "/"
+    parent = base_path
+    if not parent.endswith("/"):
+        slash = _last_index(parent, "/")
+        if slash >= 0:
+            parent = parent[0:slash + 1]
+        else:
+            parent = ""
+    parsed_base["path"] = _normalize_path(parent + rel, rel.endswith("/"))
+    parsed_base["query"] = parsed_rel.get("query")
+    parsed_base["fragment"] = parsed_rel.get("fragment")
+    return format(parsed_base)
+
+def encode_query(value):
+    if value == nil:
+        return ""
+    parts = []
+    if type(value) == "dict":
+        for pair in value.items():
+            key = _encode_scalar(pair[0], true)
+            item = pair[1]
+            if item == nil:
+                parts.append(key)
+                continue
+            kind = type(item)
+            if kind == "list" or kind == "tuple":
+                for nested in item:
+                    parts.append(key + "=" + _encode_scalar(nested, true))
+            else:
+                parts.append(key + "=" + _encode_scalar(item, true))
+        return "&".join(parts)
+    for pair in value:
+        key = _encode_scalar(pair[0], true)
+        if len(pair) < 2 or pair[1] == nil:
+            parts.append(key)
+        else:
+            parts.append(key + "=" + _encode_scalar(pair[1], true))
+    return "&".join(parts)
+
+def decode_query(text):
+    out = {}
+    source = str(text)
+    if source == "":
+        return out
+    for part in source.split("&"):
+        if part == "":
+            continue
+        pair = _split_once(part, "=")
+        key = percent_decode(pair[0], true)
+        value = ""
+        if pair[1] != nil:
+            value = percent_decode(pair[1], true)
+        if key not in out:
+            out[key] = value
+        else:
+            current = out[key]
+            if type(current) == "list":
+                current.append(value)
+            else:
+                out[key] = [current, value]
+    return out
+
+def query_pairs(text):
+    out = []
+    source = str(text)
+    if source == "":
+        return out
+    for part in source.split("&"):
+        if part == "":
+            continue
+        pair = _split_once(part, "=")
+        if pair[1] == nil:
+            out.append((percent_decode(pair[0], true), ""))
+        else:
+            out.append((percent_decode(pair[0], true), percent_decode(pair[1], true)))
+    return out
+
+def with_query(target, params):
+    parsed = parse(target)
+    merged = {}
+    current = decode_query(_get(parsed, "query", ""))
+    for pair in current.items():
+        merged[pair[0]] = pair[1]
+    if params != nil:
+        for pair in params.items():
+            merged[pair[0]] = pair[1]
+    parsed["query"] = encode_query(merged)
+    return format(parsed)

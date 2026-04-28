@@ -294,6 +294,7 @@ pub struct VmFile {
 pub enum VmSocketKind {
     Stream(std::net::TcpStream),
     Listener(std::net::TcpListener),
+    Datagram(std::net::UdpSocket),
 }
 
 impl std::fmt::Debug for VmSocketKind {
@@ -301,6 +302,7 @@ impl std::fmt::Debug for VmSocketKind {
         match self {
             VmSocketKind::Stream(s) => write!(f, "Stream({:?})", s),
             VmSocketKind::Listener(l) => write!(f, "Listener({:?})", l),
+            VmSocketKind::Datagram(s) => write!(f, "Datagram({:?})", s),
         }
     }
 }

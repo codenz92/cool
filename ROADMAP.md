@@ -209,15 +209,15 @@
 #### Networking And Services
 
 - [x] `http` module — `get`, `post`, `head`, and `getjson` request helpers across runtimes (requires host `curl`)
-- [ ] `socket` module — TCP/UDP clients and servers for networking work
-- [ ] `websocket` module — client/server websocket support for realtime tools and apps
-- [ ] `rpc` module — lightweight RPC protocol helpers, stubs, and request routing
-- [ ] `graphql` module — query building, schema helpers, and response extraction
-- [ ] `url` module — URL parsing, joining, query-string encode/decode, and percent escaping
-- [ ] `mail` module — SMTP/IMAP-style helpers for notifications and inbox workflows
-- [ ] `feed` module — RSS/Atom parsing, polling, deduplication, and feed generation
-- [ ] `calendar` module — recurring schedules, reminders, and date-range planning helpers
-- [ ] `cluster` module — multi-node coordination primitives for distributed experiments
+- [x] `socket` module — TCP/UDP clients and servers for networking work
+- [x] `websocket` module — client/server websocket support for realtime tools and apps
+- [x] `rpc` module — lightweight RPC protocol helpers, stubs, and request routing
+- [x] `graphql` module — query building, schema helpers, and response extraction
+- [x] `url` module — URL parsing, joining, query-string encode/decode, and percent escaping
+- [x] `mail` module — SMTP/IMAP-style helpers for notifications and inbox workflows
+- [x] `feed` module — RSS/Atom parsing, polling, deduplication, and feed generation
+- [x] `calendar` module — recurring schedules, reminders, and date-range planning helpers
+- [x] `cluster` module — multi-node coordination primitives for distributed experiments
 
 #### Databases And Storage
 
@@ -425,7 +425,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] `subprocess` module — process spawning, exit codes, stdout/stderr capture, and timeouts
 - [x] `argparse` module — positional/flag parsing, defaults, and generated help text
 - [x] `logging` module — leveled logs, formatters, timestamps, and file/stdout handlers
-- [x] `socket` module — TCP client (`connect`) and server (`listen`, `accept`) with `send`, `recv`, `readline`, and `close` across all runtimes
+- [x] `socket` module — TCP/UDP client and server helpers with `connect`, `listen`, `accept`, `connect_udp`, `bind_udp`, `send`, `recv`, `sendto`, `recvfrom`, address helpers, and binary-safe byte APIs across all runtimes
 
 ### Packaging And Developer Tooling
 

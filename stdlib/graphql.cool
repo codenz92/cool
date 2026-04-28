@@ -1,0 +1,189 @@
+import http
+import json
+import url
+
+private def _fail(message):
+    raise "graphql: " + message
+
+private def _as_name(value):
+    text = str(value).strip()
+    if text == "":
+        _fail("names must not be empty")
+    return text
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+def arg(name, value):
+    return {"kind": "arg", "name": _as_name(name), "value": value}
+
+def field(name, selections=nil, args=nil, alias=nil):
+    out = {"kind": "field", "name": _as_name(name), "args": [], "selections": []}
+    if alias != nil:
+        out["alias"] = _as_name(alias)
+    if args != nil:
+        for item in args:
+            if type(item) == "dict" and item.get("kind") == "arg":
+                out["args"].append(item)
+            else:
+                out["args"].append(arg(item[0], item[1]))
+    if selections != nil:
+        for item in selections:
+            out["selections"].append(item)
+    return out
+
+def fragment(name, on_type, selections):
+    return {
+        "kind": "fragment",
+        "name": _as_name(name),
+        "on": _as_name(on_type),
+        "selections": copy(selections),
+    }
+
+def operation(kind, selections, name=nil, variables=nil):
+    op = str(kind).strip().lower()
+    if op != "query" and op != "mutation" and op != "subscription":
+        _fail("operation kind must be query, mutation, or subscription")
+    out = {"kind": "operation", "op": op, "selections": copy(selections)}
+    if name != nil:
+        out["name"] = _as_name(name)
+    if variables != nil:
+        out["variables"] = copy(variables)
+    return out
+
+private def _value_literal(value):
+    kind = type(value)
+    if value == nil:
+        return "null"
+    if kind == "bool":
+        if value:
+            return "true"
+        return "false"
+    if kind == "int" or kind == "float":
+        return str(value)
+    if kind == "str":
+        return json.dumps(value)
+    if kind == "list" or kind == "tuple":
+        parts = []
+        for item in value:
+            parts.append(_value_literal(item))
+        return "[" + ", ".join(parts) + "]"
+    if kind == "dict":
+        parts = []
+        for pair in value.items():
+            parts.append(_as_name(pair[0]) + ": " + _value_literal(pair[1]))
+        return "{" + ", ".join(parts) + "}"
+    return json.dumps(str(value))
+
+private def _render_args(args):
+    if args == nil or len(args) == 0:
+        return ""
+    parts = []
+    for item in args:
+        if type(item) == "dict" and item.get("kind") == "arg":
+            parts.append(_as_name(item.get("name")) + ": " + _value_literal(item.get("value")))
+        else:
+            parts.append(_as_name(item[0]) + ": " + _value_literal(item[1]))
+    return "(" + ", ".join(parts) + ")"
+
+private def _render_selections(items):
+    parts = []
+    for item in items:
+        parts.append(render(item))
+    return "{ " + " ".join(parts) + " }"
+
+def render(node):
+    if type(node) == "str":
+        return _as_name(node)
+    if type(node) != "dict":
+        _fail("render() expects a field, fragment, operation, or string selection")
+    kind = node.get("kind")
+    if kind == "field":
+        head = _as_name(node.get("name"))
+        alias = node.get("alias")
+        if alias != nil:
+            head = _as_name(alias) + ": " + head
+        head = head + _render_args(_get(node, "args", []))
+        selections = _get(node, "selections", [])
+        if len(selections) == 0:
+            return head
+        return head + " " + _render_selections(selections)
+    if kind == "fragment":
+        return "fragment " + _as_name(node.get("name")) + " on " + _as_name(node.get("on")) + " " + _render_selections(_get(node, "selections", []))
+    if kind == "operation":
+        header = str(node.get("op"))
+        if node.get("name") != nil:
+            header = header + " " + _as_name(node.get("name"))
+        variables = node.get("variables")
+        if variables != nil and len(variables) > 0:
+            parts = []
+            for pair in variables.items():
+                parts.append("$" + _as_name(pair[0]) + ": " + str(pair[1]))
+            header = header + "(" + ", ".join(parts) + ")"
+        return header + " " + _render_selections(_get(node, "selections", []))
+    _fail("unknown node kind '" + str(kind) + "'")
+
+private def _ensure_headers(headers):
+    out = []
+    if headers != nil:
+        for item in headers:
+            out.append(str(item))
+    return out
+
+def execute(endpoint, query, variables=nil, headers=nil, operation_name=nil):
+    text = query
+    if type(query) != "str":
+        text = render(query)
+    payload = {"query": str(text)}
+    if variables != nil:
+        payload["variables"] = variables
+    if operation_name != nil:
+        payload["operationName"] = str(operation_name)
+    request_headers = _ensure_headers(headers)
+    request_headers.append("Content-Type: application/json")
+    request_headers.append("Accept: application/json")
+    body = http.post(str(endpoint), json.dumps(payload), request_headers)
+    return json.loads(body)
+
+def extract(response, pointer, default=nil):
+    if type(response) != "dict":
+        return default
+    if "data" in response:
+        return json.pointer(response["data"], pointer, default)
+    return json.pointer(response, pointer, default)
+
+def errors(response):
+    if type(response) != "dict":
+        return []
+    if "errors" not in response:
+        return []
+    return response["errors"]
+
+def ok(response):
+    return len(errors(response)) == 0
+
+def schema_fields(schema, type_name):
+    target = nil
+    if type(schema) == "dict" and "data" in schema:
+        types = json.pointer(schema["data"], "/__schema/types", [])
+        for item in types:
+            if item.get("name") == type_name:
+                target = item
+                break
+    elif type(schema) == "dict" and schema.get("name") == type_name:
+        target = schema
+    if target == nil:
+        return []
+    fields = _get(target, "fields", [])
+    out = []
+    for item in fields:
+        out.append(item.get("name"))
+    return out
+
+def endpoint_with_query(endpoint, query_text, variables=nil):
+    params = {"query": str(query_text)}
+    if variables != nil:
+        params["variables"] = json.dumps(variables)
+    return url.with_query(endpoint, params)
