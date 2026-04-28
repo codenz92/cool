@@ -531,24 +531,24 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 14 — Runtime And Memory Model
+## Phase 14 — Runtime And Memory Model ✅ Complete
 
 > Goal: define the runtime semantics clearly enough that Cool is trusted for systems-facing native software
 
 ### Memory Semantics
 
-- [ ] Choose and document the primary memory-management model for high-level values in native code
-- [ ] Define ownership boundaries between Cool-managed values, raw memory, and FFI-owned memory
-- [ ] Deterministic cleanup story for native resources beyond `with`
-- [ ] Large-value move/copy/clone semantics
-- [ ] Arena/region or other explicit allocator strategies where they make sense
+- [x] Choose and document the primary memory-management model for high-level values in native code
+- [x] Define ownership boundaries between Cool-managed values, raw memory, and FFI-owned memory
+- [x] Deterministic cleanup story for native resources beyond `with`
+- [x] Large-value move/copy/clone semantics
+- [x] Arena/region or other explicit allocator strategies where they make sense
 
 ### Runtime Profiles
 
-- [ ] Clear hosted vs freestanding runtime profile documentation
-- [ ] Stable `core`/`std` split for host-free builds
-- [ ] Native panic / abort / diagnostics policy
-- [ ] Thread/task safety rules for future concurrency features
+- [x] Clear hosted vs freestanding runtime profile documentation
+- [x] Stable `core`/`std` split for host-free builds
+- [x] Native panic / abort / diagnostics policy
+- [x] Thread/task safety rules for future concurrency features
 
 ---
 
@@ -652,7 +652,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 11 — Freestanding Systems Foundation | ✅ Complete |
 | 12 — Static Semantic Core | ✅ Complete |
 | 13 — Typed Language Features | ✅ Complete |
-| 14 — Runtime And Memory Model | ⏳ Planned |
+| 14 — Runtime And Memory Model | ✅ Complete |
 | 15 — Native Toolchain And Distribution | ✅ Complete |
 | 16 — Systems Interop And Targets | ✅ Complete |
 | 17 — Signature Features And Flagship Software | ✅ Complete |

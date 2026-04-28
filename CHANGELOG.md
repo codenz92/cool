@@ -4,6 +4,13 @@ All notable changes to the Cool language project.
 
 ## [Unreleased] - Phase 17 Complete
 
+### Phase 14 — Runtime And Memory Model
+
+- New runtime builtins `copy()`, `clone()`, `close()`, `panic()`, and `abort()` now behave consistently across interpreter, VM, and hosted native builds, with shallow-copy semantics for containers/instances, explicit rejection of opaque resource handles, deterministic close dispatch, and fatal panic/abort paths
+- `import platform` now exposes runtime-model metadata across all runtimes: `runtime_profile()`, `memory_model()`, `panic_policy()`, `thread_safety()`, and `stdlib_split()` alongside the existing capability and host-platform helpers
+- New bundled `stdlib/std/runtime.cool` and `stdlib/std/memory.cool` make the Phase 14 model usable from normal Cool code: `std.runtime.describe()`, `std.memory.deep_clone()`, `std.memory.Scope`, and `std.memory.Arena` document and operationalize the runtime/ownership story
+- Hosted native builds now carry a clearer runtime policy: native `panic()` prints diagnostics plus a stack trace, `abort()` terminates immediately, struct values support explicit shallow copy through layout metadata, and runtime cleanup integrates with the existing `with`/stack-trace/profiling paths
+
 ### Phase 13 — Typed Language Features
 
 - New first-class typed language syntax across interpreter, VM, and native builds: `enum`, `match`, `trait`, `implements`, generic `def`, generic `struct`, generic `union`, richer type annotations like `Option[int]`, `list[str]`, and `dict[str, int]`, plus pattern forms such as `Option.Some(value)`, `Option.None`, literals, and `_`

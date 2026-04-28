@@ -124,6 +124,11 @@ impl Env {
             "repr",
             "exit",
             "open",
+            "copy",
+            "clone",
+            "close",
+            "panic",
+            "abort",
             "isinstance",
             "hasattr",
             "getattr",
@@ -665,6 +670,134 @@ impl Interpreter {
             map.set(Value::Str(name.to_string()), Value::Bool(allowed));
         }
         Value::Dict(Rc::new(RefCell::new(map)))
+    }
+
+    fn dict_value(&self, entries: Vec<(&str, Value)>) -> Value {
+        let mut map = IndexedMap::new();
+        for (name, value) in entries {
+            map.set(Value::Str(name.to_string()), value);
+        }
+        Value::Dict(Rc::new(RefCell::new(map)))
+    }
+
+    fn runtime_profile_value(&self) -> Value {
+        Value::Str("hosted".to_string())
+    }
+
+    fn memory_model_value(&self) -> Value {
+        self.dict_value(vec![
+            ("managed", Value::Str("shared host-managed reference values".to_string())),
+            ("raw_memory", Value::Bool(false)),
+            (
+                "ownership",
+                Value::Str(
+                    "containers and instances are shared by assignment; use copy()/clone() for explicit shallow duplication"
+                        .to_string(),
+                ),
+            ),
+            (
+                "ffi",
+                Value::Str("FFI handles are opaque resources and are not implicitly copied or freed".to_string()),
+            ),
+            (
+                "cleanup",
+                Value::Str("with, close(), and std.memory.Scope provide deterministic resource cleanup".to_string()),
+            ),
+            (
+                "copy",
+                Value::Str("copy()/clone() are shallow; std.memory.deep_clone() recurses through list/dict trees".to_string()),
+            ),
+        ])
+    }
+
+    fn panic_policy_value(&self) -> Value {
+        self.dict_value(vec![
+            ("raise", Value::Str("recoverable exception".to_string())),
+            ("panic", Value::Str("fatal diagnostic error".to_string())),
+            ("abort", Value::Str("immediate fatal termination".to_string())),
+            ("stack_trace", Value::Bool(false)),
+        ])
+    }
+
+    fn thread_safety_value(&self) -> Value {
+        self.dict_value(vec![
+            ("mode", Value::Str("single-threaded".to_string())),
+            (
+                "shared_mutable",
+                Value::Str("not safe to share mutable interpreter values across host threads".to_string()),
+            ),
+            (
+                "ffi",
+                Value::Str("host-thread coordination is caller-managed".to_string()),
+            ),
+        ])
+    }
+
+    fn stdlib_split_value(&self) -> Value {
+        self.dict_value(vec![
+            (
+                "core",
+                Value::Str("freestanding-safe primitives and low-level helpers".to_string()),
+            ),
+            (
+                "std",
+                Value::Str("hosted or high-level library surfaces under std.*".to_string()),
+            ),
+            ("legacy_flat_imports", Value::Bool(true)),
+        ])
+    }
+
+    fn copy_value(&mut self, value: Value, env: &Env) -> Result<Value, String> {
+        match value {
+            Value::Int(_)
+            | Value::Float(_)
+            | Value::Str(_)
+            | Value::Bool(_)
+            | Value::Nil
+            | Value::BuiltinFn(_)
+            | Value::Function { .. }
+            | Value::Class(_)
+            | Value::Super { .. } => Ok(value),
+            Value::Tuple(items) => Ok(Value::Tuple(Rc::new(items.iter().cloned().collect()))),
+            Value::List(items) => Ok(Value::List(Rc::new(RefCell::new(items.borrow().clone())))),
+            Value::Dict(items) => Ok(Value::Dict(Rc::new(RefCell::new(items.borrow().clone())))),
+            Value::Instance(inst) => {
+                if lookup_method(&inst.class, "__copy__").is_some() {
+                    return self.call_method(Value::Instance(inst), "__copy__", vec![], vec![], env);
+                }
+                if lookup_method(&inst.class, "copy").is_some() {
+                    return self.call_method(Value::Instance(inst), "copy", vec![], vec![], env);
+                }
+                Ok(Value::Instance(Rc::new(CoolInstance {
+                    class: inst.class.clone(),
+                    fields: RefCell::new(inst.fields.borrow().clone()),
+                })))
+            }
+            Value::File(_) | Value::Socket(_) | Value::FfiLib(_) | Value::FfiFunc { .. } => {
+                Err(self.err("copy() does not duplicate external/resource handles; manage ownership explicitly"))
+            }
+        }
+    }
+
+    fn close_value(&mut self, value: Value, env: &Env) -> Result<Value, String> {
+        match &value {
+            Value::Nil => Ok(Value::Nil),
+            Value::File(_) => self.call_method(value, "close", vec![], vec![], env),
+            Value::Socket(_) => self.call_method(value, "close", vec![], vec![], env),
+            Value::Instance(inst) => {
+                if lookup_method(&inst.class, "__close__").is_some() {
+                    return self.call_method(value, "__close__", vec![], vec![], env);
+                }
+                if lookup_method(&inst.class, "close").is_some() {
+                    return self.call_method(value, "close", vec![], vec![], env);
+                }
+                if lookup_method(&inst.class, "__exit__").is_some() {
+                    return self.call_method(value, "__exit__", vec![Value::Nil, Value::Nil, Value::Nil], vec![], env);
+                }
+                Ok(Value::Nil)
+            }
+            _ => Ok(Value::Nil),
+        }
     }
 
     fn err(&self, msg: &str) -> String {
@@ -1402,6 +1535,11 @@ impl Interpreter {
                     "has_extern",
                     "has_inline_asm",
                     "capabilities",
+                    "runtime_profile",
+                    "memory_model",
+                    "panic_policy",
+                    "thread_safety",
+                    "stdlib_split",
                 ] {
                     map.set(
                         Value::Str(fn_name.to_string()),
@@ -3353,6 +3491,31 @@ class Stack:
                 };
                 std::process::exit(code);
             }
+            "copy" | "clone" => {
+                if args.len() != 1 {
+                    return Err(self.err(&format!("{name}() takes exactly 1 argument")));
+                }
+                self.copy_value(args.into_iter().next().unwrap(), _env)
+            }
+            "close" => {
+                if args.len() != 1 {
+                    return Err(self.err("close() takes exactly 1 argument"));
+                }
+                self.close_value(args.into_iter().next().unwrap(), _env)
+            }
+            "panic" => {
+                if args.len() != 1 {
+                    return Err(self.err("panic() takes exactly 1 argument"));
+                }
+                let message = args.into_iter().next().unwrap();
+                Err(self.err(&format!("Panic: {}", message)))
+            }
+            "abort" => {
+                if !args.is_empty() {
+                    return Err(self.err("abort() takes no arguments"));
+                }
+                Err(self.err("Abort: program terminated"))
+            }
             "runfile" => {
                 let path = match args.get(0) {
                     Some(Value::Str(s)) => s.clone(),
@@ -4734,6 +4897,11 @@ class Stack:
             "has_extern" => Value::Bool(false),
             "has_inline_asm" => Value::Bool(false),
             "capabilities" => self.capability_value(),
+            "runtime_profile" => self.runtime_profile_value(),
+            "memory_model" => self.memory_model_value(),
+            "panic_policy" => self.panic_policy_value(),
+            "thread_safety" => self.thread_safety_value(),
+            "stdlib_split" => self.stdlib_split_value(),
             _ => return Err(self.err(&format!("platform has no function '{}'", name))),
         };
         Ok(value)

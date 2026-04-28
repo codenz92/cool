@@ -136,6 +136,7 @@ typedef struct {
 typedef struct {
     const char* struct_name;
     int num_fields;
+    int byte_size;
     const CoolStructField* fields;
 } CoolStructLayout;
 
@@ -248,6 +249,19 @@ static CoolVal attrmap_get(AttrMap* m, const char* key) {
     return cv_nil();
 }
 
+static AttrMap* attrmap_clone(AttrMap* src) {
+    AttrMap* out = attrmap_create();
+    if (!out || !src) return out;
+    for (int64_t i = 0; i < src->capacity; i++) {
+        AttrNode* n = src->buckets[i];
+        while (n) {
+            attrmap_set(out, (const char*)(intptr_t)n->key, n->value);
+            n = n->next;
+        }
+    }
+    return out;
+}
+
 /* ── Class definition ────────────────────────────────────────────────── */
 typedef struct CoolClass {
     int32_t tag;       /* TAG_CLASS */
@@ -337,6 +351,7 @@ CoolVal cool_dict_new(void);
 CoolVal cool_dict_get(CoolVal, CoolVal);
 CoolVal cool_dict_set(CoolVal, CoolVal, CoolVal);
 CoolVal cool_dict_copy(CoolVal);
+CoolVal cool_copy(CoolVal);
 CoolVal cool_dict_keys(CoolVal);
 CoolVal cool_dict_values(CoolVal);
 CoolVal cool_dict_items(CoolVal);
@@ -349,6 +364,9 @@ CoolVal cool_index(CoolVal, CoolVal);
 CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
 CoolVal cool_file_open(CoolVal, CoolVal);
+CoolVal cool_close(CoolVal);
+void cool_panic(CoolVal);
+void cool_abort_now(void);
 CoolVal cool_abs(CoolVal);
 CoolVal cool_to_int(CoolVal);
 CoolVal cool_ord(CoolVal);
@@ -553,6 +571,70 @@ static CoolVal cool_platform_capabilities(void) {
     cool_dict_set(out, cv_str("network"), cv_bool(COOL_CAP_NETWORK));
     cool_dict_set(out, cv_str("env"), cv_bool(COOL_CAP_ENV));
     cool_dict_set(out, cv_str("process"), cv_bool(COOL_CAP_PROCESS));
+    return out;
+}
+
+static CoolVal cool_platform_runtime_profile(void) {
+    return cv_str("hosted");
+}
+
+static CoolVal cool_platform_memory_model(void) {
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("managed"), cv_str("native heap objects plus explicit raw-memory access"));
+    cool_dict_set(out, cv_str("raw_memory"), cv_bool(1));
+    cool_dict_set(
+        out,
+        cv_str("ownership"),
+        cv_str("high-level containers and objects are shared by assignment; copy()/clone() make shallow duplicates")
+    );
+    cool_dict_set(
+        out,
+        cv_str("ffi"),
+        cv_str("FFI handles and host resources are opaque and must be owned explicitly")
+    );
+    cool_dict_set(
+        out,
+        cv_str("cleanup"),
+        cv_str("with, close(), and std.memory.Scope provide deterministic cleanup for native resources")
+    );
+    cool_dict_set(
+        out,
+        cv_str("copy"),
+        cv_str("copy()/clone() are shallow; std.memory.deep_clone() recurses through list/dict trees")
+    );
+    return out;
+}
+
+static CoolVal cool_platform_panic_policy(void) {
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("raise"), cv_str("recoverable exception"));
+    cool_dict_set(out, cv_str("panic"), cv_str("fatal diagnostic error"));
+    cool_dict_set(out, cv_str("abort"), cv_str("immediate fatal termination"));
+    cool_dict_set(out, cv_str("stack_trace"), cv_bool(1));
+    return out;
+}
+
+static CoolVal cool_platform_thread_safety(void) {
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("mode"), cv_str("single-threaded"));
+    cool_dict_set(
+        out,
+        cv_str("shared_mutable"),
+        cv_str("Cool heap objects are not safe to share mutably across host threads")
+    );
+    cool_dict_set(
+        out,
+        cv_str("ffi"),
+        cv_str("threading discipline for foreign resources is caller-managed")
+    );
+    return out;
+}
+
+static CoolVal cool_platform_stdlib_split(void) {
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("core"), cv_str("freestanding-safe primitives and low-level helpers"));
+    cool_dict_set(out, cv_str("std"), cv_str("hosted or high-level library surfaces under std.*"));
+    cool_dict_set(out, cv_str("legacy_flat_imports"), cv_bool(1));
     return out;
 }
 
@@ -1091,13 +1173,17 @@ const char* cool_type_name(int32_t tag) {
         case TAG_BOOL:   return "bool";
         case TAG_STR:    return "str";
         case TAG_LIST:   return "list";
+        case TAG_OBJECT: return "instance";
+        case TAG_CLASS:  return "class";
         case TAG_DICT:   return "dict";
-        case TAG_OBJECT: return "object";
         case TAG_TUPLE:  return "tuple";
+        case TAG_CLOSURE: return "function";
+        case TAG_EXCEPTION: return "exception";
         case TAG_FILE:   return "file";
         case TAG_FFI_LIB: return "ffi_lib";
         case TAG_FFI_FUNC: return "ffi_func";
         case TAG_SOCKET: return "socket";
+        case TAG_STRUCT: return "struct";
         default:         return "unknown";
     }
 }
@@ -2558,6 +2644,33 @@ CoolVal cool_socket_close(CoolVal sock_v) {
     return cv_nil();
 }
 
+CoolVal cool_close(CoolVal value) {
+    if (value.tag == TAG_NIL) return cv_nil();
+    if (value.tag == TAG_FILE) return cool_file_close(value);
+    if (value.tag == TAG_SOCKET) return cool_socket_close(value);
+    if (value.tag != TAG_OBJECT) return cv_nil();
+
+    CoolObject* o = (CoolObject*)(intptr_t)value.payload;
+    if (!o || !o->class) return cv_nil();
+    CoolVal cls = (CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class};
+    int64_t fn_ptr = cool_get_method_ptr(cls, "method___close__");
+    if (fn_ptr != 0) {
+        CoolVal argv[1] = {value};
+        return call_cool_fn_ptr(fn_ptr, 1, argv);
+    }
+    fn_ptr = cool_get_method_ptr(cls, "method_close");
+    if (fn_ptr != 0) {
+        CoolVal argv[1] = {value};
+        return call_cool_fn_ptr(fn_ptr, 1, argv);
+    }
+    fn_ptr = cool_get_method_ptr(cls, "method___exit__");
+    if (fn_ptr != 0) {
+        CoolVal argv[4] = {value, cv_nil(), cv_nil(), cv_nil()};
+        return call_cool_fn_ptr(fn_ptr, 4, argv);
+    }
+    return cv_nil();
+}
+
 CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
@@ -2776,6 +2889,69 @@ CoolVal cool_dict_copy(CoolVal dict_v) {
         cool_dict_set(out, d->keys[i], d->vals[i]);
     }
     return out;
+}
+
+CoolVal cool_copy(CoolVal value) {
+    switch (value.tag) {
+        case TAG_NIL:
+        case TAG_INT:
+        case TAG_FLOAT:
+        case TAG_BOOL:
+        case TAG_STR:
+        case TAG_CLASS:
+        case TAG_CLOSURE:
+        case TAG_EXCEPTION:
+            return value;
+        case TAG_LIST:
+        case TAG_TUPLE:
+            return cool_list_copy(value);
+        case TAG_DICT:
+            return cool_dict_copy(value);
+        case TAG_OBJECT: {
+            CoolObject* o = (CoolObject*)(intptr_t)value.payload;
+            if (!o || !o->class) return value;
+            CoolVal cls = (CoolVal){TAG_CLASS, (int64_t)(intptr_t)o->class};
+            int64_t copy_ptr = cool_get_method_ptr(cls, "method___copy__");
+            if (copy_ptr != 0) {
+                CoolVal argv[1] = {value};
+                return call_cool_fn_ptr(copy_ptr, 1, argv);
+            }
+            copy_ptr = cool_get_method_ptr(cls, "method_copy");
+            if (copy_ptr != 0) {
+                CoolVal argv[1] = {value};
+                return call_cool_fn_ptr(copy_ptr, 1, argv);
+            }
+            CoolVal out = cool_object_new(cls);
+            CoolObject* dst = (CoolObject*)(intptr_t)out.payload;
+            if (dst) {
+                attrmap_destroy(dst->attrs);
+                dst->attrs = attrmap_clone(o->attrs);
+            }
+            return out;
+        }
+        case TAG_STRUCT: {
+            void* mem = (void*)(intptr_t)value.payload;
+            const CoolStructLayout* layout = cool_struct_lookup(mem);
+            if (!layout) {
+                fprintf(stderr, "RuntimeError: copy() could not find struct layout metadata\n");
+                exit(1);
+            }
+            CoolVal out = cool_struct_new(layout->byte_size, layout);
+            memcpy((void*)(intptr_t)out.payload, mem, (size_t)layout->byte_size);
+            return out;
+        }
+        case TAG_FILE:
+        case TAG_SOCKET:
+        case TAG_FFI_LIB:
+        case TAG_FFI_FUNC:
+            fprintf(
+                stderr,
+                "RuntimeError: copy() does not duplicate external/resource handles; manage ownership explicitly\n"
+            );
+            exit(1);
+        default:
+            return value;
+    }
 }
 
 CoolVal cool_dict_keys(CoolVal dict_v) {
@@ -7286,6 +7462,11 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
         if (strcmp(name, "arch") == 0 && nargs == 0) return cv_str(cool_platform_arch_name());
         if (strcmp(name, "family") == 0 && nargs == 0) return cv_str(cool_platform_family_name());
         if (strcmp(name, "runtime") == 0 && nargs == 0) return cv_str("native");
+        if (strcmp(name, "runtime_profile") == 0 && nargs == 0) return cool_platform_runtime_profile();
+        if (strcmp(name, "memory_model") == 0 && nargs == 0) return cool_platform_memory_model();
+        if (strcmp(name, "panic_policy") == 0 && nargs == 0) return cool_platform_panic_policy();
+        if (strcmp(name, "thread_safety") == 0 && nargs == 0) return cool_platform_thread_safety();
+        if (strcmp(name, "stdlib_split") == 0 && nargs == 0) return cool_platform_stdlib_split();
         if (strcmp(name, "exe_ext") == 0 && nargs == 0) return cv_str(cool_platform_exe_ext());
         if (strcmp(name, "shared_lib_ext") == 0 && nargs == 0) return cv_str(cool_platform_shared_lib_ext());
         if (strcmp(name, "path_sep") == 0 && nargs == 0) return cv_str(cool_platform_path_sep());
@@ -8323,6 +8504,23 @@ void cool_raise(CoolVal exc) {
     exit(1);
 }
 
+void cool_panic(CoolVal message) {
+    cool_unwind_withs_to(0);
+    fprintf(stderr, "Panic: %s\n", cool_to_str(message));
+    cool_print_stack_trace(stderr);
+    while (g_trace_frame_count > 0) {
+        cool_trace_pop();
+    }
+    cool_profile_flush();
+    exit(1);
+}
+
+void cool_abort_now(void) {
+    fprintf(stderr, "Abort: program terminated\n");
+    cool_profile_flush();
+    exit(1);
+}
+
 /* Get the current exception value */
 CoolVal cool_get_exception(void) {
     return g_current_exception;
@@ -8684,6 +8882,10 @@ struct RuntimeFns<'ctx> {
     cool_slice: FunctionValue<'ctx>,
     cool_setindex: FunctionValue<'ctx>,
     cool_file_open: FunctionValue<'ctx>,
+    cool_copy: FunctionValue<'ctx>,
+    cool_close: FunctionValue<'ctx>,
+    cool_panic: FunctionValue<'ctx>,
+    cool_abort_now: FunctionValue<'ctx>,
     cool_abs: FunctionValue<'ctx>,
     cool_to_int: FunctionValue<'ctx>,
     cool_ord: FunctionValue<'ctx>,
@@ -9226,6 +9428,10 @@ impl<'ctx> Compiler<'ctx> {
             cool_slice: decl!("cool_slice", cv_type.fn_type(&[cv, cv, cv], false)),
             cool_setindex: decl!("cool_setindex", cv_type.fn_type(&[cv, cv, cv], false)),
             cool_file_open: decl!("cool_file_open", cv_type.fn_type(&[cv, cv], false)),
+            cool_copy: decl!("cool_copy", cv_type.fn_type(&[cv], false)),
+            cool_close: decl!("cool_close", cv_type.fn_type(&[cv], false)),
+            cool_panic: decl!("cool_panic", voidt.fn_type(&[cv], false)),
+            cool_abort_now: decl!("cool_abort_now", voidt.fn_type(&[], false)),
             cool_abs: decl!("cool_abs", cv_type.fn_type(&[cv], false)),
             cool_to_int: decl!("cool_to_int", cv_type.fn_type(&[cv], false)),
             cool_ord: decl!("cool_ord", cv_type.fn_type(&[cv], false)),
@@ -12665,14 +12871,23 @@ impl<'ctx> Compiler<'ctx> {
         fields_global.set_linkage(inkwell::module::Linkage::Private);
         fields_global.set_initializer(&fields_array_val);
 
-        // Build CoolStructLayout global: { ptr struct_name, i32 num_fields, ptr fields }
-        let cool_struct_layout_llvm = self
-            .context
-            .struct_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
+        let layout_byte_size = offsets
+            .iter()
+            .zip(field_meta.iter())
+            .map(|(offset, (_, _, _, byte_size, _, _))| offset + byte_size)
+            .max()
+            .unwrap_or(0);
+
+        // Build CoolStructLayout global: { ptr struct_name, i32 num_fields, i32 byte_size, ptr fields }
+        let cool_struct_layout_llvm = self.context.struct_type(
+            &[ptr_type.into(), i32_type.into(), i32_type.into(), ptr_type.into()],
+            false,
+        );
         let struct_name_gptr = self.const_global_string_ptr(name, &format!("sf_{name}_struct_name"));
         let layout_const = cool_struct_layout_llvm.const_named_struct(&[
             struct_name_gptr.as_basic_value_enum(),
             i32_type.const_int(num_fields as u64, false).into(),
+            i32_type.const_int(layout_byte_size as u64, false).into(),
             fields_global.as_pointer_value().as_basic_value_enum(),
         ]);
         let layout_global = self
@@ -12918,13 +13133,15 @@ impl<'ctx> Compiler<'ctx> {
         fields_global.set_linkage(inkwell::module::Linkage::Private);
         fields_global.set_initializer(&fields_array_val);
 
-        let cool_struct_layout_llvm = self
-            .context
-            .struct_type(&[ptr_type.into(), i32_type.into(), ptr_type.into()], false);
+        let cool_struct_layout_llvm = self.context.struct_type(
+            &[ptr_type.into(), i32_type.into(), i32_type.into(), ptr_type.into()],
+            false,
+        );
         let union_name_gptr = self.const_global_string_ptr(name, &format!("uf_{name}_name"));
         let layout_const = cool_struct_layout_llvm.const_named_struct(&[
             union_name_gptr.as_basic_value_enum(),
             i32_type.const_int(num_fields as u64, false).into(),
+            i32_type.const_int(max_size as u64, false).into(),
             fields_global.as_pointer_value().as_basic_value_enum(),
         ]);
         let layout_global = self
@@ -15992,6 +16209,71 @@ impl<'ctx> Compiler<'ctx> {
                 .left()
                 .unwrap()
                 .into_struct_value());
+        }
+
+        if name == "copy" || name == "clone" {
+            if !kwargs.is_empty() {
+                return Err(format!("{name}() does not support keyword arguments"));
+            }
+            if args.len() != 1 {
+                return Err(format!("{name}() takes exactly 1 argument"));
+            }
+            if self.build_mode.is_freestanding() || self.no_libc {
+                return Err(format!(
+                    "{name}() is not available in freestanding or no-libc native builds"
+                ));
+            }
+            let value = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_copy, value, &name));
+        }
+
+        if name == "close" {
+            if !kwargs.is_empty() {
+                return Err("close() does not support keyword arguments".into());
+            }
+            if args.len() != 1 {
+                return Err("close() takes exactly 1 argument".into());
+            }
+            if self.build_mode.is_freestanding() || self.no_libc {
+                return Err("close() is not available in freestanding or no-libc native builds".into());
+            }
+            let value = self.compile_expr(&args[0])?;
+            return Ok(self.call_unop_fn(self.rt.cool_close, value, "close"));
+        }
+
+        if name == "panic" {
+            if !kwargs.is_empty() {
+                return Err("panic() does not support keyword arguments".into());
+            }
+            if args.len() != 1 {
+                return Err("panic() takes exactly 1 argument".into());
+            }
+            let message = self.compile_expr(&args[0])?;
+            if self.build_mode.is_freestanding() || self.no_libc {
+                self.builder.build_call(self.rt.trap_fn, &[], "panic_trap").unwrap();
+                return Ok(self.build_nil());
+            }
+            self.builder
+                .build_call(self.rt.cool_panic, &[message.into()], "panic")
+                .unwrap();
+            return Ok(self.build_nil());
+        }
+
+        if name == "abort" {
+            if !kwargs.is_empty() {
+                return Err("abort() does not support keyword arguments".into());
+            }
+            if !args.is_empty() {
+                return Err("abort() takes no arguments".into());
+            }
+            if self.build_mode.is_freestanding() || self.no_libc {
+                self.builder.build_call(self.rt.trap_fn, &[], "abort_trap").unwrap();
+                return Ok(self.build_nil());
+            }
+            self.builder
+                .build_call(self.rt.cool_abort_now, &[], "abort_now")
+                .unwrap();
+            return Ok(self.build_nil());
         }
 
         // ── raw memory builtins ──

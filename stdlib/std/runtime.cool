@@ -1,0 +1,39 @@
+import platform
+
+def engine():
+    return platform.runtime()
+
+def runtime_profile():
+    return platform.runtime_profile()
+
+def capabilities():
+    return platform.capabilities()
+
+def memory_model():
+    return platform.memory_model()
+
+def panic_policy():
+    return platform.panic_policy()
+
+def thread_safety():
+    return platform.thread_safety()
+
+def stdlib_split():
+    return platform.stdlib_split()
+
+def is_hosted():
+    return runtime_profile() == "hosted"
+
+def is_freestanding():
+    return runtime_profile() == "freestanding"
+
+def describe():
+    return {
+        "engine": engine(),
+        "profile": runtime_profile(),
+        "capabilities": capabilities(),
+        "memory_model": memory_model(),
+        "panic_policy": panic_policy(),
+        "thread_safety": thread_safety(),
+        "stdlib_split": stdlib_split(),
+    }

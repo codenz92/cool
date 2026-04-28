@@ -1,0 +1,110 @@
+import core
+import platform
+
+def shallow_copy(value):
+    return copy(value)
+
+def deep_clone(value):
+    kind = type(value)
+    if kind == "list":
+        out = []
+        for item in value:
+            out.append(deep_clone(item))
+        return out
+    if kind == "tuple":
+        return clone(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[deep_clone(key)] = deep_clone(value[key])
+        return out
+    return clone(value)
+
+class Scope:
+    def __init__(self):
+        self._resources = []
+        self.closed = false
+
+    def track(self, value):
+        if self.closed:
+            raise "std.memory.Scope is already closed"
+        self._resources.append(value)
+        return value
+
+    def extend(self, values):
+        if values == nil:
+            return self
+        for value in values:
+            self.track(value)
+        return self
+
+    def finish(self):
+        if self.closed:
+            return nil
+        self.closed = true
+        idx = len(self._resources) - 1
+        while idx >= 0:
+            close(self._resources[idx])
+            idx = idx - 1
+        self._resources = []
+        return nil
+
+    def __close__(self):
+        return self.finish()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type=nil, exc=nil, tb=nil):
+        self.finish()
+        return nil
+
+class Arena:
+    def __init__(self):
+        self._ptrs = []
+        self.closed = false
+
+    def raw_supported(self):
+        return platform.has_raw_memory()
+
+    def alloc(self, size):
+        if self.closed:
+            raise "std.memory.Arena is already closed"
+        if not self.raw_supported():
+            raise "std.memory.Arena requires raw-memory support"
+        ptr = core.alloc(int(size))
+        self._ptrs.append(ptr)
+        return ptr
+
+    def track(self, ptr):
+        if self.closed:
+            raise "std.memory.Arena is already closed"
+        self._ptrs.append(ptr)
+        return ptr
+
+    def reset(self):
+        if self.closed:
+            return nil
+        idx = len(self._ptrs) - 1
+        while idx >= 0:
+            core.free(self._ptrs[idx])
+            idx = idx - 1
+        self._ptrs = []
+        return nil
+
+    def finish(self):
+        if self.closed:
+            return nil
+        self.reset()
+        self.closed = true
+        return nil
+
+    def __close__(self):
+        return self.finish()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type=nil, exc=nil, tb=nil):
+        self.finish()
+        return nil

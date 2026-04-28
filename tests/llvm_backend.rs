@@ -2047,6 +2047,106 @@ print(platform.has_inline_asm())
 }
 
 #[test]
+fn test_llvm_runtime_metadata_and_std_memory() {
+    let result = compile_and_run_native(
+        r#"
+import platform
+import std.memory
+import std.runtime
+
+class Resource:
+    def __init__(self, name):
+        self.name = name
+
+    def __close__(self):
+        print("close " + self.name)
+
+items = [{"nums": [1, 2]}, 9]
+dup = memory.deep_clone(items)
+items[0]["nums"][0] = 77
+print(dup[0]["nums"][0])
+
+vals = [1, 2]
+other = copy(vals)
+vals[0] = 99
+print(other[0])
+
+scope = memory.Scope()
+scope.track(Resource("a"))
+scope.track(Resource("b"))
+close(scope)
+
+with memory.Arena() as arena:
+    ptr = arena.alloc(4)
+    write_u8(ptr, 65)
+    print(read_u8(ptr))
+
+print(platform.runtime_profile())
+print(platform.memory_model()["raw_memory"])
+print(platform.panic_policy()["stack_trace"])
+print(platform.thread_safety()["mode"])
+print(platform.stdlib_split()["legacy_flat_imports"])
+print(runtime.runtime_profile())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "1",
+            "1",
+            "close b",
+            "close a",
+            "65",
+            "hosted",
+            "true",
+            "true",
+            "single-threaded",
+            "true",
+            "hosted",
+        ]
+    );
+}
+
+#[test]
+fn test_llvm_copy_rejects_resource_handles() {
+    let output = compile_and_run_native_expect_runtime_error(
+        r#"
+f = open("phase14_copy.txt", "w")
+copy(f)
+"#,
+    );
+    assert!(
+        output.contains("copy() does not duplicate external/resource handles"),
+        "stderr:\n{output}"
+    );
+    let _ = fs::remove_file("phase14_copy.txt");
+}
+
+#[test]
+fn test_llvm_panic_and_abort_builtins_are_fatal() {
+    let panic_output = compile_and_run_native_expect_runtime_error(
+        r#"
+def leaf():
+    panic("boom")
+
+leaf()
+"#,
+    );
+    assert!(panic_output.contains("Panic: boom"), "stderr:\n{panic_output}");
+    assert!(panic_output.contains("Stack trace"), "stderr:\n{panic_output}");
+    assert!(panic_output.contains("leaf"), "stderr:\n{panic_output}");
+
+    let abort_output = compile_and_run_native_expect_runtime_error("abort()\n");
+    assert!(
+        abort_output.contains("Abort: program terminated"),
+        "stderr:\n{abort_output}"
+    );
+}
+
+#[test]
 fn test_llvm_import_core_module() {
     let result = compile_and_run_native(
         r#"

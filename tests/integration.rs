@@ -5441,6 +5441,138 @@ print(platform.has_inline_asm())
 }
 
 #[test]
+fn test_runtime_metadata_and_std_memory_in_interpreter() {
+    let output = run_cool(
+        r#"import platform
+import std.memory
+import std.runtime
+
+class Resource:
+    def __init__(self, name):
+        self.name = name
+
+    def __close__(self):
+        print("close " + self.name)
+
+items = [{"nums": [1, 2]}, 9]
+dup = memory.deep_clone(items)
+items[0]["nums"][0] = 77
+print(dup[0]["nums"][0])
+
+vals = [1, 2]
+other = copy(vals)
+vals[0] = 99
+print(other[0])
+
+scope = memory.Scope()
+scope.track(Resource("a"))
+scope.track(Resource("b"))
+close(scope)
+
+print(platform.runtime_profile())
+print(platform.memory_model()["raw_memory"])
+print(platform.panic_policy()["stack_trace"])
+print(platform.thread_safety()["mode"])
+print(platform.stdlib_split()["legacy_flat_imports"])
+print(runtime.runtime_profile())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "1",
+            "1",
+            "close b",
+            "close a",
+            "hosted",
+            "false",
+            "false",
+            "single-threaded",
+            "true",
+            "hosted",
+        ]
+    );
+}
+
+#[test]
+fn test_runtime_metadata_and_std_memory_in_vm() {
+    let output = run_cool_vm(
+        r#"import platform
+import std.memory
+import std.runtime
+
+class Resource:
+    def __init__(self, name):
+        self.name = name
+
+    def __close__(self):
+        print("close " + self.name)
+
+items = [{"nums": [1, 2]}, 9]
+dup = memory.deep_clone(items)
+items[0]["nums"][0] = 77
+print(dup[0]["nums"][0])
+
+vals = [1, 2]
+other = copy(vals)
+vals[0] = 99
+print(other[0])
+
+scope = memory.Scope()
+scope.track(Resource("a"))
+scope.track(Resource("b"))
+close(scope)
+
+print(platform.runtime_profile())
+print(platform.memory_model()["raw_memory"])
+print(platform.panic_policy()["stack_trace"])
+print(platform.thread_safety()["mode"])
+print(platform.stdlib_split()["legacy_flat_imports"])
+print(runtime.runtime_profile())
+"#,
+    )
+    .unwrap();
+
+    let lines: Vec<_> = output.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "1",
+            "1",
+            "close b",
+            "close a",
+            "hosted",
+            "false",
+            "false",
+            "single-threaded",
+            "true",
+            "hosted",
+        ]
+    );
+}
+
+#[test]
+fn test_panic_and_abort_builtins_are_fatal_in_interpreter() {
+    let panic_err = run_cool("panic(\"boom\")\n").unwrap_err();
+    assert!(panic_err.contains("Panic: boom"), "stderr:\n{panic_err}");
+
+    let abort_err = run_cool("abort()\n").unwrap_err();
+    assert!(abort_err.contains("Abort: program terminated"), "stderr:\n{abort_err}");
+}
+
+#[test]
+fn test_panic_and_abort_builtins_are_fatal_in_vm() {
+    let panic_err = run_cool_vm("panic(\"boom\")\n").unwrap_err();
+    assert!(panic_err.contains("Panic: boom"), "stderr:\n{panic_err}");
+
+    let abort_err = run_cool_vm("abort()\n").unwrap_err();
+    assert!(abort_err.contains("Abort: program terminated"), "stderr:\n{abort_err}");
+}
+
+#[test]
 fn test_import_core_module() {
     let result = run_cool(
         r#"import core

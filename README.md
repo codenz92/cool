@@ -48,11 +48,13 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `write()`, `readlines()`
+- Explicit runtime helpers: `copy()`, `clone()`, `close()`, `panic()`, and `abort()`
 - `runfile()` to execute another `.cool` file at runtime
 - `eval(str)` to evaluate a Cool expression or statement at runtime
 - `import term` for raw terminal mode, cursor control, terminal sizing, and real-time key input across interpreter, VM, and native builds (real TTY required for interactive input)
 - `os.popen(cmd)` to run shell commands and capture output
 - Integer width helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, plus pointer-width `isize`, `usize`, `word_bits()`, and `word_bytes()`
+- Runtime-model helpers via `import std.memory` and `import std.runtime`
 - Bundled data modules: `import bytes`, `import base64`, `import codec`, `import html`, `import config`, and `import schema`
 - `struct` definitions with typed fields and positional/keyword construction across all runtimes
 - `packed struct` — no inter-field padding, stable binary layout in LLVM
@@ -61,7 +63,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 
 ### Built-in Functions
 
-`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `ord()`, `chr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `isize()`, `usize()`, `word_bits()`, `word_bytes()`, `assert`, `exit()`
+`print()`, `input()`, `str()`, `int()`, `float()`, `bool()`, `len()`, `range()`, `type()`, `repr()`, `ord()`, `chr()`, `abs()`, `min()`, `max()`, `sum()`, `any()`, `all()`, `round()`, `sorted()`, `reversed()`, `enumerate()`, `zip()`, `map()`, `filter()`, `list()`, `tuple()`, `dict()`, `set()`, `isinstance()`, `hasattr()`, `getattr()`, `copy()`, `clone()`, `close()`, `panic()`, `abort()`, `isize()`, `usize()`, `word_bits()`, `word_bytes()`, `assert`, `exit()`
 
 ### String Methods
 
@@ -78,10 +80,13 @@ print(platform.os())              # "macos", "linux", "windows", ...
 print(platform.arch())            # "x86_64", "aarch64", ...
 print(platform.family())          # "unix" or "windows"
 print(platform.runtime())         # "interpreter", "vm", or "native"
+print(platform.runtime_profile()) # "hosted" or "freestanding"
 print(platform.shared_lib_ext())  # "dylib", "so", or "dll"
 print(platform.has_ffi())         # runtime capability flags
 print(platform.has_raw_memory())
 print(platform.capabilities())    # {"file": true, "network": true, ...}
+print(platform.memory_model()["raw_memory"])
+print(platform.panic_policy()["stack_trace"])
 ```
 
 ### Capability Model
@@ -97,6 +102,26 @@ process = false
 ```
 
 The interpreter, bytecode VM, and native runtime enforce the same policy for `open()`, `import os`, `import http`, `import socket`, and `import subprocess`. Denied operations raise an explicit capability error, and `platform.capabilities()` reports the active manifest policy back to Cool code.
+
+### Runtime Model
+
+Phase 14 adds a user-visible runtime/memory surface:
+
+```python
+import std.memory
+import std.runtime
+
+scope = std.memory.Scope()
+file = scope.track(open("demo.txt", "w"))
+file.write("hello")
+close(scope)  # deterministic cleanup beyond `with`
+
+print(std.runtime.runtime_profile())      # hosted / freestanding
+print(std.runtime.memory_model()["copy"]) # shallow-copy policy
+print(std.runtime.thread_safety()["mode"])
+```
+
+`copy()` / `clone()` are shallow across containers and instances; `std.memory.deep_clone()` recursively clones list/dict trees. `std.memory.Arena` layers explicit `core.alloc()` / `core.free()` ownership onto hosted native builds when raw memory is available. `panic()` is a fatal diagnostic path, while `abort()` is an immediate fatal termination path.
 
 ### Data Modules
 
@@ -384,7 +409,7 @@ cool build --linker-script=link.ld hello.cool  # emits → ./hello.o, then links
 
 `--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`. `--entry <symbol>` / `[build].entry` let you control the final linker entry for no-libc or kernel-style outputs, while `--cpu` / `--cpu-features` thread target tuning through the LLVM target machine.
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, top-level typed parameters/return types, and generic defs lowered onto the shared dynamic runtime), enums/tagged unions with `match`, generic structs/unions, classes with `__init__`, inheritance, methods, `implements`, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`, `loads_lines`, `dumps_lines`, `pointer`, `transform`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, top-level typed parameters/return types, and generic defs lowered onto the shared dynamic runtime), enums/tagged unions with `match`, generic structs/unions, classes with `__init__`, inheritance, methods, `implements`, and `super()`, `print()`, `str()`, `isinstance()`, `copy()`, `clone()`, `close()`, `panic()`, `abort()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `runtime_profile`, `memory_model`, `panic_policy`, `thread_safety`, `stdlib_split`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), bundled `import std.memory` / `import std.runtime`, native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`, `loads_lines`, `dumps_lines`, `pointer`, `transform`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** closures/lambdas.
 
@@ -403,7 +428,7 @@ The LLVM backend supports: integers, floats, strings, booleans, variables, arith
 | `import os` | ✅ | ✅ | ✅ |
 | `import sys` | ✅ | ✅ | ✅ |
 | `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`) | ✅ | ✅ | ✅ |
-| `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, `is_windows`, `is_unix`, `has_ffi`, `has_raw_memory`, `has_extern`, `has_inline_asm`) | ✅ | ✅ | ✅ |
+| `import platform` (`os`, `arch`, `family`, `runtime`, `runtime_profile`, `memory_model`, `panic_policy`, `thread_safety`, `stdlib_split`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, `is_windows`, `is_unix`, `has_ffi`, `has_raw_memory`, `has_extern`, `has_inline_asm`) | ✅ | ✅ | ✅ |
 | `import core` (`word_bits`, `word_bytes`, `page_size`, page/paging helpers; allocator hooks are LLVM-only) | ✅ | ✅ | ✅ |
 | `import csv` (`rows`, `dicts`, `write`) | ✅ | ✅ | ✅ |
 | `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`) | ✅ | ✅ | ✅ |

@@ -137,6 +137,146 @@ impl VM {
         VmValue::Dict(Rc::new(RefCell::new(dict)))
     }
 
+    fn dict_value(&self, entries: Vec<(&str, VmValue)>) -> VmValue {
+        let mut dict = VmDict::new();
+        for (name, value) in entries {
+            dict.set(VmValue::Str(name.to_string()), value);
+        }
+        VmValue::Dict(Rc::new(RefCell::new(dict)))
+    }
+
+    fn runtime_profile_value(&self) -> VmValue {
+        VmValue::Str("hosted".to_string())
+    }
+
+    fn memory_model_value(&self) -> VmValue {
+        self.dict_value(vec![
+            ("managed", VmValue::Str("shared host-managed reference values".to_string())),
+            ("raw_memory", VmValue::Bool(false)),
+            (
+                "ownership",
+                VmValue::Str(
+                    "containers and instances are shared by assignment; use copy()/clone() for explicit shallow duplication"
+                        .to_string(),
+                ),
+            ),
+            (
+                "ffi",
+                VmValue::Str("VM values do not expose native FFI-owned memory directly".to_string()),
+            ),
+            (
+                "cleanup",
+                VmValue::Str("with, close(), and std.memory.Scope provide deterministic resource cleanup".to_string()),
+            ),
+            (
+                "copy",
+                VmValue::Str("copy()/clone() are shallow; std.memory.deep_clone() recurses through list/dict trees".to_string()),
+            ),
+        ])
+    }
+
+    fn panic_policy_value(&self) -> VmValue {
+        self.dict_value(vec![
+            ("raise", VmValue::Str("recoverable exception".to_string())),
+            ("panic", VmValue::Str("fatal diagnostic error".to_string())),
+            ("abort", VmValue::Str("immediate fatal termination".to_string())),
+            ("stack_trace", VmValue::Bool(false)),
+        ])
+    }
+
+    fn thread_safety_value(&self) -> VmValue {
+        self.dict_value(vec![
+            ("mode", VmValue::Str("single-threaded".to_string())),
+            (
+                "shared_mutable",
+                VmValue::Str("not safe to share mutable VM values across host threads".to_string()),
+            ),
+            (
+                "ffi",
+                VmValue::Str("native thread coordination is outside the VM contract".to_string()),
+            ),
+        ])
+    }
+
+    fn stdlib_split_value(&self) -> VmValue {
+        self.dict_value(vec![
+            (
+                "core",
+                VmValue::Str("freestanding-safe primitives and low-level helpers".to_string()),
+            ),
+            (
+                "std",
+                VmValue::Str("hosted or high-level library surfaces under std.*".to_string()),
+            ),
+            ("legacy_flat_imports", VmValue::Bool(true)),
+        ])
+    }
+
+    fn copy_value(&mut self, value: VmValue) -> Result<VmValue, String> {
+        match value {
+            VmValue::Int(_)
+            | VmValue::Float(_)
+            | VmValue::Str(_)
+            | VmValue::Bool(_)
+            | VmValue::Nil
+            | VmValue::Closure(_)
+            | VmValue::BoundMethod(_)
+            | VmValue::BoundBuiltin(_, _)
+            | VmValue::BuiltinFn(_)
+            | VmValue::Class(_)
+            | VmValue::Proto(_)
+            | VmValue::Iter(_)
+            | VmValue::Super(_) => Ok(value),
+            VmValue::Tuple(items) => Ok(VmValue::Tuple(Rc::new(items.iter().cloned().collect()))),
+            VmValue::List(items) => Ok(VmValue::List(Rc::new(RefCell::new(items.borrow().clone())))),
+            VmValue::Dict(items) => Ok(VmValue::Dict(Rc::new(RefCell::new(items.borrow().clone())))),
+            VmValue::Instance(inst) => {
+                let instance_value = VmValue::Instance(inst.clone());
+                if self.find_method(&inst.class, "__copy__").is_some() {
+                    let method = self.get_attr(instance_value.clone(), "__copy__")?;
+                    return self.call_value_direct(method, &[], &[]);
+                }
+                if self.find_method(&inst.class, "copy").is_some() {
+                    let method = self.get_attr(instance_value.clone(), "copy")?;
+                    return self.call_value_direct(method, &[], &[]);
+                }
+                Ok(VmValue::Instance(Rc::new(VmInstance {
+                    class: inst.class.clone(),
+                    fields: RefCell::new(inst.fields.borrow().clone()),
+                })))
+            }
+            VmValue::File(_) | VmValue::Socket(_) => {
+                Err(self.err("copy() does not duplicate external/resource handles; manage ownership explicitly"))
+            }
+        }
+    }
+
+    fn close_value(&mut self, value: VmValue) -> Result<VmValue, String> {
+        match &value {
+            VmValue::Nil => Ok(VmValue::Nil),
+            VmValue::File(_) | VmValue::Socket(_) => {
+                let close_fn = self.get_attr(value.clone(), "close")?;
+                self.call_value_direct(close_fn, &[], &[])
+            }
+            VmValue::Instance(inst) => {
+                if self.find_method(&inst.class, "__close__").is_some() {
+                    let method = self.get_attr(value.clone(), "__close__")?;
+                    return self.call_value_direct(method, &[], &[]);
+                }
+                if self.find_method(&inst.class, "close").is_some() {
+                    let method = self.get_attr(value.clone(), "close")?;
+                    return self.call_value_direct(method, &[], &[]);
+                }
+                if self.find_method(&inst.class, "__exit__").is_some() {
+                    let method = self.get_attr(value.clone(), "__exit__")?;
+                    return self.call_value_direct(method, &[VmValue::Nil, VmValue::Nil, VmValue::Nil], &[]);
+                }
+                Ok(VmValue::Nil)
+            }
+            _ => Ok(VmValue::Nil),
+        }
+    }
+
     fn register_builtins(&mut self) {
         for name in &[
             "print",
@@ -164,6 +304,11 @@ impl VM {
             "repr",
             "exit",
             "open",
+            "copy",
+            "clone",
+            "close",
+            "panic",
+            "abort",
             "isinstance",
             "hasattr",
             "getattr",
@@ -2182,6 +2327,30 @@ impl VM {
                     _ => 0,
                 };
                 std::process::exit(code);
+            }
+            "copy" | "clone" => {
+                if args.len() != 1 {
+                    return Err(self.err(&format!("{name}() takes exactly 1 argument")));
+                }
+                self.copy_value(args[0].clone())
+            }
+            "close" => {
+                if args.len() != 1 {
+                    return Err(self.err("close() takes exactly 1 argument"));
+                }
+                self.close_value(args[0].clone())
+            }
+            "panic" => {
+                if args.len() != 1 {
+                    return Err(self.err("panic() takes exactly 1 argument"));
+                }
+                Err(self.err(&format!("Panic: {}", args[0])))
+            }
+            "abort" => {
+                if !args.is_empty() {
+                    return Err(self.err("abort() takes no arguments"));
+                }
+                Err(self.err("Abort: program terminated"))
             }
             "open" => {
                 self.require_file_capability("open()")?;
@@ -4365,6 +4534,11 @@ impl VM {
             "arch" => VmValue::Str(std::env::consts::ARCH.to_string()),
             "family" => VmValue::Str(std::env::consts::FAMILY.to_string()),
             "runtime" => VmValue::Str("vm".to_string()),
+            "runtime_profile" => self.runtime_profile_value(),
+            "memory_model" => self.memory_model_value(),
+            "panic_policy" => self.panic_policy_value(),
+            "thread_safety" => self.thread_safety_value(),
+            "stdlib_split" => self.stdlib_split_value(),
             "exe_ext" => VmValue::Str(std::env::consts::EXE_EXTENSION.to_string()),
             "shared_lib_ext" => VmValue::Str(
                 if cfg!(target_os = "windows") {
@@ -5875,6 +6049,11 @@ impl VM {
                     "arch",
                     "family",
                     "runtime",
+                    "runtime_profile",
+                    "memory_model",
+                    "panic_policy",
+                    "thread_safety",
+                    "stdlib_split",
                     "exe_ext",
                     "shared_lib_ext",
                     "path_sep",
