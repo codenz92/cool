@@ -56,6 +56,15 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/cluster.cool` adds simple distributed coordination primitives on top of `store`: membership, leases, barriers, leader selection, and file-backed state for multi-node experiments
 - While landing the networking tranche, the bundled modules were tightened for true cross-runtime parity: native builds now reject fewer stdlib portability traps because the new code avoids open-ended slice forms and string-method argument patterns that the interpreter/VM had tolerated more loosely
 
+### Phase 6 Follow-on — Databases And Storage Modules
+
+- New bundled `stdlib/cache.cool` adds in-memory and disk-backed TTL caches with invalidation, prefix clearing, hit/miss stats, and `cache.remember(...)` helpers that now behave consistently across interpreter, VM, and native builds
+- New bundled `stdlib/memo.cool` adds deterministic memoization tables on top of those cache backends, plus semantically stable `memo.call(...)` helpers for reusable function-result caching across runtimes
+- New bundled `stdlib/package.cool` adds semantic-version parsing/comparison, version bumping and constraint checks, manifest/project inspection, package IDs, and local dependency-tree resolution helpers for project tooling
+- New bundled `stdlib/compress.cool`, `stdlib/archive.cool`, and `stdlib/bundle.cool` add pure-Cool gzip/tar/zip helpers, higher-level archive pack/list/unpack flows, and single-file bundle packaging plus asset extraction on top of the same byte-oriented primitives
+- Native `open()` file handles now support `read_bytes()` and `write_bytes()` alongside the existing text methods, so archive/cache/package tooling can move binary payloads without dropping to ad hoc host glue
+- While landing the storage tranche, the bundled code was hardened against real cross-runtime gaps: helper modules now avoid unsupported `with open(...)` and native method-default traps internally, and the new coverage exercises the same cache/archive/bundle flows through interpreter, VM, and native runs
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

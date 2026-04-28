@@ -364,6 +364,14 @@ CoolVal cool_index(CoolVal, CoolVal);
 CoolVal cool_slice(CoolVal, CoolVal, CoolVal);
 CoolVal cool_setindex(CoolVal, CoolVal, CoolVal);
 CoolVal cool_file_open(CoolVal, CoolVal);
+CoolVal cool_file_read(CoolVal);
+CoolVal cool_file_read_bytes(CoolVal);
+CoolVal cool_file_readline(CoolVal);
+CoolVal cool_file_readlines(CoolVal);
+CoolVal cool_file_write(CoolVal, CoolVal);
+CoolVal cool_file_write_bytes(CoolVal, CoolVal);
+CoolVal cool_file_writelines(CoolVal, CoolVal);
+CoolVal cool_file_close(CoolVal);
 CoolVal cool_close(CoolVal);
 CoolVal cool_socket_connect(CoolVal, CoolVal);
 CoolVal cool_socket_listen(CoolVal, CoolVal);
@@ -2473,6 +2481,51 @@ static CoolFile* cv_file_ptr(CoolVal v) {
     return (CoolFile*)(intptr_t)v.payload;
 }
 
+static uint8_t* cool_file_bytes_arg(CoolVal value, size_t* out_len, const char* context) {
+    if (value.tag == TAG_STR) {
+        const char* text = (const char*)(intptr_t)value.payload;
+        size_t len = strlen(text);
+        uint8_t* out = (uint8_t*)malloc(len ? len : 1);
+        if (!out) {
+            fprintf(stderr, "%s out of memory\n", context);
+            exit(1);
+        }
+        if (len > 0) memcpy(out, text, len);
+        *out_len = len;
+        return out;
+    }
+    if (value.tag == TAG_LIST || value.tag == TAG_TUPLE) {
+        CoolList* list = (CoolList*)(intptr_t)value.payload;
+        size_t len = (size_t)list->length;
+        uint8_t* out = (uint8_t*)malloc(len ? len : 1);
+        if (!out) {
+            fprintf(stderr, "%s out of memory\n", context);
+            exit(1);
+        }
+        CoolVal* items = (CoolVal*)list->data;
+        for (size_t i = 0; i < len; i++) {
+            CoolVal item = items[i];
+            if (item.tag != TAG_INT || item.payload < 0 || item.payload > 255) {
+                fprintf(stderr, "%s requires a string or byte list/tuple\n", context);
+                exit(1);
+            }
+            out[i] = (uint8_t)item.payload;
+        }
+        *out_len = len;
+        return out;
+    }
+    fprintf(stderr, "%s requires a string or byte list/tuple\n", context);
+    exit(1);
+}
+
+static CoolVal cool_file_bytes_value(const uint8_t* data, size_t len) {
+    CoolVal out = cool_list_make(cv_int((int64_t)len));
+    for (size_t i = 0; i < len; i++) {
+        cool_list_push(out, cv_int((int64_t)data[i]));
+    }
+    return out;
+}
+
 CoolVal cool_file_open(CoolVal path, CoolVal mode) {
     if (!COOL_CAP_FILE) {
         cool_capability_denied("file", "open()");
@@ -2519,6 +2572,23 @@ CoolVal cool_file_read(CoolVal file) {
     size_t read = fread(buf, 1, (size_t)size, f->fp);
     buf[read] = '\0';
     return cv_str(buf);
+}
+
+CoolVal cool_file_read_bytes(CoolVal file) {
+    CoolFile* f = cv_file_ptr(file);
+    if (!f || f->closed) {
+        fputs("ValueError: I/O operation on closed file\n", stderr);
+        exit(1);
+    }
+    fseek(f->fp, 0, SEEK_END);
+    long size = ftell(f->fp);
+    rewind(f->fp);
+    uint8_t* buf = (uint8_t*)malloc((size_t)size ? (size_t)size : 1);
+    if (!buf) return cool_list_make(cv_int(0));
+    size_t read = fread(buf, 1, (size_t)size, f->fp);
+    CoolVal out = cool_file_bytes_value(buf, read);
+    free(buf);
+    return out;
 }
 
 CoolVal cool_file_readline(CoolVal file) {
@@ -2586,6 +2656,20 @@ CoolVal cool_file_write(CoolVal file, CoolVal text) {
     fputs(s, f->fp);
     fflush(f->fp);
     return cv_nil();
+}
+
+CoolVal cool_file_write_bytes(CoolVal file, CoolVal value) {
+    CoolFile* f = cv_file_ptr(file);
+    if (!f || f->closed) {
+        fputs("ValueError: I/O operation on closed file\n", stderr);
+        exit(1);
+    }
+    size_t len = 0;
+    uint8_t* data = cool_file_bytes_arg(value, &len, "write_bytes()");
+    fwrite(data, 1, len, f->fp);
+    fflush(f->fp);
+    free(data);
+    return cv_int((int64_t)len);
 }
 
 CoolVal cool_file_writelines(CoolVal file, CoolVal lines) {
@@ -3119,9 +3203,11 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
         if (strcmp(builtin_name, "__enter__") == 0 && nargs == 0) return obj;
         if (strcmp(builtin_name, "__exit__") == 0 && nargs == 3) return cool_file_close(obj);
         if (strcmp(builtin_name, "read") == 0 && nargs == 0) return cool_file_read(obj);
+        if (strcmp(builtin_name, "read_bytes") == 0 && nargs == 0) return cool_file_read_bytes(obj);
         if (strcmp(builtin_name, "readline") == 0 && nargs == 0) return cool_file_readline(obj);
         if (strcmp(builtin_name, "readlines") == 0 && nargs == 0) return cool_file_readlines(obj);
         if (strcmp(builtin_name, "write") == 0 && nargs == 1) return cool_file_write(obj, a0);
+        if (strcmp(builtin_name, "write_bytes") == 0 && nargs == 1) return cool_file_write_bytes(obj, a0);
         if (strcmp(builtin_name, "writelines") == 0 && nargs == 1) return cool_file_writelines(obj, a0);
         if (strcmp(builtin_name, "close") == 0 && nargs == 0) return cool_file_close(obj);
     }

@@ -286,6 +286,7 @@ pub struct VmFile {
     pub content: Vec<String>,
     pub line_pos: usize,
     pub write_buf: String,
+    pub write_buf_bytes: Vec<u8>,
     pub closed: bool,
 }
 

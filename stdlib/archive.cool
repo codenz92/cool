@@ -1,0 +1,195 @@
+import compress
+import os
+import path
+
+private def _fail(message):
+    raise "archive: " + str(message)
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _bytes(value):
+    if type(value) == "str" and os.exists(value):
+        return read_file(value)
+    return value
+
+private def _read_bytes(file_path):
+    f = open(file_path, "rb")
+    data = f.read_bytes()
+    f.close()
+    return data
+
+private def _write_bytes(file_path, data):
+    parent = path.dirname(file_path)
+    if parent != "" and parent != ".":
+        ensure_dir(parent)
+    f = open(file_path, "wb")
+    f.write_bytes(data)
+    f.close()
+    return file_path
+
+def ensure_dir(dir_path):
+    target = path.normalize(str(dir_path)).replace("\\", "/")
+    if target == "" or target == ".":
+        return target
+    if os.exists(target):
+        return target
+    parent = path.dirname(target)
+    if parent != target and parent != "":
+        ensure_dir(parent)
+    if not os.exists(target):
+        os.mkdir(target)
+    return target
+
+private def _normalize_entry_name(name):
+    text = str(name).replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:len(text)]
+    if text == "" or text.startswith("/") or text.startswith("../") or text.find("/../") >= 0:
+        _fail("unsafe archive entry name '" + str(name) + "'")
+    return text
+
+def read_file(file_path):
+    return _read_bytes(str(file_path))
+
+def write_file(file_path, data):
+    return _write_bytes(str(file_path), data)
+
+def entry(name, data=nil, kind="file", mode=420, mtime=0):
+    return compress.tar_entry(_normalize_entry_name(name), data, kind, mode, mtime)
+
+def entries(root, prefix=""):
+    base = path.normalize(str(root)).replace("\\", "/")
+    if not os.exists(base):
+        _fail("path not found: '" + base + "'")
+    initial_prefix = str(prefix).replace("\\", "/")
+    out = []
+    pending = [(base, initial_prefix)]
+    while len(pending) > 0:
+        item = pending[len(pending) - 1]
+        pending = pending[0:len(pending) - 1]
+        current = item[0]
+        rel = item[1]
+        if os.isdir(current):
+            names = os.listdir(current)
+            names.sort()
+            if rel != "":
+                dir_name = _normalize_entry_name(rel)
+                if not dir_name.endswith("/"):
+                    dir_name = dir_name + "/"
+                out.append(entry(dir_name, [], "dir"))
+            idx = len(names) - 1
+            while idx >= 0:
+                child_name = str(names[idx])
+                child_abs = path.join(current, child_name)
+                child_rel = child_name
+                if rel != "":
+                    child_rel = path.join(rel, child_name).replace("\\", "/")
+                pending.append((child_abs, child_rel))
+                idx = idx - 1
+        else:
+            out.append(entry(_normalize_entry_name(rel), _read_bytes(current), "file"))
+    return out
+
+private def _infer_format_name(raw):
+    text = str(raw).lower()
+    if text.endswith(".tar.gz") or text.endswith(".tgz") or text == "tar.gz" or text == "tgz":
+        return "tar.gz"
+    if text.endswith(".tar") or text == "tar":
+        return "tar"
+    if text.endswith(".zip") or text == "zip":
+        return "zip"
+    return nil
+
+private def _load_entries(payload, format_name):
+    kind = _infer_format_name(format_name)
+    if kind == "tar.gz":
+        return compress.tar_decode(compress.gzip_decode(payload))
+    if kind == "tar":
+        return compress.tar_decode(payload)
+    if kind == "zip":
+        items = compress.zip_decode(payload)
+        out = []
+        for item in items:
+            item_kind = "file"
+            if item["dir"]:
+                item_kind = "dir"
+            out.append({
+                "name": item["name"],
+                "data": item["data"],
+                "kind": item_kind,
+            })
+        return out
+    _fail("unsupported archive format '" + str(format_name) + "'")
+
+def pack_entries(items, format="tar.gz"):
+    kind = _infer_format_name(format)
+    if kind == "tar.gz":
+        return compress.gzip_encode(compress.tar_encode(items))
+    if kind == "tar":
+        return compress.tar_encode(items)
+    if kind == "zip":
+        zip_items = []
+        for item in items:
+            zip_items.append({
+                "name": _normalize_entry_name(item["name"]),
+                "data": item["data"],
+                "dir": str(item["kind"]) == "dir",
+            })
+        return compress.zip_encode(zip_items)
+    _fail("unsupported archive format '" + str(format) + "'")
+
+def pack(root, format="tar.gz", prefix=""):
+    return pack_entries(entries(root, prefix), format)
+
+def create(root, output, format=nil, prefix=""):
+    kind = format
+    if kind == nil:
+        kind = _infer_format_name(output)
+    if kind == nil:
+        kind = "tar.gz"
+    payload = pack(root, kind, prefix)
+    _write_bytes(output, payload)
+    return {
+        "output": str(output),
+        "format": kind,
+        "entries": len(entries(root, prefix)),
+    }
+
+def list(source, format=nil):
+    kind = format
+    if kind == nil:
+        kind = _infer_format_name(source)
+    payload = _bytes(source)
+    names = []
+    for item in _load_entries(payload, kind):
+        names.append(item["name"])
+    names.sort()
+    return names
+
+def unpack(source, dest, format=nil):
+    kind = format
+    if kind == nil:
+        kind = _infer_format_name(source)
+    if kind == nil:
+        _fail("could not infer archive format")
+    ensure_dir(dest)
+    payload = _bytes(source)
+    items = _load_entries(payload, kind)
+    written = []
+    for item in items:
+        name = _normalize_entry_name(item["name"])
+        target = path.join(dest, name)
+        if str(_get(item, "kind", "file")) == "dir" or name.endswith("/"):
+            ensure_dir(target)
+            continue
+        ensure_dir(path.dirname(target))
+        _write_bytes(target, _get(item, "data", []))
+        written.append(target)
+    return {
+        "format": kind,
+        "files": written,
+        "count": len(written),
+    }

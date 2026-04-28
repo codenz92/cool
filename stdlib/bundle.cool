@@ -1,0 +1,159 @@
+import archive
+import bytes
+import compress
+import json
+import os
+import package
+import path
+
+private def _fail(message):
+    raise "bundle: " + str(message)
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _bundle_bytes(source):
+    if type(source) == "str" and os.exists(source):
+        return archive.read_file(source)
+    return bytes.coerce(source)
+
+private def _bundle_entries(source):
+    return compress.zip_decode(_bundle_bytes(source))
+
+private def _entry_map(source):
+    out = {}
+    for item in _bundle_entries(source):
+        out[item["name"]] = item
+    return out
+
+private def _ensure_output(output, info):
+    if output != nil:
+        return str(output)
+    return path.join(info["root"], info["name"] + "-" + info["version"] + ".coolbundle")
+
+private def _collect_all(root):
+    return archive.entries(root, "payload")
+
+private def _collect_one(root, rel):
+    name = str(rel).replace("\\", "/")
+    absolute = path.join(root, name)
+    if not os.exists(absolute):
+        _fail("asset not found: '" + name + "'")
+    if os.isdir(absolute):
+        return archive.entries(absolute, path.join("payload", name).replace("\\", "/"))
+    return [archive.entry(path.join("payload", name).replace("\\", "/"), archive.read_file(absolute), "file")]
+
+private def _dedupe(items):
+    out = []
+    seen = {}
+    for item in items:
+        name = item["name"]
+        if name in seen:
+            continue
+        seen[name] = true
+        out.append(item)
+    return out
+
+def embed_text(name, text, encoding="utf-8"):
+    return {
+        "name": str(name),
+        "data": bytes.from_string(text, encoding),
+        "kind": "file",
+    }
+
+def embed_bytes(name, data):
+    return {
+        "name": str(name),
+        "data": bytes.coerce(data),
+        "kind": "file",
+    }
+
+def create(root, entry=nil, output=nil, assets=nil, metadata=nil):
+    info = package.project_info(root)
+    entry_path = entry
+    if entry_path == nil:
+        entry_path = info["main"]
+    if entry_path == nil:
+        _fail("bundle entry is required")
+    entry_path = str(entry_path).replace("\\", "/")
+    project_root = info["root"]
+    payload_entries = []
+    if assets == nil:
+        payload_entries = _collect_all(project_root)
+    else:
+        selected = ["cool.toml", entry_path]
+        for item in assets:
+            selected.append(str(item))
+        idx = 0
+        while idx < len(selected):
+            for extra in _collect_one(project_root, selected[idx]):
+                payload_entries.append(extra)
+            idx = idx + 1
+    payload_entries = _dedupe(payload_entries)
+    files = []
+    for item in payload_entries:
+        if _get(item, "kind", "file") == "file":
+            files.append(item["name"])
+    files.sort()
+    manifest = {
+        "type": "cool-bundle",
+        "entry": entry_path,
+        "package": {
+            "name": info["name"],
+            "version": info["version"],
+            "id": package.package_id(info),
+        },
+        "root": project_root,
+        "files": files,
+        "metadata": _get(metadata, "metadata", metadata),
+    }
+    bundle_entries = [embed_text("bundle.json", json.dumps(manifest), "utf-8")]
+    for item in payload_entries:
+        bundle_entries.append(item)
+    payload = compress.zip_encode(bundle_entries)
+    target = _ensure_output(output, info)
+    archive.write_file(target, payload)
+    return {
+        "output": target,
+        "entry": entry_path,
+        "files": files,
+        "package": manifest["package"],
+    }
+
+def read_manifest(source):
+    mapping = _entry_map(source)
+    if "bundle.json" not in mapping:
+        _fail("bundle.json missing from bundle")
+    return json.loads(bytes.to_string(mapping["bundle.json"]["data"], "utf-8"))
+
+def extract(source, dest):
+    manifest = read_manifest(source)
+    archive.ensure_dir(dest)
+    written = []
+    for item in _bundle_entries(source):
+        name = item["name"]
+        if name == "bundle.json" or item["dir"]:
+            continue
+        rel = name
+        if rel.startswith("payload/"):
+            rel = rel[8:len(rel)]
+        target = path.join(dest, rel)
+        archive.write_file(target, item["data"])
+        written.append(target)
+    return {
+        "manifest": manifest,
+        "files": written,
+        "count": len(written),
+    }
+
+def asset_bytes(source, name):
+    target = "payload/" + str(name).replace("\\", "/")
+    for item in _bundle_entries(source):
+        if item["name"] == target:
+            return item["data"]
+    _fail("bundle asset not found: '" + str(name) + "'")
+
+def asset_text(source, name, encoding="utf-8"):
+    return bytes.to_string(asset_bytes(source, name), encoding)

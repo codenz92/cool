@@ -1011,6 +1011,40 @@ CoolVal cool_range3(CoolVal start, CoolVal stop, CoolVal step) {
 typedef struct { FILE* fp; int closed; } CoolFile;
 static CoolFile* cv_file_ptr(CoolVal v) { return (CoolFile*)(intptr_t)v.payload; }
 
+static uint8_t* cool_file_bytes_arg(CoolVal value, size_t* out_len, const char* context) {
+    if (value.tag == TAG_STR) {
+        const char* text = as_cstr(value);
+        size_t len = strlen(text);
+        uint8_t* out = malloc(len ? len : 1);
+        if (!out) { fprintf(stderr, "%s out of memory\n", context); exit(1); }
+        if (len > 0) memcpy(out, text, len);
+        *out_len = len;
+        return out;
+    }
+    if (value.tag == TAG_LIST || value.tag == TAG_TUPLE) {
+        CoolList* list = (CoolList*)(intptr_t)value.payload;
+        size_t len = (size_t)list->len;
+        uint8_t* out = malloc(len ? len : 1);
+        if (!out) { fprintf(stderr, "%s out of memory\n", context); exit(1); }
+        for (size_t i = 0; i < len; i++) {
+            CoolVal item = list->data[i];
+            if (item.tag != TAG_INT || item.payload < 0 || item.payload > 255) {
+                fprintf(stderr, "%s requires a string or byte list/tuple\n", context); exit(1);
+            }
+            out[i] = (uint8_t)item.payload;
+        }
+        *out_len = len;
+        return out;
+    }
+    fprintf(stderr, "%s requires a string or byte list/tuple\n", context); exit(1);
+}
+
+static CoolVal cool_file_bytes_value(const uint8_t* data, size_t len) {
+    CoolVal out = cool_list_new();
+    for (size_t i = 0; i < len; i++) cool_list_append_raw(out, cv_int((int64_t)data[i]));
+    return out;
+}
+
 CoolVal cool_file_open(CoolVal path, CoolVal mode) {
     const char* p = as_cstr(path);
     const char* m = (mode.tag == TAG_STR) ? as_cstr(mode) : "r";
@@ -1026,6 +1060,16 @@ CoolVal cool_file_read(CoolVal file) {
     char* buf = malloc((size_t)size + 1);
     size_t read = fread(buf, 1, (size_t)size, f->fp);
     buf[read] = '\0'; return cv_str(buf);
+}
+CoolVal cool_file_read_bytes(CoolVal file) {
+    CoolFile* f = cv_file_ptr(file);
+    if (f->closed) { fputs("ValueError: I/O operation on closed file\n", stderr); exit(1); }
+    fseek(f->fp, 0, SEEK_END); long size = ftell(f->fp); rewind(f->fp);
+    uint8_t* buf = malloc((size_t)size ? (size_t)size : 1);
+    size_t read = fread(buf, 1, (size_t)size, f->fp);
+    CoolVal out = cool_file_bytes_value(buf, read);
+    free(buf);
+    return out;
 }
 CoolVal cool_file_readline(CoolVal file) {
     CoolFile* f = cv_file_ptr(file);
@@ -1066,6 +1110,16 @@ CoolVal cool_file_write(CoolVal file, CoolVal text) {
     CoolFile* f = cv_file_ptr(file);
     if (f->closed) { fputs("ValueError: I/O operation on closed file\n", stderr); exit(1); }
     fputs(as_cstr(text), f->fp); return cv_nil();
+}
+CoolVal cool_file_write_bytes(CoolVal file, CoolVal value) {
+    CoolFile* f = cv_file_ptr(file);
+    if (f->closed) { fputs("ValueError: I/O operation on closed file\n", stderr); exit(1); }
+    size_t len = 0;
+    uint8_t* data = cool_file_bytes_arg(value, &len, "write_bytes()");
+    fwrite(data, 1, len, f->fp);
+    fflush(f->fp);
+    free(data);
+    return cv_int((int64_t)len);
 }
 CoolVal cool_file_writelines(CoolVal file, CoolVal lines) {
     CoolList* l = cv_list_ptr(lines);
@@ -1156,9 +1210,11 @@ CoolVal cool_dispatch(CoolVal self, const char* name, int32_t argc, CoolVal* arg
     if (self.tag == TAG_FILE) {
         CoolVal a0 = argc > 0 ? argv[0] : cv_nil();
         if (!strcmp(name,"read"))       return cool_file_read(self);
+        if (!strcmp(name,"read_bytes")) return cool_file_read_bytes(self);
         if (!strcmp(name,"readline"))   return cool_file_readline(self);
         if (!strcmp(name,"readlines"))  return cool_file_readlines(self);
         if (!strcmp(name,"write"))      return cool_file_write(self, a0);
+        if (!strcmp(name,"write_bytes")) return cool_file_write_bytes(self, a0);
         if (!strcmp(name,"writelines")) return cool_file_writelines(self, a0);
         if (!strcmp(name,"close"))      return cool_file_close(self);
         fprintf(stderr, "AttributeError: file has no method '%s'\n", name); exit(1);

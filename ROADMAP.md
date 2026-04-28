@@ -222,12 +222,12 @@
 #### Databases And Storage
 
 - [x] `sqlite` module — embedded database access with queries, params, and row iteration
-- [ ] `cache` module — in-memory and disk-backed caching with TTL and invalidation helpers
-- [ ] `memo` module — function memoization and deterministic result caching
-- [ ] `package` module — package metadata, manifests, semver helpers, and dependency resolution
-- [ ] `bundle` module — single-file app bundling, asset embedding, and deploy packaging
-- [ ] `archive` module — higher-level project/archive packaging on top of compress primitives
-- [ ] `compress` module — gzip/zip/tar helpers for archives and packaged assets
+- [x] `cache` module — in-memory and disk-backed caching with TTL and invalidation helpers
+- [x] `memo` module — function memoization and deterministic result caching
+- [x] `package` module — package metadata, manifests, semver helpers, and dependency resolution
+- [x] `bundle` module — single-file app bundling, asset embedding, and deploy packaging
+- [x] `archive` module — higher-level project/archive packaging on top of compress primitives
+- [x] `compress` module — gzip/zip/tar helpers for archives and packaged assets
 
 #### Parsing, Language, And Tooling
 

@@ -1,0 +1,138 @@
+import cache
+import hashlib
+import json
+
+private def _fail(message):
+    raise "memo: " + str(message)
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for pair in value.items():
+            out[pair[0]] = _clone(pair[1])
+        return out
+    if kind == "list":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    if kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _normalize_args(args):
+    if args == nil:
+        return []
+    if type(args) == "list":
+        out = []
+        for item in args:
+            out.append(_clone(item))
+        return out
+    if type(args) == "tuple":
+        out = []
+        for item in args:
+            out.append(_clone(item))
+        return out
+    return [_clone(args)]
+
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    if argc == 4:
+        return fn(args[0], args[1], args[2], args[3])
+    if argc == 5:
+        return fn(args[0], args[1], args[2], args[3], args[4])
+    _fail("memoized calls currently support up to 5 arguments")
+
+private def _stable_token(name, args, extra=nil):
+    payload = {
+        "name": str(name),
+        "args": _normalize_args(args),
+        "extra": _clone(extra),
+    }
+    return hashlib.sha256(json.dumps(payload))
+
+private def _invoke(table, name, fn, args=nil, extra=nil, ttl=nil):
+    arg_list = _normalize_args(args)
+    token = table.key(name, arg_list, extra)
+    if table.backend.has(token):
+        return table.backend.get(token, nil)
+    value = _call(fn, arg_list)
+    limit = ttl
+    if limit == nil:
+        limit = table.default_ttl
+    table.backend.set(token, value, limit)
+    return _clone(value)
+
+class MemoTable:
+    def __init__(self, backend=nil, prefix="memo", ttl=nil):
+        if backend == nil:
+            backend = cache.memory()
+        self.backend = backend
+        self.prefix = str(prefix)
+        self.default_ttl = ttl
+
+    def key(self, name, args=nil, extra=nil):
+        return self.prefix + ":" + _stable_token(name, args, extra)
+
+    def has(self, name, args=nil, extra=nil):
+        return self.backend.has(self.key(name, args, extra))
+
+    def get(self, name, args=nil, extra=nil, default=nil):
+        return self.backend.get(self.key(name, args, extra), default)
+
+    def set(self, name, value, args=nil, extra=nil, ttl=nil):
+        limit = ttl
+        if limit == nil:
+            limit = self.default_ttl
+        return self.backend.set(self.key(name, args, extra), value, limit)
+
+    def call(self, name, fn, args=nil, extra=nil, ttl=nil):
+        return _invoke(self, name, fn, args, extra, ttl)
+
+    def call0(self, name, fn, ttl=nil):
+        return _invoke(self, name, fn, [], nil, ttl)
+
+    def call1(self, name, fn, arg0, ttl=nil):
+        return _invoke(self, name, fn, [arg0], nil, ttl)
+
+    def call2(self, name, fn, arg0, arg1, ttl=nil):
+        return _invoke(self, name, fn, [arg0, arg1], nil, ttl)
+
+    def call3(self, name, fn, arg0, arg1, arg2, ttl=nil):
+        return _invoke(self, name, fn, [arg0, arg1, arg2], nil, ttl)
+
+    def call4(self, name, fn, arg0, arg1, arg2, arg3, ttl=nil):
+        return _invoke(self, name, fn, [arg0, arg1, arg2, arg3], nil, ttl)
+
+    def invalidate(self, name, args=nil, extra=nil):
+        return self.backend.invalidate(self.key(name, args, extra))
+
+    def clear(self):
+        return self.backend.invalidate_prefix(self.prefix + ":")
+
+    def stats(self):
+        stats = self.backend.stats()
+        stats["prefix"] = self.prefix
+        stats["default_ttl"] = self.default_ttl
+        return stats
+
+def memory(prefix="memo", ttl=nil):
+    return MemoTable(cache.memory(), prefix, ttl)
+
+def disk(root=nil, namespace="memo", prefix="memo", ttl=nil):
+    return MemoTable(cache.disk(root, namespace), prefix, ttl)
+
+def call(table, name, fn, args=nil, extra=nil, ttl=nil):
+    return _invoke(table, name, fn, args, extra, ttl)

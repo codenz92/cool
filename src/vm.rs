@@ -1798,7 +1798,7 @@ impl VM {
 
     fn file_method(&self, receiver: VmValue, _fh: Rc<RefCell<VmFile>>, name: &str) -> Result<VmValue, String> {
         match name {
-            "read" | "readline" | "readlines" | "write" | "close" | "seek" | "tell" => {
+            "read" | "readline" | "readlines" | "read_bytes" | "write" | "write_bytes" | "close" | "seek" | "tell" => {
                 Ok(VmValue::BoundBuiltin(Box::new(receiver), format!("file.{}", name)))
             }
             // Context manager protocol: __enter__ returns self, __exit__ closes the file.
@@ -2364,28 +2364,51 @@ impl VM {
                     _ => return Err(self.err("open() mode must be a string")),
                 };
                 let full_path = self.source_dir.join(&path);
+                let binary = mode.contains('b');
                 match mode.as_str() {
-                    "r" | "r+" => {
-                        let content = std::fs::read_to_string(&full_path)
-                            .map_err(|e| self.err(&format!("open '{}': {}", path, e)))?;
-                        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                    "r" | "r+" | "rb" | "r+b" | "rb+" => {
+                        if binary {
+                            std::fs::metadata(&full_path).map_err(|e| self.err(&format!("open '{}': {}", path, e)))?;
+                            Ok(VmValue::File(Rc::new(RefCell::new(VmFile {
+                                path,
+                                mode,
+                                content: vec![],
+                                line_pos: 0,
+                                write_buf: String::new(),
+                                write_buf_bytes: Vec::new(),
+                                closed: false,
+                            }))))
+                        } else {
+                            let content = std::fs::read_to_string(&full_path)
+                                .map_err(|e| self.err(&format!("open '{}': {}", path, e)))?;
+                            let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+                            Ok(VmValue::File(Rc::new(RefCell::new(VmFile {
+                                path,
+                                mode,
+                                content: lines,
+                                line_pos: 0,
+                                write_buf: String::new(),
+                                write_buf_bytes: Vec::new(),
+                                closed: false,
+                            }))))
+                        }
+                    }
+                    "w" | "a" | "w+" | "a+" | "wb" | "ab" | "w+b" | "wb+" | "a+b" | "ab+" => {
+                        let append_bytes = if mode.contains('a') && binary {
+                            std::fs::read(&full_path).unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
                         Ok(VmValue::File(Rc::new(RefCell::new(VmFile {
                             path,
                             mode,
-                            content: lines,
+                            content: vec![],
                             line_pos: 0,
                             write_buf: String::new(),
+                            write_buf_bytes: append_bytes,
                             closed: false,
                         }))))
                     }
-                    "w" | "a" | "w+" | "a+" => Ok(VmValue::File(Rc::new(RefCell::new(VmFile {
-                        path,
-                        mode,
-                        content: vec![],
-                        line_pos: 0,
-                        write_buf: String::new(),
-                        closed: false,
-                    })))),
                     _ => Err(self.err(&format!("unsupported file mode '{}'", mode))),
                 }
             }
@@ -3548,6 +3571,21 @@ impl VM {
                     Err(self.err("file not open for reading"))
                 }
             }
+            "read_bytes" => {
+                let (mode, path) = {
+                    let fh = fh_rc.borrow();
+                    (fh.mode.clone(), fh.path.clone())
+                };
+                if mode.contains('r') {
+                    let full_path = self.source_dir.join(&path);
+                    let content =
+                        std::fs::read(&full_path).map_err(|e| self.err(&format!("read_bytes '{}': {}", path, e)))?;
+                    let values: Vec<VmValue> = content.into_iter().map(|b| VmValue::Int(b as i64)).collect();
+                    Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                } else {
+                    Err(self.err("file not open for reading"))
+                }
+            }
             "readline" => {
                 let mut fh = fh_rc.borrow_mut();
                 if fh.line_pos < fh.content.len() {
@@ -3588,6 +3626,39 @@ impl VM {
                 };
                 std::fs::write(&full_path, existing + &fh.write_buf).map_err(|e| self.err(&format!("write: {}", e)))?;
                 Ok(VmValue::Nil)
+            }
+            "write_bytes" => {
+                let value = args.get(1).ok_or_else(|| self.err("write_bytes() requires data"))?;
+                let mut data = Vec::new();
+                match value {
+                    VmValue::Str(s) => data.extend_from_slice(s.as_bytes()),
+                    VmValue::List(items) => {
+                        for item in items.borrow().iter() {
+                            match item {
+                                VmValue::Int(n) if *n >= 0 && *n <= 255 => data.push(*n as u8),
+                                _ => return Err(self.err("write_bytes() requires a string or byte list/tuple")),
+                            }
+                        }
+                    }
+                    VmValue::Tuple(items) => {
+                        for item in items.iter() {
+                            match item {
+                                VmValue::Int(n) if *n >= 0 && *n <= 255 => data.push(*n as u8),
+                                _ => return Err(self.err("write_bytes() requires a string or byte list/tuple")),
+                            }
+                        }
+                    }
+                    _ => return Err(self.err("write_bytes() requires a string or byte list/tuple")),
+                }
+                let mut fh = fh_rc.borrow_mut();
+                if fh.mode == "r" || fh.mode == "rb" {
+                    return Err(self.err("write_bytes() on read-only file"));
+                }
+                fh.write_buf_bytes.extend(data.iter().copied());
+                let full_path = self.source_dir.join(&fh.path);
+                std::fs::write(&full_path, &fh.write_buf_bytes)
+                    .map_err(|e| self.err(&format!("write_bytes: {}", e)))?;
+                Ok(VmValue::Int(data.len() as i64))
             }
             "close" => {
                 fh_rc.borrow_mut().closed = true;

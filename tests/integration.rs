@@ -743,6 +743,195 @@ fn expected_phase6_filesystem_os_lines(runtime: &str) -> Vec<String> {
     ]
 }
 
+fn write_phase6_storage_suite(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let base = cool_quote_path(dir);
+    let remember_count_file = cool_quote_path(&dir.join("remember.count"));
+    let memo_count_file = cool_quote_path(&dir.join("memo.count"));
+    std::fs::write(
+        dir.join("main.cool"),
+        format!(
+            r#"import archive
+import bundle
+import bytes
+import cache
+import compress
+import memo
+import os
+import package
+import path
+import time
+
+base = "{base}"
+
+def read_counter(file_path):
+    if not os.exists(file_path):
+        return 0
+    f = open(file_path, "r")
+    text = f.read().strip()
+    f.close()
+    if text == "":
+        return 0
+    return int(text)
+
+def write_counter(file_path, value):
+    f = open(file_path, "w")
+    f.write(str(value))
+    f.close()
+    return value
+
+def build_value():
+    next = read_counter("{remember_count_file}") + 1
+    write_counter("{remember_count_file}", next)
+    return {{"count": next}}
+
+def add_pair(left, right):
+    next = read_counter("{memo_count_file}") + 1
+    write_counter("{memo_count_file}", next)
+    return left + right
+
+f = open(path.join(base, "blob.bin"), "wb")
+print(f.write_bytes([0, 1, 2, 255]))
+f.close()
+f = open(path.join(base, "blob.bin"), "rb")
+raw = f.read_bytes()
+f.close()
+print(len(raw))
+print(raw[0])
+print(raw[3])
+
+mem = cache.memory()
+mem.set("ttl", "soon", 0.01)
+time.sleep(0.02)
+print(mem.get("ttl", "expired"))
+print(cache.remember(mem, "remember", build_value)["count"])
+print(cache.remember(mem, "remember", build_value)["count"])
+print(read_counter("{remember_count_file}"))
+print(mem.invalidate_prefix("remember"))
+
+dc = cache.disk(path.join(base, "disk-cache"), "demo")
+dc.set("nums", [1, 2, 3], nil)
+print(dc.get("nums", nil)[1])
+print(dc.stats()["kind"])
+
+table = memo.memory("calc")
+print(memo.call(table, "add", add_pair, [2, 3]))
+print(memo.call(table, "add", add_pair, [2, 3]))
+print(read_counter("{memo_count_file}"))
+
+print(package.compare_versions("1.2.3", "1.3.0"))
+print(package.satisfies("1.2.3", "^1.0.0"))
+print(package.bump("1.2.3", "minor"))
+
+project = path.join(base, "project")
+os.mkdir(path.join(project, "src"))
+os.mkdir(path.join(project, "deps", "util", "src"))
+f = open(path.join(project, "cool.toml"), "w")
+f.write("[project]\nname = \"demo\"\nversion = \"0.1.0\"\nmain = \"src/main.cool\"\n\n[dependencies]\nutil = {{ path = \"deps/util\" }}\n")
+f.close()
+f = open(path.join(project, "src", "main.cool"), "w")
+f.write("print(\"demo project\")\n")
+f.close()
+f = open(path.join(project, "deps", "util", "cool.toml"), "w")
+f.write("[project]\nname = \"util\"\nversion = \"0.2.0\"\nmain = \"src/main.cool\"\n")
+f.close()
+f = open(path.join(project, "deps", "util", "src", "main.cool"), "w")
+f.write("print(\"util\")\n")
+f.close()
+info = package.project_info(project)
+print(info["name"])
+tree = package.dependency_tree(project)
+print(len(tree["packages"]))
+print(len(tree["edges"]))
+print(len(tree["unresolved"]))
+
+gzip_blob = compress.gzip_encode(bytes.from_string("Hello archive"))
+print(bytes.to_string(compress.gzip_decode(gzip_blob)))
+tar_blob = compress.tar_encode([compress.tar_entry("hello.txt", bytes.from_string("tar!"))])
+tar_entries = compress.tar_decode(tar_blob)
+print(tar_entries[0]["name"])
+print(bytes.to_string(tar_entries[0]["data"]))
+zip_blob = compress.zip_encode([compress.zip_entry("hi.txt", bytes.from_string("zip!"))])
+zip_entries = compress.zip_decode(zip_blob)
+print(zip_entries[0]["name"])
+print(bytes.to_string(zip_entries[0]["data"]))
+
+data_root = path.join(base, "data")
+os.mkdir(path.join(data_root, "sub"))
+f = open(path.join(data_root, "a.txt"), "wb")
+f.write_bytes(bytes.from_string("A"))
+f.close()
+f = open(path.join(data_root, "sub", "b.txt"), "wb")
+f.write_bytes(bytes.from_string("B"))
+f.close()
+archive_path = path.join(base, "data.tar.gz")
+created = archive.create(data_root, archive_path)
+print(created["format"])
+names = archive.list(archive_path)
+print("sub/b.txt" in names)
+unpacked = archive.unpack(archive_path, path.join(base, "out"))
+print(unpacked["count"])
+f = open(path.join(base, "out", "a.txt"), "rb")
+print(bytes.to_string(f.read_bytes()))
+f.close()
+f = open(path.join(base, "out", "sub", "b.txt"), "rb")
+print(bytes.to_string(f.read_bytes()))
+f.close()
+
+bundle_path = path.join(base, "demo.coolbundle")
+bundle.create(project, "src/main.cool", bundle_path, ["src"])
+manifest = bundle.read_manifest(bundle_path)
+print(manifest["package"]["name"])
+print(bundle.asset_text(bundle_path, "src/main.cool").find("demo project") >= 0)
+extracted = bundle.extract(bundle_path, path.join(base, "bundle-out"))
+print(extracted["count"] >= 2)
+print(os.exists(path.join(base, "bundle-out", "src", "main.cool")))
+"#
+        ),
+    )
+    .unwrap();
+}
+
+fn expected_phase6_storage_lines() -> Vec<String> {
+    vec![
+        "4".to_string(),
+        "4".to_string(),
+        "0".to_string(),
+        "255".to_string(),
+        "expired".to_string(),
+        "1".to_string(),
+        "1".to_string(),
+        "1".to_string(),
+        "1".to_string(),
+        "2".to_string(),
+        "disk".to_string(),
+        "5".to_string(),
+        "5".to_string(),
+        "1".to_string(),
+        "-1".to_string(),
+        "true".to_string(),
+        "1.3.0".to_string(),
+        "demo".to_string(),
+        "2".to_string(),
+        "1".to_string(),
+        "0".to_string(),
+        "Hello archive".to_string(),
+        "hello.txt".to_string(),
+        "tar!".to_string(),
+        "hi.txt".to_string(),
+        "zip!".to_string(),
+        "tar.gz".to_string(),
+        "true".to_string(),
+        "2".to_string(),
+        "A".to_string(),
+        "B".to_string(),
+        "demo".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+    ]
+}
+
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     let status = Command::new("cp")
         .args(["-R", src.to_str().unwrap(), dst.to_str().unwrap()])
@@ -7688,6 +7877,28 @@ fn test_phase6_filesystem_os_modules_in_vm() {
     .unwrap();
     let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_filesystem_os_lines("vm"));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_storage_modules_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_phase6_storage_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_storage_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &[]).unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_storage_lines());
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_storage_modules_in_vm() {
+    let temp_dir = unique_temp_dir("cool_phase6_storage_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_storage_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_storage_lines());
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 

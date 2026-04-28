@@ -297,6 +297,8 @@ pub struct FileHandle {
     pub content: Vec<String>, // lines for "r"/"r+" modes
     pub line_pos: usize,      // next line to read
     pub write_buf: RefCell<String>,
+    pub write_buf_bytes: RefCell<Vec<u8>>,
+    pub binary: bool,
     pub closed: bool,
 }
 
@@ -2720,6 +2722,53 @@ class Stack:
                 fh.write_buf.borrow_mut().push_str(&text);
                 Ok(Value::Int(text.len() as i64))
             }
+            "read_bytes" => {
+                let fh = fh_rc.borrow();
+                if fh.closed {
+                    return Err(self.err("read_bytes() on closed file"));
+                }
+                let data = std::fs::read(&fh.path).map_err(|e| self.err(&format!("file read error: {}", e)))?;
+                let values: Vec<Value> = data.into_iter().map(|b| Value::Int(b as i64)).collect();
+                Ok(Value::List(Rc::new(RefCell::new(values))))
+            }
+            "write_bytes" => {
+                let value = match args.into_iter().next() {
+                    Some(v) => v,
+                    None => return Err(self.err("write_bytes() requires 1 argument")),
+                };
+                let mut bytes_out = Vec::new();
+                match value {
+                    Value::Str(s) => {
+                        bytes_out.extend_from_slice(s.as_bytes());
+                    }
+                    Value::List(items) => {
+                        for item in items.borrow().iter() {
+                            match item {
+                                Value::Int(n) if *n >= 0 && *n <= 255 => bytes_out.push(*n as u8),
+                                _ => return Err(self.err("write_bytes() requires a string or byte list/tuple")),
+                            }
+                        }
+                    }
+                    Value::Tuple(items) => {
+                        for item in items.iter() {
+                            match item {
+                                Value::Int(n) if *n >= 0 && *n <= 255 => bytes_out.push(*n as u8),
+                                _ => return Err(self.err("write_bytes() requires a string or byte list/tuple")),
+                            }
+                        }
+                    }
+                    _ => return Err(self.err("write_bytes() requires a string or byte list/tuple")),
+                }
+                let fh = fh_rc.borrow();
+                if fh.closed {
+                    return Err(self.err("write_bytes() on closed file"));
+                }
+                if fh.mode == "r" || fh.mode == "rb" {
+                    return Err(self.err("write_bytes() on read-only file"));
+                }
+                fh.write_buf_bytes.borrow_mut().extend(bytes_out.iter().copied());
+                Ok(Value::Int(bytes_out.len() as i64))
+            }
             "writelines" => {
                 let lst = match args.into_iter().next() {
                     Some(Value::List(l)) => l.borrow().clone(),
@@ -2738,10 +2787,18 @@ class Stack:
                 let mut fh = fh_rc.borrow_mut();
                 if !fh.closed {
                     // Flush write buffer
-                    if fh.mode != "r" && !fh.write_buf.borrow().is_empty() {
-                        let content = fh.write_buf.borrow().clone();
-                        std::fs::write(&fh.path, &content)
-                            .map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                    if fh.mode != "r" && fh.mode != "rb" {
+                        if fh.binary {
+                            if !fh.write_buf_bytes.borrow().is_empty() {
+                                let content = fh.write_buf_bytes.borrow().clone();
+                                std::fs::write(&fh.path, &content)
+                                    .map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                            }
+                        } else if !fh.write_buf.borrow().is_empty() {
+                            let content = fh.write_buf.borrow().clone();
+                            std::fs::write(&fh.path, &content)
+                                .map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                        }
                     }
                     fh.closed = true;
                 }
@@ -2749,9 +2806,16 @@ class Stack:
             }
             "flush" => {
                 let fh = fh_rc.borrow();
-                if !fh.closed && fh.mode != "r" {
-                    let content = fh.write_buf.borrow().clone();
-                    std::fs::write(&fh.path, &content).map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                if !fh.closed && fh.mode != "r" && fh.mode != "rb" {
+                    if fh.binary {
+                        let content = fh.write_buf_bytes.borrow().clone();
+                        std::fs::write(&fh.path, &content)
+                            .map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                    } else {
+                        let content = fh.write_buf.borrow().clone();
+                        std::fs::write(&fh.path, &content)
+                            .map_err(|e| self.err(&format!("file write error: {}", e)))?;
+                    }
                 }
                 Ok(Value::Nil)
             }
@@ -3617,16 +3681,23 @@ class Stack:
                     self.source_dir.join(&path).to_string_lossy().to_string()
                 };
 
-                let (content, write_buf) = if mode.contains('r') {
+                let binary = mode.contains('b');
+                let (content, write_buf, write_buf_bytes) = if mode.contains('r') && binary {
+                    std::fs::metadata(&full_path).map_err(|e| self.err(&format!("cannot open '{}': {}", path, e)))?;
+                    (vec![], String::new(), Vec::new())
+                } else if mode.contains('r') && !binary {
                     let text = std::fs::read_to_string(&full_path)
                         .map_err(|e| self.err(&format!("cannot open '{}': {}", path, e)))?;
                     let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-                    (lines, String::new())
+                    (lines, String::new(), Vec::new())
+                } else if mode.contains('a') && binary {
+                    let existing = std::fs::read(&full_path).unwrap_or_default();
+                    (vec![], String::new(), existing)
                 } else if mode.contains('a') {
                     let existing = std::fs::read_to_string(&full_path).unwrap_or_default();
-                    (vec![], existing)
+                    (vec![], existing, Vec::new())
                 } else {
-                    (vec![], String::new())
+                    (vec![], String::new(), Vec::new())
                 };
 
                 let fh = FileHandle {
@@ -3635,6 +3706,8 @@ class Stack:
                     content,
                     line_pos: 0,
                     write_buf: RefCell::new(write_buf),
+                    write_buf_bytes: RefCell::new(write_buf_bytes),
+                    binary,
                     closed: false,
                 };
                 Ok(Value::File(Rc::new(RefCell::new(fh))))

@@ -1,0 +1,504 @@
+import bytes
+
+private def _fail(message):
+    raise "compress: " + str(message)
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for pair in value.items():
+            out[pair[0]] = _clone(pair[1])
+        return out
+    if kind == "list":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    if kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _bytes(value):
+    return bytes.coerce(value)
+
+private def _append_bytes(out, data):
+    for item in _bytes(data):
+        out.append(item)
+    return out
+
+private def _slice(data, start, stop=nil):
+    if stop == nil:
+        return bytes.slice(data, int(start), len(data))
+    return bytes.slice(data, int(start), int(stop))
+
+private def _u16(value):
+    return bytes.u16_le(int(value))
+
+private def _u32(value):
+    return bytes.u32_le(int(value))
+
+private def _read_u16(data, offset):
+    return bytes.read_u16_le(data, int(offset))
+
+private def _read_u32(data, offset):
+    return bytes.read_u32_le(data, int(offset))
+
+private def _all_zero(block):
+    for item in block:
+        if item != 0:
+            return false
+    return true
+
+private def _ascii_trim(data):
+    out = ""
+    for item in _bytes(data):
+        if item == 0:
+            break
+        out = out + chr(item)
+    return out
+
+private def _octal_value(text):
+    value = 0
+    for ch in str(text).strip():
+        if ch < "0" or ch > "7":
+            break
+        value = (value * 8) + (ord(ch) - 48)
+    return value
+
+private def _octal_field_from_bytes(data):
+    clean = ""
+    for item in _bytes(data):
+        if item == 0 or item == 32:
+            continue
+        clean = clean + chr(item)
+    if clean == "":
+        return 0
+    return _octal_value(clean)
+
+private def _octal_text(value):
+    n = int(value)
+    if n < 0:
+        _fail("octal fields require non-negative values")
+    if n == 0:
+        return "0"
+    out = ""
+    current = n
+    while current > 0:
+        out = chr(48 + (current % 8)) + out
+        current = current // 8
+    return out
+
+private def _octal_field(value, width):
+    digits = _octal_text(value)
+    usable = int(width) - 1
+    if len(digits) > usable:
+        _fail("octal field overflow")
+    out = []
+    pad = usable - len(digits)
+    i = 0
+    while i < pad:
+        out.append(48)
+        i = i + 1
+    for ch in digits:
+        out.append(ord(ch))
+    out.append(0)
+    while len(out) < int(width):
+        out.append(0)
+    return out
+
+private def _tar_name_fields(name):
+    text = str(name).replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:len(text)]
+    if text.startswith("/"):
+        text = text[1:len(text)]
+    if text == "" or text.startswith("../") or text.find("/../") >= 0:
+        _fail("unsafe tar entry name '" + str(name) + "'")
+    if len(text) <= 100:
+        return {"name": text, "prefix": ""}
+    slash = -1
+    i = 0
+    while i < len(text):
+        if text[i] == "/" and i <= 155:
+            slash = i
+        i = i + 1
+    if slash < 0:
+        _fail("tar entry name too long: '" + text + "'")
+    prefix = text[0:slash]
+    short = text[slash + 1:len(text)]
+    if len(prefix) > 155 or len(short) > 100:
+        _fail("tar entry name too long: '" + text + "'")
+    return {"name": short, "prefix": prefix}
+
+def crc32(value):
+    data = _bytes(value)
+    crc = 0xFFFFFFFF
+    for item in data:
+        crc = crc ^ item
+        i = 0
+        while i < 8:
+            if (crc & 1) != 0:
+                crc = (crc >> 1) ^ 0xEDB88320
+            else:
+                crc = crc >> 1
+            crc = crc & 0xFFFFFFFF
+            i = i + 1
+    return (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
+
+def gzip_encode(value):
+    data = _bytes(value)
+    out = [31, 139, 8, 0, 0, 0, 0, 0, 0, 3]
+    if len(data) == 0:
+        _append_bytes(out, [1, 0, 0, 255, 255])
+    else:
+        offset = 0
+        while offset < len(data):
+            chunk_len = len(data) - offset
+            if chunk_len > 65535:
+                chunk_len = 65535
+            final = offset + chunk_len >= len(data)
+            if final:
+                out.append(1)
+            else:
+                out.append(0)
+            _append_bytes(out, _u16(chunk_len))
+            _append_bytes(out, _u16(65535 - chunk_len))
+            _append_bytes(out, _slice(data, offset, offset + chunk_len))
+            offset = offset + chunk_len
+    _append_bytes(out, _u32(crc32(data)))
+    _append_bytes(out, _u32(len(data) & 0xFFFFFFFF))
+    return out
+
+def gzip_decode(value):
+    data = _bytes(value)
+    if len(data) < 18:
+        _fail("gzip stream is too short")
+    if data[0] != 31 or data[1] != 139 or data[2] != 8:
+        _fail("unsupported gzip header")
+    flags = data[3]
+    index = 10
+    if (flags & 4) != 0:
+        extra_len = _read_u16(data, index)
+        index = index + 2 + extra_len
+    if (flags & 8) != 0:
+        while index < len(data) and data[index] != 0:
+            index = index + 1
+        index = index + 1
+    if (flags & 16) != 0:
+        while index < len(data) and data[index] != 0:
+            index = index + 1
+        index = index + 1
+    if (flags & 2) != 0:
+        index = index + 2
+    out = []
+    while true:
+        if index + 5 > len(data):
+            _fail("truncated deflate stream")
+        head = data[index]
+        index = index + 1
+        final = head & 1
+        kind = (head >> 1) & 3
+        if kind != 0:
+            _fail("only stored gzip blocks are currently supported")
+        chunk_len = _read_u16(data, index)
+        chunk_inv = _read_u16(data, index + 2)
+        index = index + 4
+        if ((chunk_len ^ 0xFFFF) & 0xFFFF) != chunk_inv:
+            _fail("invalid stored-block length")
+        if index + chunk_len > len(data):
+            _fail("truncated stored block")
+        _append_bytes(out, _slice(data, index, index + chunk_len))
+        index = index + chunk_len
+        if final != 0:
+            break
+    if index + 8 > len(data):
+        _fail("missing gzip trailer")
+    expected_crc = _read_u32(data, index)
+    expected_size = _read_u32(data, index + 4)
+    if crc32(out) != expected_crc:
+        _fail("gzip CRC mismatch")
+    if (len(out) & 0xFFFFFFFF) != expected_size:
+        _fail("gzip size mismatch")
+    return out
+
+def tar_entry(name, data=nil, kind="file", mode=420, mtime=0):
+    item_kind = str(kind)
+    payload = []
+    if data != nil:
+        payload = _bytes(data)
+    if item_kind == "dir":
+        payload = []
+    fields = _tar_name_fields(name)
+    entry_name = fields["prefix"]
+    if entry_name != "":
+        entry_name = entry_name + "/" + fields["name"]
+    else:
+        entry_name = fields["name"]
+    if item_kind == "dir" and not entry_name.endswith("/"):
+        entry_name = entry_name + "/"
+    return {
+        "name": entry_name,
+        "data": payload,
+        "kind": item_kind,
+        "mode": int(mode),
+        "mtime": int(mtime),
+    }
+
+private def _tar_header(entry):
+    name_fields = _tar_name_fields(entry["name"])
+    header = []
+    name_bytes = bytes.from_string(name_fields["name"], "utf-8")
+    prefix_bytes = bytes.from_string(name_fields["prefix"], "utf-8")
+    _append_bytes(header, name_bytes)
+    while len(header) < 100:
+        header.append(0)
+    _append_bytes(header, _octal_field(_get(entry, "mode", 420), 8))
+    _append_bytes(header, _octal_field(0, 8))
+    _append_bytes(header, _octal_field(0, 8))
+    payload = _bytes(_get(entry, "data", []))
+    _append_bytes(header, _octal_field(len(payload), 12))
+    _append_bytes(header, _octal_field(_get(entry, "mtime", 0), 12))
+    checksum_offset = len(header)
+    i = 0
+    while i < 8:
+        header.append(32)
+        i = i + 1
+    kind = _get(entry, "kind", "file")
+    if kind == "dir":
+        header.append(ord("5"))
+    else:
+        header.append(ord("0"))
+    i = 0
+    while i < 100:
+        header.append(0)
+        i = i + 1
+    _append_bytes(header, [117, 115, 116, 97, 114, 0])
+    _append_bytes(header, [48, 48])
+    i = 0
+    while i < 32:
+        header.append(0)
+        i = i + 1
+    i = 0
+    while i < 32:
+        header.append(0)
+        i = i + 1
+    _append_bytes(header, _octal_field(0, 8))
+    _append_bytes(header, _octal_field(0, 8))
+    _append_bytes(header, prefix_bytes)
+    while len(header) < 500:
+        header.append(0)
+    while len(header) < 512:
+        header.append(0)
+    total = 0
+    for item in header:
+        total = total + item
+    checksum = _octal_field(total, 8)
+    checksum[6] = 0
+    checksum[7] = 32
+    i = 0
+    while i < 8:
+        header[checksum_offset + i] = checksum[i]
+        i = i + 1
+    return header
+
+def tar_encode(entries):
+    out = []
+    for raw in entries:
+        entry = tar_entry(
+            _get(raw, "name"),
+            _get(raw, "data", []),
+            _get(raw, "kind", "file"),
+            _get(raw, "mode", 420),
+            _get(raw, "mtime", 0),
+        )
+        payload = entry["data"]
+        _append_bytes(out, _tar_header(entry))
+        _append_bytes(out, payload)
+        while len(out) % 512 != 0:
+            out.append(0)
+    i = 0
+    while i < 1024:
+        out.append(0)
+        i = i + 1
+    return out
+
+def tar_decode(value):
+    data = _bytes(value)
+    out = []
+    index = 0
+    while index + 512 <= len(data):
+        header = _slice(data, index, index + 512)
+        index = index + 512
+        if _all_zero(header):
+            break
+        name = _ascii_trim(_slice(header, 0, 100))
+        prefix = _ascii_trim(_slice(header, 345, 500))
+        if prefix != "":
+            name = prefix + "/" + name
+        kind_flag = chr(header[156])
+        item_kind = "file"
+        if kind_flag == "5":
+            item_kind = "dir"
+        size = _octal_field_from_bytes(_slice(header, 124, 136))
+        mode = _octal_field_from_bytes(_slice(header, 100, 108))
+        mtime = _octal_field_from_bytes(_slice(header, 136, 148))
+        payload = []
+        if size > 0:
+            payload = _slice(data, index, index + size)
+        out.append({
+            "name": name,
+            "data": payload,
+            "kind": item_kind,
+            "mode": mode,
+            "mtime": mtime,
+            "size": size,
+        })
+        index = index + size
+        while index % 512 != 0:
+            index = index + 1
+    return out
+
+def zip_entry(name, data=nil, dir=false, mtime=0, comment=""):
+    entry_name = str(name).replace("\\", "/")
+    if entry_name == "" or entry_name.startswith("/") or entry_name.startswith("../") or entry_name.find("/../") >= 0:
+        _fail("unsafe zip entry name '" + str(name) + "'")
+    item_dir = dir == true
+    if item_dir and not entry_name.endswith("/"):
+        entry_name = entry_name + "/"
+    payload = []
+    if data != nil:
+        payload = _bytes(data)
+    if item_dir:
+        payload = []
+    return {
+        "name": entry_name,
+        "data": payload,
+        "dir": item_dir,
+        "mtime": int(mtime),
+        "comment": str(comment),
+    }
+
+private def _find_signature_from_end(data, signature):
+    target = bytes.u32_le(signature)
+    start = len(data) - 4
+    while start >= 0:
+        if data[start] == target[0] and data[start + 1] == target[1] and data[start + 2] == target[2] and data[start + 3] == target[3]:
+            return start
+        start = start - 1
+    return -1
+
+def zip_encode(entries):
+    out = []
+    central = []
+    for raw in entries:
+        entry = zip_entry(
+            _get(raw, "name"),
+            _get(raw, "data", []),
+            _get(raw, "dir", false),
+            _get(raw, "mtime", 0),
+            _get(raw, "comment", ""),
+        )
+        name_bytes = bytes.from_string(entry["name"], "utf-8")
+        comment_bytes = bytes.from_string(entry["comment"], "utf-8")
+        payload = entry["data"]
+        offset = len(out)
+        crc = crc32(payload)
+        if entry["dir"]:
+            crc = 0
+        _append_bytes(out, _u32(0x04034B50))
+        _append_bytes(out, _u16(20))
+        _append_bytes(out, _u16(0))
+        _append_bytes(out, _u16(0))
+        _append_bytes(out, _u16(0))
+        _append_bytes(out, _u16(0))
+        _append_bytes(out, _u32(crc))
+        _append_bytes(out, _u32(len(payload)))
+        _append_bytes(out, _u32(len(payload)))
+        _append_bytes(out, _u16(len(name_bytes)))
+        _append_bytes(out, _u16(0))
+        _append_bytes(out, name_bytes)
+        _append_bytes(out, payload)
+
+        record = []
+        _append_bytes(record, _u32(0x02014B50))
+        _append_bytes(record, _u16(20))
+        _append_bytes(record, _u16(20))
+        _append_bytes(record, _u16(0))
+        _append_bytes(record, _u16(0))
+        _append_bytes(record, _u16(0))
+        _append_bytes(record, _u16(0))
+        _append_bytes(record, _u32(crc))
+        _append_bytes(record, _u32(len(payload)))
+        _append_bytes(record, _u32(len(payload)))
+        _append_bytes(record, _u16(len(name_bytes)))
+        _append_bytes(record, _u16(0))
+        _append_bytes(record, _u16(len(comment_bytes)))
+        _append_bytes(record, _u16(0))
+        _append_bytes(record, _u16(0))
+        if entry["dir"]:
+            _append_bytes(record, _u32(16 << 16))
+        else:
+            _append_bytes(record, _u32(0))
+        _append_bytes(record, _u32(offset))
+        _append_bytes(record, name_bytes)
+        _append_bytes(record, comment_bytes)
+        central.append(record)
+    central_offset = len(out)
+    for record in central:
+        _append_bytes(out, record)
+    central_size = len(out) - central_offset
+    _append_bytes(out, _u32(0x06054B50))
+    _append_bytes(out, _u16(0))
+    _append_bytes(out, _u16(0))
+    _append_bytes(out, _u16(len(central)))
+    _append_bytes(out, _u16(len(central)))
+    _append_bytes(out, _u32(central_size))
+    _append_bytes(out, _u32(central_offset))
+    _append_bytes(out, _u16(0))
+    return out
+
+def zip_decode(value):
+    data = _bytes(value)
+    eocd = _find_signature_from_end(data, 0x06054B50)
+    if eocd < 0:
+        _fail("zip end-of-central-directory not found")
+    total = _read_u16(data, eocd + 10)
+    central_offset = _read_u32(data, eocd + 16)
+    index = central_offset
+    out = []
+    count = 0
+    while count < total:
+        if _read_u32(data, index) != 0x02014B50:
+            _fail("invalid zip central-directory entry")
+        method = _read_u16(data, index + 10)
+        if method != 0:
+            _fail("only stored zip entries are currently supported")
+        name_len = _read_u16(data, index + 28)
+        extra_len = _read_u16(data, index + 30)
+        comment_len = _read_u16(data, index + 32)
+        local_offset = _read_u32(data, index + 42)
+        name = bytes.to_string(_slice(data, index + 46, index + 46 + name_len), "utf-8")
+        if _read_u32(data, local_offset) != 0x04034B50:
+            _fail("invalid zip local header")
+        local_name_len = _read_u16(data, local_offset + 26)
+        local_extra_len = _read_u16(data, local_offset + 28)
+        payload_len = _read_u32(data, local_offset + 18)
+        payload_start = local_offset + 30 + local_name_len + local_extra_len
+        payload = _slice(data, payload_start, payload_start + payload_len)
+        out.append({
+            "name": name,
+            "data": payload,
+            "dir": name.endswith("/"),
+        })
+        index = index + 46 + name_len + extra_len + comment_len
+        count = count + 1
+    return out

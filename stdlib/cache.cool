@@ -1,0 +1,298 @@
+import store
+import time
+
+private def _fail(message):
+    raise "cache: " + str(message)
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for pair in value.items():
+            out[pair[0]] = _clone(pair[1])
+        return out
+    if kind == "list":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    if kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _now():
+    return time.time()
+
+private def _normalize_ttl(ttl):
+    if ttl == nil:
+        return nil
+    value = float(ttl)
+    if value < 0:
+        value = 0
+    return value
+
+private def _expires_at(ttl):
+    ttl_value = _normalize_ttl(ttl)
+    if ttl_value == nil:
+        return nil
+    return _now() + ttl_value
+
+private def _entry(value, ttl=nil):
+    return {
+        "value": _clone(value),
+        "expires_at": _expires_at(ttl),
+        "created_at": _now(),
+    }
+
+private def _expired(entry, now=nil):
+    if entry == nil or type(entry) != "dict":
+        return false
+    limit = _get(entry, "expires_at")
+    if limit == nil:
+        return false
+    current = now
+    if current == nil:
+        current = _now()
+    return float(current) >= float(limit)
+
+private def _entry_value(entry, default=nil):
+    if entry == nil or type(entry) != "dict":
+        return default
+    if "value" not in entry:
+        return default
+    return _clone(entry["value"])
+
+private def _without_key(data, key):
+    out = {}
+    for pair in data.items():
+        if pair[0] != key:
+            out[pair[0]] = pair[1]
+    return out
+
+class MemoryCache:
+    def __init__(self):
+        self.entries = {}
+        self.hits = 0
+        self.misses = 0
+
+    def _purge_if_expired(self, key):
+        if key not in self.entries:
+            return false
+        if not _expired(self.entries[key]):
+            return false
+        self.entries = _without_key(self.entries, key)
+        return true
+
+    def has(self, key):
+        token = str(key)
+        self._purge_if_expired(token)
+        return token in self.entries
+
+    def get(self, key, default=nil):
+        token = str(key)
+        self._purge_if_expired(token)
+        if token in self.entries:
+            self.hits = self.hits + 1
+            return _entry_value(self.entries[token], default)
+        self.misses = self.misses + 1
+        return default
+
+    def set(self, key, value, ttl=nil):
+        token = str(key)
+        self.entries[token] = _entry(value, ttl)
+        return _clone(value)
+
+    def delete(self, key):
+        token = str(key)
+        if token not in self.entries:
+            return false
+        self.entries = _without_key(self.entries, token)
+        return true
+
+    def invalidate(self, key):
+        return self.delete(key)
+
+    def invalidate_prefix(self, prefix):
+        marker = str(prefix)
+        removed = 0
+        for key in self.keys():
+            if key.startswith(marker):
+                self.entries = _without_key(self.entries, key)
+                removed = removed + 1
+        return removed
+
+    def clear(self):
+        self.entries = {}
+        return nil
+
+    def cleanup(self):
+        removed = 0
+        keys = self.entries.keys()
+        for key in keys:
+            if self._purge_if_expired(key):
+                removed = removed + 1
+        return removed
+
+    def remember(self, key, callable, ttl=nil):
+        token = str(key)
+        if self.has(token):
+            return self.get(token, nil)
+        value = callable()
+        self.set(token, value, ttl)
+        return _clone(value)
+
+    def keys(self):
+        self.cleanup()
+        keys = self.entries.keys()
+        keys.sort()
+        return keys
+
+    def items(self):
+        out = []
+        for key in self.keys():
+            out.append((key, _entry_value(self.entries[key])))
+        return out
+
+    def size(self):
+        self.cleanup()
+        return len(self.entries)
+
+    def stats(self):
+        self.cleanup()
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "entries": len(self.entries),
+            "kind": "memory",
+        }
+
+class DiskCache:
+    def __init__(self, root=nil, namespace="cache"):
+        self.backend = store.open_store(root).namespace(namespace)
+        self.namespace = str(namespace)
+        self.hits = 0
+        self.misses = 0
+
+    def _snapshot(self):
+        return self.backend.snapshot()
+
+    def _write(self, data):
+        self.backend.save(data)
+        return data
+
+    def _purged_data(self):
+        data = self._snapshot()
+        now = _now()
+        changed = false
+        for pair in data.items():
+            if _expired(pair[1], now):
+                data = _without_key(data, pair[0])
+                changed = true
+        if changed:
+            self._write(data)
+        return data
+
+    def has(self, key):
+        data = self._purged_data()
+        return str(key) in data
+
+    def get(self, key, default=nil):
+        token = str(key)
+        data = self._purged_data()
+        if token in data:
+            self.hits = self.hits + 1
+            return _entry_value(data[token], default)
+        self.misses = self.misses + 1
+        return default
+
+    def set(self, key, value, ttl=nil):
+        token = str(key)
+        data = self._snapshot()
+        data[token] = _entry(value, ttl)
+        self._write(data)
+        return _clone(value)
+
+    def delete(self, key):
+        token = str(key)
+        data = self._snapshot()
+        if token not in data:
+            return false
+        data = _without_key(data, token)
+        self._write(data)
+        return true
+
+    def invalidate(self, key):
+        return self.delete(key)
+
+    def invalidate_prefix(self, prefix):
+        marker = str(prefix)
+        data = self._snapshot()
+        removed = 0
+        keys = data.keys()
+        for key in keys:
+            if key.startswith(marker):
+                data = _without_key(data, key)
+                removed = removed + 1
+        self._write(data)
+        return removed
+
+    def clear(self):
+        self.backend.clear()
+        return nil
+
+    def cleanup(self):
+        before = len(self._snapshot())
+        after = len(self._purged_data())
+        return before - after
+
+    def remember(self, key, callable, ttl=nil):
+        token = str(key)
+        if self.has(token):
+            return self.get(token, nil)
+        value = callable()
+        self.set(token, value, ttl)
+        return _clone(value)
+
+    def keys(self):
+        data = self._purged_data()
+        keys = data.keys()
+        keys.sort()
+        return keys
+
+    def items(self):
+        data = self._purged_data()
+        out = []
+        keys = data.keys()
+        keys.sort()
+        for key in keys:
+            out.append((key, _entry_value(data[key])))
+        return out
+
+    def size(self):
+        return len(self._purged_data())
+
+    def stats(self):
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "entries": self.size(),
+            "kind": "disk",
+            "namespace": self.namespace,
+        }
+
+def memory():
+    return MemoryCache()
+
+def disk(root=nil, namespace="cache"):
+    return DiskCache(root, namespace)
+
+def remember(cache_obj, key, callable, ttl=nil):
+    return cache_obj.remember(key, callable, ttl)
