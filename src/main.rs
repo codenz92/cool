@@ -15,6 +15,7 @@ mod layout_tool;
 mod lexer;
 mod llvm_codegen;
 mod logging_runtime;
+mod lowering;
 mod lsp;
 mod module_exports;
 mod opcode;

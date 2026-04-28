@@ -1,0 +1,36 @@
+enum Result[T, E]:
+    Ok(value: T)
+    Err(error: E)
+
+Ok = Result.Ok
+Err = Result.Err
+
+def ok[T, E](value: T) -> Result[T, E]:
+    return Result.Ok(value)
+
+def err[T, E](error: E) -> Result[T, E]:
+    return Result.Err(error)
+
+def is_ok[T, E](value: Result[T, E]) -> bool:
+    match value:
+        Result.Ok(_):
+            return true
+        Result.Err(_):
+            return false
+
+def is_err[T, E](value: Result[T, E]) -> bool:
+    return not is_ok(value)
+
+def unwrap[T, E](value: Result[T, E]) -> T:
+    match value:
+        Result.Ok(inner):
+            return inner
+        Result.Err(error):
+            raise str(error)
+
+def unwrap_err[T, E](value: Result[T, E]) -> E:
+    match value:
+        Result.Ok(_):
+            raise "called result.unwrap_err() on Ok"
+        Result.Err(error):
+            return error

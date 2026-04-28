@@ -10264,6 +10264,26 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn resolve_class_attribute_constructor(
+        &self,
+        attributes: &[(String, Expr)],
+        attr_name: &str,
+        classes: &HashMap<String, ClassInfo<'ctx>>,
+    ) -> Option<(FunctionValue<'ctx>, Vec<crate::ast::Param>)> {
+        let (_, expr) = attributes.iter().find(|(name, _)| name == attr_name)?;
+        let target_name = match expr {
+            Expr::Ident(name) => Some(name.as_str()),
+            Expr::Call { callee, args, kwargs } if args.is_empty() && kwargs.is_empty() => match callee.as_ref() {
+                Expr::Ident(name) => Some(name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }?;
+        classes
+            .get(target_name)
+            .map(|class_info| (class_info.constructor, class_info.constructor_params.clone()))
+    }
+
     fn resolve_allocator_callable_ptr(&mut self, expr: &Expr, hook_name: &str) -> Result<IntValue<'ctx>, String> {
         let fn_val = match expr {
             Expr::Ident(name) => self.callable_target_for_function_name(name)?,
@@ -10444,13 +10464,14 @@ impl<'ctx> Compiler<'ctx> {
                     name,
                     fields,
                     is_packed,
+                    ..
                 } => {
                     if self.structs.contains_key(name) {
                         continue;
                     }
                     self.compile_struct_def(name, fields, *is_packed)?;
                 }
-                Stmt::Union { name, fields } => {
+                Stmt::Union { name, fields, .. } => {
                     if self.structs.contains_key(name) {
                         continue;
                     }
@@ -10517,28 +10538,25 @@ impl<'ctx> Compiler<'ctx> {
                         Vec::with_capacity(params.len());
                     for p in params {
                         if let Some(type_name) = &p.type_name {
-                            let abi =
-                                self.parse_extern_abi_type(type_name, &format!("def '{name}' param '{}'", p.name))?;
-                            if abi == ExternAbiType::Void {
-                                return Err(format!("def '{name}' parameter '{}' cannot have type 'void'", p.name));
+                            if let Some(abi) = ExternAbiType::parse(type_name) {
+                                if abi == ExternAbiType::Void {
+                                    return Err(format!("def '{name}' parameter '{}' cannot have type 'void'", p.name));
+                                }
+                                param_types.push(
+                                    self.extern_abi_basic_type(abi)
+                                        .expect("non-void param must lower to a basic type")
+                                        .into(),
+                                );
+                            } else {
+                                param_types.push(self.cv_type.into());
                             }
-                            param_types.push(
-                                self.extern_abi_basic_type(abi)
-                                    .expect("non-void param must lower to a basic type")
-                                    .into(),
-                            );
                         } else {
                             param_types.push(self.cv_type.into());
                         }
                     }
 
                     // Build LLVM return type: native if annotated, CoolVal otherwise.
-                    let parsed_ret_abi = match return_type {
-                        Some(ret_name) => {
-                            Some(self.parse_extern_abi_type(ret_name, &format!("def '{name}' return type"))?)
-                        }
-                        None => None,
-                    };
+                    let parsed_ret_abi = return_type.as_deref().and_then(ExternAbiType::parse);
                     let fn_type = match parsed_ret_abi {
                         Some(ret_abi) => match self.extern_abi_basic_type(ret_abi) {
                             Some(basic) => basic.fn_type(&param_types, false),
@@ -11389,6 +11407,7 @@ impl<'ctx> Compiler<'ctx> {
                 section,
                 entry,
                 body,
+                ..
             } => {
                 if let Some(section_name) = section.as_deref() {
                     if let Some(fn_val) = self.functions.get(name).copied() {
@@ -11433,7 +11452,7 @@ impl<'ctx> Compiler<'ctx> {
             }
 
             // ── class definition ────────────────────────────────────────────
-            Stmt::Class { name, parent, body } => {
+            Stmt::Class { name, parent, body, .. } => {
                 self.compile_class(name, parent.as_deref(), body)?;
             }
 
@@ -11441,11 +11460,12 @@ impl<'ctx> Compiler<'ctx> {
                 name,
                 fields,
                 is_packed,
+                ..
             } => {
                 self.compile_struct_def(name, fields, *is_packed)?;
             }
 
-            Stmt::Union { name, fields } => {
+            Stmt::Union { name, fields, .. } => {
                 self.compile_union_def(name, fields)?;
             }
 
@@ -11812,10 +11832,7 @@ impl<'ctx> Compiler<'ctx> {
             .ok_or_else(|| format!("function '{name}' was not pre-declared"))?;
 
         // Resolve the declared return type, if any.
-        let ret_abi: Option<ExternAbiType> = match return_type {
-            Some(rt) => Some(self.parse_extern_abi_type(rt, &format!("def '{name}' return type"))?),
-            None => None,
-        };
+        let ret_abi = return_type.and_then(ExternAbiType::parse);
 
         // Save caller state
         let saved_bb = self.builder.get_insert_block();
@@ -11861,9 +11878,12 @@ impl<'ctx> Compiler<'ctx> {
             }
             if let Some(native_val) = fn_val.get_nth_param(i as u32) {
                 let cv = if let Some(type_name) = &param.type_name {
-                    let abi = self.parse_extern_abi_type(type_name, &format!("def '{name}' param '{}'", param.name))?;
-                    // Wrap the native LLVM value into a CoolVal for the body.
-                    self.extern_return_value(native_val, abi, &format!("{}_box", param.name))?
+                    if let Some(abi) = ExternAbiType::parse(type_name) {
+                        // Wrap the native LLVM value into a CoolVal for the body.
+                        self.extern_return_value(native_val, abi, &format!("{}_box", param.name))?
+                    } else {
+                        native_val.into_struct_value()
+                    }
                 } else {
                     native_val.into_struct_value()
                 };
@@ -13374,6 +13394,7 @@ impl<'ctx> Compiler<'ctx> {
         let program = parser
             .parse_program()
             .map_err(|e| format!("import parse error: {}", e))?;
+        let lowered = crate::lowering::lower_program(&program).map_err(|e| format!("import parse error: {}", e))?;
 
         self.compiling_modules.push(canonical_path.clone());
 
@@ -13409,7 +13430,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.position_at_end(entry);
         self.set_source_context(canonical_path.clone());
         self.allow_toplevel_defs = true;
-        let start_line = program
+        let start_line = lowered
             .iter()
             .find_map(|stmt| match stmt {
                 Stmt::SetLine(line) => Some(*line),
@@ -13424,10 +13445,10 @@ impl<'ctx> Compiler<'ctx> {
         self.emit_trace_push(&display_name);
 
         let compile_result = (|| -> Result<ModuleInfo<'ctx>, String> {
-            self.declare_top_level_types(&program)?;
-            self.declare_top_level_data(&program)?;
-            self.declare_top_level_functions(&program)?;
-            self.compile_stmts(&program)?;
+            self.declare_top_level_types(&lowered)?;
+            self.declare_top_level_data(&lowered)?;
+            self.declare_top_level_functions(&lowered)?;
+            self.compile_stmts(&lowered)?;
 
             let mut exports = module_exports::exported_names(&program);
             exports.sort();
@@ -14294,9 +14315,11 @@ impl<'ctx> Compiler<'ctx> {
         let mut native_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(values.len());
         for (i, (param, cv)) in params.iter().zip(values.iter()).enumerate() {
             if let Some(type_name) = &param.type_name {
-                let abi =
-                    self.parse_extern_abi_type(type_name, &format!("call '{name}' parameter '{}'", param.name))?;
-                native_args.push(self.extern_arg_value(*cv, abi, &format!("{name}_arg{i}"))?);
+                if let Some(abi) = ExternAbiType::parse(type_name) {
+                    native_args.push(self.extern_arg_value(*cv, abi, &format!("{name}_arg{i}"))?);
+                } else {
+                    native_args.push((*cv).into());
+                }
             } else {
                 native_args.push((*cv).into());
             }
@@ -15304,88 +15327,154 @@ impl<'ctx> Compiler<'ctx> {
             }
         }
 
+        if let Expr::Attr {
+            object,
+            name: attr_name,
+        } = callee
+        {
+            let constructor_target = match object.as_ref() {
+                Expr::Ident(class_name) => self.classes.get(class_name).and_then(|class_info| {
+                    self.resolve_class_attribute_constructor(&class_info.attributes, attr_name, &self.classes)
+                }),
+                Expr::Attr { object, name } => {
+                    if let Expr::Ident(module_name) = object.as_ref() {
+                        self.imported_user_modules
+                            .get(module_name)
+                            .and_then(|module_path| self.compiled_modules.get(module_path))
+                            .and_then(|module_info| {
+                                module_info.classes.get(name).and_then(|class_info| {
+                                    self.resolve_class_attribute_constructor(
+                                        &class_info.attributes,
+                                        attr_name,
+                                        &module_info.classes,
+                                    )
+                                })
+                            })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some((constructor, ctor_params)) = constructor_target {
+                return self.call_constructor(constructor, &ctor_params, args, kwargs);
+            }
+        }
+
         // Handle method calls: obj.method(args)
         if let Expr::Attr {
             object,
             name: method_name,
         } = callee
         {
-            if let Expr::Call {
-                callee,
-                args: super_args,
-                kwargs: super_kwargs,
-            } = object.as_ref()
-            {
-                if matches!(callee.as_ref(), Expr::Ident(name) if name == "super")
-                    && super_args.is_empty()
-                    && super_kwargs.is_empty()
-                {
-                    let current_class = self.current_class.clone().ok_or("super() used outside method")?;
-                    let parent_name = self
-                        .classes
-                        .get(&current_class)
-                        .and_then(|c| c.parent.clone())
-                        .ok_or("super(): class has no parent")?;
-                    let (parent_method, parent_params) = {
-                        let parent_info = self
-                            .classes
-                            .get(&parent_name)
-                            .ok_or("super(): missing parent metadata")?;
-                        let parent_method = *parent_info
-                            .methods
-                            .get(method_name)
-                            .ok_or_else(|| format!("super(): parent has no method '{method_name}'"))?;
-                        let parent_params = parent_info.method_params.get(method_name).cloned().unwrap_or_default();
-                        (parent_method, parent_params)
-                    };
-                    let self_ptr = self
-                        .locals
-                        .get("self")
-                        .copied()
-                        .ok_or("super() called outside of a method")?;
-                    let self_val = self
-                        .builder
-                        .build_load(self.cv_type, self_ptr, "super_self")
-                        .unwrap()
-                        .into_struct_value();
-                    let mut call_args = vec![self_val];
-                    for arg in args {
-                        call_args.push(self.compile_expr(arg)?);
+            let class_attr_callable = match object.as_ref() {
+                Expr::Ident(class_name) => self
+                    .classes
+                    .get(class_name)
+                    .map(|class_info| class_info.attributes.iter().any(|(attr, _)| attr == method_name))
+                    .unwrap_or(false),
+                Expr::Attr { object, name } => {
+                    if let Expr::Ident(module_name) = object.as_ref() {
+                        if let Some(module_path) = self.imported_user_modules.get(module_name) {
+                            if let Some(module_info) = self.compiled_modules.get(module_path) {
+                                if let Some(class_info) = module_info.classes.get(name) {
+                                    class_info.attributes.iter().any(|(attr, _)| attr == method_name)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
                     }
-                    return Ok(self.call_fn_with_struct_args(
-                        parent_method,
-                        &parent_params,
-                        None,
-                        &call_args,
-                        "super_call",
-                    )?);
                 }
+                _ => false,
+            };
+            if class_attr_callable {
+                // Fall through to the generic callable path below so enum namespaces
+                // and other callable class attributes behave like normal callables.
+            } else {
+                if let Expr::Call {
+                    callee,
+                    args: super_args,
+                    kwargs: super_kwargs,
+                } = object.as_ref()
+                {
+                    if matches!(callee.as_ref(), Expr::Ident(name) if name == "super")
+                        && super_args.is_empty()
+                        && super_kwargs.is_empty()
+                    {
+                        let current_class = self.current_class.clone().ok_or("super() used outside method")?;
+                        let parent_name = self
+                            .classes
+                            .get(&current_class)
+                            .and_then(|c| c.parent.clone())
+                            .ok_or("super(): class has no parent")?;
+                        let (parent_method, parent_params) = {
+                            let parent_info = self
+                                .classes
+                                .get(&parent_name)
+                                .ok_or("super(): missing parent metadata")?;
+                            let parent_method = *parent_info
+                                .methods
+                                .get(method_name)
+                                .ok_or_else(|| format!("super(): parent has no method '{method_name}'"))?;
+                            let parent_params = parent_info.method_params.get(method_name).cloned().unwrap_or_default();
+                            (parent_method, parent_params)
+                        };
+                        let self_ptr = self
+                            .locals
+                            .get("self")
+                            .copied()
+                            .ok_or("super() called outside of a method")?;
+                        let self_val = self
+                            .builder
+                            .build_load(self.cv_type, self_ptr, "super_self")
+                            .unwrap()
+                            .into_struct_value();
+                        let mut call_args = vec![self_val];
+                        for arg in args {
+                            call_args.push(self.compile_expr(arg)?);
+                        }
+                        return Ok(self.call_fn_with_struct_args(
+                            parent_method,
+                            &parent_params,
+                            None,
+                            &call_args,
+                            "super_call",
+                        )?);
+                    }
+                }
+
+                let obj_val = self.compile_expr(object)?;
+                let attr_name = format!("method_{}", method_name);
+                let attr_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
+
+                // Call method - the runtime looks up the method from the class structure
+                let i32t = self.context.i32_type();
+                let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                    obj_val.into(),
+                    attr_name_ptr.as_pointer_value().into(),
+                    nargs_i32.into(),
+                ];
+                for arg in args {
+                    call_args.push(self.compile_expr(arg)?.into());
+                }
+
+                return Ok(self
+                    .builder
+                    .build_call(self.rt.cool_call_method_vararg, &call_args, "call_method")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_struct_value());
             }
-
-            let obj_val = self.compile_expr(object)?;
-            let attr_name = format!("method_{}", method_name);
-            let attr_name_ptr = self.builder.build_global_string_ptr(&attr_name, &attr_name).unwrap();
-
-            // Call method - the runtime looks up the method from the class structure
-            let i32t = self.context.i32_type();
-            let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
-            let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
-                obj_val.into(),
-                attr_name_ptr.as_pointer_value().into(),
-                nargs_i32.into(),
-            ];
-            for arg in args {
-                call_args.push(self.compile_expr(arg)?.into());
-            }
-
-            return Ok(self
-                .builder
-                .build_call(self.rt.cool_call_method_vararg, &call_args, "call_method")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_struct_value());
         }
 
         if let Expr::Ident(name) = callee {
@@ -15526,10 +15615,7 @@ impl<'ctx> Compiler<'ctx> {
                         .into_struct_value()
                 })
             }
-            Expr::Attr { object: _, name: _ } => {
-                // Method calls are handled above, but for closures we might get here
-                None
-            }
+            Expr::Attr { object: _, name: _ } => Some(self.compile_expr(callee)?),
             _ => {
                 // For other expressions (like nested lambdas), compile and load the result
                 Some(self.compile_expr(callee)?)
@@ -16228,7 +16314,8 @@ impl<'ctx> Compiler<'ctx> {
             let obj = self.compile_expr(&args[0])?;
             let class_name = match &args[1] {
                 Expr::Str(s) => s.clone(),
-                _ => return Err("isinstance() currently requires a string literal class name".into()),
+                Expr::Ident(s) => s.clone(),
+                _ => return Err("isinstance() currently requires a class identifier or string literal".into()),
             };
             let class_name_ptr = self
                 .builder
@@ -16719,6 +16806,7 @@ pub fn compile_program_with_output(
     script_path: &Path,
     options: &NativeCompileOptions,
 ) -> Result<(), String> {
+    let lowered = crate::lowering::lower_program(program)?;
     if options.build_mode.is_freestanding() && options.artifact_kind == NativeArtifactKind::Binary && !options.no_libc {
         return Err(
             "freestanding builds cannot emit hosted binaries; use object, assembly, llvm-ir, staticlib, sharedlib, or pair binary output with no-libc mode"
@@ -16761,13 +16849,13 @@ pub fn compile_program_with_output(
     compiler.module_resolver = ModuleResolver::discover_for_script(&compiler.current_source_dir)?;
 
     // ── Pass 1: predeclare top-level types, data, and functions ─────────────
-    compiler.declare_top_level_types(program)?;
-    compiler.declare_top_level_data(program)?;
-    compiler.declare_top_level_functions(program)?;
+    compiler.declare_top_level_types(&lowered)?;
+    compiler.declare_top_level_data(&lowered)?;
+    compiler.declare_top_level_functions(&lowered)?;
 
     // ── Pass 2: build the selected top-level shape ───────────────────────────
     if options.build_mode.is_freestanding() {
-        compiler.compile_freestanding_toplevel(program)?;
+        compiler.compile_freestanding_toplevel(&lowered)?;
     } else {
         let i32_type = context.i32_type();
         let main_fn = compiler.module.add_function("main", i32_type.fn_type(&[], false), None);
@@ -16775,7 +16863,7 @@ pub fn compile_program_with_output(
         compiler.builder.position_at_end(entry);
         compiler.current_fn = Some(main_fn);
         compiler.allow_toplevel_defs = true;
-        let start_line = program
+        let start_line = lowered
             .iter()
             .find_map(|stmt| match stmt {
                 Stmt::SetLine(line) => Some(*line),
@@ -16785,7 +16873,7 @@ pub fn compile_program_with_output(
         compiler.enter_function_debug_scope(main_fn, "main", start_line);
         compiler.emit_trace_push("main");
 
-        compiler.compile_stmts(program)?;
+        compiler.compile_stmts(&lowered)?;
 
         // Ensure main is properly terminated
         if !compiler.current_block_terminated() {

@@ -620,7 +620,7 @@ impl Compiler {
                 )
             }
 
-            Stmt::Class { name, parent, body } => {
+            Stmt::Class { name, parent, body, .. } => {
                 // Collect methods from body.
                 let has_parent = parent.is_some();
 
@@ -731,6 +731,7 @@ impl Compiler {
                 }
                 let class_body = vec![Stmt::FnDef {
                     name: "__init__".to_string(),
+                    type_params: Vec::new(),
                     params,
                     return_type: None,
                     section: None,
@@ -740,12 +741,13 @@ impl Compiler {
                 let class_stmt = Stmt::Class {
                     name: name.clone(),
                     parent: None,
+                    implements: Vec::new(),
                     body: class_body,
                 };
                 self.compile_stmt(&class_stmt)?;
             }
 
-            Stmt::Union { name, fields } => {
+            Stmt::Union { name, fields, .. } => {
                 // Lower union to a class with zero-defaulted fields (VM path).
                 let mut init_body: Vec<Stmt> = Vec::new();
                 let mut params = vec![Param {
@@ -804,6 +806,7 @@ impl Compiler {
                 }
                 let class_body = vec![Stmt::FnDef {
                     name: "__init__".to_string(),
+                    type_params: Vec::new(),
                     params,
                     return_type: None,
                     section: None,
@@ -813,6 +816,7 @@ impl Compiler {
                 let class_stmt = Stmt::Class {
                     name: name.clone(),
                     parent: None,
+                    implements: Vec::new(),
                     body: class_body,
                 };
                 self.compile_stmt(&class_stmt)?;
@@ -921,6 +925,12 @@ impl Compiler {
 
             Stmt::Visibility { stmt, .. } => {
                 self.compile_stmt(stmt)?;
+            }
+
+            Stmt::Enum { .. } | Stmt::Trait { .. } | Stmt::Match { .. } => {
+                return Err(
+                    "internal error: high-level typed statement reached VM compiler before lowering".to_string(),
+                )
             }
         }
         Ok(())
@@ -1468,5 +1478,6 @@ const BUILTINS: &[&str] = &[
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn compile(program: &crate::ast::Program) -> Result<Chunk, String> {
-    Compiler::new().compile_program(program)
+    let lowered = crate::lowering::lower_program(program)?;
+    Compiler::new().compile_program(&lowered)
 }

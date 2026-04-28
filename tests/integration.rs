@@ -7160,3 +7160,102 @@ fn test_example_kernel_demo_builds_object_artifact() {
 
     let _ = std::fs::remove_dir_all(&project_dir);
 }
+
+#[test]
+fn test_phase13_typed_language_features_interpreter_and_vm() {
+    let source = r#"
+trait Named:
+    def name(self) -> str
+
+class User implements Named:
+    def __init__(self, name: str):
+        self.value = name
+
+    def name(self) -> str:
+        return self.value
+
+enum Option[T]:
+    Some(value: T)
+    None
+
+struct Box[T]:
+    value: T
+
+def identity[T](value: T) -> T:
+    return value
+
+def show(value: Option[int]) -> int:
+    match value:
+        Option.Some(inner):
+            print(inner)
+            return inner
+        Option.None:
+            print("none")
+            return 0
+
+print(identity(Box(7)).value)
+print(User("Ada").name())
+show(Option.Some(41))
+show(Option.None)
+"#;
+    let interp = run_cool(source).unwrap();
+    let interp_lines: Vec<_> = interp.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(interp_lines, vec!["7", "Ada", "41", "none"]);
+
+    let vm = run_cool_vm(source).unwrap();
+    let vm_lines: Vec<_> = vm.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(vm_lines, vec!["7", "Ada", "41", "none"]);
+}
+
+#[test]
+fn test_cool_check_phase13_flags_non_exhaustive_match() {
+    let source = r#"
+enum Result[T, E]:
+    Ok(value: T)
+    Err(error: E)
+
+def unwrap_or_zero(value: Result[int, str]) -> int:
+    match value:
+        Result.Ok(inner):
+            return inner
+"#;
+    let err = run_cool_with_args(source, &["check"]).unwrap_err();
+    assert!(err.contains("non_exhaustive_match"), "stderr:\n{err}");
+    assert!(err.contains("missing_return"), "stderr:\n{err}");
+}
+
+#[test]
+fn test_cool_check_phase13_flags_trait_bound_failure() {
+    let source = r#"
+trait Named:
+    def name(self) -> str
+
+class User implements Named:
+    def name(self) -> str:
+        return "ok"
+
+class Thing:
+    pass
+
+def pick_name[T: Named](value: T) -> T:
+    return value
+
+pick_name(User())
+pick_name(Thing())
+"#;
+    let err = run_cool_with_args(source, &["check"]).unwrap_err();
+    assert!(err.contains("does not satisfy bound 'T: Named'"), "stderr:\n{err}");
+}
+
+#[test]
+fn test_cool_check_phase13_flags_typed_collection_mismatch() {
+    let source = r#"
+def total(items: list[int]) -> int:
+    return len(items)
+
+total([1, 2, 3])
+total(["x"])
+"#;
+    let err = run_cool_with_args(source, &["check"]).unwrap_err();
+    assert!(err.contains("expected 'list[int]', got 'list[str]'"), "stderr:\n{err}");
+}

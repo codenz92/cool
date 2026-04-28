@@ -133,6 +133,45 @@ pub struct Param {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TypeParam {
+    pub name: String,
+    pub bound: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraitMethod {
+    pub name: String,
+    pub type_params: Vec<TypeParam>,
+    pub params: Vec<Param>,
+    pub return_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EnumVariant {
+    pub name: String,
+    pub fields: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pattern {
+    Wildcard,
+    Literal(Expr),
+    Variant {
+        enum_name: Option<String>,
+        variant: String,
+        fields: Vec<Pattern>,
+    },
+    Capture(String),
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ExternParam {
     pub name: String,
     pub type_name: String,
@@ -203,6 +242,7 @@ pub enum Stmt {
     },
     FnDef {
         name: String,
+        type_params: Vec<TypeParam>,
         params: Vec<Param>,
         return_type: Option<String>,
         section: Option<String>,
@@ -234,19 +274,36 @@ pub enum Stmt {
     Class {
         name: String,
         parent: Option<String>,
+        implements: Vec<String>,
         body: Vec<Stmt>,
     },
     /// struct Name:\n    field: type\n    ...
     /// packed struct Name:\n    field: type\n    ...
     Struct {
         name: String,
+        type_params: Vec<TypeParam>,
         fields: Vec<(String, String)>, // (field_name, type_name)
         is_packed: bool,
     },
     /// union Name:\n    field: type\n    ...
     Union {
         name: String,
+        type_params: Vec<TypeParam>,
         fields: Vec<(String, String)>, // (field_name, type_name) — all share the same memory
+    },
+    Enum {
+        name: String,
+        type_params: Vec<TypeParam>,
+        variants: Vec<EnumVariant>,
+    },
+    Trait {
+        name: String,
+        type_params: Vec<TypeParam>,
+        methods: Vec<TraitMethod>,
+    },
+    Match {
+        value: Expr,
+        arms: Vec<MatchArm>,
     },
     /// try / except / else / finally
     Try {

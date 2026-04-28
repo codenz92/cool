@@ -127,6 +127,9 @@ impl Parser {
                 self.parse_struct_body(true)
             }
             Token::Union => self.parse_union(),
+            Token::Enum => self.parse_enum(),
+            Token::Trait => self.parse_trait(),
+            Token::Match => self.parse_match(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
             Token::For => self.parse_for(),
@@ -176,6 +179,8 @@ impl Parser {
                 self.parse_struct_body(true)?
             }
             Token::Union => self.parse_union()?,
+            Token::Enum => self.parse_enum()?,
+            Token::Trait => self.parse_trait()?,
             Token::Ident(_) => self.parse_assign_or_expr()?,
             _ => {
                 return Err(format!(
@@ -198,6 +203,8 @@ impl Parser {
                 | Stmt::Class { .. }
                 | Stmt::Struct { .. }
                 | Stmt::Union { .. }
+                | Stmt::Enum { .. }
+                | Stmt::Trait { .. }
         ) {
             return Err(format!(
                 "line {}: {} may only be used with top-level declarations or bindings",
@@ -223,12 +230,13 @@ impl Parser {
     fn parse_fn_def(&mut self) -> Result<Stmt, String> {
         self.eat(&Token::Def)?;
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.eat(&Token::LParen)?;
         let params = self.parse_param_list()?;
         self.eat(&Token::RParen)?;
         let return_type = if self.check(&Token::Arrow) {
             self.advance();
-            Some(self.expect_ident()?)
+            Some(self.parse_type_annotation(&[Token::Colon])?)
         } else {
             None
         };
@@ -237,6 +245,7 @@ impl Parser {
         let (section, entry, body) = self.parse_fn_body_with_metadata()?;
         Ok(Stmt::FnDef {
             name,
+            type_params,
             params,
             return_type,
             section,
@@ -257,7 +266,7 @@ impl Parser {
         }
         let name = self.expect_ident()?;
         self.eat(&Token::Colon)?;
-        let type_name = self.expect_ident()?;
+        let type_name = self.parse_type_annotation(&[Token::Eq])?;
         self.eat(&Token::Eq)?;
         let value = self.parse_expr()?;
         let mut section = None;
@@ -300,7 +309,7 @@ impl Parser {
         let params = self.parse_extern_param_list()?;
         self.eat(&Token::RParen)?;
         self.eat(&Token::Arrow)?;
-        let return_type = self.expect_ident()?;
+        let return_type = self.parse_type_annotation(&[Token::Colon, Token::Newline])?;
 
         let mut symbol = None;
         let mut callconv = None;
@@ -538,12 +547,9 @@ impl Parser {
         }
         let name = self.expect_ident()?;
         // Optional type annotation: name: type
-        let type_name = if self.check(&Token::Colon)
-            && matches!(self.token_at(1), Token::Ident(_))
-            && matches!(self.token_at(2), Token::Comma | Token::RParen | Token::Eq)
-        {
+        let type_name = if self.check(&Token::Colon) {
             self.advance();
-            Some(self.expect_ident()?)
+            Some(self.parse_type_annotation(&[Token::Comma, Token::RParen, Token::Eq])?)
         } else {
             None
         };
@@ -571,7 +577,7 @@ impl Parser {
     fn parse_extern_param(&mut self) -> Result<ExternParam, String> {
         let name = self.expect_ident()?;
         self.eat(&Token::Colon)?;
-        let type_name = self.expect_ident()?;
+        let type_name = self.parse_type_annotation(&[Token::Comma, Token::RParen])?;
         Ok(ExternParam { name, type_name })
     }
 
@@ -586,10 +592,24 @@ impl Parser {
         } else {
             None
         };
+        let mut implements = Vec::new();
+        if self.check(&Token::Implements) {
+            self.advance();
+            implements.push(self.parse_type_annotation(&[Token::Comma, Token::Colon])?);
+            while self.check(&Token::Comma) {
+                self.advance();
+                implements.push(self.parse_type_annotation(&[Token::Comma, Token::Colon])?);
+            }
+        }
         self.eat(&Token::Colon)?;
         self.eat_newline();
         let body = self.parse_block()?;
-        Ok(Stmt::Class { name, parent, body })
+        Ok(Stmt::Class {
+            name,
+            parent,
+            implements,
+            body,
+        })
     }
 
     fn parse_struct(&mut self, is_packed: bool) -> Result<Stmt, String> {
@@ -599,6 +619,7 @@ impl Parser {
 
     fn parse_struct_body(&mut self, is_packed: bool) -> Result<Stmt, String> {
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.eat(&Token::Colon)?;
         self.eat_newline();
         self.eat(&Token::Indent)?;
@@ -615,13 +636,14 @@ impl Parser {
             }
             let field_name = self.expect_ident()?;
             self.eat(&Token::Colon)?;
-            let type_name = self.expect_ident()?;
+            let type_name = self.parse_type_annotation(&[Token::Newline])?;
             self.eat_newline();
             fields.push((field_name, type_name));
         }
         self.eat(&Token::Dedent)?;
         Ok(Stmt::Struct {
             name,
+            type_params,
             fields,
             is_packed,
         })
@@ -630,6 +652,7 @@ impl Parser {
     fn parse_union(&mut self) -> Result<Stmt, String> {
         self.eat(&Token::Union)?;
         let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
         self.eat(&Token::Colon)?;
         self.eat_newline();
         self.eat(&Token::Indent)?;
@@ -646,12 +669,205 @@ impl Parser {
             }
             let field_name = self.expect_ident()?;
             self.eat(&Token::Colon)?;
-            let type_name = self.expect_ident()?;
+            let type_name = self.parse_type_annotation(&[Token::Newline])?;
             self.eat_newline();
             fields.push((field_name, type_name));
         }
         self.eat(&Token::Dedent)?;
-        Ok(Stmt::Union { name, fields })
+        Ok(Stmt::Union {
+            name,
+            type_params,
+            fields,
+        })
+    }
+
+    fn parse_enum(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Enum)?;
+        let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
+        self.eat(&Token::Colon)?;
+        self.eat_newline();
+        self.eat(&Token::Indent)?;
+        let mut variants = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            self.skip_newlines();
+            if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                break;
+            }
+            if self.check(&Token::Pass) {
+                self.advance();
+                self.eat_newline();
+                continue;
+            }
+            let variant_name = self.expect_ident()?;
+            let mut fields = Vec::new();
+            if self.check(&Token::LParen) {
+                self.advance();
+                if !self.check(&Token::RParen) {
+                    loop {
+                        let field_name = self.expect_ident()?;
+                        self.eat(&Token::Colon)?;
+                        let type_name = self.parse_type_annotation(&[Token::Comma, Token::RParen])?;
+                        fields.push((field_name, type_name));
+                        if self.check(&Token::Comma) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.eat(&Token::RParen)?;
+            }
+            self.eat_newline();
+            variants.push(EnumVariant {
+                name: variant_name,
+                fields,
+            });
+        }
+        self.eat(&Token::Dedent)?;
+        Ok(Stmt::Enum {
+            name,
+            type_params,
+            variants,
+        })
+    }
+
+    fn parse_trait(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Trait)?;
+        let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
+        self.eat(&Token::Colon)?;
+        self.eat_newline();
+        self.eat(&Token::Indent)?;
+        let mut methods = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            self.skip_newlines();
+            if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                break;
+            }
+            if self.check(&Token::Pass) {
+                self.advance();
+                self.eat_newline();
+                continue;
+            }
+            if !self.check(&Token::Def) {
+                return Err(format!(
+                    "line {}: trait bodies may only contain method signatures",
+                    self.line()
+                ));
+            }
+            methods.push(self.parse_trait_method()?);
+        }
+        self.eat(&Token::Dedent)?;
+        Ok(Stmt::Trait {
+            name,
+            type_params,
+            methods,
+        })
+    }
+
+    fn parse_trait_method(&mut self) -> Result<TraitMethod, String> {
+        self.eat(&Token::Def)?;
+        let name = self.expect_ident()?;
+        let type_params = self.parse_type_params()?;
+        self.eat(&Token::LParen)?;
+        let params = self.parse_param_list()?;
+        self.eat(&Token::RParen)?;
+        let return_type = if self.check(&Token::Arrow) {
+            self.advance();
+            Some(self.parse_type_annotation(&[Token::Newline, Token::Colon])?)
+        } else {
+            None
+        };
+        if self.check(&Token::Colon) {
+            self.advance();
+            self.eat_newline();
+            let body = self.parse_block()?;
+            if !body.iter().all(|stmt| matches!(stmt, Stmt::SetLine(_) | Stmt::Pass)) {
+                return Err(format!(
+                    "line {}: trait methods may only use `pass` bodies",
+                    self.line()
+                ));
+            }
+        } else {
+            self.eat_newline();
+        }
+        Ok(TraitMethod {
+            name,
+            type_params,
+            params,
+            return_type,
+        })
+    }
+
+    fn parse_match(&mut self) -> Result<Stmt, String> {
+        self.eat(&Token::Match)?;
+        let value = self.parse_expr()?;
+        self.eat(&Token::Colon)?;
+        self.eat_newline();
+        self.eat(&Token::Indent)?;
+        let mut arms = Vec::new();
+        while !self.check(&Token::Dedent) && !self.check(&Token::Eof) {
+            self.skip_newlines();
+            if self.check(&Token::Dedent) || self.check(&Token::Eof) {
+                break;
+            }
+            let pattern = self.parse_pattern(false)?;
+            self.eat(&Token::Colon)?;
+            self.eat_newline();
+            let body = self.parse_block()?;
+            arms.push(MatchArm { pattern, body });
+        }
+        self.eat(&Token::Dedent)?;
+        if arms.is_empty() {
+            return Err(format!("line {}: match requires at least one arm", self.line()));
+        }
+        Ok(Stmt::Match { value, arms })
+    }
+
+    fn parse_pattern(&mut self, allow_capture: bool) -> Result<Pattern, String> {
+        match self.peek().clone() {
+            Token::Ident(name) => {
+                self.advance();
+                if name == "_" {
+                    return Ok(Pattern::Wildcard);
+                }
+                let mut parts = vec![name.clone()];
+                while self.check(&Token::Dot) {
+                    self.advance();
+                    parts.push(self.expect_ident()?);
+                }
+                if allow_capture && parts.len() == 1 && !self.check(&Token::LParen) {
+                    return Ok(Pattern::Capture(name));
+                }
+                let mut fields = Vec::new();
+                if self.check(&Token::LParen) {
+                    self.advance();
+                    if !self.check(&Token::RParen) {
+                        loop {
+                            fields.push(self.parse_pattern(true)?);
+                            if self.check(&Token::Comma) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    self.eat(&Token::RParen)?;
+                }
+                let variant = parts.pop().unwrap();
+                let enum_name = parts.pop();
+                Ok(Pattern::Variant {
+                    enum_name,
+                    variant,
+                    fields,
+                })
+            }
+            Token::Int(_) | Token::Float(_) | Token::Str(_) | Token::Bool(_) | Token::Nil => {
+                Ok(Pattern::Literal(self.parse_primary()?))
+            }
+            other => Err(format!("line {}: unsupported pattern token {:?}", self.line(), other)),
+        }
     }
 
     fn parse_if(&mut self) -> Result<Stmt, String> {
@@ -897,9 +1113,9 @@ impl Parser {
     fn parse_const_decl(&mut self) -> Result<Stmt, String> {
         self.eat(&Token::Const)?;
         let name = self.expect_ident()?;
-        let type_name = if self.check(&Token::Colon) && matches!(self.token_at(1), Token::Ident(_)) {
+        let type_name = if self.check(&Token::Colon) {
             self.advance();
-            Some(self.expect_ident()?)
+            Some(self.parse_type_annotation(&[Token::Eq])?)
         } else {
             None
         };
@@ -917,13 +1133,10 @@ impl Parser {
     /// Parse assignment or augmented assignment or a bare expression.
     fn parse_assign_or_expr(&mut self) -> Result<Stmt, String> {
         if let Token::Ident(name) = self.peek().clone() {
-            if self.token_at(1) == &Token::Colon
-                && matches!(self.token_at(2), Token::Ident(_))
-                && self.token_at(3) == &Token::Eq
-            {
+            if self.token_at(1) == &Token::Colon {
                 self.advance();
                 self.advance();
-                let type_name = self.expect_ident()?;
+                let type_name = self.parse_type_annotation(&[Token::Eq])?;
                 self.eat(&Token::Eq)?;
                 let value = self.parse_expr()?;
                 self.eat_newline();
@@ -1109,13 +1322,25 @@ impl Parser {
             self.advance();
             let mut params = Vec::new();
             if !self.check(&Token::Colon) {
-                params.push(self.parse_param()?);
+                params.push(Param {
+                    name: self.expect_ident()?,
+                    default: None,
+                    is_vararg: false,
+                    is_kwarg: false,
+                    type_name: None,
+                });
                 while self.check(&Token::Comma) {
                     self.advance();
                     if self.check(&Token::Colon) {
                         break;
                     }
-                    params.push(self.parse_param()?);
+                    params.push(Param {
+                        name: self.expect_ident()?,
+                        default: None,
+                        is_vararg: false,
+                        is_kwarg: false,
+                        type_name: None,
+                    });
                 }
             }
             self.eat(&Token::Colon)?;
@@ -1464,6 +1689,104 @@ impl Parser {
         Ok((args, kwargs))
     }
 
+    fn parse_type_params(&mut self) -> Result<Vec<TypeParam>, String> {
+        if !self.check(&Token::LBracket) {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        self.skip_collection_ws();
+        let mut params = Vec::new();
+        if self.check(&Token::RBracket) {
+            self.advance();
+            return Ok(params);
+        }
+        loop {
+            let name = self.expect_ident()?;
+            let bound = if self.check(&Token::Colon) {
+                self.advance();
+                Some(self.parse_type_annotation(&[Token::Comma, Token::RBracket])?)
+            } else {
+                None
+            };
+            params.push(TypeParam { name, bound });
+            self.skip_collection_ws();
+            if self.check(&Token::Comma) {
+                self.advance();
+                self.skip_collection_ws();
+            } else {
+                break;
+            }
+        }
+        self.eat(&Token::RBracket)?;
+        Ok(params)
+    }
+
+    fn parse_type_annotation(&mut self, terminators: &[Token]) -> Result<String, String> {
+        let mut text = String::new();
+        let mut bracket_depth = 0usize;
+        let mut paren_depth = 0usize;
+        loop {
+            if bracket_depth == 0
+                && paren_depth == 0
+                && terminators
+                    .iter()
+                    .any(|token| std::mem::discriminant(self.peek()) == std::mem::discriminant(token))
+            {
+                break;
+            }
+            let piece = match self.peek().clone() {
+                Token::Ident(value) => value,
+                Token::Bool(true) => "true".to_string(),
+                Token::Bool(false) => "false".to_string(),
+                Token::Nil => "nil".to_string(),
+                Token::LBracket => {
+                    bracket_depth += 1;
+                    "[".to_string()
+                }
+                Token::RBracket => {
+                    if bracket_depth == 0 {
+                        break;
+                    }
+                    bracket_depth -= 1;
+                    "]".to_string()
+                }
+                Token::LParen => {
+                    paren_depth += 1;
+                    "(".to_string()
+                }
+                Token::RParen => {
+                    if paren_depth == 0 {
+                        break;
+                    }
+                    paren_depth -= 1;
+                    ")".to_string()
+                }
+                Token::Comma => ", ".to_string(),
+                Token::Dot => ".".to_string(),
+                Token::Pipe => " | ".to_string(),
+                Token::Arrow => " -> ".to_string(),
+                Token::Star => "*".to_string(),
+                Token::Colon => ": ".to_string(),
+                Token::Int(value) => value.to_string(),
+                other => {
+                    return Err(format!(
+                        "line {}: unexpected token {:?} in type annotation",
+                        self.line(),
+                        other
+                    ))
+                }
+            };
+            self.advance();
+            text.push_str(&piece);
+        }
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            Err(format!("line {}: expected type annotation", self.line()))
+        } else {
+            Ok(text)
+        }
+    }
+
     fn parse_primary(&mut self) -> Result<Expr, String> {
         match self.peek().clone() {
             Token::Int(n) => {
@@ -1614,15 +1937,32 @@ impl Parser {
     }
 
     fn expect_ident(&mut self) -> Result<String, String> {
-        if let Token::Ident(s) = self.peek().clone() {
-            self.advance();
-            Ok(s)
-        } else {
-            Err(format!(
+        match self.peek().clone() {
+            Token::Ident(s) => {
+                self.advance();
+                Ok(s)
+            }
+            Token::Enum => {
+                self.advance();
+                Ok("enum".to_string())
+            }
+            Token::Trait => {
+                self.advance();
+                Ok("trait".to_string())
+            }
+            Token::Implements => {
+                self.advance();
+                Ok("implements".to_string())
+            }
+            Token::Match => {
+                self.advance();
+                Ok("match".to_string())
+            }
+            _ => Err(format!(
                 "line {}: expected identifier, got {:?}",
                 self.line(),
                 self.peek()
-            ))
+            )),
         }
     }
 

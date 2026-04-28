@@ -1,4 +1,4 @@
-use crate::ast::{ExceptHandler, Expr, Program, Stmt, Visibility};
+use crate::ast::{ExceptHandler, Expr, MatchArm, Pattern, Program, Stmt, TraitMethod, TypeParam, Visibility};
 use crate::lexer::Lexer;
 use crate::module_exports;
 use crate::parser::Parser;
@@ -725,7 +725,7 @@ fn build_doc_module(
                     lifetime: lifetime.clone(),
                 }),
             }),
-            Stmt::Class { name, parent, body } => {
+            Stmt::Class { name, parent, body, .. } => {
                 let (methods, class_bindings) = doc_class_body(body, include_private);
                 classes.push(DocClass {
                     line: current_line,
@@ -737,10 +737,32 @@ fn build_doc_module(
                     class_bindings,
                 });
             }
+            Stmt::Trait { name, methods, .. } => classes.push(DocClass {
+                line: current_line,
+                name: name.clone(),
+                parent: None,
+                doc: None,
+                visibility: Some(effective_visibility),
+                methods: methods
+                    .iter()
+                    .map(|method| DocFunction {
+                        line: current_line,
+                        name: method.name.clone(),
+                        kind: "trait_method",
+                        params: inspect_params(&method.params),
+                        return_type: method.return_type.clone(),
+                        doc: None,
+                        visibility: Some(effective_visibility),
+                        extern_metadata: None,
+                    })
+                    .collect(),
+                class_bindings: Vec::new(),
+            }),
             Stmt::Struct {
                 name,
                 fields,
                 is_packed,
+                ..
             } => types.push(DocType {
                 line: current_line,
                 name: name.clone(),
@@ -756,7 +778,7 @@ fn build_doc_module(
                     })
                     .collect(),
             }),
-            Stmt::Union { name, fields } => types.push(DocType {
+            Stmt::Union { name, fields, .. } => types.push(DocType {
                 line: current_line,
                 name: name.clone(),
                 kind: "union",
@@ -768,6 +790,30 @@ fn build_doc_module(
                     .map(|(field_name, type_name)| InspectStructField {
                         name: field_name.clone(),
                         type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
+            Stmt::Enum { name, variants, .. } => types.push(DocType {
+                line: current_line,
+                name: name.clone(),
+                kind: "enum",
+                is_packed: false,
+                doc: None,
+                visibility: Some(effective_visibility),
+                fields: variants
+                    .iter()
+                    .map(|variant| InspectStructField {
+                        name: variant.name.clone(),
+                        type_name: if variant.fields.is_empty() {
+                            "unit".to_string()
+                        } else {
+                            variant
+                                .fields
+                                .iter()
+                                .map(|(field_name, type_name)| format!("{field_name}: {type_name}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
                     })
                     .collect(),
             }),
@@ -1812,7 +1858,7 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
                 params: inspect_extern_params(params),
                 return_type: Some(return_type.clone()),
             }),
-            Stmt::Class { name, parent, body } => {
+            Stmt::Class { name, parent, body, .. } => {
                 let (methods, class_assignments) = inspect_class_body(body);
                 classes.push(InspectClass {
                     line: current_line,
@@ -1822,10 +1868,26 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
                     class_assignments,
                 });
             }
+            Stmt::Trait { name, methods, .. } => classes.push(InspectClass {
+                line: current_line,
+                name: name.clone(),
+                parent: None,
+                methods: methods
+                    .iter()
+                    .map(|method| InspectFunction {
+                        line: current_line,
+                        name: method.name.clone(),
+                        params: inspect_params(&method.params),
+                        return_type: method.return_type.clone(),
+                    })
+                    .collect(),
+                class_assignments: Vec::new(),
+            }),
             Stmt::Struct {
                 name,
                 fields,
                 is_packed,
+                ..
             } => structs.push(InspectStruct {
                 line: current_line,
                 name: name.clone(),
@@ -1838,7 +1900,7 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
                     })
                     .collect(),
             }),
-            Stmt::Union { name, fields } => structs.push(InspectStruct {
+            Stmt::Union { name, fields, .. } => structs.push(InspectStruct {
                 line: current_line,
                 name: name.clone(),
                 is_packed: false,
@@ -1847,6 +1909,27 @@ fn inspect_program(path: String, program: &Program, imports: Vec<ModuleGraphImpo
                     .map(|(field_name, type_name)| InspectStructField {
                         name: field_name.clone(),
                         type_name: type_name.clone(),
+                    })
+                    .collect(),
+            }),
+            Stmt::Enum { name, variants, .. } => structs.push(InspectStruct {
+                line: current_line,
+                name: name.clone(),
+                is_packed: false,
+                fields: variants
+                    .iter()
+                    .map(|variant| InspectStructField {
+                        name: variant.name.clone(),
+                        type_name: if variant.fields.is_empty() {
+                            "unit".to_string()
+                        } else {
+                            variant
+                                .fields
+                                .iter()
+                                .map(|(field_name, type_name)| format!("{field_name}: {type_name}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
                     })
                     .collect(),
             }),
@@ -2356,6 +2439,7 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
         }),
         Stmt::FnDef {
             name,
+            type_params,
             params,
             return_type,
             section,
@@ -2363,6 +2447,7 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             body,
         } => Some(Stmt::FnDef {
             name: name.clone(),
+            type_params: type_params.clone(),
             params: params.clone(),
             return_type: return_type.clone(),
             section: section.clone(),
@@ -2405,9 +2490,15 @@ fn strip_stmt(stmt: &Stmt) -> Option<Stmt> {
             value: value.clone(),
             section: section.clone(),
         }),
-        Stmt::Class { name, parent, body } => Some(Stmt::Class {
+        Stmt::Class {
+            name,
+            parent,
+            implements,
+            body,
+        } => Some(Stmt::Class {
             name: name.clone(),
             parent: parent.clone(),
+            implements: implements.clone(),
             body: strip_line_markers(body),
         }),
         Stmt::Try {
@@ -2567,6 +2658,29 @@ struct SymbolScope {
     nonlocals_declared: HashSet<String>,
 }
 
+#[derive(Clone)]
+struct EnumTypeInfo {
+    type_params: Vec<TypeParam>,
+    variants: HashMap<String, Vec<(String, String)>>,
+}
+
+#[derive(Clone)]
+struct TraitTypeInfo {
+    methods: HashMap<String, (Vec<Option<String>>, Option<String>)>,
+}
+
+#[derive(Clone, Default)]
+struct ClassTypeInfo {
+    implements: Vec<String>,
+    methods: HashMap<String, (Vec<Option<String>>, Option<String>)>,
+}
+
+#[derive(Clone)]
+struct StructTypeInfo {
+    type_params: Vec<TypeParam>,
+    fields: Vec<(String, String)>,
+}
+
 fn type_check_program(
     program: &[Stmt],
     path: &str,
@@ -2577,19 +2691,26 @@ fn type_check_program(
         path: path.to_string(),
         context,
         typed_fns: HashMap::new(),
+        fn_type_params: HashMap::new(),
+        enum_types: HashMap::new(),
+        trait_types: HashMap::new(),
+        class_types: HashMap::new(),
+        struct_types: HashMap::new(),
         type_env: HashMap::new(),
         annotated_env: HashMap::new(),
         symbol_scopes: Vec::new(),
+        current_type_params: HashMap::new(),
         current_return_type: None,
         current_line: 1,
         diagnostics: Vec::new(),
     };
-    checker.collect_fn_signatures(program);
+    checker.collect_type_metadata(program);
     checker.symbol_scopes.push(checker.collect_scope(program, true));
     if strict {
         checker.check_annotation_coverage(program);
     }
     checker.check_stmts(program, 0);
+    checker.validate_trait_impls();
     checker.diagnostics
 }
 
@@ -2598,22 +2719,29 @@ struct TypeChecker {
     context: Option<ModuleCheckContext>,
     // fn name → (param types per position, return type)
     typed_fns: HashMap<String, (Vec<Option<String>>, Option<String>)>,
+    fn_type_params: HashMap<String, Vec<TypeParam>>,
+    enum_types: HashMap<String, EnumTypeInfo>,
+    trait_types: HashMap<String, TraitTypeInfo>,
+    class_types: HashMap<String, ClassTypeInfo>,
+    struct_types: HashMap<String, StructTypeInfo>,
     // Variable → currently-known type (inferred or annotated).
     type_env: HashMap<String, String>,
     // Variable → explicit declared/annotated type.
     annotated_env: HashMap<String, String>,
     symbol_scopes: Vec<SymbolScope>,
+    current_type_params: HashMap<String, TypeParam>,
     current_return_type: Option<String>,
     current_line: usize,
     diagnostics: Vec<ToolingDiagnostic>,
 }
 
 impl TypeChecker {
-    fn collect_fn_signatures(&mut self, stmts: &[Stmt]) {
+    fn collect_type_metadata(&mut self, stmts: &[Stmt]) {
         for stmt in stmts {
             match module_exports::stmt_unwrap_visibility(stmt).0 {
                 Stmt::FnDef {
                     name,
+                    type_params,
                     params,
                     return_type,
                     ..
@@ -2623,8 +2751,81 @@ impl TypeChecker {
                     if has_types {
                         self.typed_fns.insert(name.clone(), (param_types, return_type.clone()));
                     }
+                    self.fn_type_params.insert(name.clone(), type_params.clone());
                 }
-                Stmt::Class { body, .. } => self.collect_fn_signatures(body),
+                Stmt::Class {
+                    name, implements, body, ..
+                } => {
+                    let mut methods = HashMap::new();
+                    for stmt in body {
+                        if let Stmt::FnDef {
+                            name,
+                            params,
+                            return_type,
+                            ..
+                        } = module_exports::stmt_unwrap_visibility(stmt).0
+                        {
+                            methods.insert(
+                                name.clone(),
+                                (
+                                    params.iter().map(|param| param.type_name.clone()).collect(),
+                                    return_type.clone(),
+                                ),
+                            );
+                        }
+                    }
+                    self.class_types.insert(
+                        name.clone(),
+                        ClassTypeInfo {
+                            implements: implements.clone(),
+                            methods,
+                        },
+                    );
+                    self.collect_type_metadata(body);
+                }
+                Stmt::Struct {
+                    name,
+                    type_params,
+                    fields,
+                    ..
+                }
+                | Stmt::Union {
+                    name,
+                    type_params,
+                    fields,
+                } => {
+                    self.struct_types.insert(
+                        name.clone(),
+                        StructTypeInfo {
+                            type_params: type_params.clone(),
+                            fields: fields.clone(),
+                        },
+                    );
+                }
+                Stmt::Enum {
+                    name,
+                    type_params,
+                    variants,
+                } => {
+                    self.enum_types.insert(
+                        name.clone(),
+                        EnumTypeInfo {
+                            type_params: type_params.clone(),
+                            variants: variants
+                                .iter()
+                                .map(|variant| (variant.name.clone(), variant.fields.clone()))
+                                .collect(),
+                        },
+                    );
+                }
+                Stmt::Trait { name, methods, .. } => {
+                    self.trait_types.insert(
+                        name.clone(),
+                        TraitTypeInfo {
+                            methods: methods.iter().map(|method| trait_method_signature(method)).collect(),
+                        },
+                    );
+                }
                 _ => {}
             }
         }
@@ -2706,6 +2907,7 @@ impl TypeChecker {
                 let saved_ret = self.current_return_type.clone();
                 let saved_env = self.type_env.clone();
                 let saved_annotated = self.annotated_env.clone();
+                let saved_type_params = self.current_type_params.clone();
                 let mut scope = self.collect_scope(body, false);
                 for param in params {
                     scope.names.insert(param.name.clone());
@@ -2715,6 +2917,14 @@ impl TypeChecker {
                     }
                 }
                 self.symbol_scopes.push(scope);
+                self.current_type_params = self
+                    .fn_type_params
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|param| (param.name.clone(), param))
+                    .collect();
                 self.current_return_type = if self.typed_fns.contains_key(name) {
                     return_type.clone()
                 } else {
@@ -2732,6 +2942,7 @@ impl TypeChecker {
                 self.current_return_type = saved_ret;
                 self.type_env = saved_env;
                 self.annotated_env = saved_annotated;
+                self.current_type_params = saved_type_params;
                 self.symbol_scopes.pop();
             }
 
@@ -2745,13 +2956,20 @@ impl TypeChecker {
                 self.annotated_env = saved_annotated;
             }
 
+            Stmt::Match { value, arms } => {
+                self.check_expr(value);
+                self.check_match(value, arms, nesting);
+            }
+
             Stmt::Return(opt_expr) => {
                 if let Some(ret_type) = &self.current_return_type.clone() {
                     match opt_expr {
                         Some(expr) => {
                             self.check_expr(expr);
                             if let Some(actual) = self.infer_type(expr) {
-                                if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), ret_type) {
+                                if !self.types_compatible_name(&actual, ret_type) {
+                                    let msg = type_mismatch_msg(&normalize_to_kind(&actual), ret_type)
+                                        .unwrap_or_else(|| format!("expected '{}', got '{}'", ret_type, actual));
                                     self.emit("type_error", &format!("return type mismatch: {msg}"));
                                 }
                             }
@@ -2781,7 +2999,9 @@ impl TypeChecker {
                 }
                 if let Some(expected) = self.annotated_env.get(name).cloned() {
                     if let Some(actual) = self.infer_type(value) {
-                        if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), &expected) {
+                        if !self.types_compatible_name(&actual, &expected) {
+                            let msg = type_mismatch_msg(&normalize_to_kind(&actual), &expected)
+                                .unwrap_or_else(|| format!("expected '{}', got '{}'", expected, actual));
                             self.emit("type_error", &format!("assignment to '{}': {msg}", name));
                         }
                     }
@@ -2797,7 +3017,9 @@ impl TypeChecker {
                 self.check_expr(value);
                 if let Some(expected) = type_name {
                     if let Some(actual) = self.infer_type(value) {
-                        if let Some(msg) = type_mismatch_msg(normalize_to_kind(&actual), expected) {
+                        if !self.types_compatible_name(&actual, expected) {
+                            let msg = type_mismatch_msg(&normalize_to_kind(&actual), expected)
+                                .unwrap_or_else(|| format!("expected '{}', got '{}'", expected, actual));
                             self.emit("type_error", &format!("binding '{}': {msg}", name));
                         }
                     }
@@ -2908,6 +3130,7 @@ impl TypeChecker {
                 self.check_stmts(body, nesting);
             }
             Stmt::Raise(Some(e)) => self.check_expr(e),
+            Stmt::Enum { .. } | Stmt::Trait { .. } => {}
             _ => {}
         }
     }
@@ -2922,13 +3145,49 @@ impl TypeChecker {
             Expr::Call { callee, args, kwargs } => {
                 if let Expr::Ident(fn_name) = callee.as_ref() {
                     if let Some((param_types, _)) = self.typed_fns.get(fn_name).cloned() {
+                        let fn_type_params = self.fn_type_params.get(fn_name).cloned().unwrap_or_default();
+                        let mut bindings = HashMap::new();
                         for (i, (arg, param_type)) in args.iter().zip(param_types.iter()).enumerate() {
                             if let Some(type_name) = param_type {
-                                let mismatch = self
-                                    .infer_type(arg)
-                                    .and_then(|actual| type_mismatch_msg(normalize_to_kind(&actual), &type_name));
-                                if let Some(msg) = mismatch {
-                                    self.emit("type_error", &format!("argument {} to '{}': {msg}", i + 1, fn_name));
+                                if let Some(actual) = self.infer_type(arg) {
+                                    if !self.bind_expected_type(&actual, &type_name, &fn_type_params, &mut bindings) {
+                                        let msg = type_mismatch_msg(&normalize_to_kind(&actual), &type_name)
+                                            .unwrap_or_else(|| format!("expected '{}', got '{}'", type_name, actual));
+                                        self.emit("type_error", &format!("argument {} to '{}': {msg}", i + 1, fn_name));
+                                    }
+                                }
+                            }
+                        }
+                        self.check_bound_bindings(fn_name, &fn_type_params, &bindings);
+                    }
+                    if let Some(struct_info) = self.struct_types.get(fn_name) {
+                        if struct_info.fields.len() != args.len() {
+                            self.emit(
+                                "type_error",
+                                &format!(
+                                    "constructor '{}' expects {} argument(s), got {}",
+                                    fn_name,
+                                    struct_info.fields.len(),
+                                    args.len()
+                                ),
+                            );
+                        }
+                    }
+                } else if let Expr::Attr { object, name } = callee.as_ref() {
+                    if let Expr::Ident(enum_name) = object.as_ref() {
+                        if let Some(enum_info) = self.enum_types.get(enum_name) {
+                            if let Some(fields) = enum_info.variants.get(name) {
+                                if fields.len() != args.len() {
+                                    self.emit(
+                                        "type_error",
+                                        &format!(
+                                            "variant '{}.{}' expects {} argument(s), got {}",
+                                            enum_name,
+                                            name,
+                                            fields.len(),
+                                            args.len()
+                                        ),
+                                    );
                                 }
                             }
                         }
@@ -3051,10 +3310,85 @@ impl TypeChecker {
             Expr::Bool(_) => Some("bool".to_string()),
             Expr::Nil => Some("nil".to_string()),
             Expr::Ident(name) => self.type_env.get(name).cloned(),
-            Expr::Call { callee, .. } => {
+            Expr::List(items) => {
+                let first = self.infer_type(items.first()?)?;
+                if items
+                    .iter()
+                    .skip(1)
+                    .all(|item| self.infer_type(item).as_deref() == Some(first.as_str()))
+                {
+                    Some(format!("list[{first}]"))
+                } else {
+                    Some("list".to_string())
+                }
+            }
+            Expr::Tuple(items) => Some(format!(
+                "tuple[{}]",
+                items
+                    .iter()
+                    .map(|item| self.infer_type(item).unwrap_or_else(|| "any".to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            Expr::Dict(items) => {
+                if items.is_empty() {
+                    return Some("dict".to_string());
+                }
+                let key = self.infer_type(&items[0].0)?;
+                let value = self.infer_type(&items[0].1)?;
+                if items.iter().skip(1).all(|(k, v)| {
+                    self.infer_type(k).as_deref() == Some(key.as_str())
+                        && self.infer_type(v).as_deref() == Some(value.as_str())
+                }) {
+                    Some(format!("dict[{key}, {value}]"))
+                } else {
+                    Some("dict".to_string())
+                }
+            }
+            Expr::Call { callee, args, .. } => {
                 if let Expr::Ident(fn_name) = callee.as_ref() {
                     if let Some((_, Some(ret))) = self.typed_fns.get(fn_name) {
-                        return Some(ret.clone());
+                        let fn_type_params = self.fn_type_params.get(fn_name).cloned().unwrap_or_default();
+                        let mut bindings = HashMap::new();
+                        if let Some((param_types, _)) = self.typed_fns.get(fn_name) {
+                            for (arg, expected) in args.iter().zip(param_types.iter()) {
+                                if let Some(expected) = expected {
+                                    if let Some(actual) = self.infer_type(arg) {
+                                        let _ =
+                                            self.bind_expected_type(&actual, expected, &fn_type_params, &mut bindings);
+                                    }
+                                }
+                            }
+                        }
+                        return Some(self.substitute_type_name(ret, &bindings));
+                    }
+                    if let Some(struct_info) = self.struct_types.get(fn_name) {
+                        return Some(self.infer_struct_constructor_type(fn_name, struct_info, args));
+                    }
+                    if self.class_types.contains_key(fn_name) {
+                        return Some(fn_name.clone());
+                    }
+                } else if let Expr::Attr { object, name } = callee.as_ref() {
+                    if let Expr::Ident(enum_name) = object.as_ref() {
+                        if let Some(inferred) = self.infer_enum_variant_type(enum_name, name, args) {
+                            return Some(inferred);
+                        }
+                    }
+                }
+                None
+            }
+            Expr::Attr { object, name } => {
+                if let Expr::Ident(enum_name) = object.as_ref() {
+                    if let Some(enum_info) = self.enum_types.get(enum_name) {
+                        if let Some(fields) = enum_info.variants.get(name) {
+                            if fields.is_empty() {
+                                return Some(self.instantiate_named_type(
+                                    enum_name,
+                                    &enum_info.type_params,
+                                    &HashMap::new(),
+                                ));
+                            }
+                        }
                     }
                 }
                 None
@@ -3064,13 +3398,275 @@ impl TypeChecker {
             } => {
                 let then_ty = self.infer_type(then_expr)?;
                 let else_ty = self.infer_type(else_expr)?;
-                if normalize_to_kind(&then_ty) == normalize_to_kind(&else_ty) {
+                if self.types_compatible_name(&then_ty, &else_ty) {
                     Some(then_ty)
                 } else {
                     None
                 }
             }
             _ => None,
+        }
+    }
+
+    fn types_compatible_name(&self, actual: &str, expected: &str) -> bool {
+        let actual = parse_type_expr(actual);
+        let expected = parse_type_expr(expected);
+        let mut bindings = HashMap::new();
+        let params = self.current_type_params.values().cloned().collect::<Vec<_>>();
+        type_matches(&actual, &expected, &params, &mut bindings)
+    }
+
+    fn bind_expected_type(
+        &self,
+        actual: &str,
+        expected: &str,
+        type_params: &[TypeParam],
+        bindings: &mut HashMap<String, TypeExpr>,
+    ) -> bool {
+        type_matches(
+            &parse_type_expr(actual),
+            &parse_type_expr(expected),
+            type_params,
+            bindings,
+        )
+    }
+
+    fn substitute_type_name(&self, type_name: &str, bindings: &HashMap<String, TypeExpr>) -> String {
+        substitute_type_expr(&parse_type_expr(type_name), bindings).render()
+    }
+
+    fn instantiate_named_type(
+        &self,
+        name: &str,
+        type_params: &[TypeParam],
+        bindings: &HashMap<String, TypeExpr>,
+    ) -> String {
+        if type_params.is_empty() {
+            return name.to_string();
+        }
+        let args = type_params
+            .iter()
+            .map(|param| {
+                bindings
+                    .get(&param.name)
+                    .cloned()
+                    .unwrap_or_else(|| TypeExpr::named(param.name.clone()))
+            })
+            .collect();
+        TypeExpr::Named {
+            name: name.to_string(),
+            args,
+        }
+        .render()
+    }
+
+    fn infer_struct_constructor_type(&self, name: &str, info: &StructTypeInfo, args: &[Expr]) -> String {
+        let mut bindings = HashMap::new();
+        for ((_, expected), arg) in info.fields.iter().zip(args.iter()) {
+            if let Some(actual) = self.infer_type(arg) {
+                let _ = self.bind_expected_type(&actual, expected, &info.type_params, &mut bindings);
+            }
+        }
+        self.instantiate_named_type(name, &info.type_params, &bindings)
+    }
+
+    fn infer_enum_variant_type(&self, enum_name: &str, variant_name: &str, args: &[Expr]) -> Option<String> {
+        let info = self.enum_types.get(enum_name)?;
+        let fields = info.variants.get(variant_name)?;
+        let mut bindings = HashMap::new();
+        for ((_, expected), arg) in fields.iter().zip(args.iter()) {
+            if let Some(actual) = self.infer_type(arg) {
+                let _ = self.bind_expected_type(&actual, expected, &info.type_params, &mut bindings);
+            }
+        }
+        Some(self.instantiate_named_type(enum_name, &info.type_params, &bindings))
+    }
+
+    fn check_bound_bindings(&mut self, fn_name: &str, type_params: &[TypeParam], bindings: &HashMap<String, TypeExpr>) {
+        for param in type_params {
+            let Some(bound) = &param.bound else {
+                continue;
+            };
+            let Some(actual) = bindings.get(&param.name) else {
+                continue;
+            };
+            if !self.type_implements_trait(actual, bound) {
+                self.emit(
+                    "type_error",
+                    &format!(
+                        "call to '{}': type '{}' does not satisfy bound '{}: {}'",
+                        fn_name,
+                        actual.render(),
+                        param.name,
+                        bound
+                    ),
+                );
+            }
+        }
+    }
+
+    fn type_implements_trait(&self, actual: &TypeExpr, trait_name: &str) -> bool {
+        let actual_name = actual.base_name();
+        if actual_name == trait_name {
+            return true;
+        }
+        self.class_types
+            .get(actual_name)
+            .map(|info| {
+                info.implements
+                    .iter()
+                    .any(|implemented| type_name_base(implemented) == trait_name)
+            })
+            .unwrap_or(false)
+    }
+
+    fn check_match(&mut self, value: &Expr, arms: &[MatchArm], nesting: usize) {
+        let inferred = self.infer_type(value);
+        if let Some(subject_type) = inferred.as_deref() {
+            let subject_base = type_name_base(subject_type);
+            if let Some(enum_info) = self.enum_types.get(&subject_base) {
+                let covered = arms
+                    .iter()
+                    .any(|arm| matches!(arm.pattern, Pattern::Wildcard | Pattern::Capture(_)))
+                    || enum_info
+                        .variants
+                        .keys()
+                        .all(|variant| arms.iter().any(|arm| pattern_covers_variant(&arm.pattern, variant)));
+                if !covered {
+                    self.emit(
+                        "non_exhaustive_match",
+                        &format!(
+                            "match on '{}' does not cover every variant of '{}'",
+                            subject_type, subject_base
+                        ),
+                    );
+                }
+            }
+        }
+
+        for arm in arms {
+            let saved_env = self.type_env.clone();
+            let saved_annotated = self.annotated_env.clone();
+            let mut scope = SymbolScope::default();
+            if let Some(subject_type) = inferred.as_deref() {
+                self.bind_pattern_types(&arm.pattern, subject_type, &mut scope);
+            }
+            self.symbol_scopes.push(scope);
+            self.check_stmts(&arm.body, nesting + 1);
+            self.symbol_scopes.pop();
+            self.type_env = saved_env;
+            self.annotated_env = saved_annotated;
+        }
+    }
+
+    fn bind_pattern_types(&mut self, pattern: &Pattern, subject_type: &str, scope: &mut SymbolScope) {
+        match pattern {
+            Pattern::Capture(name) => {
+                scope.names.insert(name.clone());
+                self.type_env.insert(name.clone(), subject_type.to_string());
+            }
+            Pattern::Variant {
+                enum_name,
+                variant,
+                fields,
+            } => {
+                let resolved_enum = enum_name.clone().unwrap_or_else(|| type_name_base(subject_type));
+                if let Some(field_types) = self.instantiated_variant_field_types(&resolved_enum, subject_type, variant)
+                {
+                    for (field_pattern, field_type) in fields.iter().zip(field_types.iter()) {
+                        self.bind_pattern_types(field_pattern, field_type, scope);
+                    }
+                } else {
+                    for field_pattern in fields {
+                        self.bind_pattern_types(field_pattern, "any", scope);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn instantiated_variant_field_types(
+        &self,
+        enum_name: &str,
+        subject_type: &str,
+        variant: &str,
+    ) -> Option<Vec<String>> {
+        let info = self.enum_types.get(enum_name)?;
+        let fields = info.variants.get(variant)?;
+        let subject = parse_type_expr(subject_type);
+        let mut bindings = HashMap::new();
+        if let TypeExpr::Named { args, .. } = subject {
+            for (param, arg) in info.type_params.iter().zip(args.iter()) {
+                bindings.insert(param.name.clone(), arg.clone());
+            }
+        }
+        Some(
+            fields
+                .iter()
+                .map(|(_, type_name)| substitute_type_expr(&parse_type_expr(type_name), &bindings).render())
+                .collect(),
+        )
+    }
+
+    fn validate_trait_impls(&mut self) {
+        for (class_name, class_info) in self.class_types.clone() {
+            for trait_name in class_info.implements {
+                let trait_base = type_name_base(&trait_name);
+                let Some(trait_info) = self.trait_types.get(&trait_base).cloned() else {
+                    self.emit(
+                        "type_error",
+                        &format!("class '{}' implements unknown trait '{}'", class_name, trait_name),
+                    );
+                    continue;
+                };
+                for (method_name, expected_sig) in &trait_info.methods {
+                    let Some(actual_sig) = class_info.methods.get(method_name) else {
+                        self.emit(
+                            "type_error",
+                            &format!(
+                                "class '{}' does not implement required trait method '{}.{}'",
+                                class_name, trait_name, method_name
+                            ),
+                        );
+                        continue;
+                    };
+                    if actual_sig.0.len() != expected_sig.0.len() {
+                        self.emit(
+                            "type_error",
+                            &format!(
+                                "class '{}' method '{}' does not match trait '{}' arity",
+                                class_name, method_name, trait_name
+                            ),
+                        );
+                        continue;
+                    }
+                    for (actual, expected) in actual_sig.0.iter().zip(expected_sig.0.iter()) {
+                        if let (Some(actual), Some(expected)) = (actual, expected) {
+                            if !self.types_compatible_name(actual, expected) {
+                                self.emit(
+                                    "type_error",
+                                    &format!(
+                                        "class '{}' method '{}' parameter type '{}' does not satisfy trait '{}'",
+                                        class_name, method_name, actual, trait_name
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                    if let (Some(actual), Some(expected)) = (&actual_sig.1, &expected_sig.1) {
+                        if !self.types_compatible_name(actual, expected) {
+                            self.emit(
+                                "type_error",
+                                &format!(
+                                    "class '{}' method '{}' return type '{}' does not satisfy trait '{}'",
+                                    class_name, method_name, actual, trait_name
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3356,15 +3952,222 @@ impl TypeChecker {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TypeExpr {
+    Named { name: String, args: Vec<TypeExpr> },
+    Union(Vec<TypeExpr>),
+}
+
+impl TypeExpr {
+    fn named(name: impl Into<String>) -> Self {
+        Self::Named {
+            name: name.into(),
+            args: Vec::new(),
+        }
+    }
+
+    fn render(&self) -> String {
+        match self {
+            Self::Named { name, args } if args.is_empty() => name.clone(),
+            Self::Named { name, args } => format!(
+                "{}[{}]",
+                name,
+                args.iter().map(TypeExpr::render).collect::<Vec<_>>().join(", ")
+            ),
+            Self::Union(items) => items.iter().map(TypeExpr::render).collect::<Vec<_>>().join(" | "),
+        }
+    }
+
+    fn base_name(&self) -> &str {
+        match self {
+            Self::Named { name, .. } => name,
+            Self::Union(items) => items.first().map(TypeExpr::base_name).unwrap_or("any"),
+        }
+    }
+}
+
+fn trait_method_signature(method: &TraitMethod) -> (String, (Vec<Option<String>>, Option<String>)) {
+    (
+        method.name.clone(),
+        (
+            method.params.iter().map(|param| param.type_name.clone()).collect(),
+            method.return_type.clone(),
+        ),
+    )
+}
+
+fn pattern_covers_variant(pattern: &Pattern, variant: &str) -> bool {
+    match pattern {
+        Pattern::Variant { variant: name, .. } => name == variant,
+        Pattern::Wildcard | Pattern::Capture(_) => true,
+        _ => false,
+    }
+}
+
+fn type_name_base(type_name: &str) -> String {
+    parse_type_expr(type_name).base_name().to_string()
+}
+
+fn parse_type_expr(text: &str) -> TypeExpr {
+    let text = text.trim();
+    let union_parts = split_top_level(text, '|');
+    if union_parts.len() > 1 {
+        return TypeExpr::Union(union_parts.into_iter().map(|part| parse_type_expr(&part)).collect());
+    }
+    let Some(bracket_start) = find_top_level_char(text, '[') else {
+        return TypeExpr::named(text);
+    };
+    if !text.ends_with(']') {
+        return TypeExpr::named(text);
+    }
+    let name = text[..bracket_start].trim().to_string();
+    let inner = &text[bracket_start + 1..text.len() - 1];
+    let args = split_top_level(inner, ',')
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .map(|part| parse_type_expr(&part))
+        .collect();
+    TypeExpr::Named { name, args }
+}
+
+fn split_top_level(text: &str, separator: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (idx, ch) in text.char_indices() {
+        match ch {
+            '[' | '(' => depth += 1,
+            ']' | ')' => depth -= 1,
+            _ if ch == separator && depth == 0 => {
+                parts.push(text[start..idx].trim().to_string());
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(text[start..].trim().to_string());
+    parts
+}
+
+fn find_top_level_char(text: &str, target: char) -> Option<usize> {
+    let mut depth = 0i32;
+    for (idx, ch) in text.char_indices() {
+        match ch {
+            '[' | '(' => {
+                if ch == target && depth == 0 {
+                    return Some(idx);
+                }
+                depth += 1;
+            }
+            ']' | ')' => depth -= 1,
+            _ if ch == target && depth == 0 => return Some(idx),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn substitute_type_expr(expr: &TypeExpr, bindings: &HashMap<String, TypeExpr>) -> TypeExpr {
+    match expr {
+        TypeExpr::Named { name, args } if args.is_empty() => {
+            bindings.get(name).cloned().unwrap_or_else(|| expr.clone())
+        }
+        TypeExpr::Named { name, args } => TypeExpr::Named {
+            name: name.clone(),
+            args: args.iter().map(|arg| substitute_type_expr(arg, bindings)).collect(),
+        },
+        TypeExpr::Union(items) => {
+            TypeExpr::Union(items.iter().map(|item| substitute_type_expr(item, bindings)).collect())
+        }
+    }
+}
+
+fn type_matches(
+    actual: &TypeExpr,
+    expected: &TypeExpr,
+    type_params: &[TypeParam],
+    bindings: &mut HashMap<String, TypeExpr>,
+) -> bool {
+    match expected {
+        TypeExpr::Union(items) => items.iter().any(|item| {
+            let mut local = bindings.clone();
+            let ok = type_matches(actual, item, type_params, &mut local);
+            if ok {
+                *bindings = local;
+            }
+            ok
+        }),
+        TypeExpr::Named { name, args } => {
+            if type_params.iter().any(|param| param.name == *name) && args.is_empty() {
+                match bindings.get(name) {
+                    Some(bound) => bound == actual,
+                    None => {
+                        bindings.insert(name.clone(), actual.clone());
+                        true
+                    }
+                }
+            } else {
+                let actual_name = actual.base_name();
+                let expected_name = name.as_str();
+                let primitive_ok = primitive_types_compatible(actual_name, expected_name);
+                if !primitive_ok && actual_name != expected_name {
+                    return false;
+                }
+                match actual {
+                    TypeExpr::Named { args: actual_args, .. } => {
+                        if !args.is_empty() && args.len() != actual_args.len() {
+                            return false;
+                        }
+                        args.iter().zip(actual_args.iter()).all(|(expected_arg, actual_arg)| {
+                            type_matches(actual_arg, expected_arg, type_params, bindings)
+                        })
+                    }
+                    TypeExpr::Union(_) => false,
+                }
+            }
+        }
+    }
+}
+
+fn primitive_types_compatible(actual: &str, expected: &str) -> bool {
+    if actual == expected {
+        return true;
+    }
+    match normalize_to_kind(actual).as_str() {
+        "int" => matches!(
+            expected,
+            "int"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "isize"
+                | "usize"
+                | "float"
+                | "f32"
+                | "f64"
+        ),
+        "float" => matches!(expected, "float" | "f32" | "f64"),
+        "bool" => matches!(expected, "bool"),
+        "str" => matches!(expected, "str"),
+        "nil" => matches!(expected, "nil"),
+        _ => false,
+    }
+}
+
 /// Normalize an exact type name or kind string to the coarse kind used by type_mismatch_msg.
-fn normalize_to_kind(type_str: &str) -> &str {
-    match type_str {
-        "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "isize" | "usize" | "int" => "int",
-        "f32" | "f64" | "float" => "float",
-        "str" => "str",
-        "bool" => "bool",
-        "nil" => "nil",
-        other => other,
+fn normalize_to_kind(type_str: &str) -> String {
+    match parse_type_expr(type_str).base_name() {
+        "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "isize" | "usize" | "int" => "int".to_string(),
+        "f32" | "f64" | "float" => "float".to_string(),
+        "str" => "str".to_string(),
+        "bool" => "bool".to_string(),
+        "nil" => "nil".to_string(),
+        other => other.to_string(),
     }
 }
 

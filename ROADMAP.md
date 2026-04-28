@@ -509,25 +509,25 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 13 — Typed Language Features
+## Phase 13 — Typed Language Features ✅
 
 > Goal: make Cool comfortable for large native codebases, not just dynamic-style programs that happen to compile
 
 ### Core Language Features
 
-- [ ] Enums / tagged unions / algebraic data types
-- [ ] `match` with exhaustiveness checking
-- [ ] `Option` / `Result` style standard types and language sugar where justified
-- [ ] Generic functions
-- [ ] Generic structs / enums / collections
-- [ ] Traits / interfaces / protocols for shared behavior
-- [ ] Trait bounds or equivalent constraints for generic code
+- [x] Enums / tagged unions / algebraic data types
+- [x] `match` with exhaustiveness checking
+- [x] `Option` / `Result` style standard types and language sugar where justified
+- [x] Generic functions
+- [x] Generic structs / enums / collections
+- [x] Traits / interfaces / protocols for shared behavior
+- [x] Trait bounds or equivalent constraints for generic code
 
 ### Collections And APIs
 
-- [ ] Typed standard collections with clear generic surfaces
-- [ ] Method/trait design that works consistently across interpreter, VM, and native builds
-- [ ] Error-handling conventions for compiled application code
+- [x] Typed standard collections with clear generic surfaces
+- [x] Method/trait design that works consistently across interpreter, VM, and native builds
+- [x] Error-handling conventions for compiled application code
 
 ---
 
@@ -651,7 +651,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 10 — Production Readiness And Ecosystem | ✅ Complete |
 | 11 — Freestanding Systems Foundation | ✅ Complete |
 | 12 — Static Semantic Core | ✅ Complete |
-| 13 — Typed Language Features | ⏳ Planned |
+| 13 — Typed Language Features | ✅ Complete |
 | 14 — Runtime And Memory Model | ⏳ Planned |
 | 15 — Native Toolchain And Distribution | ✅ Complete |
 | 16 — Systems Interop And Targets | ✅ Complete |

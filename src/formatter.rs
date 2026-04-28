@@ -1,4 +1,6 @@
-use crate::ast::{BinOp, ExceptHandler, Expr, FStringPart, Param, Stmt, UnaryOp, Visibility};
+use crate::ast::{
+    BinOp, ExceptHandler, Expr, FStringPart, Param, Pattern, Stmt, TraitMethod, TypeParam, UnaryOp, Visibility,
+};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
 
@@ -252,13 +254,20 @@ impl Formatter {
             }
             Stmt::FnDef {
                 name,
+                type_params,
                 params,
                 return_type,
                 section,
                 entry,
                 body,
             } => {
-                let mut text = format!("{}def {}({})", prefix.unwrap_or(""), name, format_params(params));
+                let mut text = format!(
+                    "{}def {}{}({})",
+                    prefix.unwrap_or(""),
+                    name,
+                    format_type_params(type_params),
+                    format_params(params)
+                );
                 if let Some(return_type) = return_type {
                     text.push_str(" -> ");
                     text.push_str(return_type);
@@ -356,12 +365,21 @@ impl Formatter {
                     self.write_line(indent, &text, line)
                 }
             }
-            Stmt::Class { name, parent, body } => {
+            Stmt::Class {
+                name,
+                parent,
+                implements,
+                body,
+            } => {
                 let mut text = format!("{}class {}", prefix.unwrap_or(""), name);
                 if let Some(parent) = parent {
                     text.push('(');
                     text.push_str(parent);
                     text.push(')');
+                }
+                if !implements.is_empty() {
+                    text.push_str(" implements ");
+                    text.push_str(&implements.join(", "));
                 }
                 text.push(':');
                 self.write_line(indent, &text, line)?;
@@ -369,11 +387,22 @@ impl Formatter {
             }
             Stmt::Struct {
                 name,
+                type_params,
                 fields,
                 is_packed,
             } => {
                 let keyword = if *is_packed { "packed struct" } else { "struct" };
-                self.write_line(indent, &format!("{}{} {}:", prefix.unwrap_or(""), keyword, name), line)?;
+                self.write_line(
+                    indent,
+                    &format!(
+                        "{}{} {}{}:",
+                        prefix.unwrap_or(""),
+                        keyword,
+                        name,
+                        format_type_params(type_params)
+                    ),
+                    line,
+                )?;
                 if fields.is_empty() {
                     self.write_plain_line(indent + 4, "pass");
                 } else {
@@ -383,14 +412,97 @@ impl Formatter {
                 }
                 Ok(())
             }
-            Stmt::Union { name, fields } => {
-                self.write_line(indent, &format!("{}union {}:", prefix.unwrap_or(""), name), line)?;
+            Stmt::Union {
+                name,
+                type_params,
+                fields,
+            } => {
+                self.write_line(
+                    indent,
+                    &format!(
+                        "{}union {}{}:",
+                        prefix.unwrap_or(""),
+                        name,
+                        format_type_params(type_params)
+                    ),
+                    line,
+                )?;
                 if fields.is_empty() {
                     self.write_plain_line(indent + 4, "pass");
                 } else {
                     for (field_name, type_name) in fields {
                         self.write_plain_line(indent + 4, &format!("{field_name}: {type_name}"));
                     }
+                }
+                Ok(())
+            }
+            Stmt::Enum {
+                name,
+                type_params,
+                variants,
+            } => {
+                self.write_line(
+                    indent,
+                    &format!(
+                        "{}enum {}{}:",
+                        prefix.unwrap_or(""),
+                        name,
+                        format_type_params(type_params)
+                    ),
+                    line,
+                )?;
+                if variants.is_empty() {
+                    self.write_plain_line(indent + 4, "pass");
+                } else {
+                    for variant in variants {
+                        if variant.fields.is_empty() {
+                            self.write_plain_line(indent + 4, &variant.name);
+                        } else {
+                            let fields = variant
+                                .fields
+                                .iter()
+                                .map(|(field_name, type_name)| format!("{field_name}: {type_name}"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            self.write_plain_line(indent + 4, &format!("{}({fields})", variant.name));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Stmt::Trait {
+                name,
+                type_params,
+                methods,
+            } => {
+                self.write_line(
+                    indent,
+                    &format!(
+                        "{}trait {}{}:",
+                        prefix.unwrap_or(""),
+                        name,
+                        format_type_params(type_params)
+                    ),
+                    line,
+                )?;
+                if methods.is_empty() {
+                    self.write_plain_line(indent + 4, "pass");
+                } else {
+                    for method in methods {
+                        self.write_plain_line(indent + 4, &format_trait_method(method));
+                    }
+                }
+                Ok(())
+            }
+            Stmt::Match { value, arms } => {
+                self.write_line(
+                    indent,
+                    &format!("{}match {}:", prefix.unwrap_or(""), self.expr(value, Prec::Lowest)),
+                    line,
+                )?;
+                for arm in arms {
+                    self.write_plain_line(indent + 4, &format!("{}:", format_pattern(&arm.pattern)));
+                    self.write_block(&arm.body, indent + 8)?;
                 }
                 Ok(())
             }
@@ -679,6 +791,9 @@ fn stmt_needs_spacing(stmt: &Stmt) -> bool {
             | Stmt::Class { .. }
             | Stmt::Struct { .. }
             | Stmt::Union { .. }
+            | Stmt::Enum { .. }
+            | Stmt::Trait { .. }
+            | Stmt::Match { .. }
             | Stmt::Try { .. }
             | Stmt::If { .. }
             | Stmt::While { .. }
@@ -689,6 +804,23 @@ fn stmt_needs_spacing(stmt: &Stmt) -> bool {
 
 fn format_params(params: &[Param]) -> String {
     params.iter().map(format_param).collect::<Vec<_>>().join(", ")
+}
+
+fn format_type_params(params: &[TypeParam]) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    format!(
+        "[{}]",
+        params
+            .iter()
+            .map(|param| match &param.bound {
+                Some(bound) => format!("{}: {}", param.name, bound),
+                None => param.name.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn format_param(param: &Param) -> String {
@@ -721,6 +853,53 @@ fn format_extern_params(params: &[crate::ast::ExternParam]) -> String {
         .map(|param| format!("{}: {}", param.name, param.type_name))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn format_trait_method(method: &TraitMethod) -> String {
+    let mut text = format!(
+        "def {}{}({})",
+        method.name,
+        format_type_params(&method.type_params),
+        format_params(&method.params)
+    );
+    if let Some(return_type) = &method.return_type {
+        text.push_str(" -> ");
+        text.push_str(return_type);
+    }
+    text
+}
+
+fn format_pattern(pattern: &Pattern) -> String {
+    match pattern {
+        Pattern::Wildcard => "_".to_string(),
+        Pattern::Literal(expr) => {
+            let formatter = Formatter {
+                out: String::new(),
+                comments: Vec::new(),
+                next_comment: 0,
+            };
+            formatter.expr(expr, Prec::Lowest)
+        }
+        Pattern::Variant {
+            enum_name,
+            variant,
+            fields,
+        } => {
+            let mut text = String::new();
+            if let Some(enum_name) = enum_name {
+                text.push_str(enum_name);
+                text.push('.');
+            }
+            text.push_str(variant);
+            if !fields.is_empty() {
+                text.push('(');
+                text.push_str(&fields.iter().map(format_pattern).collect::<Vec<_>>().join(", "));
+                text.push(')');
+            }
+            text
+        }
+        Pattern::Capture(name) => name.clone(),
+    }
 }
 
 fn expr_prec(expr: &Expr) -> Prec {

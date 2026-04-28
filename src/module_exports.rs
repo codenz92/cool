@@ -10,6 +10,8 @@ pub fn stmt_declared_name(stmt: &Stmt) -> Option<&str> {
         Stmt::Class { name, .. } => Some(name),
         Stmt::Struct { name, .. } => Some(name),
         Stmt::Union { name, .. } => Some(name),
+        Stmt::Enum { name, .. } => Some(name),
+        Stmt::Trait { name, .. } => Some(name),
         _ => None,
     }
 }

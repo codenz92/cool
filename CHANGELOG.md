@@ -4,6 +4,14 @@ All notable changes to the Cool language project.
 
 ## [Unreleased] - Phase 17 Complete
 
+### Phase 13 — Typed Language Features
+
+- New first-class typed language syntax across interpreter, VM, and native builds: `enum`, `match`, `trait`, `implements`, generic `def`, generic `struct`, generic `union`, richer type annotations like `Option[int]`, `list[str]`, and `dict[str, int]`, plus pattern forms such as `Option.Some(value)`, `Option.None`, literals, and `_`
+- New lowering/runtime path maps enums and `match` onto the existing class/object model so tagged unions, generic structs, and trait-checked classes behave consistently across all three execution modes instead of being native-only syntax
+- `cool check` now understands trait implementations, generic bounds, typed collection surfaces, generic constructor calls, enum variant construction, and non-exhaustive `match` blocks for local enums, with concrete diagnostics for trait/bound failures and typed collection mismatches
+- New bundled `stdlib/option.cool` and `stdlib/result.cool` provide practical typed error-handling helpers (`some`, `none`, `ok`, `err`, `unwrap`, `unwrap_or`, `unwrap_err`, predicates) on top of the new enum surface
+- Formatter, AST/inspect/doc tooling, and module export indexing now understand typed-language declarations, including enum variants, trait methods, generic parameters, and `implements` clauses
+
 ### Phase 6 Follow-on — Data Modules (Pass 1)
 
 - New bundled `stdlib/bytes.cool`, `stdlib/base64.cool`, `stdlib/codec.cool`, `stdlib/html.cool`, `stdlib/config.cool`, and `stdlib/schema.cool` modules cover byte strings, hex/base64, codec dispatch, HTML escaping/extraction, config loading/merging, and typed shape validation across interpreter, VM, and native builds

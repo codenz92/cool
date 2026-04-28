@@ -17,6 +17,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `if` / `elif` / `else`, `while`, `for`, `break`, `continue`
 - Functions with default args, `*args`, `**kwargs`, keyword args, closures
 - Typed local bindings (`name: Type = expr`) and immutable constants (`const NAME: Type = expr`)
+- Enums/tagged unions with `match`, traits via `trait` / `implements`, generic `def` / `struct` / `union`, trait bounds, and typed collection surfaces like `list[T]`, `dict[K, V]`, and `tuple[T, U]`
 - Classes with inheritance, `super()`, operator overloading (`__add__`, `__str__`, `__eq__`, `__len__`, etc.)
 - Lists, dicts, tuples with full method support
 - `set()` built-in (returns deduplicated list)
@@ -42,6 +43,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - `cool publish`, `cool install --locked`, and lockfile checksums for source-distribution packaging and reproducible dependency installs
 - `cool pkg` for Cool-native project/package inspection and dependency diagnostics
 - `import jobs` for structured concurrency: tasks, channels, deadlines, cancellation, and process/network orchestration
+- Bundled typed error helpers: `import option` and `import result`
 - Bundled data/text modules: `import bytes`, `import base64`, `import codec`, `import html`, `import xml`, `import unicode`, `import locale`, `import config`, and `import schema`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
@@ -244,7 +246,66 @@ def next_count(value: i32) -> i32:
     return local
 ```
 
-`cool check` validates typed bindings, immutable reassignments, missing returns on typed functions, and private/exported module surfaces. `import "helper.cool"` only flattens public exports, and `import helper` only exposes public names on the module namespace.
+`cool check` validates typed bindings, immutable reassignments, missing returns on typed functions, non-exhaustive local-enum `match` blocks, trait implementations, generic trait bounds, and private/exported module surfaces. `import "helper.cool"` only flattens public exports, and `import helper` only exposes public names on the module namespace.
+
+### Enums, Traits, Generics, And `match`
+
+Cool now has a typed-language layer that stays aligned across interpreter, VM, and native builds:
+
+```python
+trait Named:
+    def name(self) -> str
+
+class User implements Named:
+    def __init__(self, value: str):
+        self.value = value
+
+    def name(self) -> str:
+        return self.value
+
+enum Option[T]:
+    Some(value: T)
+    None
+
+def first[T](items: list[T]) -> Option[T]:
+    if len(items) > 0:
+        return Option.Some(items[0])
+    return Option.None
+
+def show_name[T: Named](item: T) -> str:
+    return item.name()
+
+match first([1, 2, 3]):
+    Option.Some(value):
+        print(value)
+    Option.None:
+        print("empty")
+
+print(show_name(User("Ada")))
+```
+
+Generic structs use the same surface:
+
+```python
+struct Box[T]:
+    value: T
+
+box: Box[int] = Box(41)
+print(box.value)
+```
+
+For application-style error handling, the bundled `option` and `result` modules provide reusable helpers:
+
+```python
+import option
+import result
+
+value = option.some(41)
+print(option.unwrap_or(option.none(), 0))
+
+outcome = result.ok("done")
+print(result.unwrap(outcome))
+```
 
 ### Extern Declarations (LLVM backend)
 
@@ -323,7 +384,7 @@ cool build --linker-script=link.ld hello.cool  # emits → ./hello.o, then links
 
 `--linker-script=<path>` (implies `--freestanding`) compiles to a `.o` then invokes LLD (`ld.lld`) to link a kernel image (`.elf`) using the provided GNU linker script. The same effect is available project-wide via `linker_script = "link.ld"` in `cool.toml`. `--entry <symbol>` / `[build].entry` let you control the final linker entry for no-libc or kernel-style outputs, while `--cpu` / `--cpu-features` thread target tuning through the LLVM target machine.
 
-The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, and top-level typed parameters/return types), classes with `__init__`, inheritance, methods, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`, `loads_lines`, `dumps_lines`, `pointer`, `transform`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
+The LLVM backend supports: integers, floats, strings, booleans, variables, arithmetic/bitwise/comparison operators, `if`/`elif`/`else`, `while`/`for` loops, `break`/`continue`, functions (including recursion, default arguments, keyword arguments, top-level typed parameters/return types, and generic defs lowered onto the shared dynamic runtime), enums/tagged unions with `match`, generic structs/unions, classes with `__init__`, inheritance, methods, `implements`, and `super()`, `print()`, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, lists, dicts, tuples, slicing, `range()`, `len()`, `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, integer width helpers (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `isize`, `usize`, `word_bits`, `word_bytes`), source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, LLVM-native `extern def` declarations with `symbol:` / `cc:` / `section:` / `library:` / `link_kind:` / `weak:` / `ownership:` / `lifetime:` metadata, LLVM-native ordinary `def` signatures with ABI-style parameter/return annotations, LLVM-native raw `data` declarations with `section:` placement, native `import ffi` (`ffi.open`, `ffi.func`), native `import math`, native `import os`, native `import sys`, native `import path` (`join`, `basename`, `dirname`, `ext`, `stem`, `split`, `normalize`, `exists`, `isabs`), native `import platform` (`os`, `arch`, `family`, `runtime`, `exe_ext`, `shared_lib_ext`, `path_sep`, `newline`, and runtime capability helpers), native `import core` (page/address helpers, allocator hooks, string/formatting helpers, lightweight collections, MMIO/register helpers, and Linux syscall helpers), native `import csv` (`rows`, `dicts`, `write`), native `import datetime` (`now`, `format`, `parse`, `parts`, `add_seconds`, `diff_seconds`), native `import hashlib` (`md5`, `sha1`, `sha256`, `digest`), native `import toml` (`loads`, `dumps`), native `import yaml` (`loads`, `dumps` for a config-oriented YAML subset), native `import sqlite` (`execute`, `query`, `scalar`), native `import http` (`get`, `post`, `head`, `getjson`; requires host `curl`), native `import subprocess` (`run`, `call`, `check_output`), native `import argparse` (`parse`, `help`), native `import logging` (`basic_config`, `log`, `debug`, `info`, `warning`, `warn`, `error`), native `import test` (`equal`, `not_equal`, `truthy`, `falsey`, `is_nil`, `not_nil`, `fail`, `raises`), native `import time`, native `import random` (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), native `import json` (`loads`, `dumps`, `loads_lines`, `dumps_lines`, `pointer`, `transform`), native `import string` (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), native `import list` (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), native `import re` (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), native `import collections` (`Queue`, `Stack`), native `open()` / file methods (`read`, `readline`, `readlines`, `write`, `writelines`, `close`), and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, plus f-strings, ternary expressions, list comprehensions, `in`/`not in`, inline assembly, and raw memory operations.
 
 **LLVM limitations:** closures/lambdas.
 
@@ -650,7 +711,7 @@ run = "cool fmt"
 
 Inside test files, `import test` gives you assertion helpers like `test.equal(...)`, `test.truthy(...)`, `test.is_nil(...)`, and `test.raises(...)`.
 
-For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, and typed `def` call/return mismatches, and `cool doc [file.cool]` generates module/type/API docs as Markdown, HTML, or JSON. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search. `cool pkg` adds a Cool-native project workflow layer with `info`, `deps`, `tree`, `capabilities`, and `doctor` subcommands.
+For tooling, `cool ast <file.cool>` prints the parsed AST as JSON, `cool inspect <file.cool>` summarizes top-level imports and symbols as JSON, `cool symbols [file.cool]` prints a resolved symbol index across reachable modules as JSON, `cool diff <before.cool> <after.cool>` compares top-level changes as JSON, `cool modulegraph <file.cool>` resolves reachable imports and prints the resulting graph as JSON, `cool check [file.cool]` performs static checks: unresolved imports, import cycles, duplicate symbols, typed/local binding mismatches, immutable reassignments, private export/import validation, missing returns on typed functions, typed `def` call/return mismatches, non-exhaustive local-enum `match` blocks, trait implementation errors, and generic trait-bound failures, and `cool doc [file.cool]` generates module/type/API docs as Markdown, HTML, or JSON. `cool check --strict` additionally requires every top-level `def` to have fully annotated parameters and a return type, making it suitable as a CI gate for typed codebases. `cool lsp` starts a JSON-RPC Language Server Protocol server on stdin/stdout for editor integration (VS Code, Neovim, Helix, etc.) with typed diagnostics, completions, hover, go-to-definition, document symbols, and workspace symbol search. `cool pkg` adds a Cool-native project workflow layer with `info`, `deps`, `tree`, `capabilities`, and `doctor` subcommands.
 
 ## VS Code
 
@@ -688,7 +749,7 @@ Then in VS Code run `Extensions: Install from VSIX...` and choose the generated 
 | `cool symbols [file.cool]` | Print a resolved JSON symbol index for reachable modules |
 | `cool diff <before.cool> <after.cool>` | Print a JSON summary of top-level changes |
 | `cool modulegraph <file.cool>` | Print the resolved import graph as JSON |
-| `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, typed bindings, immutable reassignments, missing returns, export validation, and type mismatches; `--strict` enforces full annotations |
+| `cool check [--strict] [file.cool]` | Statically check imports, cycles, duplicate symbols, typed bindings, immutable reassignments, missing returns, export validation, type mismatches, local-enum `match` exhaustiveness, and trait/bound validation; `--strict` enforces full annotations |
 | `cool doc [file.cool]` | Generate API docs as Markdown, HTML, or JSON |
 | `cool bindgen <header.h>` | Generate starter Cool FFI bindings from a C header subset |
 | `cool build` | Build the project described by `cool.toml` |

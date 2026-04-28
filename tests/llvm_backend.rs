@@ -2891,3 +2891,72 @@ fn test_llvm_phase6_pass2_stdlib_modules() {
     );
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_llvm_phase13_typed_language_features() {
+    let result = compile_and_run_native(
+        r#"
+trait Named:
+    def name(self) -> str
+
+class User implements Named:
+    def __init__(self, name: str):
+        self.value = name
+
+    def name(self) -> str:
+        return self.value
+
+enum Option[T]:
+    Some(value: T)
+    None
+
+struct Box[T]:
+    value: T
+
+def identity[T](value: T) -> T:
+    return value
+
+def show(value: Option[int]) -> int:
+    match value:
+        Option.Some(inner):
+            print(inner)
+            return inner
+        Option.None:
+            print("none")
+            return 0
+
+print(identity(Box(7)).value)
+print(User("Ada").name())
+show(Option.Some(41))
+show(Option.None)
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, vec!["7", "Ada", "41", "none"]);
+}
+
+#[test]
+fn test_llvm_phase13_option_and_result_stdlib_modules() {
+    let result = compile_and_run_native(
+        r#"
+import option
+import result
+
+value = option.some(5)
+print(option.is_some(value))
+print(option.unwrap(value))
+print(option.unwrap_or(option.none(), 9))
+
+ok = result.ok(41)
+err = result.err("boom")
+print(result.is_ok(ok))
+print(result.unwrap(ok))
+print(result.is_err(err))
+print(result.unwrap_err(err))
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(lines, vec!["true", "5", "9", "true", "41", "true", "boom"]);
+}

@@ -685,7 +685,8 @@ impl Interpreter {
 
     pub fn run(&mut self, program: &Program) -> Result<(), String> {
         let env = Env::new_global();
-        let result = match self.exec_block(program, &env) {
+        let lowered = crate::lowering::lower_program(program)?;
+        let result = match self.exec_block(&lowered, &env) {
             Err(e) if e == "__raise__" => {
                 let v = self.pending_raise.take().unwrap_or(Value::Nil);
                 Ok(Signal::Raise(v))
@@ -872,7 +873,7 @@ impl Interpreter {
                 Err(self.err("data declarations are only supported in the LLVM backend — compile with `cool build`"))
             }
 
-            Stmt::Class { name, parent, body } => {
+            Stmt::Class { name, parent, body, .. } => {
                 let parent_class = if let Some(pname) = parent {
                     match env.get(pname) {
                         Some(Value::Class(cls)) => Some(cls),
@@ -970,7 +971,7 @@ impl Interpreter {
                 Ok(Signal::None)
             }
 
-            Stmt::Union { name, fields } => {
+            Stmt::Union { name, fields, .. } => {
                 // Lower union to a class with zero-defaulted fields.
                 // Memory-sharing semantics are LLVM-only; in the interpreter each field is independent.
                 let mut init_body = Vec::new();
@@ -1188,9 +1189,11 @@ impl Interpreter {
                     .map_err(|e| self.err(&format!("import parse error: {}", e)))?;
                 let exports: std::collections::HashSet<String> =
                     module_exports::exported_names(&program).into_iter().collect();
+                let lowered = crate::lowering::lower_program(&program)
+                    .map_err(|e| self.err(&format!("import parse error: {}", e)))?;
 
                 let child = Env::new_child(env.clone());
-                self.exec_block(&program, &child)?;
+                self.exec_block(&lowered, &child)?;
                 let child_vars = child.0.borrow();
                 for name in &exports {
                     if let Some(value) = child_vars.vars.get(name) {
@@ -1256,6 +1259,9 @@ impl Interpreter {
             }
 
             Stmt::Visibility { stmt, .. } => self.exec_stmt(stmt, env),
+            Stmt::Enum { .. } | Stmt::Trait { .. } | Stmt::Match { .. } => {
+                Err(self.err("internal error: high-level typed statement reached interpreter before lowering"))
+            }
         }
     }
 
@@ -1757,7 +1763,8 @@ class Stack:
                 let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
                 let mut parser = crate::parser::Parser::new(tokens);
                 let program = parser.parse_program().map_err(|e| self.err(&e))?;
-                self.exec_block(&program, env)?;
+                let lowered = crate::lowering::lower_program(&program).map_err(|e| self.err(&e))?;
+                self.exec_block(&lowered, env)?;
                 let mut map = IndexedMap::new();
                 if let Some(queue) = env.get("Queue") {
                     map.set(Value::Str("Queue".to_string()), queue);
@@ -1787,10 +1794,11 @@ class Stack:
                     let program = parser.parse_program().map_err(|e| self.err(&e))?;
                     let exported_names: std::collections::HashSet<String> =
                         module_exports::exported_names(&program).into_iter().collect();
+                    let lowered = crate::lowering::lower_program(&program).map_err(|e| self.err(&e))?;
                     let child = Env::new_child(env.clone());
                     let old_dir = self.source_dir.clone();
                     self.source_dir = path.parent().unwrap_or(&old_dir).to_path_buf();
-                    let result = self.exec_block(&program, &child);
+                    let result = self.exec_block(&lowered, &child);
                     self.source_dir = old_dir;
                     result?;
                     let child_vars = child.0.borrow();
@@ -1977,6 +1985,11 @@ class Stack:
                     let arg_vals: Result<Vec<_>, _> = args.iter().map(|a| self.eval(a, env)).collect();
                     let arg_vals = arg_vals?;
                     let kwarg_vals = self.eval_kwargs(kwargs, env)?;
+                    if let Value::Class(cls) = &obj {
+                        if let Some(func) = cls.methods.get(name) {
+                            return self.call_value(func.clone(), arg_vals, kwarg_vals, env);
+                        }
+                    }
                     if let Value::Dict(map) = &obj {
                         if let Some(func) = map.borrow().get(&Value::Str(name.clone())) {
                             return self.call_value(func, arg_vals, kwarg_vals, env);
@@ -3328,7 +3341,8 @@ class Stack:
                     let tokens = lex2.tokenize().map_err(|e| self.err(&e))?;
                     let mut parser2 = crate::parser::Parser::new(tokens);
                     let prog = parser2.parse_program().map_err(|e| self.err(&e))?;
-                    self.exec_block(&prog, env)?;
+                    let lowered = crate::lowering::lower_program(&prog).map_err(|e| self.err(&e))?;
+                    self.exec_block(&lowered, env)?;
                     Ok(Value::Nil)
                 }
             }
@@ -3361,6 +3375,7 @@ class Stack:
                 let tokens = lexer.tokenize().map_err(|e| self.err(&e))?;
                 let mut parser = crate::parser::Parser::new(tokens);
                 let program = parser.parse_program().map_err(|e| self.err(&e))?;
+                let lowered = crate::lowering::lower_program(&program).map_err(|e| self.err(&e))?;
                 let old_dir = self.source_dir.clone();
                 let old_script_path = std::env::var("COOL_SCRIPT_PATH").ok();
                 let old_program_args = std::env::var("COOL_PROGRAM_ARGS").ok();
@@ -3374,7 +3389,7 @@ class Stack:
                     std::env::remove_var("COOL_PROGRAM_ARGS");
                 }
                 let run_env = Env::new_global();
-                let result = self.exec_block(&program, &run_env);
+                let result = self.exec_block(&lowered, &run_env);
                 self.source_dir = old_dir;
                 if let Some(script_path) = old_script_path {
                     std::env::set_var("COOL_SCRIPT_PATH", script_path);

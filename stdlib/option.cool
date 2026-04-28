@@ -1,0 +1,36 @@
+enum Option[T]:
+    Some(value: T)
+    None
+
+Some = Option.Some
+None = Option.None
+
+def some[T](value: T) -> Option[T]:
+    return Option.Some(value)
+
+def none[T]() -> Option[T]:
+    return Option.None
+
+def is_some[T](value: Option[T]) -> bool:
+    match value:
+        Option.Some(_):
+            return true
+        Option.None:
+            return false
+
+def is_none[T](value: Option[T]) -> bool:
+    return not is_some(value)
+
+def unwrap[T](value: Option[T]) -> T:
+    match value:
+        Option.Some(inner):
+            return inner
+        Option.None:
+            raise "called option.unwrap() on None"
+
+def unwrap_or[T](value: Option[T], default: T) -> T:
+    match value:
+        Option.Some(inner):
+            return inner
+        Option.None:
+            return default
