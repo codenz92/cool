@@ -764,6 +764,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 - [x] Hosted verification checks `release.json`, `latest.json`, `SHA256SUMS`, archive hashes/sizes, payload layouts, platform sidecars, trust metadata, package-channel archive checksums, and optional installer smoke behavior
 - [x] The verifier supports required-platform checks, signed metadata verification with `--verify-key`, mirror bases with `--base-url`, JSON reports, retained download directories, and local `file://` mirrors for CI smoke tests
 - [x] GitHub Actions `Hosted Release Verify` runs on published releases and manual dispatches, uploads hosted verification reports, and validates the full public platform contract
+- [x] Public `v*` tag publishing is owned by `Release Matrix`; `Published Release` remains manual-only to avoid racing single-platform assets against the multi-platform release
 
 ### Release Operations
 

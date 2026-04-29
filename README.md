@@ -954,7 +954,7 @@ Publish with the GitHub CLI after trust verification:
 bash scripts/publish_release.sh --version 1.0.0 --publish --no-draft
 ```
 
-The `Published Release` GitHub Actions workflow builds the RC, promotes it, generates trust metadata, optionally signs with `COOL_RELEASE_SIGNING_KEY_B64`, verifies the result, and uploads or publishes the final assets. The installer can verify release metadata before installing:
+The `Published Release` GitHub Actions workflow remains available for manual single-platform release drills. Public tag publishing is owned by the multi-platform `Release Matrix` workflow so a `v*` tag cannot race a single-platform GitHub Release against the final matrix release. The installer can verify release metadata before installing:
 
 ```bash
 bash install.sh --version 1.0.0 --verify-metadata

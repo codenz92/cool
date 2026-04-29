@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Optional version override. Defaults to Cargo.toml, or the pushed tag without the v prefix.
+        description: Optional version override. Defaults to Cargo.toml.
         required: false
         type: string
       publish:
@@ -31,10 +31,6 @@ on:
         options:
           - "false"
           - "true"
-  push:
-    tags:
-      - "v*"
-
 permissions:
   contents: write
 

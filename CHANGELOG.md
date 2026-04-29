@@ -11,6 +11,7 @@ All notable changes to the Cool language project.
 - Added `docs/RELEASE_RUNBOOK.md` and `docs/SUPPORT_MATRIX.md` for release-day operations, rollback/hotfix handling, supported platforms, channel coverage, and verification policy
 - Added release checklist and hotfix issue templates plus a PR template with release-impact validation prompts
 - Packaged hosted verification scripts and release-operations docs into release candidates, promoted releases, and assembled matrix releases
+- Made public `v*` tag publishing unambiguous by keeping the multi-platform `Release Matrix` workflow as the tag publisher and leaving `Published Release` as a manual single-platform drill
 
 ### Phase 23 — Public Release Validation And Ecosystem Readiness
 
