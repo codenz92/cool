@@ -189,7 +189,7 @@ All notable changes to the Cool language project.
 - `cool bundle` now verifies or generates `cool.lock` before packaging, so binary artifacts and source packages share the same dependency reproducibility expectations
 - `cool new` now scaffolds starter `[tasks.publish]` tasks for projects that want a source-distribution workflow from day one
 
-### Phase 12 — Static Semantic Core (In Progress)
+### Phase 12 — Static Semantic Core (Complete)
 
 #### Typed Function Signatures
 

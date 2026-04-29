@@ -18,13 +18,13 @@
 - Systems interop must feel first-class, not bolted on
 - Cool should not chase full Python compatibility as a goal in itself
 
-### Current Critical Path
+### Completed Critical Path
 
-1. Finish the freestanding systems foundation
-2. Add a real static semantic core for ordinary `def`/module code
-3. Add typed language features that make large compiled programs pleasant and safe
-4. Harden the native toolchain so shipping Cool binaries feels routine
-5. Turn systems interop into a signature advantage (`bindgen`, ABI, targets, link flow)
+1. Freestanding systems foundation
+2. Static semantic core for ordinary `def`/module code
+3. Typed language features for larger compiled programs
+4. Hardened native toolchain for routine binary shipping
+5. Systems interop as a signature advantage (`bindgen`, ABI, targets, link flow)
 
 ## Legend
 
@@ -34,7 +34,7 @@
 
 ---
 
-## Phase 1 — Core Interpreter ✅
+## Phase 1 — Core Interpreter ✅ Complete
 
 > Goal: a working tree-walk interpreter that can run real programs
 
@@ -59,7 +59,7 @@
 
 ---
 
-## Phase 2 — Real Language Features ✅
+## Phase 2 — Real Language Features ✅ Complete
 
 > Goal: enough features to write real programs
 
@@ -91,7 +91,7 @@
 
 ---
 
-## Phase 3 — Cool Shell ✅
+## Phase 3 — Cool Shell ✅ Complete
 
 > Goal: a working interactive shell written entirely in Cool
 
@@ -114,7 +114,7 @@
 
 ---
 
-## Phase 4 — Quality of Life ✅
+## Phase 4 — Quality of Life ✅ Complete
 
 > Goal: remove rough edges, make the language more pleasant to use
 
@@ -139,7 +139,7 @@
 
 ---
 
-## Phase 5 — Shell: More Commands ✅
+## Phase 5 — Shell: More Commands ✅ Complete
 
 > Goal: a shell powerful enough for real use
 
@@ -157,7 +157,7 @@
 
 ---
 
-## Phase 6 — Standard Library ✅
+## Phase 6 — Standard Library ✅ Complete
 
 > Goal: a practical built-in library shipped with the language across runtimes
 
@@ -306,7 +306,7 @@
 
 ---
 
-## Phase 7 — Cool Applications ✅
+## Phase 7 — Cool Applications ✅ Complete
 
 > Goal: write real apps entirely in Cool
 
@@ -319,7 +319,7 @@
 
 ---
 
-## Phase 8 — Compiler ✅
+## Phase 8 — Compiler ✅ Complete
 
 > Goal: compile Cool to native binaries
 
@@ -481,7 +481,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 12 — Static Semantic Core
+## Phase 12 — Static Semantic Core ✅ Complete
 
 > Goal: give Cool a disciplined compile-time spine so it reads like a high-level language but scales like a serious compiled one
 
@@ -509,7 +509,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 13 — Typed Language Features ✅
+## Phase 13 — Typed Language Features ✅ Complete
 
 > Goal: make Cool comfortable for large native codebases, not just dynamic-style programs that happen to compile
 
@@ -580,7 +580,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 16 — Systems Interop And Targets
+## Phase 16 — Systems Interop And Targets ✅ Complete
 
 > Goal: make Cool unusually strong at crossing the line between high-level application code and low-level native/system boundaries
 
@@ -608,7 +608,7 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
-## Phase 17 — Signature Features And Flagship Software
+## Phase 17 — Signature Features And Flagship Software ✅ Complete
 
 > Goal: give Cool a recognizable identity beyond “another compiled language” and prove it with software people care about
 
