@@ -60,6 +60,7 @@ jobs:
             scripts/validate_release.py \
             scripts/verify_hosted_release.py \
             scripts/smoke_matrix_release.py
+          find scripts -name __pycache__ -type d -prune -exec rm -rf {} +
 
           bash scripts/release_candidate.sh --skip-gate --platform macos-arm64
           bash scripts/promote_release.sh --version "$VERSION" --platform macos-arm64 --allow-skipped-gate
