@@ -428,7 +428,15 @@ else
     GATE_STATUS="skipped"
 fi
 
-run cargo build --release --bin "$PACKAGE_NAME"
+RELEASE_BUILD_RUSTFLAGS="${RUSTFLAGS:-}"
+if [[ -n "${COOL_RELEASE_BUILD_RUSTFLAGS:-}" ]]; then
+    RELEASE_BUILD_RUSTFLAGS="${RELEASE_BUILD_RUSTFLAGS:+$RELEASE_BUILD_RUSTFLAGS }$COOL_RELEASE_BUILD_RUSTFLAGS"
+fi
+if [[ -n "$RELEASE_BUILD_RUSTFLAGS" ]]; then
+    run env RUSTFLAGS="$RELEASE_BUILD_RUSTFLAGS" cargo build --release --bin "$PACKAGE_NAME"
+else
+    run cargo build --release --bin "$PACKAGE_NAME"
+fi
 if [[ ! -x "$BINARY_SRC" ]]; then
     printf 'release candidate: release binary not found or not executable: %s\n' "$BINARY_SRC" >&2
     exit 1
