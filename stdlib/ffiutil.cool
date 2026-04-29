@@ -1,0 +1,86 @@
+private def _trim_all(items):
+    out = []
+    for item in items:
+        text = str(item).strip()
+        if text != "":
+            out.append(text)
+    return out
+
+def normalize_type(name):
+    text = str(name).strip().lower()
+    aliases = {
+        "string": "str",
+        "char*": "cstring",
+        "const char*": "cstring",
+        "size_t": "usize",
+        "void": "void",
+    }
+    if text in aliases:
+        return aliases[text]
+    return text
+
+def parse_signature(signature):
+    text = str(signature).strip()
+    arrow = text.find("->")
+    left = text
+    ret = "void"
+    if arrow >= 0:
+        left = text[0:arrow].strip()
+        ret = text[arrow + 2:len(text)].strip()
+    open_paren = left.find("(")
+    close_paren = left.find(")")
+    name = left
+    args = []
+    if open_paren >= 0 and close_paren > open_paren:
+        name = left[0:open_paren].strip()
+        raw_args = left[open_paren + 1:close_paren].strip()
+        if raw_args != "":
+            args = _trim_all(raw_args.split(","))
+    normalized = []
+    for arg in args:
+        normalized.append(normalize_type(arg))
+    return {
+        "name": name,
+        "args": normalized,
+        "return": normalize_type(ret),
+    }
+
+def cool_type(ffi_type):
+    t = normalize_type(ffi_type)
+    if t in ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "usize", "isize", "int"]:
+        return "int"
+    if t in ["f32", "f64", "float", "double"]:
+        return "float"
+    if t == "str" or t == "cstring":
+        return "str"
+    if t == "bool":
+        return "bool"
+    if t == "void":
+        return "nil"
+    return "int"
+
+def extern_decl(name, signature, library=nil):
+    sig = parse_signature(signature)
+    params = []
+    idx = 0
+    for arg in sig["args"]:
+        params.append("arg" + str(idx) + ": " + cool_type(arg))
+        idx = idx + 1
+    line = "extern def " + str(name) + "(" + ", ".join(params) + ")"
+    if sig["return"] != "void":
+        line = line + " -> " + cool_type(sig["return"])
+    meta = []
+    if sig["name"] != "" and sig["name"] != name:
+        meta.append("symbol: \"" + sig["name"] + "\"")
+    if library != nil:
+        meta.append("library: \"" + str(library) + "\"")
+    if len(meta) > 0:
+        line = line + " [" + ", ".join(meta) + "]"
+    return line
+
+def wrapper(name, signature, library=nil):
+    return {
+        "name": str(name),
+        "signature": parse_signature(signature),
+        "extern": extern_decl(name, signature, library),
+    }

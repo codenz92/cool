@@ -1,0 +1,97 @@
+import os
+import package
+import path
+import toml
+
+private def _read_text(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _write_text(file_path, text):
+    parent = path.dirname(file_path)
+    if parent != "" and parent != "." and not os.exists(parent):
+        ensure_dirs(parent, [])
+    f = open(file_path, "w")
+    f.write(str(text))
+    f.close()
+    return file_path
+
+def ensure_dirs(root, names=nil):
+    if not os.exists(root):
+        parent = path.dirname(root)
+        if parent != "" and parent != "." and parent != root:
+            ensure_dirs(parent, [])
+        os.mkdir(root)
+    if names != nil:
+        for name in names:
+            full = path.join(root, str(name))
+            if not os.exists(full):
+                os.mkdir(full)
+    return root
+
+def manifest_path(root="."):
+    target = str(root)
+    if path.basename(target) == "cool.toml":
+        return target
+    return path.join(target, "cool.toml")
+
+def manifest(root="."):
+    return package.read_manifest(root)
+
+def info(root="."):
+    return package.project_info(root)
+
+def workspace(root="."):
+    data = info(root)
+    return {
+        "root": data["root"],
+        "manifest": data["manifest_path"],
+        "name": data["name"],
+        "version": data["version"],
+        "main": data["main"],
+        "src": path.join(data["root"], "src"),
+        "tests": path.join(data["root"], "tests"),
+        "benchmarks": path.join(data["root"], "benchmarks"),
+        "dependencies": data["dependencies"],
+    }
+
+def task(name, run, description=nil, cwd=nil, env=nil):
+    out = {
+        "run": run,
+    }
+    if description != nil:
+        out["description"] = description
+    if cwd != nil:
+        out["cwd"] = cwd
+    if env != nil:
+        out["env"] = env
+    return {str(name): out}
+
+def scaffold(root, name, template="app"):
+    project_root = path.join(root, name)
+    ensure_dirs(project_root, ["src", "tests", "benchmarks"])
+    kind = str(template)
+    main_file = "src/main.cool"
+    if kind == "lib":
+        main_file = "src/lib.cool"
+    manifest_data = {
+        "project": {
+            "name": name,
+            "version": "0.1.0",
+            "main": main_file,
+        },
+        "tasks": {
+            "test": {"run": "cool test"},
+        },
+    }
+    _write_text(path.join(project_root, "cool.toml"), toml.dumps(manifest_data))
+    _write_text(path.join(project_root, main_file), "print(\"" + str(name) + "\")\n")
+    return workspace(project_root)
+
+def metadata(root="."):
+    data = workspace(root)
+    data["package_id"] = package.package_id(data)
+    data["dependency_count"] = len(data["dependencies"])
+    return data

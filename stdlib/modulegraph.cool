@@ -1,0 +1,87 @@
+import ast
+import os
+import path
+
+private def _read_text(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _normalize(value):
+    return path.normalize(str(value)).replace("\\", "/")
+
+private def _dirname(file_path):
+    return _normalize(path.dirname(file_path))
+
+private def _strip_quotes(value):
+    text = str(value).strip()
+    if len(text) >= 2 and ((text[0] == "\"" and text[-1] == "\"") or (text[0] == "'" and text[-1] == "'")):
+        return text[1:len(text) - 1]
+    return text
+
+def imports(file_path):
+    return ast.imports(_read_text(file_path))
+
+def resolve(module_name, from_file, roots=nil):
+    raw = _strip_quotes(module_name)
+    candidates = []
+    if raw.endswith(".cool"):
+        candidates.append(path.join(_dirname(from_file), raw))
+    else:
+        rel = raw.replace(".", "/") + ".cool"
+        candidates.append(path.join(_dirname(from_file), rel))
+        if roots != nil:
+            for root in roots:
+                candidates.append(path.join(root, rel))
+    for candidate in candidates:
+        normalized = _normalize(candidate)
+        if os.exists(normalized):
+            return normalized
+    return nil
+
+def graph(entry, roots=nil):
+    start = _normalize(entry)
+    pending = [start]
+    seen = {}
+    nodes = []
+    edges = []
+    unresolved = []
+    while len(pending) > 0:
+        current = pending[len(pending) - 1]
+        pending = pending[0:len(pending) - 1]
+        if current in seen:
+            continue
+        seen[current] = true
+        nodes.append(current)
+        for item in imports(current):
+            target = resolve(item["module"], current, roots)
+            edge = {"from": current, "import": item["module"], "to": target}
+            edges.append(edge)
+            if target == nil:
+                unresolved.append(edge)
+            elif target not in seen:
+                pending.append(target)
+    nodes.sort()
+    return {
+        "entry": start,
+        "nodes": nodes,
+        "edges": edges,
+        "unresolved": unresolved,
+    }
+
+def has_cycle(graph_data):
+    for edge in graph_data["edges"]:
+        if edge["to"] == graph_data["entry"]:
+            return true
+    return false
+
+def dot(graph_data):
+    lines = ["digraph cool_modules {"]
+    for node in graph_data["nodes"]:
+        lines.append("  \"" + node + "\";")
+    for edge in graph_data["edges"]:
+        if edge["to"] != nil:
+            lines.append("  \"" + edge["from"] + "\" -> \"" + edge["to"] + "\";")
+    lines.append("}")
+    return "\n".join(lines)

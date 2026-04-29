@@ -744,6 +744,161 @@ fn expected_phase6_storage_lines() -> Vec<String> {
     ]
 }
 
+fn write_phase6_tooling_suite(dir: &PathBuf) -> PathBuf {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    let source_path = dir.join("main.cool");
+    let base = cool_quote_path(dir);
+    let source = r###"import ast
+import diff
+import doc
+import ffiutil
+import inspect
+import lexer
+import lsp
+import modulegraph
+import os
+import parser
+import patch
+import path
+import plugin
+import project
+import release
+import repo
+import shell
+import template
+
+base = "@BASE@"
+
+sections = [
+    {"kind": "heading", "text": "Usage", "level": 2},
+    {"kind": "list", "items": ["run", "test"]},
+]
+print(doc.heading("Cool", 2))
+print(doc.markdown("Tool", sections).find("## Usage") >= 0)
+print(doc.html_document("Tool", "# Title\nhello").find("<h1>Title</h1>") >= 0)
+
+rendered = template.render("Hi {{ name }} {{#items}}{{.}},{{/items}}{{> tail}}", {"name": "Ada", "items": ["x", "y"]}, {"tail": "done"})
+print(rendered)
+
+tokens = lexer.tokenize("def hi(x):\n    return x + 1\n")
+print(lexer.values(tokens, "keyword")[0])
+print(len(lexer.filter(tokens, "identifier")))
+assignments = parser.parse_assignments(lexer.tokenize("name = value\ncount = 3\n"))
+print(assignments[0]["name"])
+print(assignments[1]["value"]["value"])
+
+cool_source = "import util\nclass Box:\n    def size(self):\n        return 1\nVALUE = 2\n"
+summary = ast.summary(cool_source)
+print(len(summary["imports"]))
+print(ast.find_symbol(cool_source, "Box")["kind"])
+
+shape = inspect.describe({"b": 2, "a": 1})
+print(shape["type"])
+print(shape["keys"][0])
+
+changes = diff.compare("a\nb", "a\nc\nb")
+print(diff.stats(changes)["insert"])
+patch_text = patch.create("a\nb", "a\nc\nb", "old", "new")
+print(patch.apply_text("a\nb", patch_text) == "a\nc\nb")
+
+workspace = project.scaffold(base, "demo", "app")
+print(workspace["name"])
+plan = release.plan(path.join(base, "demo"), "minor", "native")
+print(plan["next"])
+print(plan["artifact"].endswith("native.tar.gz"))
+
+status = repo.parse_status(" M README.md\n?? new.cool\n")
+print(status[0]["worktree"])
+print(status[1]["index"])
+
+graph_root = path.join(base, "graph")
+project.ensure_dirs(graph_root, [])
+f = open(path.join(graph_root, "main.cool"), "w")
+f.write("import util\nprint(util.value)\n")
+f.close()
+f = open(path.join(graph_root, "util.cool"), "w")
+f.write("value = 1\n")
+f.close()
+graph = modulegraph.graph(path.join(graph_root, "main.cool"), nil)
+print(len(graph["nodes"]))
+print(len(graph["unresolved"]))
+print(modulegraph.dot(graph).find("->") >= 0)
+
+plugins_root = path.join(base, "plugins")
+project.ensure_dirs(plugins_root, ["demo"])
+plugin_root = path.join(plugins_root, "demo")
+project.ensure_dirs(path.join(plugin_root, ".codex-plugin"), [])
+f = open(path.join(plugin_root, ".codex-plugin", "plugin.json"), "w")
+f.write("{\"id\":\"demo-plugin\",\"version\":\"1.0.0\",\"capabilities\":[\"file\"],\"hooks\":{\"start\":\"run\"}}")
+f.close()
+loaded = plugin.load(plugin_root)
+registry = plugin.registry()
+plugin.register(registry, loaded)
+print(registry["order"][0])
+print(plugin.capabilities(loaded)[0])
+
+diag = lsp.diagnostic("bad", 2, 4, 1, "cool")
+print(diag["range"]["start"]["line"])
+encoded = lsp.encode(lsp.response(1, {"ok": true}))
+print(lsp.decode(encoded)["result"]["ok"])
+
+sig = ffiutil.parse_signature("puts(cstring)->i32")
+print(sig["name"])
+print(ffiutil.cool_type("cstring"))
+print(ffiutil.extern_decl("puts", "puts(cstring)->i32", "c").find("library") >= 0)
+
+parts = shell.split("echo 'hello world'")
+print(parts[1])
+aliases = shell.aliases()
+shell.set_alias(aliases, "ll", "ls -la")
+print(shell.expand_alias(aliases, "ll src").find("src") >= 0)
+print(shell.complete("ma", ["main", "test"])[0])
+print(len(shell.source_lines("#x\nrun\n\nexit")))
+"###
+    .replace("@BASE@", &base);
+    fs::write(&source_path, source).unwrap();
+    source_path
+}
+
+fn expected_phase6_tooling_lines() -> Vec<String> {
+    vec![
+        "## Cool".to_string(),
+        "true".to_string(),
+        "true".to_string(),
+        "Hi Ada x,y,done".to_string(),
+        "def".to_string(),
+        "3".to_string(),
+        "name".to_string(),
+        "3".to_string(),
+        "1".to_string(),
+        "class".to_string(),
+        "dict".to_string(),
+        "a".to_string(),
+        "1".to_string(),
+        "true".to_string(),
+        "demo".to_string(),
+        "0.2.0".to_string(),
+        "true".to_string(),
+        "M".to_string(),
+        "?".to_string(),
+        "2".to_string(),
+        "0".to_string(),
+        "true".to_string(),
+        "demo-plugin".to_string(),
+        "file".to_string(),
+        "2".to_string(),
+        "true".to_string(),
+        "puts".to_string(),
+        "str".to_string(),
+        "true".to_string(),
+        "hello world".to_string(),
+        "true".to_string(),
+        "main".to_string(),
+        "2".to_string(),
+    ]
+}
+
 fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().unwrap();
@@ -3780,6 +3935,16 @@ fn test_llvm_phase6_storage_modules() {
     let result = compile_and_run_native_path(&source_path).unwrap();
     let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_storage_lines());
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_tooling_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_tooling");
+    let source_path = write_phase6_tooling_suite(&temp_dir);
+    let result = compile_and_run_native_path(&source_path).unwrap();
+    let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_tooling_lines());
     let _ = fs::remove_dir_all(&temp_dir);
 }
 

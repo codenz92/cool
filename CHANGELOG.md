@@ -65,6 +65,13 @@ All notable changes to the Cool language project.
 - Native `open()` file handles now support `read_bytes()` and `write_bytes()` alongside the existing text methods, so archive/cache/package tooling can move binary payloads without dropping to ad hoc host glue
 - While landing the storage tranche, the bundled code was hardened against real cross-runtime gaps: helper modules now avoid unsupported `with open(...)` and native method-default traps internally, and the new coverage exercises the same cache/archive/bundle flows through interpreter, VM, and native runs
 
+### Phase 6 Follow-on — Parsing, Language, And Tooling Modules
+
+- New bundled `stdlib/doc.cool`, `stdlib/template.cool`, `stdlib/lexer.cool`, `stdlib/parser.cool`, `stdlib/ast.cool`, and `stdlib/inspect.cool` add document rendering, lightweight templating, token scanning, token-stream helpers, Cool source summaries, and portable value/module inspection
+- New bundled `stdlib/diff.cool`, `stdlib/patch.cool`, `stdlib/project.cool`, `stdlib/release.cool`, `stdlib/repo.cool`, and `stdlib/modulegraph.cool` add line diffing, patch application, scaffold/manifest metadata, release planning, git status parsing, and import graph visualization helpers
+- New bundled `stdlib/plugin.cool`, `stdlib/lsp.cool`, `stdlib/ffiutil.cool`, and `stdlib/shell.cool` add plugin descriptors/registries, JSON-RPC/LSP message utilities, FFI signature/wrapper helpers, and shell quoting/splitting/alias/completion helpers
+- The new tooling tranche is covered across the interpreter, VM, and LLVM backend, including native-portability fixes for template contexts, string helpers, dictionary key ordering, and inspection fallbacks
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

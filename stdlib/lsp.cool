@@ -1,0 +1,85 @@
+import json
+
+def position(line, character):
+    return {"line": int(line), "character": int(character)}
+
+def range(start_line, start_char, end_line, end_char):
+    return {
+        "start": position(start_line, start_char),
+        "end": position(end_line, end_char),
+    }
+
+def diagnostic(message, line=0, character=0, severity=1, source="cool"):
+    return {
+        "range": range(line, character, line, character + 1),
+        "severity": int(severity),
+        "source": source,
+        "message": str(message),
+    }
+
+def completion(label, kind=3, detail=nil, insert_text=nil):
+    item = {
+        "label": str(label),
+        "kind": int(kind),
+    }
+    if detail != nil:
+        item["detail"] = str(detail)
+    if insert_text != nil:
+        item["insertText"] = str(insert_text)
+    return item
+
+def hover(text):
+    return {
+        "contents": {
+            "kind": "markdown",
+            "value": str(text),
+        },
+    }
+
+def response(id, result):
+    return {
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    }
+
+def error(id, code, message):
+    return {
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": int(code),
+            "message": str(message),
+        },
+    }
+
+def notification(method, params=nil):
+    return {
+        "jsonrpc": "2.0",
+        "method": str(method),
+        "params": params,
+    }
+
+def initialize_result(name="cool-lsp"):
+    return {
+        "serverInfo": {"name": name},
+        "capabilities": {
+            "textDocumentSync": 1,
+            "completionProvider": {"resolveProvider": false},
+            "hoverProvider": true,
+            "definitionProvider": true,
+            "documentSymbolProvider": true,
+            "workspaceSymbolProvider": true,
+        },
+    }
+
+def encode(message):
+    body = json.dumps(message)
+    return "Content-Length: " + str(len(body)) + "\r\n\r\n" + body
+
+def decode(payload):
+    text = str(payload)
+    sep = text.find("\r\n\r\n")
+    if sep < 0:
+        return json.loads(text)
+    return json.loads(text[sep + 4:len(text)])

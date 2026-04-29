@@ -1,0 +1,142 @@
+import html
+
+private def _is_alpha(ch):
+    return (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or ch == "_"
+
+private def _is_digit(ch):
+    return ch >= "0" and ch <= "9"
+
+private def _is_alnum(ch):
+    return _is_alpha(ch) or _is_digit(ch)
+
+def token(kind, value, line, column):
+    return {
+        "kind": kind,
+        "value": value,
+        "line": line,
+        "column": column,
+    }
+
+def keywords():
+    return ["and", "as", "break", "class", "const", "continue", "def", "elif", "else", "enum", "except", "false", "finally", "for", "if", "import", "in", "nil", "not", "or", "private", "public", "raise", "return", "struct", "trait", "true", "try", "while", "with"]
+
+def tokenize(source):
+    text = str(source)
+    out = []
+    i = 0
+    line = 1
+    col = 1
+    words = keywords()
+    while i < len(text):
+        ch = text[i]
+        if ch == " " or ch == "\t" or ch == "\r":
+            i = i + 1
+            col = col + 1
+            continue
+        if ch == "\n":
+            out.append(token("newline", "\n", line, col))
+            i = i + 1
+            line = line + 1
+            col = 1
+            continue
+        if ch == "#":
+            start_col = col
+            start = i
+            while i < len(text) and text[i] != "\n":
+                i = i + 1
+                col = col + 1
+            out.append(token("comment", text[start:i], line, start_col))
+            continue
+        if ch == "\"" or ch == "'":
+            quote = ch
+            start_col = col
+            start = i
+            i = i + 1
+            col = col + 1
+            escaped = false
+            while i < len(text):
+                current = text[i]
+                if current == "\n":
+                    line = line + 1
+                    col = 1
+                else:
+                    col = col + 1
+                i = i + 1
+                if escaped:
+                    escaped = false
+                elif current == "\\":
+                    escaped = true
+                elif current == quote:
+                    break
+            out.append(token("string", text[start:i], line, start_col))
+            continue
+        if _is_digit(ch):
+            start_col = col
+            start = i
+            seen_dot = false
+            while i < len(text) and (_is_digit(text[i]) or (text[i] == "." and not seen_dot)):
+                if text[i] == ".":
+                    seen_dot = true
+                i = i + 1
+                col = col + 1
+            out.append(token("number", text[start:i], line, start_col))
+            continue
+        if _is_alpha(ch):
+            start_col = col
+            start = i
+            while i < len(text) and _is_alnum(text[i]):
+                i = i + 1
+                col = col + 1
+            value = text[start:i]
+            kind = "identifier"
+            if value in words:
+                kind = "keyword"
+            out.append(token(kind, value, line, start_col))
+            continue
+        start_col = col
+        value = ch
+        if i + 1 < len(text):
+            pair = text[i:i + 2]
+            if pair in ["==", "!=", "<=", ">=", "->", "=>", "+=", "-=", "*=", "/=", "//", "**"]:
+                value = pair
+        i = i + len(value)
+        col = col + len(value)
+        out.append(token("operator", value, line, start_col))
+    return out
+
+def filter(tokens, kind):
+    out = []
+    for item in tokens:
+        if item["kind"] == kind:
+            out.append(item)
+    return out
+
+def values(tokens, kind=nil):
+    out = []
+    for item in tokens:
+        if kind == nil or item["kind"] == kind:
+            out.append(item["value"])
+    return out
+
+def spans(source):
+    out = []
+    for item in tokenize(source):
+        out.append({
+            "kind": item["kind"],
+            "text": item["value"],
+            "line": item["line"],
+            "column": item["column"],
+            "length": len(item["value"]),
+        })
+    return out
+
+def highlight_html(source):
+    parts = []
+    for item in tokenize(source):
+        cls = item["kind"]
+        text = item["value"]
+        if cls == "newline":
+            parts.append("\n")
+        else:
+            parts.append("<span class=\"tok-" + cls + "\">" + html.escape(text) + "</span>")
+    return "".join(parts)

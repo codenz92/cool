@@ -1,0 +1,117 @@
+import os
+import path
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+private def _lookup(context, name, default=""):
+    if str(name).strip() == ".":
+        if type(context) == "dict" and "." in context:
+            return context["."]
+        return context
+    current = context
+    for part in str(name).split("."):
+        key = part.strip()
+        if key == "":
+            continue
+        if key == ".":
+            if type(current) == "dict" and "." in current:
+                return current["."]
+            return current
+        if type(current) == "dict" and key in current:
+            current = current[key]
+        else:
+            return default
+    return current
+
+private def _read_text(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _find_from(text, needle, start):
+    tail = text[start:len(text)]
+    idx = tail.find(needle)
+    if idx < 0:
+        return -1
+    return start + idx
+
+private def _merge_context(parent, value):
+    if type(value) == "dict":
+        merged = {}
+        if type(parent) == "dict":
+            for key in parent.keys():
+                merged[key] = parent[key]
+        for key in value.keys():
+            merged[key] = value[key]
+        merged["."] = value
+        return merged
+    if type(parent) == "dict":
+        merged = {}
+        for key in parent.keys():
+            merged[key] = parent[key]
+        merged["."] = value
+        return merged
+    return {".": value}
+
+def render(source, context=nil, partials=nil):
+    if context == nil:
+        context = {}
+    if partials == nil:
+        partials = {}
+    text = str(source)
+    out = ""
+    i = 0
+    while i < len(text):
+        start = _find_from(text, "{{", i)
+        if start < 0:
+            out = out + text[i:len(text)]
+            break
+        out = out + text[i:start]
+        end = _find_from(text, "}}", start + 2)
+        if end < 0:
+            out = out + text[start:len(text)]
+            break
+        tag = text[start + 2:end].strip()
+        if tag.startswith("#"):
+            name = tag[1:len(tag)].strip()
+            close_tag = "{{/" + name + "}}"
+            close_at = _find_from(text, close_tag, end + 2)
+            if close_at < 0:
+                raise "template: missing section close for '" + name + "'"
+            block = text[end + 2:close_at]
+            value = _lookup(context, name, [])
+            if type(value) == "list" or type(value) == "tuple":
+                for item in value:
+                    out = out + render(block, _merge_context(context, item), partials)
+            elif value:
+                out = out + render(block, _merge_context(context, value), partials)
+            i = close_at + len(close_tag)
+        elif tag.startswith(">"):
+            name = tag[1:len(tag)].strip()
+            out = out + render(_get(partials, name, ""), context, partials)
+            i = end + 2
+        elif tag.startswith("!"):
+            i = end + 2
+        else:
+            out = out + str(_lookup(context, tag, ""))
+            i = end + 2
+    return out
+
+def render_file(file_path, context=nil, partials=nil):
+    return render(_read_text(file_path), context, partials)
+
+def load_partials(root):
+    out = {}
+    if root == nil or not os.exists(root):
+        return out
+    for name in os.listdir(root):
+        full = path.join(root, name)
+        if os.isdir(full):
+            continue
+        key = path.stem(name)
+        out[key] = _read_text(full)
+    return out

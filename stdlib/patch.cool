@@ -1,0 +1,56 @@
+import diff
+import os
+
+private def _read_text(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _write_text(file_path, text):
+    f = open(file_path, "w")
+    f.write(str(text))
+    f.close()
+
+def create(before, after, from_file="a", to_file="b"):
+    return diff.unified(before, after, from_file, to_file)
+
+def parse(text):
+    out = []
+    for line in str(text).split("\n"):
+        if line.startswith("--- ") or line.startswith("+++ ") or line.startswith("@@"):
+            continue
+        if line.startswith("+"):
+            out.append({"kind": "insert", "line": line[1:len(line)]})
+        elif line.startswith("-"):
+            out.append({"kind": "delete", "line": line[1:len(line)]})
+        elif line.startswith(" "):
+            out.append({"kind": "equal", "line": line[1:len(line)]})
+    return out
+
+def apply_text(before, patch_text):
+    original = str(before).split("\n")
+    pos = 0
+    out = []
+    for item in parse(patch_text):
+        kind = item["kind"]
+        line = item["line"]
+        if kind == "equal":
+            out.append(line)
+            pos = pos + 1
+        elif kind == "delete":
+            pos = pos + 1
+        elif kind == "insert":
+            out.append(line)
+    while pos < len(original):
+        out.append(original[pos])
+        pos = pos + 1
+    return "\n".join(out)
+
+def apply_file(file_path, patch_text):
+    before = ""
+    if os.exists(file_path):
+        before = _read_text(file_path)
+    after = apply_text(before, patch_text)
+    _write_text(file_path, after)
+    return after

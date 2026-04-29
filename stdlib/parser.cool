@@ -1,0 +1,95 @@
+private def _fail(message):
+    raise "parser: " + str(message)
+
+def stream(tokens):
+    return {
+        "tokens": tokens,
+        "index": 0,
+        "marks": [],
+    }
+
+def eof(state):
+    return int(state["index"]) >= len(state["tokens"])
+
+def peek(state, offset=0):
+    idx = int(state["index"]) + int(offset)
+    if idx < 0 or idx >= len(state["tokens"]):
+        return nil
+    return state["tokens"][idx]
+
+def advance(state):
+    item = peek(state, 0)
+    if item != nil:
+        state["index"] = int(state["index"]) + 1
+    return item
+
+def match_value(state, value):
+    item = peek(state, 0)
+    if item != nil and item["value"] == value:
+        advance(state)
+        return item
+    return nil
+
+def match_kind(state, kind):
+    item = peek(state, 0)
+    if item != nil and item["kind"] == kind:
+        advance(state)
+        return item
+    return nil
+
+def expect_value(state, value):
+    item = match_value(state, value)
+    if item == nil:
+        _fail("expected '" + str(value) + "'")
+    return item
+
+def expect_kind(state, kind):
+    item = match_kind(state, kind)
+    if item == nil:
+        _fail("expected token kind '" + str(kind) + "'")
+    return item
+
+def mark(state):
+    state["marks"].append(state["index"])
+    return state["index"]
+
+def reset(state, mark_value=nil):
+    target = mark_value
+    if target == nil:
+        if len(state["marks"]) == 0:
+            _fail("no parser mark to reset")
+        target = state["marks"][len(state["marks"]) - 1]
+        state["marks"] = state["marks"][0:len(state["marks"]) - 1]
+    state["index"] = int(target)
+    return state
+
+def commit(state):
+    if len(state["marks"]) > 0:
+        state["marks"] = state["marks"][0:len(state["marks"]) - 1]
+    return state
+
+def separated(state, parse_kind, separator):
+    items = []
+    first = match_kind(state, parse_kind)
+    if first == nil:
+        return items
+    items.append(first)
+    while match_value(state, separator) != nil:
+        items.append(expect_kind(state, parse_kind))
+    return items
+
+def parse_assignments(tokens):
+    state = stream(tokens)
+    out = []
+    while not eof(state):
+        name = match_kind(state, "identifier")
+        if name != nil and match_value(state, "=") != nil:
+            value = advance(state)
+            out.append({
+                "name": name["value"],
+                "value": value,
+                "line": name["line"],
+            })
+        else:
+            advance(state)
+    return out

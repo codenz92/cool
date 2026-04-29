@@ -1,0 +1,71 @@
+private def _lines(value):
+    return str(value).split("\n")
+
+def compare(before, after):
+    left = _lines(before)
+    right = _lines(after)
+    out = []
+    i = 0
+    j = 0
+    while i < len(left) or j < len(right):
+        if i < len(left) and j < len(right) and left[i] == right[j]:
+            out.append({"kind": "equal", "line": left[i], "old": i + 1, "new": j + 1})
+            i = i + 1
+            j = j + 1
+        elif j < len(right) and (i >= len(left) or (i + 1 < len(left) and left[i + 1] == right[j])):
+            out.append({"kind": "delete", "line": left[i], "old": i + 1, "new": nil})
+            i = i + 1
+        elif i < len(left) and (j >= len(right) or (j + 1 < len(right) and left[i] == right[j + 1])):
+            out.append({"kind": "insert", "line": right[j], "old": nil, "new": j + 1})
+            j = j + 1
+        elif i < len(left) and j < len(right):
+            out.append({"kind": "delete", "line": left[i], "old": i + 1, "new": nil})
+            out.append({"kind": "insert", "line": right[j], "old": nil, "new": j + 1})
+            i = i + 1
+            j = j + 1
+        elif i < len(left):
+            out.append({"kind": "delete", "line": left[i], "old": i + 1, "new": nil})
+            i = i + 1
+        else:
+            out.append({"kind": "insert", "line": right[j], "old": nil, "new": j + 1})
+            j = j + 1
+    return out
+
+def stats(changes):
+    out = {"equal": 0, "insert": 0, "delete": 0}
+    for item in changes:
+        kind = item["kind"]
+        if kind not in out:
+            out[kind] = 0
+        out[kind] = out[kind] + 1
+    return out
+
+def changed(changes):
+    for item in changes:
+        if item["kind"] != "equal":
+            return true
+    return false
+
+def unified(before, after, from_file="a", to_file="b"):
+    lines = ["--- " + str(from_file), "+++ " + str(to_file), "@@ -1 +1 @@"]
+    for item in compare(before, after):
+        if item["kind"] == "equal":
+            lines.append(" " + item["line"])
+        elif item["kind"] == "delete":
+            lines.append("-" + item["line"])
+        elif item["kind"] == "insert":
+            lines.append("+" + item["line"])
+    return "\n".join(lines)
+
+def merge(base, left, right):
+    if left == right:
+        return {"ok": true, "text": left, "conflicts": []}
+    if base == left:
+        return {"ok": true, "text": right, "conflicts": []}
+    if base == right:
+        return {"ok": true, "text": left, "conflicts": []}
+    return {
+        "ok": false,
+        "text": "<<<<<<< left\n" + str(left) + "\n=======\n" + str(right) + "\n>>>>>>> right\n",
+        "conflicts": [{"base": base, "left": left, "right": right}],
+    }

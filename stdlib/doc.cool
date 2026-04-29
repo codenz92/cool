@@ -1,0 +1,111 @@
+import html
+
+private def _text(value):
+    if value == nil:
+        return ""
+    return str(value)
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+def escape_markdown(value):
+    text = _text(value)
+    for ch in ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", "!", "|"]:
+        text = text.replace(ch, "\\" + ch)
+    return text
+
+def heading(text, level=1):
+    depth = int(level)
+    if depth < 1:
+        depth = 1
+    if depth > 6:
+        depth = 6
+    marks = ""
+    while len(marks) < depth:
+        marks = marks + "#"
+    return marks + " " + _text(text)
+
+def paragraph(text):
+    return _text(text).strip()
+
+def code_block(code, language=""):
+    return "```" + _text(language) + "\n" + _text(code).rstrip() + "\n```"
+
+def bullet_list(items):
+    lines = []
+    for item in items:
+        lines.append("- " + _text(item))
+    return "\n".join(lines)
+
+def table(headers, rows):
+    head = []
+    for item in headers:
+        head.append(_text(item))
+    sep = []
+    for item in headers:
+        sep.append("---")
+    lines = ["| " + " | ".join(head) + " |", "| " + " | ".join(sep) + " |"]
+    for row in rows:
+        cells = []
+        for cell in row:
+            cells.append(_text(cell).replace("|", "\\|"))
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+def markdown(title, sections):
+    parts = [heading(title, 1)]
+    for section in sections:
+        kind = _get(section, "kind", "paragraph")
+        if kind == "heading":
+            parts.append(heading(_get(section, "text", ""), _get(section, "level", 2)))
+        elif kind == "code":
+            parts.append(code_block(_get(section, "code", ""), _get(section, "language", "")))
+        elif kind == "list":
+            parts.append(bullet_list(_get(section, "items", [])))
+        elif kind == "table":
+            parts.append(table(_get(section, "headers", []), _get(section, "rows", [])))
+        else:
+            parts.append(paragraph(_get(section, "text", "")))
+    return "\n\n".join(parts).strip() + "\n"
+
+def manpage(name, summary, sections=nil):
+    if sections == nil:
+        sections = []
+    lines = [
+        heading("NAME", 1),
+        _text(name) + " - " + _text(summary),
+        heading("SYNOPSIS", 1),
+        _text(name),
+    ]
+    for section in sections:
+        lines.append(heading(str(_get(section, "title", "SECTION")).upper(), 1))
+        lines.append(_text(_get(section, "text", "")))
+    return "\n\n".join(lines).strip() + "\n"
+
+def html_document(title, body_markdown):
+    body = []
+    for line in _text(body_markdown).split("\n"):
+        if line.startswith("# "):
+            body.append("<h1>" + html.escape(line[2:len(line)]) + "</h1>")
+        elif line.startswith("## "):
+            body.append("<h2>" + html.escape(line[3:len(line)]) + "</h2>")
+        elif line.startswith("- "):
+            body.append("<p>&bull; " + html.escape(line[2:len(line)]) + "</p>")
+        elif line.strip() == "":
+            continue
+        else:
+            body.append("<p>" + html.escape(line) + "</p>")
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + html.escape(title) + "</title></head><body>" + "".join(body) + "</body></html>"
+
+def render(title, sections, format="markdown"):
+    kind = str(format).lower()
+    md = markdown(title, sections)
+    if kind == "markdown" or kind == "md":
+        return md
+    if kind == "html":
+        return html_document(title, md)
+    if kind == "man" or kind == "manpage":
+        return manpage(title, "", sections)
+    raise "doc: unsupported format '" + str(format) + "'"

@@ -1,0 +1,55 @@
+import package
+import path
+
+private def _get(mapping, key, default=nil):
+    if mapping != nil and type(mapping) == "dict" and key in mapping:
+        return mapping[key]
+    return default
+
+def tag_name(version, prefix="v"):
+    return str(prefix) + str(version)
+
+def artifact_name(name, version, target=nil, ext=".tar.gz"):
+    base = str(name) + "-" + str(version)
+    if target != nil and str(target) != "":
+        base = base + "-" + str(target)
+    return base + str(ext)
+
+def changelog_entry(version, items=nil, date=nil):
+    if items == nil:
+        items = []
+    title = "## " + str(version)
+    if date != nil:
+        title = title + " - " + str(date)
+    lines = [title, ""]
+    if len(items) == 0:
+        lines.append("- Maintenance release")
+    else:
+        for item in items:
+            lines.append("- " + str(item))
+    return "\n".join(lines) + "\n"
+
+def plan(root=".", bump="patch", target=nil):
+    info = package.project_info(root)
+    next_version = package.bump(info["version"], bump)
+    return {
+        "name": info["name"],
+        "current": info["version"],
+        "next": next_version,
+        "tag": tag_name(next_version),
+        "artifact": artifact_name(info["name"], next_version, target),
+        "root": info["root"],
+    }
+
+def checklist(root=".", bump="patch"):
+    p = plan(root, bump, nil)
+    return [
+        "Update version to " + p["next"],
+        "Run tests",
+        "Build release artifact " + p["artifact"],
+        "Tag " + p["tag"],
+    ]
+
+def notes(version, changes, options=nil):
+    title = _get(options, "title", "Release " + str(version))
+    return "# " + str(title) + "\n\n" + changelog_entry(version, changes)

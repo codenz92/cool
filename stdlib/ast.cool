@@ -1,0 +1,112 @@
+import lexer
+
+private def _line_indent(line):
+    count = 0
+    while count < len(line) and (line[count] == " " or line[count] == "\t"):
+        count = count + 1
+    return count
+
+private def _trim_comment(line):
+    idx = str(line).find("#")
+    if idx < 0:
+        return line
+    return line[0:idx]
+
+private def _name_after(prefix, line):
+    text = line[len(prefix):len(line)].strip()
+    out = ""
+    for ch in text:
+        if (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch == "_":
+            out = out + ch
+        else:
+            break
+    return out
+
+private def _node(kind, name, line, indent, extra=nil):
+    node = {
+        "kind": kind,
+        "name": name,
+        "line": line,
+        "indent": indent,
+    }
+    if extra != nil:
+        for pair in extra.items():
+            node[pair[0]] = pair[1]
+    return node
+
+def imports(source):
+    out = []
+    line_no = 1
+    for raw in str(source).split("\n"):
+        line = _trim_comment(raw).strip()
+        if line.startswith("import "):
+            out.append({
+                "module": line[7:len(line)].strip(),
+                "line": line_no,
+            })
+        line_no = line_no + 1
+    return out
+
+def parse(source):
+    body = []
+    line_no = 1
+    for raw in str(source).split("\n"):
+        indent = _line_indent(raw)
+        line = _trim_comment(raw).strip()
+        if line == "":
+            line_no = line_no + 1
+            continue
+        if line.startswith("import "):
+            body.append(_node("import", line[7:len(line)].strip(), line_no, indent))
+        elif line.startswith("def "):
+            name = _name_after("def ", line)
+            body.append(_node("function", name, line_no, indent, {"signature": line}))
+        elif line.startswith("class "):
+            name = _name_after("class ", line)
+            body.append(_node("class", name, line_no, indent, {"signature": line}))
+        elif line.startswith("struct "):
+            body.append(_node("struct", _name_after("struct ", line), line_no, indent, {"signature": line}))
+        elif line.startswith("enum "):
+            body.append(_node("enum", _name_after("enum ", line), line_no, indent, {"signature": line}))
+        elif line.startswith("trait "):
+            body.append(_node("trait", _name_after("trait ", line), line_no, indent, {"signature": line}))
+        elif line.startswith("const "):
+            rest = line[6:len(line)].strip()
+            name = rest.split("=")[0].split(":")[0].strip()
+            body.append(_node("const", name, line_no, indent, {"source": line}))
+        elif line.find("=") > 0 and not line.startswith("if ") and not line.startswith("while "):
+            name = line.split("=")[0].split(":")[0].strip()
+            body.append(_node("binding", name, line_no, indent, {"source": line}))
+        line_no = line_no + 1
+    return {
+        "kind": "module",
+        "body": body,
+        "tokens": lexer.tokenize(source),
+    }
+
+def symbols(source):
+    out = []
+    for node in parse(source)["body"]:
+        if node["kind"] != "import":
+            out.append(node)
+    return out
+
+def find_symbol(source, name):
+    for item in symbols(source):
+        if item["name"] == name:
+            return item
+    return nil
+
+def summary(source):
+    tree = parse(source)
+    counts = {}
+    for node in tree["body"]:
+        kind = node["kind"]
+        if kind not in counts:
+            counts[kind] = 0
+        counts[kind] = counts[kind] + 1
+    return {
+        "imports": imports(source),
+        "symbols": symbols(source),
+        "counts": counts,
+    }

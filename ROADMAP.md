@@ -233,22 +233,22 @@
 
 - [x] `argparse` module — command-line flag parsing, positional args, and help generation
 - [x] `logging` module — leveled logs, timestamps, formatters, and file/stdout handlers
-- [ ] `doc` module — markdown, manpage, and HTML document generation helpers
-- [ ] `template` module — string/file templating with variables, loops, and partials
-- [ ] `parser` module — parser combinators and token-stream helpers for DSLs
-- [ ] `lexer` module — token definitions, scanners, and syntax-highlighting support
-- [ ] `ast` module — parse Cool source into inspectable AST nodes for tooling and linters
-- [ ] `inspect` module — runtime inspection for modules, classes, functions, and objects
-- [ ] `diff` module — text/line diffing, patches, and merge-assist primitives
-- [ ] `patch` module — unified diff creation/application and file patch tooling
-- [ ] `project` module — project scaffolding, manifests, templates, and workspace metadata
-- [ ] `release` module — changelog generation, tagging, artifact assembly, and publish workflows
-- [ ] `repo` module — git-aware repository inspection, diff/status helpers, and branch metadata
-- [ ] `modulegraph` module — import graph inspection, cycle detection, and dependency visualization
-- [ ] `plugin` module — plugin discovery, registration, lifecycle hooks, and capability loading
-- [ ] `lsp` module — language-server protocol messages, diagnostics, completions, and tooling support
-- [ ] `ffiutil` module — FFI signatures, type marshaling helpers, and safe wrapper generation
-- [ ] `shell` module — shell parsing, quoting, completion, aliases, and script execution helpers
+- [x] `doc` module — markdown, manpage, and HTML document generation helpers
+- [x] `template` module — string/file templating with variables, loops, and partials
+- [x] `parser` module — parser combinators and token-stream helpers for DSLs
+- [x] `lexer` module — token definitions, scanners, and syntax-highlighting support
+- [x] `ast` module — parse Cool source into inspectable AST nodes for tooling and linters
+- [x] `inspect` module — runtime inspection for modules, classes, functions, and objects
+- [x] `diff` module — text/line diffing, patches, and merge-assist primitives
+- [x] `patch` module — unified diff creation/application and file patch tooling
+- [x] `project` module — project scaffolding, manifests, templates, and workspace metadata
+- [x] `release` module — changelog generation, tagging, artifact assembly, and publish workflows
+- [x] `repo` module — git-aware repository inspection, diff/status helpers, and branch metadata
+- [x] `modulegraph` module — import graph inspection, cycle detection, and dependency visualization
+- [x] `plugin` module — plugin discovery, registration, lifecycle hooks, and capability loading
+- [x] `lsp` module — language-server protocol messages, diagnostics, completions, and tooling support
+- [x] `ffiutil` module — FFI signatures, type marshaling helpers, and safe wrapper generation
+- [x] `shell` module — shell parsing, quoting, completion, aliases, and script execution helpers
 
 #### Runtime, Automation, And Observability
 

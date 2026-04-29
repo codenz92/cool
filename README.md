@@ -48,6 +48,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Bundled filesystem/OS modules: `import glob`, `import tempfile`, `import process`, `import fswatch`, `import daemon`, `import sandbox`, `import sync`, and `import store`
 - Bundled networking/service modules: `import url`, `import websocket`, `import rpc`, `import graphql`, `import mail`, `import feed`, `import calendar`, and `import cluster`
 - Bundled storage/package modules: `import cache`, `import memo`, `import package`, `import compress`, `import archive`, and `import bundle`
+- Bundled parsing/tooling modules: `import doc`, `import template`, `import lexer`, `import parser`, `import ast`, `import inspect`, `import diff`, `import patch`, `import project`, `import release`, `import repo`, `import modulegraph`, `import plugin`, `import lsp`, `import ffiutil`, and `import shell`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `read_bytes()`, `write()`, `write_bytes()`, and `readlines()`
@@ -262,6 +263,28 @@ archive.create("assets", "dist/assets.tar.gz")
 print(archive.list("dist/assets.tar.gz")[0])
 
 print(bundle.read_manifest("dist/app.coolbundle")["package"]["name"])
+```
+
+### Tooling Modules
+
+Bundled parsing/language/tooling helpers now cover documentation rendering, small templates, token streams, source summaries, diffs and patches, project/release metadata, repository status parsing, import graphs, plugin descriptors, LSP messages, FFI wrapper text, and shell syntax:
+
+```python
+import ast
+import diff
+import doc
+import lsp
+import modulegraph
+import shell
+import template
+
+print(doc.heading("Cool", 2))
+print(template.render("Hello {{ name }}", {"name": "Ada"}))
+print(ast.summary("import util\nVALUE = 1\n")["counts"]["binding"])
+print(diff.stats(diff.compare("a", "b"))["insert"])
+print(modulegraph.dot(modulegraph.graph({"main": "import util\n"})))
+print(lsp.encode(lsp.response(1, {"ok": true})).startswith("Content-Length: "))
+print(shell.split("cool run app.cool")[0])
 ```
 
 ### Jobs Module
@@ -1094,6 +1117,22 @@ stdlib/
   compress.cool     Gzip, tar, zip, and checksum helpers for packaged assets
   archive.cool      Higher-level archive pack/list/unpack helpers
   bundle.cool       Single-file app bundle packaging and asset extraction
+  doc.cool          Markdown, manpage, and HTML document rendering helpers
+  template.cool     Variable, loop, and partial string/file templating
+  lexer.cool        Token scanning and syntax-highlighting support
+  parser.cool       Token stream helpers and small DSL parsing primitives
+  ast.cool          Source summaries for imports, symbols, and declarations
+  inspect.cool      Portable value and module inspection helpers
+  diff.cool         Line/text diff, stats, and merge-assist helpers
+  patch.cool        Unified patch creation and application helpers
+  project.cool      Manifest, scaffold, and workspace metadata helpers
+  release.cool      Release planning, changelog, tag, and artifact helpers
+  repo.cool         Git status, branch, diff, and summary helpers
+  modulegraph.cool  Import graph resolution, cycle checks, and DOT output
+  plugin.cool       Plugin descriptors, discovery, registries, and lifecycle hooks
+  lsp.cool          JSON-RPC/LSP message, diagnostic, completion, and hover helpers
+  ffiutil.cool      FFI signature parsing and wrapper-generation helpers
+  shell.cool        Shell quoting, splitting, aliasing, completion, and source parsing
   html.cool         Escaping, tag stripping, and small extraction helpers
   xml.cool          Lightweight XML parsing, text extraction, and serialization
   unicode.cool      Unicode categories, normalization, width, and grapheme helpers

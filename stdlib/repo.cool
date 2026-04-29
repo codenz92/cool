@@ -1,0 +1,52 @@
+import path
+import subprocess
+
+def shell_quote(text):
+    return "'" + str(text).replace("'", "'\"'\"'") + "'"
+
+def parse_status(text):
+    out = []
+    for raw in str(text).split("\n"):
+        if raw.strip() == "":
+            continue
+        code = raw[0:2]
+        file_path = raw[3:len(raw)].strip()
+        out.append({
+            "index": code[0],
+            "worktree": code[1],
+            "path": file_path,
+            "raw": raw,
+        })
+    return out
+
+def parse_branch(text):
+    for raw in str(text).split("\n"):
+        line = raw.strip()
+        if line.startswith("* "):
+            return line[2:len(line)].strip()
+    return nil
+
+def run(root, args):
+    cmd = "git -C " + shell_quote(root)
+    for arg in args:
+        cmd = cmd + " " + shell_quote(arg)
+    return subprocess.check_output(cmd)
+
+def branch(root="."):
+    return run(root, ["branch", "--show-current"]).strip()
+
+def status(root="."):
+    return parse_status(run(root, ["status", "--short"]))
+
+def diff(root=".", ref=nil):
+    args = ["diff"]
+    if ref != nil:
+        args.append(str(ref))
+    return run(root, args)
+
+def summary(root="."):
+    return {
+        "root": path.normalize(root),
+        "branch": branch(root),
+        "status": status(root),
+    }

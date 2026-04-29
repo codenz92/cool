@@ -1,0 +1,101 @@
+def quote(text):
+    return "'" + str(text).replace("'", "'\"'\"'") + "'"
+
+def split(command):
+    text = str(command)
+    out = []
+    current = ""
+    quote_ch = nil
+    escaped = false
+    for ch in text:
+        if escaped:
+            current = current + ch
+            escaped = false
+        elif ch == "\\":
+            escaped = true
+        elif quote_ch != nil:
+            if ch == quote_ch:
+                quote_ch = nil
+            else:
+                current = current + ch
+        elif ch == "\"" or ch == "'":
+            quote_ch = ch
+        elif ch == " " or ch == "\t":
+            if current != "":
+                out.append(current)
+                current = ""
+        else:
+            current = current + ch
+    if current != "":
+        out.append(current)
+    return out
+
+def join(args):
+    parts = []
+    for arg in args:
+        parts.append(quote(arg))
+    return " ".join(parts)
+
+def parse(command):
+    tokens = split(command)
+    commands = []
+    current = []
+    redirects = {}
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "|":
+            commands.append(current)
+            current = []
+        elif tok == ">" or tok == "2>" or tok == "<":
+            if i + 1 < len(tokens):
+                redirects[tok] = tokens[i + 1]
+                i = i + 1
+        else:
+            current.append(tok)
+        i = i + 1
+    if len(current) > 0:
+        commands.append(current)
+    return {
+        "argv": tokens,
+        "commands": commands,
+        "redirects": redirects,
+    }
+
+def aliases():
+    return {}
+
+def set_alias(table, name, command):
+    table[str(name)] = str(command)
+    return table
+
+def expand_alias(table, command):
+    parts = split(command)
+    if len(parts) == 0:
+        return command
+    head = parts[0]
+    if head not in table:
+        return command
+    rest = parts[1:len(parts)]
+    if len(rest) == 0:
+        return table[head]
+    return table[head] + " " + join(rest)
+
+def complete(prefix, candidates):
+    out = []
+    needle = str(prefix)
+    for item in candidates:
+        text = str(item)
+        if text.startswith(needle):
+            out.append(text)
+    out.sort()
+    return out
+
+def source_lines(text):
+    out = []
+    for raw in str(text).split("\n"):
+        line = raw.strip()
+        if line == "" or line.startswith("#"):
+            continue
+        out.append(line)
+    return out

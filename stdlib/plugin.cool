@@ -1,0 +1,76 @@
+import json
+import os
+import path
+
+private def _read_text(file_path):
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return text
+
+private def _descriptor_path(root):
+    direct = path.join(root, "plugin.json")
+    if os.exists(direct):
+        return direct
+    nested = path.join(root, ".codex-plugin", "plugin.json")
+    if os.exists(nested):
+        return nested
+    return nil
+
+def descriptor(id, version="0.1.0", capabilities=nil, hooks=nil):
+    if capabilities == nil:
+        capabilities = []
+    if hooks == nil:
+        hooks = {}
+    return {
+        "id": str(id),
+        "version": str(version),
+        "capabilities": capabilities,
+        "hooks": hooks,
+        "enabled": true,
+    }
+
+def load(root):
+    file_path = _descriptor_path(root)
+    if file_path == nil:
+        raise "plugin: descriptor not found under '" + str(root) + "'"
+    data = json.loads(_read_text(file_path))
+    data["root"] = path.normalize(root)
+    data["descriptor"] = file_path
+    return data
+
+def discover(root):
+    out = []
+    if not os.exists(root):
+        return out
+    for name in os.listdir(root):
+        full = path.join(root, name)
+        if os.isdir(full) and _descriptor_path(full) != nil:
+            out.append(load(full))
+    return out
+
+def registry():
+    return {
+        "plugins": {},
+        "order": [],
+    }
+
+def register(registry, plugin):
+    id = str(plugin["id"])
+    if id not in registry["plugins"]:
+        registry["order"].append(id)
+    registry["plugins"][id] = plugin
+    return plugin
+
+def capabilities(plugin):
+    if "capabilities" in plugin:
+        return plugin["capabilities"]
+    return []
+
+def activate(plugin):
+    plugin["enabled"] = true
+    return plugin
+
+def deactivate(plugin):
+    plugin["enabled"] = false
+    return plugin

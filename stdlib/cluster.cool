@@ -26,7 +26,7 @@ def open_cluster(root=nil, name="default", ttl=30):
     db = store.open_store(path.join(base, "cluster", str(name)))
     return {
         "name": str(name),
-        "ttl": float(ttl),
+        "ttl": int(ttl),
         "db": db,
         "members_ns": db.namespace("members"),
         "leases_ns": db.namespace("leases"),
@@ -34,21 +34,21 @@ def open_cluster(root=nil, name="default", ttl=30):
     }
 
 private def _members_ns(cluster):
-    return cluster.get("members_ns")
+    return cluster["members_ns"]
 
 private def _leases_ns(cluster):
-    return cluster.get("leases_ns")
+    return cluster["leases_ns"]
 
 private def _barriers_ns(cluster):
-    return cluster.get("barriers_ns")
+    return cluster["barriers_ns"]
 
 private def _now():
-    return datetime.now()
+    return int(datetime.now())
 
 private def _prune_members(cluster, now=nil):
     if now == nil:
         now = _now()
-    ttl = float(_get(cluster, "ttl", 30))
+    ttl = int(_get(cluster, "ttl", 30))
     ns = _members_ns(cluster)
     alive = []
     for pair in ns.items():
@@ -96,14 +96,16 @@ private def _prune_barriers(cluster, now=nil):
 def heartbeat(cluster, node_id, meta=nil):
     now = _now()
     record = {"id": str(node_id), "heartbeat": now, "meta": _copy_map(meta)}
-    _members_ns(cluster).set(str(node_id), record)
+    ns = _members_ns(cluster)
+    ns.set(str(node_id), record)
     return record
 
 def join(cluster, node_id, meta=nil):
     return heartbeat(cluster, node_id, meta)
 
 def leave(cluster, node_id):
-    return _members_ns(cluster).delete(str(node_id))
+    ns = _members_ns(cluster)
+    return ns.delete(str(node_id))
 
 def members(cluster):
     items = _prune_members(cluster)
@@ -120,7 +122,8 @@ def members(cluster):
 
 def member(cluster, node_id):
     _prune_members(cluster)
-    return _members_ns(cluster).get(str(node_id))
+    ns = _members_ns(cluster)
+    return ns.get(str(node_id))
 
 def leader(cluster):
     items = _prune_members(cluster)
@@ -138,7 +141,7 @@ def leader(cluster):
 
 def claim(cluster, lease_name, owner, ttl=nil, meta=nil):
     now = _now()
-    ttl_value = float(ttl if ttl != nil else _get(cluster, "ttl", 30))
+    ttl_value = int(ttl if ttl != nil else _get(cluster, "ttl", 30))
     _prune_leases(cluster, now)
     ns = _leases_ns(cluster)
     current = ns.get(str(lease_name))
@@ -148,7 +151,7 @@ def claim(cluster, lease_name, owner, ttl=nil, meta=nil):
     lease = {
         "name": str(lease_name),
         "owner": owner_id,
-        "expires": datetime.add_seconds(now, ttl_value),
+        "expires": now + ttl_value,
         "meta": _copy_map(meta),
     }
     ns.set(str(lease_name), lease)
@@ -164,20 +167,22 @@ def release(cluster, lease_name, owner=nil):
         return false
     if owner != nil and current.get("owner") != str(owner):
         return false
-    return _leases_ns(cluster).delete(str(lease_name))
+    ns = _leases_ns(cluster)
+    return ns.delete(str(lease_name))
 
 def barrier(cluster, name, node_id, expected, ttl=nil):
     now = _now()
-    ttl_value = float(ttl if ttl != nil else _get(cluster, "ttl", 30))
+    ttl_value = int(ttl if ttl != nil else _get(cluster, "ttl", 30))
     barriers = _prune_barriers(cluster, now)
     key = str(name)
     entry = _get(barriers, key, {"members": {}, "expected": int(expected)})
     entry["expected"] = int(expected)
-    entry["expires"] = datetime.add_seconds(now, ttl_value)
+    entry["expires"] = now + ttl_value
     members = _get(entry, "members", {})
     members[str(node_id)] = now
     entry["members"] = members
-    _barriers_ns(cluster).set(key, entry)
+    ns = _barriers_ns(cluster)
+    ns.set(key, entry)
     arrived = entry["members"].keys()
     arrived.sort()
     ready = len(arrived) >= int(expected)
