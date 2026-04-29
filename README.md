@@ -927,6 +927,39 @@ curl -fsSL https://raw.githubusercontent.com/codenz92/cool-lang/master/install.s
 
 Use `--verify-sha256 <hash>` with the archive hash from `SHA256SUMS` when installing from a downloaded asset. See `docs/INSTALL.md` for local, hosted, mirror, and smoke-test details.
 
+### Published Release Trust
+
+Generate SBOM, provenance, trust metadata, and optional detached signatures for a promoted release:
+
+```bash
+bash scripts/trust_release.sh generate --version 1.0.0
+```
+
+`scripts/promote_release.sh` runs the trust generator by default. The trust layer writes `sbom.spdx.json`, `provenance.intoto.json`, `trust.json`, and `TRUST_SHA256SUMS`; when `--sign-key <private-key.pem>` is provided it also signs `SHA256SUMS`, `release.json`, provenance, SBOM, and trust metadata using OpenSSL detached signatures. Verify the unsigned hash chain, or verify signatures with a public key:
+
+```bash
+bash scripts/trust_release.sh verify --version 1.0.0
+bash scripts/trust_release.sh verify --version 1.0.0 --verify-key release-signing-public.pem
+```
+
+Dry-run GitHub Release publishing:
+
+```bash
+bash scripts/publish_release.sh --version 1.0.0
+```
+
+Publish with the GitHub CLI after trust verification:
+
+```bash
+bash scripts/publish_release.sh --version 1.0.0 --publish --no-draft
+```
+
+The `Published Release` GitHub Actions workflow builds the RC, promotes it, generates trust metadata, optionally signs with `COOL_RELEASE_SIGNING_KEY_B64`, verifies the result, and uploads or publishes the final assets. The installer can verify release metadata before installing:
+
+```bash
+bash install.sh --version 1.0.0 --verify-metadata
+```
+
 ### Project workflow
 
 ```bash
@@ -1409,6 +1442,7 @@ examples/
 | 18 — Release hardening | ✅ Complete |
 | 19 — Release candidate and distribution | ✅ Complete |
 | 20 — Release promotion and installer channels | ✅ Complete |
+| 21 — Published release automation and supply-chain trust | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

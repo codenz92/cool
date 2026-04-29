@@ -50,6 +50,31 @@ bash install.sh \
   --verify-sha256 "<archive-sha256>"
 ```
 
+You can also let the installer verify the archive through release metadata:
+
+```bash
+bash install.sh \
+  --from cool-1.0.0-macos-arm64.tar.gz \
+  --checksums SHA256SUMS
+```
+
+For signed releases, verify the detached `SHA256SUMS.sig` signature before the
+archive is installed:
+
+```bash
+bash install.sh \
+  --from cool-1.0.0-macos-arm64.tar.gz \
+  --checksums SHA256SUMS \
+  --checksums-signature SHA256SUMS.sig \
+  --verify-key release-signing-public.pem
+```
+
+Hosted installs can infer `SHA256SUMS` from the release URL:
+
+```bash
+bash install.sh --version 1.0.0 --verify-metadata
+```
+
 ## Smoke Test
 
 By default the installer runs:

@@ -16,6 +16,9 @@ ALLOW_COMMIT_MISMATCH=0
 CREATE_TAG=0
 DRY_RUN=0
 FORCE_TAG=0
+SKIP_TRUST=0
+SIGN_KEY=""
+VERIFY_KEY=""
 
 usage() {
     cat <<'USAGE'
@@ -36,6 +39,9 @@ Options:
   --allow-rc-dirty         Allow promotion of an RC whose manifest has git.dirty=true.
   --allow-skipped-gate     Allow promotion of an RC whose release gate was skipped.
   --allow-commit-mismatch  Allow current HEAD to differ from the RC manifest commit.
+  --sign-key PATH          Sign release trust metadata with an OpenSSL private key.
+  --verify-key PATH        Verify generated release signatures with an OpenSSL public key.
+  --skip-trust             Do not generate SBOM/provenance/trust metadata after promotion.
   --dry-run                Validate only; do not write promoted artifacts or tags.
 USAGE
 }
@@ -124,6 +130,34 @@ while [[ $# -gt 0 ]]; do
             ;;
         --allow-commit-mismatch)
             ALLOW_COMMIT_MISMATCH=1
+            shift
+            ;;
+        --sign-key)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                printf 'promote release: --sign-key requires a path\n' >&2
+                exit 2
+            fi
+            SIGN_KEY="$2"
+            shift 2
+            ;;
+        --sign-key=*)
+            SIGN_KEY="${1#--sign-key=}"
+            shift
+            ;;
+        --verify-key)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                printf 'promote release: --verify-key requires a path\n' >&2
+                exit 2
+            fi
+            VERIFY_KEY="$2"
+            shift 2
+            ;;
+        --verify-key=*)
+            VERIFY_KEY="${1#--verify-key=}"
+            shift
+            ;;
+        --skip-trust)
+            SKIP_TRUST=1
             shift
             ;;
         --dry-run)
@@ -319,6 +353,10 @@ Promoted: $GENERATED_AT
 - \`install.sh\`
 - \`SHA256SUMS\`
 - \`release.json\`
+- \`sbom.spdx.json\`
+- \`provenance.intoto.json\`
+- \`trust.json\`
+- \`TRUST_SHA256SUMS\`
 
 ## Install
 
@@ -543,6 +581,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     exit 0
 fi
 
+rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 cp "$RC_ARCHIVE_PATH" "$PROMOTED_ARCHIVE_PATH"
 cp "$MANIFEST_PATH" "$PROMOTED_MANIFEST_PATH"
@@ -550,12 +589,27 @@ cp "$CHECKSUMS_PATH" "$PROMOTED_CHECKSUMS_PATH"
 cp "$RC_NOTES_PATH" "$PROMOTED_RC_NOTES_PATH"
 cp install.sh "$RELEASE_DIR/install.sh"
 chmod 755 "$RELEASE_DIR/install.sh"
+cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RELEASE_DIR/"
+chmod 755 "$RELEASE_DIR/trust_release.sh" "$RELEASE_DIR/trust_release.py" "$RELEASE_DIR/publish_release.sh"
 
 write_release_notes
 write_sha256sums
 write_release_json
 write_latest_json
 maybe_create_tag
+
+if [[ "$SKIP_TRUST" -ne 1 ]]; then
+    TRUST_ARGS=(generate --version "$VERSION" --platform "$PLATFORM" --dist-dir "$DIST_DIR")
+    if [[ -n "$SIGN_KEY" ]]; then
+        TRUST_ARGS+=(--sign-key "$SIGN_KEY")
+    fi
+    bash scripts/trust_release.sh "${TRUST_ARGS[@]}"
+    if [[ -n "$VERIFY_KEY" ]]; then
+        bash scripts/trust_release.sh verify --version "$VERSION" --platform "$PLATFORM" --dist-dir "$DIST_DIR" --verify-key "$VERIFY_KEY"
+    else
+        bash scripts/trust_release.sh verify --version "$VERSION" --platform "$PLATFORM" --dist-dir "$DIST_DIR"
+    fi
+fi
 
 printf '\npromote release: ok\n'
 printf '  Release dir -> %s\n' "$(relative_to_root "$RELEASE_DIR")"

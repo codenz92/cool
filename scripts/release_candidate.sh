@@ -272,9 +272,13 @@ Release gate: $GATE_STATUS
 - \`LICENSE\`
 - \`install.sh\`
 - \`docs/INSTALL.md\`
+- \`docs/RELEASE_TRUST.md\`
 - \`scripts/release_gate.sh\`
 - \`scripts/release_candidate.sh\`
 - \`scripts/promote_release.sh\`
+- \`scripts/trust_release.sh\`
+- \`scripts/trust_release.py\`
+- \`scripts/publish_release.sh\`
 - \`manifest.json\`
 - \`checksums.txt\`
 
@@ -393,8 +397,9 @@ cp "$BINARY_SRC" "$RC_DIR/bin/$BINARY_NAME"
 chmod 755 "$RC_DIR/bin/$BINARY_NAME"
 cp README.md CHANGELOG.md ROADMAP.md LICENSE "$RC_DIR/"
 cp install.sh "$RC_DIR/"
-cp docs/INSTALL.md "$RC_DIR/docs/"
+cp docs/INSTALL.md docs/RELEASE_TRUST.md "$RC_DIR/docs/"
 cp scripts/release_gate.sh scripts/release_candidate.sh scripts/promote_release.sh "$RC_DIR/scripts/"
+cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RC_DIR/scripts/"
 
 write_release_notes
 write_checksums

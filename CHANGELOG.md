@@ -2,7 +2,16 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 20 Complete
+## [Unreleased] - Phase 21 Complete
+
+### Phase 21 — Published Release Automation And Supply-Chain Trust
+
+- Added `scripts/trust_release.sh` / `scripts/trust_release.py` to generate and verify release trust metadata, including SPDX-style SBOMs from `Cargo.lock`, in-toto/SLSA-style provenance, `trust.json`, and `TRUST_SHA256SUMS`
+- Added optional OpenSSL detached signatures for `SHA256SUMS`, `release.json`, provenance, SBOM, and trust metadata
+- Added `scripts/publish_release.sh`, which verifies trust metadata before creating or updating GitHub Releases with the GitHub CLI
+- Added a `Published Release` GitHub Actions workflow that builds an RC, promotes it, generates trust metadata, optionally signs with `COOL_RELEASE_SIGNING_KEY_B64`, verifies the result, and uploads or publishes final assets
+- Extended `install.sh` with metadata and signature verification options: `--verify-metadata`, `--checksums`, `--checksums-signature`, and `--verify-key`
+- Added `docs/RELEASE_TRUST.md` plus README/install documentation for trust generation, signing, verification, publishing, and installer metadata verification
 
 ### Phase 20 — Release Promotion And Installer Channels
 

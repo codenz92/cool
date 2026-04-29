@@ -7,9 +7,13 @@ ARCHIVE="${COOL_ARCHIVE:-}"
 ARCHIVE_URL="${COOL_ARCHIVE_URL:-}"
 BASE_URL="${COOL_RELEASE_BASE_URL:-https://github.com/codenz92/cool-lang/releases/download}"
 VERIFY_SHA256="${COOL_ARCHIVE_SHA256:-}"
+CHECKSUMS_REF="${COOL_CHECKSUMS:-}"
+CHECKSUMS_SIGNATURE_REF="${COOL_CHECKSUMS_SIGNATURE:-}"
+VERIFY_KEY="${COOL_VERIFY_KEY:-}"
 BIN_DIR="${COOL_BIN_DIR:-}"
 DRY_RUN=0
 NO_SMOKE=0
+VERIFY_METADATA=0
 
 if [[ -n "${COOL_PREFIX:-}" ]]; then
     PREFIX="$COOL_PREFIX"
@@ -37,6 +41,10 @@ Options:
   --prefix DIR          Install payloads under DIR/lib/cool, defaults to $HOME/.local.
   --bin-dir DIR         Symlink cool into DIR, defaults to <prefix>/bin.
   --verify-sha256 HEX   Verify the archive hash before installing.
+  --verify-metadata     Verify the archive through SHA256SUMS metadata.
+  --checksums PATH/URL  SHA256SUMS metadata file for archive verification.
+  --checksums-signature PATH/URL  Detached SHA256SUMS signature.
+  --verify-key PATH     OpenSSL public key for SHA256SUMS signature verification.
   --dry-run             Validate inputs and print the planned install paths.
   --no-smoke            Skip the post-install `cool help` smoke test.
 USAGE
@@ -90,6 +98,54 @@ download_archive() {
         wget -q -O "$output" "$url"
     else
         printf 'install cool: missing required command: curl or wget\n' >&2
+        exit 1
+    fi
+}
+
+is_url() {
+    case "$1" in
+        http://*|https://*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+materialize_reference() {
+    local ref="$1"
+    local output="$2"
+    if is_url "$ref"; then
+        download_archive "$ref" "$output"
+    else
+        if [[ ! -f "$ref" ]]; then
+            printf 'install cool: metadata file not found: %s\n' "$ref" >&2
+            exit 1
+        fi
+        cp "$ref" "$output"
+    fi
+}
+
+verify_signature() {
+    local target="$1"
+    local signature="$2"
+    local key="$3"
+    require_command openssl
+    openssl dgst -sha256 -verify "$key" -signature "$signature" "$target" >/dev/null
+}
+
+verify_archive_from_checksums() {
+    local checksums="$1"
+    local archive="$2"
+    local archive_name expected actual
+    archive_name="$(basename "$archive")"
+    expected="$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; found = 1 } END { if (!found) exit 1 }' "$checksums" || true)"
+    if [[ -z "$expected" ]]; then
+        printf 'install cool: archive %s was not listed in %s\n' "$archive_name" "$checksums" >&2
+        exit 1
+    fi
+    actual="$(sha256_file "$archive")"
+    if [[ "$actual" != "$expected" ]]; then
+        printf 'install cool: SHA-256 mismatch for %s from metadata\n' "$archive_name" >&2
+        printf '  expected: %s\n' "$expected" >&2
+        printf '  actual:   %s\n' "$actual" >&2
         exit 1
     fi
 }
@@ -192,6 +248,50 @@ while [[ $# -gt 0 ]]; do
             VERIFY_SHA256="${1#--verify-sha256=}"
             shift
             ;;
+        --verify-metadata)
+            VERIFY_METADATA=1
+            shift
+            ;;
+        --checksums)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                printf 'install cool: --checksums requires a path or URL\n' >&2
+                exit 2
+            fi
+            CHECKSUMS_REF="$2"
+            VERIFY_METADATA=1
+            shift 2
+            ;;
+        --checksums=*)
+            CHECKSUMS_REF="${1#--checksums=}"
+            VERIFY_METADATA=1
+            shift
+            ;;
+        --checksums-signature)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                printf 'install cool: --checksums-signature requires a path or URL\n' >&2
+                exit 2
+            fi
+            CHECKSUMS_SIGNATURE_REF="$2"
+            shift 2
+            ;;
+        --checksums-signature=*)
+            CHECKSUMS_SIGNATURE_REF="${1#--checksums-signature=}"
+            shift
+            ;;
+        --verify-key)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                printf 'install cool: --verify-key requires a path\n' >&2
+                exit 2
+            fi
+            VERIFY_KEY="$2"
+            VERIFY_METADATA=1
+            shift 2
+            ;;
+        --verify-key=*)
+            VERIFY_KEY="${1#--verify-key=}"
+            VERIFY_METADATA=1
+            shift
+            ;;
         --dry-run)
             DRY_RUN=1
             shift
@@ -258,6 +358,27 @@ if [[ -n "$VERIFY_SHA256" ]]; then
         printf '  actual:   %s\n' "$ACTUAL_SHA256" >&2
         exit 1
     fi
+fi
+
+if [[ "$VERIFY_METADATA" -eq 1 ]]; then
+    if [[ -z "$CHECKSUMS_REF" ]]; then
+        if [[ -z "$VERSION" ]]; then
+            printf 'install cool: --version is required to infer SHA256SUMS metadata\n' >&2
+            exit 2
+        fi
+        CHECKSUMS_REF="${BASE_URL}/v${VERSION}/SHA256SUMS"
+    fi
+    CHECKSUMS_PATH="$TMP_DIR/SHA256SUMS"
+    materialize_reference "$CHECKSUMS_REF" "$CHECKSUMS_PATH"
+    if [[ -n "$VERIFY_KEY" ]]; then
+        if [[ -z "$CHECKSUMS_SIGNATURE_REF" ]]; then
+            CHECKSUMS_SIGNATURE_REF="${CHECKSUMS_REF}.sig"
+        fi
+        CHECKSUMS_SIGNATURE_PATH="$TMP_DIR/SHA256SUMS.sig"
+        materialize_reference "$CHECKSUMS_SIGNATURE_REF" "$CHECKSUMS_SIGNATURE_PATH"
+        verify_signature "$CHECKSUMS_PATH" "$CHECKSUMS_SIGNATURE_PATH" "$VERIFY_KEY"
+    fi
+    verify_archive_from_checksums "$CHECKSUMS_PATH" "$ARCHIVE"
 fi
 
 tar -xzf "$ARCHIVE" -C "$TMP_DIR"

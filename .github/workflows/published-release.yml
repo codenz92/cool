@@ -1,0 +1,133 @@
+name: Published Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version override. Defaults to Cargo.toml, or the pushed tag without the v prefix.
+        required: false
+        type: string
+      publish:
+        description: Create or update the GitHub Release.
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      draft:
+        description: Create the GitHub Release as a draft when publishing manually.
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      prerelease:
+        description: Mark the GitHub Release as a prerelease.
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install LLVM 17
+        run: |
+          brew install llvm@17
+          echo "LLVM_SYS_170_PREFIX=$(brew --prefix llvm@17)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Build, promote, and publish release assets
+        env:
+          COOL_RELEASE_SIGNING_KEY_B64: ${{ secrets.COOL_RELEASE_SIGNING_KEY_B64 }}
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+          PUBLISH_INPUT: ${{ github.event.inputs.publish }}
+          DRAFT_INPUT: ${{ github.event.inputs.draft }}
+          PRERELEASE_INPUT: ${{ github.event.inputs.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -z "$VERSION_INPUT" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION_INPUT="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -n "$VERSION_INPUT" ]]; then
+            RC_ARGS=(--require-clean --version "$VERSION_INPUT")
+            PROMOTE_ARGS=(--version "$VERSION_INPUT")
+            PUBLISH_ARGS=(--version "$VERSION_INPUT")
+          else
+            RC_ARGS=(--require-clean)
+            PROMOTE_ARGS=()
+            PUBLISH_ARGS=()
+          fi
+
+          VERIFY_KEY=""
+          if [[ -n "$COOL_RELEASE_SIGNING_KEY_B64" ]]; then
+            SIGN_KEY="$RUNNER_TEMP/cool-release-signing-key.pem"
+            VERIFY_KEY="$RUNNER_TEMP/cool-release-signing-public.pem"
+            printf '%s' "$COOL_RELEASE_SIGNING_KEY_B64" | base64 --decode > "$SIGN_KEY"
+            chmod 600 "$SIGN_KEY"
+            openssl pkey -in "$SIGN_KEY" -pubout -out "$VERIFY_KEY"
+            PROMOTE_ARGS+=(--sign-key "$SIGN_KEY" --verify-key "$VERIFY_KEY")
+            PUBLISH_ARGS+=(--verify-key "$VERIFY_KEY")
+          fi
+
+          bash scripts/release_candidate.sh "${RC_ARGS[@]}"
+          bash scripts/promote_release.sh "${PROMOTE_ARGS[@]}"
+
+          SHOULD_PUBLISH="$PUBLISH_INPUT"
+          SHOULD_DRAFT="$DRAFT_INPUT"
+          SHOULD_PRERELEASE="$PRERELEASE_INPUT"
+          if [[ "${GITHUB_EVENT_NAME:-}" == "push" ]]; then
+            SHOULD_PUBLISH="true"
+            SHOULD_DRAFT="false"
+          fi
+          if [[ -z "$SHOULD_PUBLISH" ]]; then
+            SHOULD_PUBLISH="false"
+          fi
+          if [[ -z "$SHOULD_DRAFT" ]]; then
+            SHOULD_DRAFT="true"
+          fi
+          if [[ -z "$SHOULD_PRERELEASE" ]]; then
+            SHOULD_PRERELEASE="false"
+          fi
+
+          if [[ "$SHOULD_PUBLISH" == "true" ]]; then
+            PUBLISH_ARGS+=(--publish)
+          fi
+          if [[ "$SHOULD_DRAFT" == "false" ]]; then
+            PUBLISH_ARGS+=(--no-draft)
+          else
+            PUBLISH_ARGS+=(--draft)
+          fi
+          if [[ "$SHOULD_PRERELEASE" == "true" ]]; then
+            PUBLISH_ARGS+=(--prerelease)
+          fi
+
+          bash scripts/publish_release.sh "${PUBLISH_ARGS[@]}"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-published-release-${{ runner.os }}-${{ runner.arch }}
+          path: dist/releases/**

@@ -688,6 +688,27 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 21 — Published Release Automation And Supply-Chain Trust ✅ Complete
+
+> Goal: publish verified release assets safely and make the resulting artifacts auditable through hashes, provenance, SBOMs, and optional signatures.
+
+### Trust Metadata
+
+- [x] `scripts/trust_release.sh` / `scripts/trust_release.py` generate and verify release trust metadata after promotion
+- [x] SPDX-style `sbom.spdx.json` generated from `Cargo.lock`
+- [x] In-toto/SLSA-style `provenance.intoto.json` with release subjects, git commit, workflow/run metadata, and build inputs
+- [x] `trust.json` and `TRUST_SHA256SUMS` hash chain covering promoted assets, metadata, signatures, and verification scripts
+- [x] Optional OpenSSL detached signatures for `SHA256SUMS`, `release.json`, provenance, SBOM, and trust metadata
+
+### Publishing
+
+- [x] `scripts/publish_release.sh` verifies trust metadata before creating or updating a GitHub Release with `gh`
+- [x] GitHub Actions `Published Release` workflow builds the RC, promotes it, generates trust metadata, optionally signs with `COOL_RELEASE_SIGNING_KEY_B64`, verifies the result, and uploads or publishes final assets
+- [x] Installer metadata verification through `--verify-metadata`, `--checksums`, `--checksums-signature`, and `--verify-key`
+- [x] Release trust documentation for generation, signing, verification, and publishing
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -712,3 +733,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 18 — Release Hardening | ✅ Complete |
 | 19 — Release Candidate And Distribution | ✅ Complete |
 | 20 — Release Promotion And Installer Channels | ✅ Complete |
+| 21 — Published Release Automation And Supply-Chain Trust | ✅ Complete |
