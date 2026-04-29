@@ -308,6 +308,16 @@ list_release_files_for_json() {
     )
 }
 
+archive_entries() {
+    tar -tzf "$1" | sed 's#\\#/#g; s#^\./##' | tr -d '\r'
+}
+
+archive_contains() {
+    local archive_path="$1"
+    local expected_path="$2"
+    archive_entries "$archive_path" | grep -Fxq "$expected_path"
+}
+
 write_sha256sums() {
     : > "$RELEASE_SUMS_PATH"
     while IFS= read -r rel; do
@@ -493,6 +503,7 @@ require_command git
 require_command python3
 require_command sed
 require_command tar
+require_command tr
 require_command uname
 require_checksum_command
 
@@ -589,11 +600,11 @@ fi
 )
 
 tar -tzf "$RC_ARCHIVE_PATH" >/dev/null
-if ! tar -tzf "$RC_ARCHIVE_PATH" | grep -q "^$PAYLOAD_ROOT/bin/$BINARY_NAME$"; then
+if ! archive_contains "$RC_ARCHIVE_PATH" "$PAYLOAD_ROOT/bin/$BINARY_NAME"; then
     printf 'promote release: archive does not contain expected binary path: %s/bin/%s\n' "$PAYLOAD_ROOT" "$BINARY_NAME" >&2
     exit 1
 fi
-if ! tar -tzf "$RC_ARCHIVE_PATH" | grep -q "^$PAYLOAD_ROOT/manifest.json$"; then
+if ! archive_contains "$RC_ARCHIVE_PATH" "$PAYLOAD_ROOT/manifest.json"; then
     printf 'promote release: archive does not contain expected manifest path: %s/manifest.json\n' "$PAYLOAD_ROOT" >&2
     exit 1
 fi
