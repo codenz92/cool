@@ -2673,10 +2673,10 @@ NOTES:
     (Queue/Stack), csv(rows/dicts/write), datetime(now/format/parse/parts/add_seconds/diff_seconds), hashlib(md5/sha1/sha256/digest), toml(loads/dumps), yaml(loads/dumps for a config-oriented subset), sqlite(execute/query/scalar), http(get/post/head/getjson; requires curl), subprocess(run/call/check_output), argparse(parse/help), logging(basic_config/log/debug/info/warning/error),
     test(equal/not_equal/truthy/falsey/is_nil/not_nil/fail/raises), open()/file methods, with/context managers on
     normal exit, return/break/continue, caught exceptions, and unhandled native raises,
+    closures/lambdas,
     inline asm, and raw memory (malloc/free/read_i8/u8/i16/u16/i32/u32/i64/
     write_i8/u8/i16/u16/i32/u32/i64 plus read/write_byte, read/write_f64, read/write_str,
     and volatile *_volatile MMIO variants for byte/i8/u8/i16/u16/i32/u32/i64/f64).
-    Closures/lambdas still require the interpreter or bytecode VM.
     FFI works in the interpreter and native builds, but not in the bytecode VM.
 "
     );

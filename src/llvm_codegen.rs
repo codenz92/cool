@@ -113,6 +113,7 @@ const RUNTIME_C: &str = r#"
 #define TAG_FFI_FUNC 14
 #define TAG_SOCKET  15
 #define TAG_STRUCT  16
+#define TAG_CAPTURE_CELL 17
 
 #define SFIELD_I8   0
 #define SFIELD_U8   1
@@ -149,6 +150,11 @@ typedef struct {
     int32_t tag;
     int64_t payload;
 } CoolVal;
+
+typedef struct {
+    int32_t tag;
+    CoolVal value;
+} CoolCaptureCell;
 
 /* Forward declaration for cv_nil (needed by hashmap functions) */
 CoolVal cv_nil(void);
@@ -438,6 +444,13 @@ CoolVal cool_sorted(CoolVal);
 CoolVal cool_sum(CoolVal);
 int64_t cool_closure_get_fn_ptr(CoolVal);
 int32_t cool_is_closure(CoolVal);
+CoolVal cool_capture_cell_new(CoolVal);
+CoolVal cool_capture_cell_get(CoolVal);
+CoolVal cool_capture_cell_set(CoolVal, CoolVal);
+CoolVal cool_call_closure(CoolVal, int32_t, ...);
+CoolVal cool_closure_set_capture(CoolVal, int64_t, CoolVal);
+CoolVal cool_get_closure_capture_cell(int32_t);
+static CoolVal cool_call_closure_argv(CoolVal, int32_t, CoolVal*);
 void cool_enter_try(void*);
 void cool_exit_try(void);
 CoolVal cool_get_exception(void);
@@ -1965,9 +1978,8 @@ static CoolVal cool_call_callable1(CoolVal callable, CoolVal arg) {
         fprintf(stderr, "TypeError: callable argument must be a function\n");
         exit(1);
     }
-    int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
     CoolVal argv[1] = {arg};
-    return call_cool_fn_ptr(fn_ptr, 1, argv);
+    return cool_call_closure_argv(callable, 1, argv);
 }
 
 static CoolVal cool_call_callable2(CoolVal callable, CoolVal arg1, CoolVal arg2) {
@@ -1975,9 +1987,8 @@ static CoolVal cool_call_callable2(CoolVal callable, CoolVal arg1, CoolVal arg2)
         fprintf(stderr, "TypeError: callable argument must be a function\n");
         exit(1);
     }
-    int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
     CoolVal argv[2] = {arg1, arg2};
-    return call_cool_fn_ptr(fn_ptr, 2, argv);
+    return cool_call_closure_argv(callable, 2, argv);
 }
 
 static void cool_test_raisef(const char* fmt, ...) {
@@ -2019,8 +2030,7 @@ static int cool_test_copy_args(CoolVal value, CoolVal* out, int32_t* out_count) 
 
 static CoolVal cool_test_call_callable(CoolVal callable, int32_t argc, CoolVal* argv) {
     if (cool_is_closure(callable)) {
-        int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
-        return call_cool_fn_ptr(fn_ptr, argc, argv);
+        return cool_call_closure_argv(callable, argc, argv);
     }
     if (callable.tag == TAG_FFI_FUNC) {
         switch (argc) {
@@ -3155,8 +3165,7 @@ CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ..
     if (obj.tag == TAG_DICT) {
         CoolVal callable = cool_dict_get_opt(obj, cv_str(builtin_name));
         if (callable.tag == TAG_CLOSURE) {
-            int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
-            return call_cool_fn_ptr(fn_ptr, nargs, nargs > 0 ? &g_method_args[1] : NULL);
+            return cool_call_closure_argv(callable, nargs, nargs > 0 ? &g_method_args[1] : NULL);
         }
         if (callable.tag == TAG_FFI_FUNC) {
             switch (nargs) {
@@ -8827,15 +8836,31 @@ typedef struct {
 
 /* Create a closure with n captured variables */
 CoolVal cool_closure_new(int64_t fn_ptr, int64_t num_captures, CoolVal* captures) {
+    if (num_captures < 0) num_captures = 0;
     CoolClosure* clo = (CoolClosure*)malloc(sizeof(CoolClosure) + num_captures * sizeof(CoolVal));
+    if (!clo) {
+        fprintf(stderr, "OutOfMemory: closure allocation failed\n");
+        exit(1);
+    }
     clo->tag = TAG_CLOSURE;
     clo->fn_ptr = fn_ptr;
     clo->num_captures = num_captures;
     for (int64_t i = 0; i < num_captures; i++) {
-        clo->captures[i] = captures[i];
+        clo->captures[i] = captures ? captures[i] : cv_nil();
     }
     CoolVal v; v.tag = TAG_CLOSURE; v.payload = (int64_t)(intptr_t)clo;
     return v;
+}
+
+CoolVal cool_closure_set_capture(CoolVal clo, int64_t idx, CoolVal val) {
+    if (clo.tag != TAG_CLOSURE) { fprintf(stderr, "TypeError: not a closure\n"); exit(1); }
+    CoolClosure* c = (CoolClosure*)(intptr_t)clo.payload;
+    if (idx < 0 || idx >= c->num_captures) {
+        fprintf(stderr, "IndexError: closure capture index out of range\n");
+        exit(1);
+    }
+    c->captures[idx] = val;
+    return clo;
 }
 
 /* Get the function pointer from a closure */
@@ -8850,7 +8875,7 @@ CoolVal cool_closure_get_capture(CoolVal clo, int64_t idx) {
     if (clo.tag != TAG_CLOSURE) { fprintf(stderr, "TypeError: not a closure\n"); exit(1); }
     CoolClosure* c = (CoolClosure*)(intptr_t)clo.payload;
     if (idx < 0 || idx >= c->num_captures) { fprintf(stderr, "IndexError: closure capture index out of range\n"); exit(1); }
-    return c->captures[idx];
+    return cool_capture_cell_get(c->captures[idx]);
 }
 
 /* Get number of captures */
@@ -8865,11 +8890,94 @@ int32_t cool_is_closure(CoolVal v) {
     return v.tag == TAG_CLOSURE ? 1 : 0;
 }
 
-/* Global for passing closure captures */
+CoolVal cool_capture_cell_new(CoolVal value) {
+    CoolCaptureCell* cell = (CoolCaptureCell*)malloc(sizeof(CoolCaptureCell));
+    if (!cell) {
+        fprintf(stderr, "OutOfMemory: closure capture cell allocation failed\n");
+        exit(1);
+    }
+    cell->tag = TAG_CAPTURE_CELL;
+    cell->value = value;
+    CoolVal out; out.tag = TAG_CAPTURE_CELL; out.payload = (int64_t)(intptr_t)cell;
+    return out;
+}
+
+CoolVal cool_capture_cell_get(CoolVal cell) {
+    if (cell.tag != TAG_CAPTURE_CELL) return cell;
+    CoolCaptureCell* c = (CoolCaptureCell*)(intptr_t)cell.payload;
+    return c ? c->value : cv_nil();
+}
+
+CoolVal cool_capture_cell_set(CoolVal cell, CoolVal value) {
+    if (cell.tag != TAG_CAPTURE_CELL) {
+        fprintf(stderr, "TypeError: closure capture is not a cell\n");
+        exit(1);
+    }
+    CoolCaptureCell* c = (CoolCaptureCell*)(intptr_t)cell.payload;
+    if (!c) {
+        fprintf(stderr, "RuntimeError: null closure capture cell\n");
+        exit(1);
+    }
+    c->value = value;
+    return value;
+}
+
+/* Stack of active closures, so nested closure calls read the correct capture frame. */
+static CoolClosure* g_closure_call_stack[64];
+static int g_closure_capture_depth = 0;
+
+static void cool_push_closure_captures(CoolVal clo) {
+    if (clo.tag != TAG_CLOSURE) { fprintf(stderr, "TypeError: not a closure\n"); exit(1); }
+    if (g_closure_capture_depth >= 64) {
+        fprintf(stderr, "RuntimeError: closure call stack overflow\n");
+        exit(1);
+    }
+    CoolClosure* c = (CoolClosure*)(intptr_t)clo.payload;
+    g_closure_call_stack[g_closure_capture_depth++] = c;
+}
+
+static void cool_pop_closure_captures(void) {
+    if (g_closure_capture_depth > 0) {
+        g_closure_capture_depth--;
+        g_closure_call_stack[g_closure_capture_depth] = NULL;
+    }
+}
+
+static CoolVal cool_call_closure_argv(CoolVal callable, int32_t argc, CoolVal* argv) {
+    if (!cool_is_closure(callable)) {
+        fprintf(stderr, "TypeError: callable argument must be a function\n");
+        exit(1);
+    }
+    int64_t fn_ptr = cool_closure_get_fn_ptr(callable);
+    cool_push_closure_captures(callable);
+    CoolVal result = call_cool_fn_ptr(fn_ptr, argc, argv);
+    cool_pop_closure_captures();
+    return result;
+}
+
+CoolVal cool_call_closure(CoolVal callable, int32_t nargs, ...) {
+    va_list ap;
+    va_start(ap, nargs);
+    CoolVal argv[8];
+    for (int32_t i = 0; i < nargs && i < 8; i++) {
+        argv[i] = va_arg(ap, CoolVal);
+    }
+    va_end(ap);
+    return cool_call_closure_argv(callable, nargs, argv);
+}
+
+/* Legacy single-frame capture setters retained for compatibility with older generated objects. */
 static CoolVal g_closure_captures[64];
 static int g_num_closure_captures = 0;
 
 void cool_set_closure_capture(int32_t idx, CoolVal val) {
+    if (g_closure_capture_depth > 0) {
+        CoolClosure* c = g_closure_call_stack[g_closure_capture_depth - 1];
+        if (c && idx >= 0 && idx < c->num_captures) {
+            cool_capture_cell_set(c->captures[idx], val);
+            return;
+        }
+    }
     if (idx >= 0 && idx < 64) {
         g_closure_captures[idx] = val;
         if (idx >= g_num_closure_captures) g_num_closure_captures = idx + 1;
@@ -8877,10 +8985,27 @@ void cool_set_closure_capture(int32_t idx, CoolVal val) {
 }
 
 CoolVal cool_get_closure_capture(int32_t idx) {
+    if (g_closure_capture_depth > 0) {
+        CoolClosure* c = g_closure_call_stack[g_closure_capture_depth - 1];
+        if (c && idx >= 0 && idx < c->num_captures) {
+            return cool_capture_cell_get(c->captures[idx]);
+        }
+        return cv_nil();
+    }
     if (idx >= 0 && idx < g_num_closure_captures) {
         return g_closure_captures[idx];
     }
     return cv_nil();
+}
+
+CoolVal cool_get_closure_capture_cell(int32_t idx) {
+    if (g_closure_capture_depth > 0) {
+        CoolClosure* c = g_closure_call_stack[g_closure_capture_depth - 1];
+        if (c && idx >= 0 && idx < c->num_captures) {
+            return c->captures[idx];
+        }
+    }
+    return cool_capture_cell_new(cool_get_closure_capture(idx));
 }
 
 int32_t cool_get_num_closure_captures(void) {
@@ -8899,6 +9024,7 @@ typedef struct {
     int active;
     int with_depth;
     int trace_depth;
+    int closure_depth;
 } ExceptionFrame;
 
 typedef struct {
@@ -9108,6 +9234,7 @@ void cool_enter_try(void* buf) {
         g_exception_frames[idx].active = 1;
         g_exception_frames[idx].with_depth = g_with_manager_count;
         g_exception_frames[idx].trace_depth = g_trace_frame_count;
+        g_exception_frames[idx].closure_depth = g_closure_capture_depth;
         g_exception_frame_count++;
         return;
     }
@@ -9132,6 +9259,7 @@ void cool_raise(CoolVal exc) {
             while (g_trace_frame_count > g_exception_frames[i].trace_depth) {
                 cool_trace_pop();
             }
+            g_closure_capture_depth = g_exception_frames[i].closure_depth;
             g_exception_frames[i].active = 0;
             longjmp(*(jmp_buf*)g_exception_frames[i].buf, 1);
         }
@@ -9551,6 +9679,12 @@ struct RuntimeFns<'ctx> {
     cool_closure_get_capture: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_is_closure: FunctionValue<'ctx>,
+    cool_capture_cell_new: FunctionValue<'ctx>,
+    cool_capture_cell_get: FunctionValue<'ctx>,
+    cool_capture_cell_set: FunctionValue<'ctx>,
+    cool_closure_set_capture: FunctionValue<'ctx>,
+    cool_get_closure_capture_cell: FunctionValue<'ctx>,
+    cool_call_closure: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_set_closure_capture: FunctionValue<'ctx>,
     #[allow(dead_code)]
@@ -9642,6 +9776,8 @@ struct Compiler<'ctx> {
     rt: RuntimeFns<'ctx>,
     /// Current function's local variables (name → alloca pointer).
     locals: HashMap<String, PointerValue<'ctx>>,
+    /// Local variables that have been boxed into shared closure capture cells.
+    cell_vars: HashMap<String, PointerValue<'ctx>>,
     /// Top-level user-defined functions (name → FunctionValue).
     functions: HashMap<String, FunctionValue<'ctx>>,
     /// Top-level user-defined function signatures.
@@ -9662,8 +9798,6 @@ struct Compiler<'ctx> {
     /// Captured variables for closures (var name → capture index).
     #[allow(dead_code)]
     captured_vars: HashMap<String, usize>,
-    /// All nested function definitions (for closure support).
-    nested_functions: Vec<(String, Vec<crate::ast::Param>, Vec<crate::ast::Stmt>)>,
     /// Class currently being compiled, if any.
     current_class: Option<String>,
     /// Names of imported built-in modules visible to the native backend.
@@ -9896,6 +10030,7 @@ impl<'ctx> Compiler<'ctx> {
             cv_type,
             rt,
             locals: HashMap::new(),
+            cell_vars: HashMap::new(),
             functions: HashMap::new(),
             function_params: HashMap::new(),
             function_return_types: HashMap::new(),
@@ -9906,7 +10041,6 @@ impl<'ctx> Compiler<'ctx> {
             current_fn: None,
             current_fn_return_type: None,
             captured_vars: HashMap::new(),
-            nested_functions: Vec::new(),
             current_class: None,
             imported_modules: HashSet::new(),
             imported_user_modules: HashMap::new(),
@@ -10093,6 +10227,12 @@ impl<'ctx> Compiler<'ctx> {
             cool_closure_get_fn_ptr: decl!("cool_closure_get_fn_ptr", i64t.fn_type(&[cv], false)),
             cool_closure_get_capture: decl!("cool_closure_get_capture", cv_type.fn_type(&[cv, i64m], false)),
             cool_is_closure: decl!("cool_is_closure", i32t.fn_type(&[cv], false)),
+            cool_capture_cell_new: decl!("cool_capture_cell_new", cv_type.fn_type(&[cv], false)),
+            cool_capture_cell_get: decl!("cool_capture_cell_get", cv_type.fn_type(&[cv], false)),
+            cool_capture_cell_set: decl!("cool_capture_cell_set", cv_type.fn_type(&[cv, cv], false)),
+            cool_closure_set_capture: decl!("cool_closure_set_capture", cv_type.fn_type(&[cv, i64m, cv], false)),
+            cool_get_closure_capture_cell: decl!("cool_get_closure_capture_cell", cv_type.fn_type(&[i32m], false)),
+            cool_call_closure: decl!("cool_call_closure", cv_type.fn_type(&[cv, i32m], true)),
             cool_set_closure_capture: decl!("cool_set_closure_capture", voidt.fn_type(&[i32m, cv], false)),
             cool_get_closure_capture: decl!("cool_get_closure_capture", cv_type.fn_type(&[i32m], false)),
             // exception handling
@@ -11114,6 +11254,196 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
+    fn closure_capture_names(&self, params: &[crate::ast::Param], local_name: Option<&str>) -> Vec<String> {
+        let mut excluded: HashSet<String> = params.iter().map(|param| param.name.clone()).collect();
+        if let Some(name) = local_name {
+            excluded.insert(name.to_string());
+        }
+        let mut names: Vec<String> = self
+            .locals
+            .keys()
+            .filter(|name| !excluded.contains(*name))
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn compile_closure_function(
+        &mut self,
+        fn_name: &str,
+        params: &[crate::ast::Param],
+        body: &[Stmt],
+        capture_names: &[String],
+    ) -> Result<FunctionValue<'ctx>, String> {
+        if params.iter().any(|p| p.is_vararg || p.is_kwarg) {
+            return Err("closure *args / **kwargs are not supported in the LLVM backend".into());
+        }
+        if params.iter().any(|p| p.default.is_some()) {
+            return Err("closure default arguments are not supported in the LLVM backend".into());
+        }
+
+        let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+            params.iter().map(|_| self.cv_type.into()).collect();
+        let closure_fn = self
+            .module
+            .add_function(fn_name, self.cv_type.fn_type(&param_types, false), None);
+        closure_fn.set_linkage(inkwell::module::Linkage::Private);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
+        let saved_functions = self.functions.clone();
+        let saved_function_params = self.function_params.clone();
+        let saved_function_return_types = self.function_return_types.clone();
+        let saved_classes = self.classes.clone();
+        let saved_fn = self.current_fn.replace(closure_fn);
+        let saved_ret_type = self.current_fn_return_type;
+        let saved_captured_vars = std::mem::take(&mut self.captured_vars);
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_debug_scope = self.current_debug_scope();
+        let saved_line = self.current_line;
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
+        self.current_fn_return_type = None;
+        self.imported_modules = saved_imports.clone();
+        self.imported_user_modules = saved_user_modules.clone();
+
+        let entry = self.context.append_basic_block(closure_fn, "entry");
+        self.builder.position_at_end(entry);
+        self.restore_debug_scope(None, saved_line);
+        self.emit_trace_push(fn_name);
+
+        let i32t = self.context.i32_type();
+        for (i, capture_name) in capture_names.iter().enumerate() {
+            let idx = i32t.const_int(i as u64, false);
+            let cell = self
+                .builder
+                .build_call(self.rt.cool_get_closure_capture_cell, &[idx.into()], "capture_cell")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value();
+            let value = self
+                .builder
+                .build_call(self.rt.cool_capture_cell_get, &[cell.into()], "capture")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value();
+            let ptr = self.build_entry_alloca(capture_name);
+            self.builder.build_store(ptr, value).unwrap();
+            self.locals.insert(capture_name.clone(), ptr);
+            let cell_ptr = self.build_entry_alloca(&format!("{capture_name}_cell"));
+            self.builder.build_store(cell_ptr, cell).unwrap();
+            self.cell_vars.insert(capture_name.clone(), cell_ptr);
+            self.captured_vars.insert(capture_name.clone(), i);
+        }
+
+        for (i, param) in params.iter().enumerate() {
+            let value = closure_fn
+                .get_nth_param(i as u32)
+                .ok_or_else(|| format!("closure '{fn_name}' missing parameter {i}"))?
+                .into_struct_value();
+            let ptr = self.build_entry_alloca(&param.name);
+            self.builder.build_store(ptr, value).unwrap();
+            self.locals.insert(param.name.clone(), ptr);
+        }
+
+        self.compile_stmts(body)?;
+        if !self.current_block_terminated() {
+            self.emit_trace_pop();
+            let nil = self.build_nil();
+            self.builder.build_return(Some(&nil)).unwrap();
+        }
+
+        self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
+        self.classes = saved_classes;
+        self.current_fn = saved_fn;
+        self.current_fn_return_type = saved_ret_type;
+        self.captured_vars = saved_captured_vars;
+        self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
+        self.var_struct_types = saved_var_struct_types;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.restore_debug_scope(saved_debug_scope, saved_line);
+
+        Ok(closure_fn)
+    }
+
+    fn build_closure_value(
+        &mut self,
+        fn_val: FunctionValue<'ctx>,
+        capture_names: &[String],
+        name: &str,
+    ) -> Result<StructValue<'ctx>, String> {
+        let fn_ptr = fn_val.as_global_value().as_pointer_value();
+        let fn_ptr_int = self
+            .builder
+            .build_ptr_to_int(fn_ptr, self.context.i64_type(), &format!("{name}_fn_ptr"))
+            .unwrap();
+        let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
+        let capture_count = self.context.i64_type().const_int(capture_names.len() as u64, false);
+        let mut closure = self
+            .builder
+            .build_call(
+                self.rt.cool_closure_new,
+                &[fn_ptr_int.into(), capture_count.into(), null_ptr.into()],
+                &format!("{name}_closure"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value();
+
+        for (i, capture_name) in capture_names.iter().enumerate() {
+            let cell = self.ensure_capture_cell_for_name(capture_name)?;
+            let idx = self.context.i64_type().const_int(i as u64, false);
+            closure = self
+                .builder
+                .build_call(
+                    self.rt.cool_closure_set_capture,
+                    &[closure.into(), idx.into(), cell.into()],
+                    &format!("{name}_set_capture"),
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value();
+        }
+
+        Ok(closure)
+    }
+
+    fn compile_nested_fndef(&mut self, name: &str, params: &[crate::ast::Param], body: &[Stmt]) -> Result<(), String> {
+        let capture_names = self.closure_capture_names(params, Some(name));
+        let fn_name = self.mangle_global_name(&format!("__nested_{}_{}", name, self.str_counter));
+        self.str_counter += 1;
+        let fn_val = self.compile_closure_function(&fn_name, params, body, &capture_names)?;
+        let closure = self.build_closure_value(fn_val, &capture_names, name)?;
+        self.store_variable_value(name, closure)?;
+        Ok(())
+    }
+
     fn resolve_class_attribute_constructor(
         &self,
         attributes: &[(String, Expr)],
@@ -11210,6 +11540,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
         let saved_function_return_types = self.function_return_types.clone();
@@ -11247,6 +11578,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_return(Some(&result)).unwrap();
 
         self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
         self.function_return_types = saved_function_return_types;
@@ -11296,14 +11628,7 @@ impl<'ctx> Compiler<'ctx> {
             .left()
             .unwrap()
             .into_struct_value();
-        let ptr = if let Some(&p) = self.locals.get(name) {
-            p
-        } else {
-            let p = self.build_entry_alloca(name);
-            self.locals.insert(name.to_string(), p);
-            p
-        };
-        self.builder.build_store(ptr, closure).unwrap();
+        self.store_variable_value(name, closure)?;
         Ok(())
     }
 
@@ -11679,6 +12004,95 @@ impl<'ctx> Compiler<'ctx> {
         builder.build_alloca(self.cv_type, name).unwrap()
     }
 
+    fn capture_cell_new(&mut self, value: StructValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        self.builder
+            .build_call(self.rt.cool_capture_cell_new, &[value.into()], name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
+    fn capture_cell_get(&mut self, cell: StructValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        self.builder
+            .build_call(self.rt.cool_capture_cell_get, &[cell.into()], name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
+    fn capture_cell_set(&mut self, cell: StructValue<'ctx>, value: StructValue<'ctx>, name: &str) -> StructValue<'ctx> {
+        self.builder
+            .build_call(self.rt.cool_capture_cell_set, &[cell.into(), value.into()], name)
+            .unwrap()
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_struct_value()
+    }
+
+    fn load_variable_value(&mut self, name: &str, ir_name: &str) -> Result<Option<StructValue<'ctx>>, String> {
+        if let Some(cell_ptr) = self.cell_vars.get(name).copied() {
+            let cell = self
+                .builder
+                .build_load(self.cv_type, cell_ptr, &format!("{ir_name}_cell"))
+                .unwrap()
+                .into_struct_value();
+            return Ok(Some(self.capture_cell_get(cell, ir_name)));
+        }
+        if let Some(ptr) = self.locals.get(name).copied() {
+            return Ok(Some(
+                self.builder
+                    .build_load(self.cv_type, ptr, ir_name)
+                    .unwrap()
+                    .into_struct_value(),
+            ));
+        }
+        Ok(None)
+    }
+
+    fn store_variable_value(&mut self, name: &str, value: StructValue<'ctx>) -> Result<PointerValue<'ctx>, String> {
+        let ptr = if let Some(&p) = self.locals.get(name) {
+            p
+        } else {
+            let p = self.build_entry_alloca(name);
+            self.locals.insert(name.to_string(), p);
+            p
+        };
+        if let Some(cell_ptr) = self.cell_vars.get(name).copied() {
+            let cell = self
+                .builder
+                .build_load(self.cv_type, cell_ptr, &format!("{name}_cell_store"))
+                .unwrap()
+                .into_struct_value();
+            self.capture_cell_set(cell, value, &format!("{name}_cell_set"));
+        }
+        self.builder.build_store(ptr, value).unwrap();
+        Ok(ptr)
+    }
+
+    fn ensure_capture_cell_for_name(&mut self, name: &str) -> Result<StructValue<'ctx>, String> {
+        if let Some(cell_ptr) = self.cell_vars.get(name).copied() {
+            return Ok(self
+                .builder
+                .build_load(self.cv_type, cell_ptr, &format!("{name}_cell_load"))
+                .unwrap()
+                .into_struct_value());
+        }
+        let value = self
+            .load_variable_value(name, &format!("{name}_capture_value"))?
+            .ok_or_else(|| format!("closure capture '{name}' is not available"))?;
+        let cell = self.capture_cell_new(value, &format!("{name}_capture_cell"));
+        let cell_name = format!("{name}_cell");
+        let cell_ptr = self.build_entry_alloca(&cell_name);
+        self.builder.build_store(cell_ptr, cell).unwrap();
+        self.cell_vars.insert(name.to_string(), cell_ptr);
+        Ok(cell)
+    }
+
     fn build_entry_jmp_buf_alloca(&self, name: &str) -> PointerValue<'ctx> {
         let fn_val = self.current_fn.expect("jmp_buf alloca requires active function");
         let entry = fn_val
@@ -12021,14 +12435,7 @@ impl<'ctx> Compiler<'ctx> {
                 };
 
                 let val = self.compile_expr(value)?;
-                let ptr = if let Some(&p) = self.locals.get(name) {
-                    p
-                } else {
-                    let p = self.build_entry_alloca(name);
-                    self.locals.insert(name.clone(), p);
-                    p
-                };
-                self.builder.build_store(ptr, val).unwrap();
+                self.store_variable_value(name, val)?;
 
                 if let Some(sname) = struct_type_name {
                     self.var_struct_types.insert(name.clone(), sname);
@@ -12039,19 +12446,12 @@ impl<'ctx> Compiler<'ctx> {
 
             // ── augmented assignment  (x += expr, etc.) ───────────────────────
             Stmt::AugAssign { name, op, value } => {
-                let ptr = self
-                    .locals
-                    .get(name)
-                    .copied()
-                    .ok_or_else(|| format!("undefined variable '{name}'"))?;
                 let cur = self
-                    .builder
-                    .build_load(self.cv_type, ptr, "aug_load")
-                    .unwrap()
-                    .into_struct_value();
+                    .load_variable_value(name, "aug_load")?
+                    .ok_or_else(|| format!("undefined variable '{name}'"))?;
                 let rhs = self.compile_expr(value)?;
                 let result = self.apply_binop(op, cur, rhs)?;
-                self.builder.build_store(ptr, result).unwrap();
+                self.store_variable_value(name, result)?;
             }
 
             // ── attribute assignment: obj.attr = value ────────────────────────
@@ -12062,12 +12462,9 @@ impl<'ctx> Compiler<'ctx> {
                         if let Some(sinfo) = self.structs.get(&struct_type_name).cloned() {
                             if let Some(field_idx) = sinfo.field_names.iter().position(|n| n == name) {
                                 let val = self.compile_expr(value)?;
-                                let ptr = self.locals[var_name];
                                 let cv_val = self
-                                    .builder
-                                    .build_load(self.cv_type, ptr, "sv_load")
-                                    .unwrap()
-                                    .into_struct_value();
+                                    .load_variable_value(var_name, "sv_load")?
+                                    .ok_or_else(|| format!("undefined variable '{var_name}'"))?;
                                 let payload = self
                                     .builder
                                     .build_extract_value(cv_val, 1, "sv_payload")
@@ -12264,7 +12661,16 @@ impl<'ctx> Compiler<'ctx> {
                         fn_val.set_section(Some(section_name));
                     }
                 }
-                self.compile_fndef(name, params, return_type.as_deref(), body, entry.as_deref())?;
+                if self.allow_toplevel_defs {
+                    self.compile_fndef(name, params, return_type.as_deref(), body, entry.as_deref())?;
+                } else {
+                    if return_type.is_some() || entry.is_some() || section.is_some() {
+                        return Err(format!(
+                            "nested function '{name}' cannot use native return/entry/section metadata in the LLVM backend"
+                        ));
+                    }
+                    self.compile_nested_fndef(name, params, body)?;
+                }
             }
 
             Stmt::ExternFn {
@@ -12342,14 +12748,7 @@ impl<'ctx> Compiler<'ctx> {
                         .unwrap()
                         .into_struct_value();
                     let elem = self.call_binop_fn(self.rt.cool_index, seq_cur, idx_val, "unpack_elem");
-                    let ptr = if let Some(&p) = self.locals.get(name) {
-                        p
-                    } else {
-                        let p = self.build_entry_alloca(name);
-                        self.locals.insert(name.clone(), p);
-                        p
-                    };
-                    self.builder.build_store(ptr, elem).unwrap();
+                    self.store_variable_value(name, elem)?;
                 }
             }
 
@@ -12534,7 +12933,7 @@ impl<'ctx> Compiler<'ctx> {
             .unwrap()
             .into_struct_value();
         let elem = self.call_binop_fn(self.rt.cool_index, iter_val.clone(), body_idx, "get");
-        self.builder.build_store(var_ptr, elem).unwrap();
+        self.store_variable_value(var, elem)?;
         self.compile_stmts(body)?;
         if !self.current_block_terminated() {
             self.builder.build_unconditional_branch(step_bb).unwrap();
@@ -12601,6 +13000,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
         let saved_function_return_types = self.function_return_types.clone();
@@ -12644,6 +13044,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
         self.function_return_types = saved_function_return_types;
@@ -12687,6 +13088,7 @@ impl<'ctx> Compiler<'ctx> {
         // Save caller state
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
         let saved_function_return_types = self.function_return_types.clone();
@@ -12769,6 +13171,7 @@ impl<'ctx> Compiler<'ctx> {
 
         // Restore caller state
         self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
         self.function_return_types = saved_function_return_types;
@@ -12880,6 +13283,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
         let saved_functions = self.functions.clone();
         let saved_function_params = self.function_params.clone();
         let saved_function_return_types = self.function_return_types.clone();
@@ -12928,6 +13332,7 @@ impl<'ctx> Compiler<'ctx> {
         self.builder.build_return(Some(&result)).unwrap();
 
         self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
         self.function_return_types = saved_function_return_types;
@@ -13065,6 +13470,7 @@ impl<'ctx> Compiler<'ctx> {
                     // Save state
                     let saved_bb = self.builder.get_insert_block();
                     let saved_locals = std::mem::take(&mut self.locals);
+                    let saved_cell_vars = std::mem::take(&mut self.cell_vars);
                     let saved_functions = self.functions.clone();
                     let saved_function_params = self.function_params.clone();
                     let saved_function_return_types = self.function_return_types.clone();
@@ -13121,6 +13527,7 @@ impl<'ctx> Compiler<'ctx> {
 
                     // Restore state
                     self.locals = saved_locals;
+                    self.cell_vars = saved_cell_vars;
                     self.functions = saved_functions;
                     self.function_params = saved_function_params;
                     self.function_return_types = saved_function_return_types;
@@ -13149,6 +13556,7 @@ impl<'ctx> Compiler<'ctx> {
         // Build constructor body
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
         let saved_fn = self.current_fn.replace(constructor);
         let saved_loops = std::mem::take(&mut self.loop_stack);
         let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
@@ -13341,6 +13749,7 @@ impl<'ctx> Compiler<'ctx> {
 
         // Restore state
         self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
         self.current_fn = saved_fn;
         self.loop_stack = saved_loops;
         self.cleanup_stack = saved_cleanups;
@@ -13400,14 +13809,7 @@ impl<'ctx> Compiler<'ctx> {
             .left()
             .unwrap()
             .into_struct_value();
-        let class_ptr = if let Some(&p) = self.locals.get(name) {
-            p
-        } else {
-            let p = self.build_entry_alloca(name);
-            self.locals.insert(name.to_string(), p);
-            p
-        };
-        self.builder.build_store(class_ptr, class_ctor).unwrap();
+        self.store_variable_value(name, class_ctor)?;
 
         // Store class info for later instantiation
         Ok(())
@@ -13923,14 +14325,7 @@ impl<'ctx> Compiler<'ctx> {
             .build_call(self.rt.cool_push_with, &[manager_val.into()], "with_push")
             .unwrap();
         if let Some(name) = as_name {
-            let ptr = if let Some(&p) = self.locals.get(name) {
-                p
-            } else {
-                let p = self.build_entry_alloca(name);
-                self.locals.insert(name.to_string(), p);
-                p
-            };
-            self.builder.build_store(ptr, entered).unwrap();
+            self.store_variable_value(name, entered)?;
         }
 
         self.cleanup_stack.push(CleanupEntry::With { manager_ptr });
@@ -14092,19 +14487,12 @@ impl<'ctx> Compiler<'ctx> {
 
             self.builder.position_at_end(handler_entry_bb);
             if let Some(as_name) = &handler.as_name {
-                let ptr = if let Some(&p) = self.locals.get(as_name) {
-                    p
-                } else {
-                    let p = self.build_entry_alloca(as_name);
-                    self.locals.insert(as_name.clone(), p);
-                    p
-                };
                 let exc_cur = self
                     .builder
                     .build_load(self.cv_type, exc_ptr, "exc_for_bind")
                     .unwrap()
                     .into_struct_value();
-                self.builder.build_store(ptr, exc_cur).unwrap();
+                self.store_variable_value(as_name, exc_cur)?;
             }
 
             self.compile_stmts(&handler.body)?;
@@ -14267,6 +14655,7 @@ impl<'ctx> Compiler<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
         let saved_functions = std::mem::take(&mut self.functions);
         let saved_function_params = std::mem::take(&mut self.function_params);
         let saved_function_return_types = std::mem::take(&mut self.function_return_types);
@@ -14324,14 +14713,9 @@ impl<'ctx> Compiler<'ctx> {
                     .unwrap()
                     .into_struct_value();
                 for export in &exports {
-                    let Some(ptr) = self.locals.get(export).copied() else {
+                    let Some(value) = self.load_variable_value(export, export)? else {
                         continue;
                     };
-                    let value = self
-                        .builder
-                        .build_load(self.cv_type, ptr, export)
-                        .unwrap()
-                        .into_struct_value();
                     let name_ptr = self
                         .builder
                         .build_global_string_ptr(export, &format!("{}_export_{}", init_name, export))
@@ -14359,6 +14743,7 @@ impl<'ctx> Compiler<'ctx> {
         })();
 
         self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
         self.functions = saved_functions;
         self.function_params = saved_function_params;
         self.function_return_types = saved_function_return_types;
@@ -14417,14 +14802,7 @@ impl<'ctx> Compiler<'ctx> {
                 .left()
                 .unwrap()
                 .into_struct_value();
-            let ptr = if let Some(&p) = self.locals.get(export) {
-                p
-            } else {
-                let p = self.build_entry_alloca(export);
-                self.locals.insert(export.clone(), p);
-                p
-            };
-            self.builder.build_store(ptr, value).unwrap();
+            self.store_variable_value(export, value)?;
         }
         for (name, &fn_val) in &module_info.functions {
             self.functions.insert(name.clone(), fn_val);
@@ -14446,9 +14824,7 @@ impl<'ctx> Compiler<'ctx> {
             | "collections" | "path" | "platform" | "core" | "ffi" | "socket" => {
                 self.imported_modules.insert(name.to_string());
                 let module_val = self.build_str(&format!("<module {}>", name));
-                let ptr = self.build_entry_alloca(name);
-                self.builder.build_store(ptr, module_val).unwrap();
-                self.locals.insert(name.to_string(), ptr);
+                self.store_variable_value(name, module_val)?;
                 Ok(())
             }
             _ => {
@@ -14465,14 +14841,7 @@ impl<'ctx> Compiler<'ctx> {
                     .unwrap()
                     .into_struct_value();
                 let binding_name = name.rsplit('.').next().unwrap_or(name);
-                let ptr = if let Some(&p) = self.locals.get(binding_name) {
-                    p
-                } else {
-                    let p = self.build_entry_alloca(binding_name);
-                    self.locals.insert(binding_name.to_string(), p);
-                    p
-                };
-                self.builder.build_store(ptr, namespace).unwrap();
+                self.store_variable_value(binding_name, namespace)?;
                 self.imported_user_modules.insert(binding_name.to_string(), module_path);
                 Ok(())
             }
@@ -14490,12 +14859,8 @@ impl<'ctx> Compiler<'ctx> {
             Expr::Str(s) => Ok(self.build_str(s)),
 
             Expr::Ident(name) => {
-                if let Some(ptr) = self.locals.get(name).copied() {
-                    return Ok(self
-                        .builder
-                        .build_load(self.cv_type, ptr, name)
-                        .unwrap()
-                        .into_struct_value());
+                if let Some(value) = self.load_variable_value(name, name)? {
+                    return Ok(value);
                 }
                 if let Some(global) = self.data_globals.get(name).copied() {
                     let addr = self
@@ -14622,12 +14987,9 @@ impl<'ctx> Compiler<'ctx> {
                     if let Some(struct_type_name) = self.var_struct_types.get(var_name).cloned() {
                         if let Some(sinfo) = self.structs.get(&struct_type_name).cloned() {
                             if let Some(field_idx) = sinfo.field_names.iter().position(|n| n == name) {
-                                let ptr = self.locals[var_name];
                                 let cv_val = self
-                                    .builder
-                                    .build_load(self.cv_type, ptr, "sv_load")
-                                    .unwrap()
-                                    .into_struct_value();
+                                    .load_variable_value(var_name, "sv_load")?
+                                    .ok_or_else(|| format!("undefined variable '{var_name}'"))?;
                                 let payload = self
                                     .builder
                                     .build_extract_value(cv_val, 1, "sv_payload")
@@ -14757,82 +15119,12 @@ impl<'ctx> Compiler<'ctx> {
 
             // lambda x, y: x + y — creates a closure
             Expr::Lambda { params, body } => {
-                // Lambda creates a closure that captures the current environment.
-                // We create a function pointer dynamically and bundle it with captured values.
-                //
-                // Strategy:
-                // 1. Pre-declare a unique helper function for this lambda (fn_name by counter)
-                // 2. Store captured variables to globals so the helper can read them
-                // 3. Create the closure object with function ptr + capture count
-                //
-                // Since we can't dynamically create LLVM functions at runtime, we:
-                // - Create a unique named helper function (compiled later)
-                // - Capture all currently-visible locals as global data
-                // - Create closure with helper fn ptr and number of captures
-
-                let fn_name = format!("__lambda_{}", self.str_counter);
+                let capture_names = self.closure_capture_names(params, None);
+                let fn_name = self.mangle_global_name(&format!("__lambda_{}", self.str_counter));
                 self.str_counter += 1;
-
-                // Create the helper function type
-                let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
-                    params.iter().map(|_| self.cv_type.into()).collect();
-                let fn_type = self.cv_type.fn_type(&param_types, false);
-                let lambda_fn = self.module.add_function(&fn_name, fn_type, None);
-
-                // Store captured variable count
-                let num_captures = self.locals.len();
-                let captures_i64 = self.context.i64_type().const_int(num_captures as u64, false);
-
-                // Store each local's current value to globals that the lambda can access
-                let i32t = self.context.i32_type();
-                for (i, (_, ptr)) in self.locals.iter().enumerate() {
-                    let val = self
-                        .builder
-                        .build_load(self.cv_type, *ptr, "capture_load")
-                        .unwrap()
-                        .into_struct_value();
-                    let idx_val = i32t.const_int(i as u64, false);
-                    self.builder
-                        .build_call(
-                            self.rt.cool_set_closure_capture,
-                            &[idx_val.into(), val.into()],
-                            "set_capture",
-                        )
-                        .unwrap();
-                }
-
-                // Get function pointer as i64 using pointer-to-int cast
-                let fn_ptr_val = lambda_fn.as_global_value().as_pointer_value();
-                let fn_ptr_int = self
-                    .builder
-                    .build_ptr_to_int(fn_ptr_val, self.context.i64_type(), "fn_ptr_int")
-                    .unwrap();
-
-                // Create null pointer for captures array (we use global storage instead)
-                let null_ptr = self.context.i8_type().ptr_type(AddressSpace::default()).const_null();
-
-                let closure = self
-                    .builder
-                    .build_call(
-                        self.rt.cool_closure_new,
-                        &[fn_ptr_int.into(), captures_i64.into(), null_ptr.into()],
-                        "make_closure",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .left()
-                    .unwrap()
-                    .into_struct_value();
-
-                // Store this closure's function for later compilation
-                self.nested_functions
-                    .push((fn_name.clone(), params.clone(), vec![Stmt::Return(Some(*body.clone()))]));
-
-                // We'll compile nested functions at the end. For now, return the closure.
-                // Note: We need to register the function for later compilation.
-                // The nested_functions vec handles this.
-
-                Ok(closure)
+                let lambda_body = vec![Stmt::Return(Some(*body.clone()))];
+                let lambda_fn = self.compile_closure_function(&fn_name, params, &lambda_body, &capture_names)?;
+                self.build_closure_value(lambda_fn, &capture_names, "lambda")
             }
 
             Expr::Ternary {
@@ -14887,6 +15179,7 @@ impl<'ctx> Compiler<'ctx> {
 
                 let var_ptr = self.build_entry_alloca(var);
                 let saved_var = self.locals.get(var).copied();
+                let saved_cell_var = self.cell_vars.remove(var);
                 self.locals.insert(var.clone(), var_ptr);
 
                 let cond_bb = self.context.append_basic_block(fn_val, "lc_cond");
@@ -14973,6 +15266,11 @@ impl<'ctx> Compiler<'ctx> {
                     None => {
                         self.locals.remove(var);
                     }
+                }
+                if let Some(cell_ptr) = saved_cell_var {
+                    self.cell_vars.insert(var.clone(), cell_ptr);
+                } else {
+                    self.cell_vars.remove(var);
                 }
 
                 Ok(self
@@ -16469,12 +16767,7 @@ impl<'ctx> Compiler<'ctx> {
                     return Ok(self.call_fn_with_struct_args(fn_val, &params, return_type, &compiled, "call")?);
                 }
                 // Otherwise, load the variable (might be a closure stored in a local)
-                self.locals.get(n).copied().map(|ptr| {
-                    self.builder
-                        .build_load(self.cv_type, ptr, n)
-                        .unwrap()
-                        .into_struct_value()
-                })
+                self.load_variable_value(n, n)?
             }
             Expr::Attr { object: _, name: _ } => Some(self.compile_expr(callee)?),
             _ => {
@@ -16564,35 +16857,18 @@ impl<'ctx> Compiler<'ctx> {
 
             // Closure call path
             self.builder.position_at_end(closure_call_bb);
-            // Store args to global buffer
-            let i32t = self.context.i32_type();
-            for (i, arg) in args.iter().enumerate() {
-                let cv = self.compile_expr(arg)?;
-                let idx_val = i32t.const_int(i as u64, false);
-                self.builder
-                    .build_call(self.rt.cool_set_global_arg, &[idx_val.into(), cv.into()], "set_arg")
-                    .unwrap();
+            if !kwargs.is_empty() {
+                return Err("keyword arguments are not supported for closure calls in the LLVM backend".into());
             }
-
-            // Get function pointer from closure
-            let fn_ptr = self
-                .builder
-                .build_call(self.rt.cool_closure_get_fn_ptr, &[cv.into()], "get_fn_ptr")
-                .unwrap()
-                .try_as_basic_value()
-                .left()
-                .unwrap()
-                .into_int_value();
-
-            // Call the function pointer with nargs
+            let i32t = self.context.i32_type();
             let nargs_i32 = i32t.const_int(args.len() as u64, false);
-            let mut closure_call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![fn_ptr.into(), nargs_i32.into()];
+            let mut closure_call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![cv.into(), nargs_i32.into()];
             for arg in args {
                 closure_call_args.push(self.compile_expr(arg)?.into());
             }
             let closure_result = self
                 .builder
-                .build_call(self.rt.cool_call_fn_ptr, &closure_call_args, "call_closure")
+                .build_call(self.rt.cool_call_closure, &closure_call_args, "call_closure")
                 .unwrap()
                 .try_as_basic_value()
                 .left()

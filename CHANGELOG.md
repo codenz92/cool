@@ -4,6 +4,11 @@ All notable changes to the Cool language project.
 
 ## [Unreleased] - Phase 17 Complete
 
+### LLVM Backend
+
+- LLVM native builds now emit callable helper functions for lambda expressions and nested function closures, store shared capture cells in closure records, and activate capture frames when closures are called directly or via callable stdlib helpers such as `list.map`
+- The previous roadmap-tracked LLVM limitation for closures/lambdas has been removed from the backend coverage matrix
+
 ### Phase 14 — Runtime And Memory Model
 
 - New runtime builtins `copy()`, `clone()`, `close()`, `panic()`, and `abort()` now behave consistently across interpreter, VM, and hosted native builds, with shallow-copy semantics for containers/instances, explicit rejection of opaque resource handles, deterministic close dispatch, and fatal panic/abort paths
@@ -501,13 +506,13 @@ cool coolapps/shell.cool
 run coolapps/snake.cool
 ```
 
-The interpreter and bytecode VM now share full context-manager cleanup semantics, and the LLVM backend also covers default/keyword arguments, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import sqlite` / `import http` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises, but it still has some limitations:
+The interpreter and bytecode VM now share full context-manager cleanup semantics, and the LLVM backend also covers default/keyword arguments, closures/lambdas, inheritance, `super()`, slicing, `str()`, `isinstance()`, `try` / `except` / `else` / `finally`, `raise`, helpers like `min()`, `max()`, `sum()`, `round()`, `sorted()`, `abs()`, `int()`, `float()`, `bool()`, source-relative file imports like `import "helper.cool"`, project/package imports like `import foo.bar`, native `import ffi` (`ffi.open`, `ffi.func`), built-in `import math` / `import os` / `import sys` / `import path` / `import csv` / `import datetime` / `import hashlib` / `import toml` / `import yaml` / `import sqlite` / `import http` / `import subprocess` / `import argparse` / `import logging` / `import test` / `import time`, the core `random` helpers (`seed`, `random`, `randint`, `uniform`, `choice`, `shuffle`), `json.loads()` / `json.dumps()`, the built-in `string` helpers (`split`, `join`, `strip`, `lstrip`, `rstrip`, `upper`, `lower`, `replace`, `startswith`, `endswith`, `find`, `count`, `title`, `capitalize`, `format`), the pure `list` helpers (`sort`, `reverse`, `map`, `filter`, `reduce`, `flatten`, `unique`), the `re` helpers (`match`, `search`, `fullmatch`, `findall`, `sub`, `split`), `collections.Queue()` / `collections.Stack()`, native `open()` / file methods, and `with` / context managers on normal exit, control-flow exits (`return`, `break`, `continue`), caught exceptions, and unhandled native raises. Current backend coverage:
 
 | Feature | Interpreter | Bytecode VM | LLVM |
 | ------- | ----------- | ----------- | ---- |
 | Classes | ✅ | ✅ | ✅ |
 | `with` / context managers (normal/control-flow exits, caught exceptions, and unhandled native raises) | ✅ | ✅ | ✅ |
-| Closures / lambdas | ✅ | ✅ | ❌ |
+| Closures / lambdas | ✅ | ✅ | ✅ |
 | `while` loops | ✅ | ✅ | ✅ |
 | General `import` | ✅ | ✅ | ✅ |
 | `try` / `except` / `finally` / `raise` | ✅ | ✅ | ✅ |

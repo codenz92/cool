@@ -2816,6 +2816,94 @@ print(list.unique([1, 1, 2, 2, 3]))
 }
 
 #[test]
+fn test_llvm_lambdas_and_nested_closures() {
+    let result = compile_and_run_native(
+        r#"
+f = lambda x: x * 2
+print(f(5))
+
+n = 7
+add = lambda x: x + n
+print(add(5))
+n = 100
+print(add(5))
+
+def make_adder(n):
+    def adder(x):
+        return x + n
+    return adder
+
+add5 = make_adder(5)
+print(add5(10))
+
+def outer(a):
+    f = lambda x: x + a
+    def g(y):
+        return f(y) + a
+    return g
+
+print(outer(2)(3))
+
+def make_counter(start):
+    state = [start]
+    def tick():
+        state[0] = state[0] + 1
+        return state[0]
+    def peek():
+        return state[0]
+    return tick, peek
+
+tick, peek = make_counter(10)
+print(tick())
+print(tick())
+print(peek())
+
+def make_scalar_counter(start):
+    count = start
+    def tick():
+        count = count + 1
+        return count
+    return tick
+
+scalar_tick = make_scalar_counter(3)
+print(scalar_tick())
+print(scalar_tick())
+
+def make_bad(n):
+    def bad():
+        raise "boom"
+    return bad
+
+try:
+    make_bad(1)()
+except:
+    print(add(1))
+
+import list
+
+def make_bad_mapper():
+    def bad(x):
+        raise "boom"
+    return bad
+
+try:
+    list.map(make_bad_mapper(), [1])
+except:
+    print(add(1))
+
+print(list.map(lambda x: x + 3, [1, 2]))
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        &lines[..12],
+        &["10", "12", "105", "15", "7", "11", "12", "12", "4", "5", "101", "101"]
+    );
+    assert!(lines[12] == "[4, 5]" || lines[12] == "[4,5]");
+}
+
+#[test]
 fn test_llvm_import_re_module() {
     let result = compile_and_run_native(
         r#"
