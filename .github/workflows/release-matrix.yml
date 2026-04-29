@@ -70,11 +70,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y wget gnupg lsb-release software-properties-common
-          if ! sudo apt-get install -y llvm-17-dev clang-17 lld-17; then
+          if ! sudo apt-get install -y llvm-17-dev clang-17 lld-17 libpolly-17-dev; then
             wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
             chmod +x /tmp/llvm.sh
             sudo /tmp/llvm.sh 17
-            sudo apt-get install -y llvm-17-dev clang-17 lld-17
+            sudo apt-get install -y llvm-17-dev clang-17 lld-17 libpolly-17-dev
           fi
           echo "LLVM_SYS_170_PREFIX=/usr/lib/llvm-17" >> "$GITHUB_ENV"
           echo "/usr/lib/llvm-17/bin" >> "$GITHUB_PATH"
@@ -89,7 +89,15 @@ jobs:
       - name: Install LLVM 17 on Windows
         if: runner.os == 'Windows'
         run: |
-          choco install llvm --version=17.0.6 -y --allow-downgrade
+          for attempt in 1 2 3; do
+            if choco install llvm --version=17.0.6 -y --allow-downgrade --no-progress; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
           echo "LLVM_SYS_170_PREFIX=C:\\Program Files\\LLVM" >> "$GITHUB_ENV"
           echo "C:\\Program Files\\LLVM\\bin" >> "$GITHUB_PATH"
 
