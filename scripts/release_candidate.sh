@@ -293,6 +293,7 @@ Release gate: $GATE_STATUS
 - \`docs/INSTALL.md\`
 - \`docs/RELEASE_TRUST.md\`
 - \`docs/PACKAGE_CHANNELS.md\`
+- \`docs/RELEASE_VALIDATION.md\`
 - \`scripts/release_gate.sh\`
 - \`scripts/release_candidate.sh\`
 - \`scripts/promote_release.sh\`
@@ -303,6 +304,10 @@ Release gate: $GATE_STATUS
 - \`scripts/package_channels.py\`
 - \`scripts/assemble_matrix_release.sh\`
 - \`scripts/assemble_matrix_release.py\`
+- \`scripts/validate_release.sh\`
+- \`scripts/validate_release.py\`
+- \`scripts/smoke_matrix_release.sh\`
+- \`scripts/smoke_matrix_release.py\`
 - \`manifest.json\`
 - \`checksums.txt\`
 
@@ -432,11 +437,13 @@ cp "$BINARY_SRC" "$RC_DIR/bin/$BINARY_NAME"
 chmod 755 "$RC_DIR/bin/$BINARY_NAME"
 cp README.md CHANGELOG.md ROADMAP.md LICENSE "$RC_DIR/"
 cp install.sh "$RC_DIR/"
-cp docs/INSTALL.md docs/RELEASE_TRUST.md docs/PACKAGE_CHANNELS.md "$RC_DIR/docs/"
+cp docs/INSTALL.md docs/RELEASE_TRUST.md docs/PACKAGE_CHANNELS.md docs/RELEASE_VALIDATION.md "$RC_DIR/docs/"
 cp scripts/release_gate.sh scripts/release_candidate.sh scripts/promote_release.sh "$RC_DIR/scripts/"
 cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RC_DIR/scripts/"
 cp scripts/package_channels.sh scripts/package_channels.py "$RC_DIR/scripts/"
 cp scripts/assemble_matrix_release.sh scripts/assemble_matrix_release.py "$RC_DIR/scripts/"
+cp scripts/validate_release.sh scripts/validate_release.py "$RC_DIR/scripts/"
+cp scripts/smoke_matrix_release.sh scripts/smoke_matrix_release.py "$RC_DIR/scripts/"
 
 write_release_notes
 write_checksums

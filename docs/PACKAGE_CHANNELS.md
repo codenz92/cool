@@ -52,8 +52,25 @@ bash scripts/trust_release.sh verify --version 1.0.0 --platform multi
 bash scripts/package_channels.sh generate --version 1.0.0
 ```
 
+Then validate the release and package channels before publishing:
+
+```bash
+bash scripts/validate_release.sh \
+  --version 1.0.0 \
+  --platform multi \
+  --require-trust \
+  --require-channels \
+  --require-platform linux-x86_64 \
+  --require-platform macos-x86_64 \
+  --require-platform macos-arm64 \
+  --require-platform windows-x86_64
+```
+
 ## Channel Notes
 
 Homebrew uses platform tarballs. Winget uses the Windows zip archive and the
 portable `bin/cool.exe` nested installer path. Debian/apt metadata is generated
 from the Linux x86_64 tarball into a simple `.deb` plus `Packages` indexes.
+
+See `docs/RELEASE_VALIDATION.md` for the full pre-publish validation checklist
+and synthetic matrix smoke test.

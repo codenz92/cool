@@ -35,6 +35,13 @@ def file_record(base, path):
     }
 
 
+def display_path(path):
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def read_cargo_value(key):
     text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     match = re.search(rf"(?m)^\s*{re.escape(key)}\s*=\s*\"([^\"]+)\"", text)
@@ -339,7 +346,7 @@ def update_latest_json(release_dir, dist_dir, release_json_path):
             continue
         data = load_json(latest)
         data["release_json"] = {
-            "path": release_json_path.relative_to(ROOT).as_posix(),
+            "path": display_path(release_json_path),
             "sha256": sha256_path(release_json_path),
             "bytes": release_json_path.stat().st_size,
         }
@@ -441,10 +448,10 @@ def generate(args):
     write_trust_sums(release_dir)
 
     print("trust release: ok")
-    print(f"  SBOM       -> {sbom_path.relative_to(ROOT).as_posix()}")
-    print(f"  Provenance -> {provenance_path.relative_to(ROOT).as_posix()}")
-    print(f"  Trust      -> {trust_json_path.relative_to(ROOT).as_posix()}")
-    print(f"  Sums       -> {(release_dir / 'TRUST_SHA256SUMS').relative_to(ROOT).as_posix()}")
+    print(f"  SBOM       -> {display_path(sbom_path)}")
+    print(f"  Provenance -> {display_path(provenance_path)}")
+    print(f"  Trust      -> {display_path(trust_json_path)}")
+    print(f"  Sums       -> {display_path(release_dir / 'TRUST_SHA256SUMS')}")
 
 
 def verify(args):
@@ -504,7 +511,7 @@ def verify(args):
     print("trust release: verified")
     print(f"  Version  -> {version}")
     print(f"  Platform -> {platform_name}")
-    print(f"  Release  -> {release_dir.relative_to(ROOT).as_posix()}")
+    print(f"  Release  -> {display_path(release_dir)}")
 
 
 def main():

@@ -151,7 +151,16 @@ def main():
             copy_unique(src, release_dir / src.name)
             copied += 1
 
-    for rel in ["install.sh", "trust_release.sh", "trust_release.py", "publish_release.sh", "package_channels.sh", "package_channels.py"]:
+    for rel in [
+        "install.sh",
+        "trust_release.sh",
+        "trust_release.py",
+        "publish_release.sh",
+        "package_channels.sh",
+        "package_channels.py",
+        "validate_release.sh",
+        "validate_release.py",
+    ]:
         src = ROOT / ("scripts" if rel != "install.sh" else "") / rel
         if not src.is_file():
             continue

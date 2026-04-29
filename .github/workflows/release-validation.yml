@@ -1,0 +1,84 @@
+name: Release Validation
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-validation:
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install LLVM 17
+        run: |
+          brew install llvm@17
+          echo "LLVM_SYS_170_PREFIX=$(brew --prefix llvm@17)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Validate release tooling
+        run: |
+          VERSION="$(python3 -c 'import re, pathlib; print(re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text(encoding="utf-8")).group(1))')"
+
+          bash -n \
+            install.sh \
+            scripts/release_candidate.sh \
+            scripts/promote_release.sh \
+            scripts/publish_release.sh \
+            scripts/trust_release.sh \
+            scripts/package_channels.sh \
+            scripts/assemble_matrix_release.sh \
+            scripts/validate_release.sh \
+            scripts/smoke_matrix_release.sh
+          python3 -m py_compile \
+            scripts/trust_release.py \
+            scripts/package_channels.py \
+            scripts/assemble_matrix_release.py \
+            scripts/validate_release.py \
+            scripts/smoke_matrix_release.py
+
+          bash scripts/release_candidate.sh --skip-gate --platform macos-arm64
+          bash scripts/promote_release.sh --version "$VERSION" --platform macos-arm64 --allow-skipped-gate
+          bash scripts/package_channels.sh generate --version "$VERSION"
+          bash scripts/validate_release.sh \
+            --version "$VERSION" \
+            --platform macos-arm64 \
+            --require-trust \
+            --require-channels \
+            --install-smoke \
+            --report "dist/validation/$VERSION/host-release-validation.json"
+          bash scripts/smoke_matrix_release.sh \
+            --version "$VERSION" \
+            --source-platform macos-arm64 \
+            --work-dir dist/matrix-smoke
+
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-release-validation
+          path: |
+            dist/validation/**
+            dist/matrix-smoke/dist/validation/**

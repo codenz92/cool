@@ -732,6 +732,28 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 23 — Public Release Validation And Ecosystem Readiness ✅ Complete
+
+> Goal: make a public release auditable before publish by validating every promoted asset, trust file, installer path, and package-channel output.
+
+### Release Validation
+
+- [x] `scripts/validate_release.sh` / `.py` validate promoted release metadata, `SHA256SUMS`, platform sidecars, tarball/zip payload layouts, payload manifests, and payload checksums
+- [x] Trust validation covers SBOM, provenance, `trust.json`, `TRUST_SHA256SUMS`, release `supply_chain` references, and optional detached signature verification with `--verify-key`
+- [x] Package-channel validation covers `channels.json`, `CHANNEL_SHA256SUMS`, channel archive contents, Homebrew formula asset coverage, Winget portable manifests, Debian `.deb` structure, `Packages`, and `Packages.gz`
+- [x] Installer smoke validation installs a selected platform archive with checksum metadata and runs `cool help`
+- [x] JSON validation reports can be written under `dist/validation/<version>/`
+
+### Matrix And CI Readiness
+
+- [x] `scripts/smoke_matrix_release.sh` / `.py` synthesize Linux x86_64, macOS x86_64, macOS arm64, and Windows x86_64 artifact sets from one promoted host release, then assemble, trust, channelize, and validate the result
+- [x] GitHub Actions `Release Validation` workflow checks shell syntax, Python compile status, host release validation, installer smoke behavior, and synthetic matrix/package-channel validation on pushes, pull requests, and manual dispatches
+- [x] `Release Matrix` aggregate job validates multi-platform releases with all required platforms before publish or dry-run completion
+- [x] `Published Release` workflow validates single-platform promoted releases and uploads validation reports with release assets
+- [x] Release candidates and promoted releases include validation scripts and `docs/RELEASE_VALIDATION.md`
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -758,3 +780,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 20 — Release Promotion And Installer Channels | ✅ Complete |
 | 21 — Published Release Automation And Supply-Chain Trust | ✅ Complete |
 | 22 — Multi-Platform Release Matrix And Package Channels | ✅ Complete |
+| 23 — Public Release Validation And Ecosystem Readiness | ✅ Complete |

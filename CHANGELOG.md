@@ -2,7 +2,15 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 22 Complete
+## [Unreleased] - Phase 23 Complete
+
+### Phase 23 — Public Release Validation And Ecosystem Readiness
+
+- Added `scripts/validate_release.sh` / `.py` as the final pre-publish release audit for promoted assets, release metadata, payload checksums, trust metadata, package-channel files, and optional installer smoke tests
+- Added `scripts/smoke_matrix_release.sh` / `.py` to synthesize a four-platform matrix from one promoted host release and validate matrix assembly, trust generation, package channels, and required-platform coverage in CI
+- Added the GitHub Actions `Release Validation` workflow for release-tool syntax checks, Python compile checks, host release validation, installer smoke testing, and synthetic matrix validation on pushes, pull requests, and manual dispatches
+- Extended `Release Matrix` and `Published Release` workflows to run release validation before publish/upload completion and to upload validation reports
+- Added `docs/RELEASE_VALIDATION.md` and packaged validation docs/scripts into release candidates and promoted release directories
 
 ### Phase 22 — Multi-Platform Release Matrix And Package Channels
 

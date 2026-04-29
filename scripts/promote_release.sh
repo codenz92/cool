@@ -357,6 +357,8 @@ $zip_asset_line
 - \`$(basename "$PROMOTED_CHECKSUMS_PATH")\`
 - \`$(basename "$PROMOTED_RC_NOTES_PATH")\`
 - \`install.sh\`
+- \`validate_release.sh\`
+- \`validate_release.py\`
 - \`SHA256SUMS\`
 - \`release.json\`
 - \`sbom.spdx.json\`
@@ -616,8 +618,10 @@ cp install.sh "$RELEASE_DIR/install.sh"
 chmod 755 "$RELEASE_DIR/install.sh"
 cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RELEASE_DIR/"
 cp scripts/package_channels.sh scripts/package_channels.py "$RELEASE_DIR/"
+cp scripts/validate_release.sh scripts/validate_release.py "$RELEASE_DIR/"
 chmod 755 "$RELEASE_DIR/trust_release.sh" "$RELEASE_DIR/trust_release.py" "$RELEASE_DIR/publish_release.sh"
 chmod 755 "$RELEASE_DIR/package_channels.sh" "$RELEASE_DIR/package_channels.py"
+chmod 755 "$RELEASE_DIR/validate_release.sh" "$RELEASE_DIR/validate_release.py"
 
 write_release_notes
 write_sha256sums

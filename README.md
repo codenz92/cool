@@ -978,6 +978,34 @@ bash scripts/package_channels.sh generate --version 1.0.0
 
 Release candidates now emit both `.tar.gz` and `.zip` archives. The installer defaults to `.zip` for Windows platforms and `.tar.gz` for macOS/Linux. Package-channel generation writes `channels.json`, `CHANNEL_SHA256SUMS`, a Homebrew formula, Winget portable manifests when a Windows zip exists, Debian/apt metadata when a Linux x86_64 tarball exists, and `cool-<version>-package-channels.tar.gz` for upload as a release asset. See `docs/PACKAGE_CHANNELS.md` for the channel layout and required-platform checks.
 
+### Public Release Validation
+
+Validate a promoted release before publishing:
+
+```bash
+bash scripts/validate_release.sh \
+  --version 1.0.0 \
+  --require-trust \
+  --require-channels \
+  --install-smoke
+```
+
+For a multi-platform release, require every public platform:
+
+```bash
+bash scripts/validate_release.sh \
+  --version 1.0.0 \
+  --platform multi \
+  --require-trust \
+  --require-channels \
+  --require-platform linux-x86_64 \
+  --require-platform macos-x86_64 \
+  --require-platform macos-arm64 \
+  --require-platform windows-x86_64
+```
+
+The validator audits release metadata, asset hashes, archive payload layouts, trust metadata, Homebrew/Winget/Debian channel files, channel bundles, and optional installer execution. `scripts/smoke_matrix_release.sh` runs a synthetic four-platform matrix from one promoted host release so pull-request CI can catch release/channel regressions before a real tag. See `docs/RELEASE_VALIDATION.md` for validation reports and the release checklist.
+
 ### Project workflow
 
 ```bash
@@ -1462,6 +1490,7 @@ examples/
 | 20 — Release promotion and installer channels | ✅ Complete |
 | 21 — Published release automation and supply-chain trust | ✅ Complete |
 | 22 — Multi-platform release matrix and package channels | ✅ Complete |
+| 23 — Public release validation and ecosystem readiness | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

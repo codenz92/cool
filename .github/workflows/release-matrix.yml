@@ -152,11 +152,16 @@ jobs:
           if [[ -n "$VERSION_INPUT" ]]; then
             VERSION_ARGS=(--version "$VERSION_INPUT")
           fi
+          VERSION_VALUE="$VERSION_INPUT"
+          if [[ -z "$VERSION_VALUE" ]]; then
+            VERSION_VALUE="$(python3 -c 'import re, pathlib; print(re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text(encoding="utf-8")).group(1))')"
+          fi
 
           bash scripts/assemble_matrix_release.sh --source-dir dist/matrix-input "${VERSION_ARGS[@]}"
 
           TRUST_ARGS=(generate "${VERSION_ARGS[@]}" --platform multi)
           VERIFY_ARGS=(verify "${VERSION_ARGS[@]}" --platform multi)
+          VERIFY_KEY=""
           if [[ -n "$COOL_RELEASE_SIGNING_KEY_B64" ]]; then
             SIGN_KEY="$RUNNER_TEMP/cool-release-signing-key.pem"
             VERIFY_KEY="$RUNNER_TEMP/cool-release-signing-public.pem"
@@ -174,6 +179,24 @@ jobs:
             --require-platform macos-x86_64 \
             --require-platform macos-arm64 \
             --require-platform windows-x86_64
+
+          VALIDATE_ARGS=(
+            --version "$VERSION_VALUE"
+            --platform multi
+            --require-trust
+            --require-channels
+            --install-smoke
+            --install-smoke-platform linux-x86_64
+            --report "dist/validation/$VERSION_VALUE/release-validation.json"
+            --require-platform linux-x86_64
+            --require-platform macos-x86_64
+            --require-platform macos-arm64
+            --require-platform windows-x86_64
+          )
+          if [[ -n "$VERIFY_KEY" ]]; then
+            VALIDATE_ARGS+=(--verify-key "$VERIFY_KEY")
+          fi
+          bash scripts/validate_release.sh "${VALIDATE_ARGS[@]}"
 
       - name: Publish or dry-run
         env:
@@ -210,3 +233,4 @@ jobs:
           path: |
             dist/releases/**
             dist/channels/**
+            dist/validation/**

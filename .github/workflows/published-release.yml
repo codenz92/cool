@@ -82,6 +82,10 @@ jobs:
             PUBLISH_ARGS=()
             CHANNEL_ARGS=()
           fi
+          VERSION_VALUE="$VERSION_INPUT"
+          if [[ -z "$VERSION_VALUE" ]]; then
+            VERSION_VALUE="$(python3 -c 'import re, pathlib; print(re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text(encoding="utf-8")).group(1))')"
+          fi
 
           VERIFY_KEY=""
           if [[ -n "$COOL_RELEASE_SIGNING_KEY_B64" ]]; then
@@ -97,6 +101,17 @@ jobs:
           bash scripts/release_candidate.sh "${RC_ARGS[@]}"
           bash scripts/promote_release.sh "${PROMOTE_ARGS[@]}"
           bash scripts/package_channels.sh generate "${CHANNEL_ARGS[@]}"
+          VALIDATE_ARGS=(
+            --version "$VERSION_VALUE"
+            --require-trust
+            --require-channels
+            --install-smoke
+            --report "dist/validation/$VERSION_VALUE/release-validation.json"
+          )
+          if [[ -n "$VERIFY_KEY" ]]; then
+            VALIDATE_ARGS+=(--verify-key "$VERIFY_KEY")
+          fi
+          bash scripts/validate_release.sh "${VALIDATE_ARGS[@]}"
 
           SHOULD_PUBLISH="$PUBLISH_INPUT"
           SHOULD_DRAFT="$DRAFT_INPUT"
@@ -136,3 +151,4 @@ jobs:
           path: |
             dist/releases/**
             dist/channels/**
+            dist/validation/**
