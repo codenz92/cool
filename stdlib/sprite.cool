@@ -1,0 +1,70 @@
+def frame(lines, duration=nil):
+    rows = []
+    for line in lines:
+        rows.append(str(line))
+    return {"kind": "sprite_frame", "lines": rows, "duration": duration}
+
+def sprite(frames, fps=8):
+    out = []
+    for item in frames:
+        if type(item) == "dict":
+            out.append(item)
+        else:
+            out.append(frame(item))
+    width = 0
+    height = 0
+    if len(out) > 0:
+        height = len(out[0]["lines"])
+        if height > 0:
+            width = len(out[0]["lines"][0])
+    return {"kind": "sprite", "frames": out, "fps": int(fps), "width": width, "height": height}
+
+def from_text(text):
+    return sprite([str(text).split("\n")], 1)
+
+def tile(lines, x, y, width, height):
+    rows = []
+    yy = int(y)
+    while yy < int(y) + int(height):
+        if yy >= 0 and yy < len(lines):
+            line = str(lines[yy])
+            rows.append(line[int(x):int(x) + int(width)])
+        else:
+            rows.append("")
+        yy = yy + 1
+    return frame(rows)
+
+def tile_sprite(lines, x, y, width, height, fps=1):
+    return sprite([tile(lines, x, y, width, height)], fps)
+
+def render(sprite_record, index=0):
+    if len(sprite_record["frames"]) == 0:
+        return ""
+    idx = int(index) % len(sprite_record["frames"])
+    return "\n".join(sprite_record["frames"][idx]["lines"])
+
+def current(sprite_record, time_seconds):
+    if len(sprite_record["frames"]) == 0:
+        return nil
+    idx = int(float(time_seconds) * sprite_record["fps"]) % len(sprite_record["frames"])
+    return sprite_record["frames"][idx]
+
+def flip_h(sprite_record):
+    frames = []
+    for fr in sprite_record["frames"]:
+        rows = []
+        for line in fr["lines"]:
+            out = ""
+            i = len(line) - 1
+            while i >= 0:
+                out = out + line[i]
+                i = i - 1
+            rows.append(out)
+        frames.append(frame(rows, fr.get("duration")))
+    return sprite(frames, sprite_record["fps"])
+
+def sheet(sprites):
+    lines = []
+    for sp in sprites:
+        lines.append(render(sp, 0))
+    return "\n".join(lines)

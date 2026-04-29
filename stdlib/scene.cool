@@ -1,0 +1,85 @@
+private def _clone(value):
+    if type(value) == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+def node(name, x=0, y=0, glyph="*", children=nil, meta=nil):
+    if children == nil:
+        children = []
+    return {
+        "kind": "scene_node",
+        "name": str(name),
+        "x": int(x),
+        "y": int(y),
+        "glyph": str(glyph),
+        "children": children,
+        "meta": _clone(meta),
+    }
+
+def add(parent, child):
+    parent["children"].append(child)
+    return child
+
+def translate(n, dx, dy):
+    n["x"] = n["x"] + int(dx)
+    n["y"] = n["y"] + int(dy)
+    return n
+
+private def _flatten(n, ox, oy, out):
+    x = ox + n["x"]
+    y = oy + n["y"]
+    out.append({"name": n["name"], "x": x, "y": y, "glyph": n["glyph"], "meta": _clone(n.get("meta"))})
+    for child in n["children"]:
+        _flatten(child, x, y, out)
+
+def flatten(root):
+    out = []
+    _flatten(root, 0, 0, out)
+    return out
+
+def bounds(root):
+    items = flatten(root)
+    if len(items) == 0:
+        return {"x": 0, "y": 0, "width": 0, "height": 0}
+    min_x = items[0]["x"]
+    max_x = items[0]["x"]
+    min_y = items[0]["y"]
+    max_y = items[0]["y"]
+    for item in items:
+        if item["x"] < min_x:
+            min_x = item["x"]
+        if item["x"] > max_x:
+            max_x = item["x"]
+        if item["y"] < min_y:
+            min_y = item["y"]
+        if item["y"] > max_y:
+            max_y = item["y"]
+    return {"x": min_x, "y": min_y, "width": max_x - min_x + 1, "height": max_y - min_y + 1}
+
+def render(root, width, height, fill="."):
+    rows = []
+    y = 0
+    while y < int(height):
+        row = ""
+        x = 0
+        while x < int(width):
+            row = row + str(fill)
+            x = x + 1
+        rows.append(row)
+        y = y + 1
+    for item in flatten(root):
+        x = item["x"]
+        y = item["y"]
+        if x >= 0 and y >= 0 and y < len(rows) and x < len(rows[y]):
+            row = rows[y]
+            rows[y] = row[0:x] + item["glyph"][0] + row[x + 1:len(row)]
+    return "\n".join(rows)
+

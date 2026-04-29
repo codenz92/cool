@@ -1,0 +1,103 @@
+import time
+
+def entity(id, x=0, y=0, vx=0, vy=0, width=1, height=1, sprite=nil, meta=nil):
+    if meta == nil:
+        meta = {}
+    return {
+        "kind": "entity",
+        "id": str(id),
+        "x": float(x),
+        "y": float(y),
+        "vx": float(vx),
+        "vy": float(vy),
+        "width": float(width),
+        "height": float(height),
+        "sprite": sprite,
+        "meta": meta,
+        "alive": true,
+    }
+
+def world(width, height, fps=60):
+    return {"kind": "world", "width": int(width), "height": int(height), "fps": int(fps), "entities": [], "time": 0.0, "frame": 0, "input": {}}
+
+def timer(duration, repeat=false):
+    return {"kind": "timer", "duration": float(duration), "repeat": bool(repeat), "elapsed": 0.0, "done": false, "ticks": 0}
+
+def timer_tick(t, dt):
+    if t["done"] and not t["repeat"]:
+        return t
+    t["elapsed"] = t["elapsed"] + float(dt)
+    if t["duration"] <= 0:
+        t["done"] = true
+        t["ticks"] = t["ticks"] + 1
+        return t
+    while t["elapsed"] >= t["duration"]:
+        t["done"] = true
+        t["ticks"] = t["ticks"] + 1
+        if t["repeat"]:
+            t["elapsed"] = t["elapsed"] - t["duration"]
+        else:
+            t["elapsed"] = t["duration"]
+            return t
+    return t
+
+def add(w, ent):
+    w["entities"].append(ent)
+    return ent
+
+def find(w, id):
+    for ent in w["entities"]:
+        if ent["id"] == str(id):
+            return ent
+    return nil
+
+def move(ent, dx, dy):
+    ent["x"] = ent["x"] + float(dx)
+    ent["y"] = ent["y"] + float(dy)
+    return ent
+
+def tick(w, dt=nil):
+    if dt == nil:
+        dt = 1.0 / float(w["fps"])
+    delta = float(dt)
+    for ent in w["entities"]:
+        if ent["alive"]:
+            ent["x"] = ent["x"] + ent["vx"] * delta
+            ent["y"] = ent["y"] + ent["vy"] * delta
+    w["time"] = w["time"] + delta
+    w["frame"] = w["frame"] + 1
+    return w
+
+def loop_state(w, running=true):
+    return {"kind": "game_loop", "world": w, "running": bool(running), "frames": []}
+
+def step_loop(state, dt=nil):
+    if state["running"]:
+        tick(state["world"], dt)
+        state["frames"].append(snapshot(state["world"]))
+    return state
+
+def input_state(keys=nil):
+    state = {}
+    if keys != nil:
+        for key in keys:
+            state[str(key)] = true
+    return state
+
+def pressed(state, key):
+    return state.get(str(key), false) == true
+
+def set_input(w, state):
+    w["input"] = state
+    return w
+
+def collides(a, b):
+    overlap_x = a["x"] + a["width"] >= b["x"] and b["x"] + b["width"] >= a["x"]
+    overlap_y = a["y"] + a["height"] >= b["y"] and b["y"] + b["height"] >= a["y"]
+    return overlap_x and overlap_y
+
+def bounds(ent):
+    return {"x": ent["x"], "y": ent["y"], "width": ent["width"], "height": ent["height"]}
+
+def snapshot(w):
+    return {"width": w["width"], "height": w["height"], "time": w["time"], "frame": w["frame"], "entities": len(w["entities"])}

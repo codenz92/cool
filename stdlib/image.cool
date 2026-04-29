@@ -1,0 +1,103 @@
+import color
+
+private def _clone_pixel(pixel):
+    if type(pixel) == "dict":
+        return color.rgb(pixel.get("r", 0), pixel.get("g", 0), pixel.get("b", 0), pixel.get("a", 255))
+    if type(pixel) == "list" or type(pixel) == "tuple":
+        return color.rgb(pixel[0], pixel[1], pixel[2], 255 if len(pixel) < 4 else pixel[3])
+    return color.rgb(0, 0, 0)
+
+def image(width, height, pixels=nil):
+    w = int(width)
+    h = int(height)
+    data = []
+    if pixels == nil:
+        y = 0
+        while y < h:
+            row = []
+            x = 0
+            while x < w:
+                row.append(color.rgb(0, 0, 0, 0))
+                x = x + 1
+            data.append(row)
+            y = y + 1
+    else:
+        for row in pixels:
+            out = []
+            for pixel in row:
+                out.append(_clone_pixel(pixel))
+            data.append(out)
+    return {"kind": "image", "width": w, "height": h, "pixels": data}
+
+def blank(width, height, fill=nil):
+    if fill == nil:
+        fill = color.rgb(0, 0, 0, 0)
+    img = image(width, height)
+    y = 0
+    while y < img["height"]:
+        x = 0
+        while x < img["width"]:
+            set(img, x, y, fill)
+            x = x + 1
+        y = y + 1
+    return img
+
+def metadata(img):
+    return {"width": img["width"], "height": img["height"], "pixels": img["width"] * img["height"]}
+
+def get(img, x, y):
+    return img["pixels"][int(y)][int(x)]
+
+def set(img, x, y, pixel):
+    img["pixels"][int(y)][int(x)] = _clone_pixel(pixel)
+    return img
+
+def crop(img, x, y, width, height):
+    rows = []
+    yy = int(y)
+    while yy < int(y) + int(height):
+        row = []
+        xx = int(x)
+        while xx < int(x) + int(width):
+            row.append(get(img, xx, yy))
+            xx = xx + 1
+        rows.append(row)
+        yy = yy + 1
+    return image(width, height, rows)
+
+def resize(img, width, height):
+    rows = []
+    y = 0
+    while y < int(height):
+        row = []
+        src_y = int(y * img["height"] / int(height))
+        x = 0
+        while x < int(width):
+            src_x = int(x * img["width"] / int(width))
+            row.append(get(img, src_x, src_y))
+            x = x + 1
+        rows.append(row)
+        y = y + 1
+    return image(width, height, rows)
+
+def grayscale(img):
+    rows = []
+    for row in img["pixels"]:
+        out = []
+        for pixel in row:
+            v = int(pixel["r"] * 0.2126 + pixel["g"] * 0.7152 + pixel["b"] * 0.0722)
+            out.append(color.rgb(v, v, v, pixel.get("a", 255)))
+        rows.append(out)
+    return image(img["width"], img["height"], rows)
+
+def to_ppm(img):
+    lines = ["P3", str(img["width"]) + " " + str(img["height"]), "255"]
+    for row in img["pixels"]:
+        parts = []
+        for pixel in row:
+            parts.append(str(pixel["r"]))
+            parts.append(str(pixel["g"]))
+            parts.append(str(pixel["b"]))
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
+

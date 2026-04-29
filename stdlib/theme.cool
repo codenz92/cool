@@ -1,0 +1,87 @@
+import ansi
+import color
+
+private def _clone(value):
+    if type(value) == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+def theme(name, palette=nil, styles=nil, spacing=nil):
+    if palette == nil:
+        palette = {}
+    if styles == nil:
+        styles = {}
+    if spacing == nil:
+        spacing = {}
+    return {"kind": "theme", "name": str(name), "palette": _clone(palette), "styles": _clone(styles), "spacing": _clone(spacing)}
+
+def default():
+    return theme("default", {
+        "bg": color.parse_hex("#101820"),
+        "fg": color.parse_hex("#f2f0e6"),
+        "accent": color.parse_hex("#fdb515"),
+        "muted": color.parse_hex("#7a869a"),
+        "danger": color.parse_hex("#d1495b"),
+    }, {
+        "title": [1, 38, 5, 220],
+        "muted": [2, 38, 5, 245],
+        "danger": [1, 38, 5, 160],
+    }, {
+        "xs": 0,
+        "sm": 1,
+        "md": 2,
+        "lg": 4,
+        "xl": 8,
+    })
+
+def light():
+    return theme("light", {
+        "bg": color.parse_hex("#faf7ef"),
+        "fg": color.parse_hex("#172026"),
+        "accent": color.parse_hex("#0077b6"),
+    })
+
+def get(t, name, default_value=nil):
+    key = str(name)
+    if key in t["palette"]:
+        return t["palette"][key]
+    if key in t["styles"]:
+        return t["styles"][key]
+    if key in t.get("spacing", {}):
+        return t["spacing"][key]
+    return default_value
+
+def merge(base, overrides):
+    out = _clone(base)
+    for key in overrides.get("palette", {}).keys():
+        out["palette"][key] = overrides["palette"][key]
+    for key in overrides.get("styles", {}).keys():
+        out["styles"][key] = overrides["styles"][key]
+    for key in overrides.get("spacing", {}).keys():
+        out["spacing"][key] = overrides["spacing"][key]
+    if overrides.get("name") != nil:
+        out["name"] = overrides["name"]
+    return out
+
+def style(t, name, text):
+    codes = t["styles"].get(str(name), [])
+    return ansi.style(text, codes)
+
+def space(t, name, default_value=0):
+    return t.get("spacing", {}).get(str(name), default_value)
+
+def swatch(t):
+    lines = []
+    keys = t["palette"].keys()
+    keys.sort()
+    for key in keys:
+        lines.append(key + "=" + color.to_hex(t["palette"][key]))
+    return "\n".join(lines)

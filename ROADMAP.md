@@ -290,19 +290,19 @@
 
 #### Terminal, UI, And Presentation
 
-- [ ] `ansi` module — terminal colors, cursor movement, box drawing, and styling helpers
-- [~] `term` module — raw terminal mode, key events, mouse events, and screen buffers (runtime parity now covers interpreter / VM / LLVM for raw mode, cursor control, sizing, and key input; mouse and richer screen buffers still open)
-- [ ] `tui` module — higher-level terminal UI widgets, layout, focus, and event loops
-- [ ] `theme` module — reusable palettes, spacing scales, and text-style presets for TUIs
-- [ ] `color` module — RGB/HSL/HSV conversion, palettes, gradients, and contrast helpers
-- [ ] `scene` module — lightweight scene graphs for TUI/ASCII/game applications
+- [x] `ansi` module — terminal colors, cursor movement, box drawing, and styling helpers
+- [x] `term` module — raw terminal mode, key events, mouse event records, cursor control, sizing, and deterministic screen buffers across interpreter / VM / LLVM
+- [x] `tui` module — higher-level terminal UI widgets, layout, focus, deterministic event loops, labels, buttons, panels, lists, and screen helpers
+- [x] `theme` module — reusable palettes, spacing scales, and text-style presets for TUIs
+- [x] `color` module — RGB/HSL/HSV conversion, palettes, gradients, hex parsing/formatting, luminance, and contrast helpers
+- [x] `scene` module — lightweight scene graphs for TUI/ASCII/game applications
 
 #### Media And Game Development
 
-- [ ] `image` module — image metadata, resize/crop helpers, and simple format conversion
-- [ ] `audio` module — WAV/PCM helpers, metadata, and lightweight processing primitives
-- [ ] `sprite` module — tiny 2D sprite sheets, tiles, and ASCII/pixel animation helpers
-- [ ] `game` module — timers, entities, input state, collision helpers, and main-loop support
+- [x] `image` module — image metadata, pixel access, resize/crop helpers, grayscale, and PPM conversion
+- [x] `audio` module — WAV/PCM helpers, sample buffers, silence/square generation, metadata, normalize/mix/trim processing primitives
+- [x] `sprite` module — tiny 2D sprite sheets, tiles, frames, text sprites, flipping, and ASCII animation helpers
+- [x] `game` module — worlds, timers, entities, input state, collision helpers, ticks, movement, loop helpers, and snapshots
 
 ---
 

@@ -1844,6 +1844,12 @@ impl Interpreter {
                     "poll_char",
                     "get_char",
                     "size",
+                    "mouse_event",
+                    "mouse_sequence",
+                    "screen",
+                    "screen_put",
+                    "screen_text",
+                    "screen_clear",
                 ] {
                     map.set(
                         Value::Str(fn_name.to_string()),
@@ -6679,6 +6685,153 @@ class Stack:
                     }
                 }
                 Ok(Value::Nil)
+            }
+            "mouse_event" => {
+                let kind = match args.first() {
+                    Some(Value::Str(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => "move".to_string(),
+                };
+                let row = match args.get(1) {
+                    Some(Value::Int(n)) => *n,
+                    Some(Value::Float(f)) => *f as i64,
+                    None => 0,
+                    _ => return Err(self.err("term.mouse_event(kind, row, col, ...) requires numeric row/col")),
+                };
+                let col = match args.get(2) {
+                    Some(Value::Int(n)) => *n,
+                    Some(Value::Float(f)) => *f as i64,
+                    None => 0,
+                    _ => return Err(self.err("term.mouse_event(kind, row, col, ...) requires numeric row/col")),
+                };
+                let button = args.get(3).cloned().unwrap_or(Value::Nil);
+                let modifiers = args
+                    .get(4)
+                    .cloned()
+                    .unwrap_or_else(|| Value::List(Rc::new(RefCell::new(Vec::new()))));
+                Ok(self.dict_value(vec![
+                    ("kind", Value::Str("mouse".to_string())),
+                    ("event", Value::Str(kind)),
+                    ("row", Value::Int(row)),
+                    ("col", Value::Int(col)),
+                    ("button", button),
+                    ("modifiers", modifiers),
+                ]))
+            }
+            "mouse_sequence" => {
+                let enabled = match args.first() {
+                    Some(Value::Bool(v)) => *v,
+                    Some(Value::Int(n)) => *n != 0,
+                    Some(Value::Nil) | None => true,
+                    Some(_) => true,
+                };
+                Ok(Value::Str(if enabled {
+                    "\x1b[?1000;1006h".to_string()
+                } else {
+                    "\x1b[?1000;1006l".to_string()
+                }))
+            }
+            "screen" => {
+                let width = match args.first() {
+                    Some(Value::Int(n)) => (*n).max(0) as usize,
+                    _ => return Err(self.err("term.screen(width, height, fill) requires integer width")),
+                };
+                let height = match args.get(1) {
+                    Some(Value::Int(n)) => (*n).max(0) as usize,
+                    _ => return Err(self.err("term.screen(width, height, fill) requires integer height")),
+                };
+                let fill = match args.get(2) {
+                    Some(Value::Str(s)) => s.chars().next().unwrap_or(' '),
+                    Some(v) => v.to_string().chars().next().unwrap_or(' '),
+                    None => ' ',
+                };
+                let row: String = std::iter::repeat(fill).take(width).collect();
+                let rows = (0..height).map(|_| Value::Str(row.clone())).collect();
+                Ok(self.dict_value(vec![
+                    ("kind", Value::Str("screen".to_string())),
+                    ("width", Value::Int(width as i64)),
+                    ("height", Value::Int(height as i64)),
+                    ("rows", Value::List(Rc::new(RefCell::new(rows)))),
+                ]))
+            }
+            "screen_put" => {
+                let screen = match args.first() {
+                    Some(Value::Dict(map)) => map.clone(),
+                    _ => return Err(self.err("term.screen_put(screen, row, col, text) requires a screen dict")),
+                };
+                let row = match args.get(1) {
+                    Some(Value::Int(n)) => *n - 1,
+                    _ => return Err(self.err("term.screen_put(screen, row, col, text) requires integer row")),
+                };
+                let col = match args.get(2) {
+                    Some(Value::Int(n)) => *n - 1,
+                    _ => return Err(self.err("term.screen_put(screen, row, col, text) requires integer col")),
+                };
+                let text = match args.get(3) {
+                    Some(Value::Str(s)) => s.clone(),
+                    Some(v) => v.to_string(),
+                    None => String::new(),
+                };
+                let rows_value = screen.borrow().get(&Value::Str("rows".to_string()));
+                if let Some(Value::List(rows_rc)) = rows_value {
+                    let mut rows = rows_rc.borrow_mut();
+                    if row >= 0 && (row as usize) < rows.len() {
+                        if let Value::Str(line) = &rows[row as usize] {
+                            let mut chars: Vec<char> = line.chars().collect();
+                            if col >= 0 {
+                                for (offset, ch) in text.chars().enumerate() {
+                                    let idx = col as usize + offset;
+                                    if idx < chars.len() {
+                                        chars[idx] = ch;
+                                    }
+                                }
+                            }
+                            rows[row as usize] = Value::Str(chars.into_iter().collect());
+                        }
+                    }
+                }
+                Ok(Value::Dict(screen))
+            }
+            "screen_text" => {
+                let screen = match args.first() {
+                    Some(Value::Dict(map)) => map.clone(),
+                    _ => return Err(self.err("term.screen_text(screen) requires a screen dict")),
+                };
+                let rows_value = screen.borrow().get(&Value::Str("rows".to_string()));
+                if let Some(Value::List(rows_rc)) = rows_value {
+                    let mut lines = Vec::new();
+                    for row in rows_rc.borrow().iter() {
+                        lines.push(match row {
+                            Value::Str(s) => s.clone(),
+                            other => other.to_string(),
+                        });
+                    }
+                    return Ok(Value::Str(lines.join("\n")));
+                }
+                Ok(Value::Str(String::new()))
+            }
+            "screen_clear" => {
+                let screen = match args.first() {
+                    Some(Value::Dict(map)) => map.clone(),
+                    _ => return Err(self.err("term.screen_clear(screen, fill) requires a screen dict")),
+                };
+                let fill = match args.get(1) {
+                    Some(Value::Str(s)) => s.chars().next().unwrap_or(' '),
+                    Some(v) => v.to_string().chars().next().unwrap_or(' '),
+                    None => ' ',
+                };
+                let rows_value = screen.borrow().get(&Value::Str("rows".to_string()));
+                if let Some(Value::List(rows_rc)) = rows_value {
+                    let mut rows = rows_rc.borrow_mut();
+                    for row in rows.iter_mut() {
+                        let width = match row {
+                            Value::Str(s) => s.chars().count(),
+                            _ => 0,
+                        };
+                        *row = Value::Str(std::iter::repeat(fill).take(width).collect());
+                    }
+                }
+                Ok(Value::Dict(screen))
             }
             _ => Err(self.err(&format!("term has no function '{}'", name))),
         }

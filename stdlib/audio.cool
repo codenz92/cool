@@ -1,0 +1,134 @@
+private def _samples(values):
+    out = []
+    for item in values:
+        value = float(item)
+        if value < -1:
+            value = -1.0
+        if value > 1:
+            value = 1.0
+        out.append(value)
+    return out
+
+private def _byte(value):
+    n = int(value)
+    if n < 0:
+        return 0
+    if n > 255:
+        return 255
+    return n
+
+def sound(rate=44100, samples=nil, channels=1):
+    if samples == nil:
+        samples = []
+    return {"kind": "sound", "rate": int(rate), "channels": int(channels), "samples": _samples(samples)}
+
+def silence(duration, rate=44100):
+    count = int(float(duration) * int(rate))
+    samples = []
+    i = 0
+    while i < count:
+        samples.append(0.0)
+        i = i + 1
+    return sound(rate, samples)
+
+def square(frequency, duration, rate=44100, amplitude=1.0):
+    samples = []
+    period = int(float(rate) / float(frequency))
+    if period <= 0:
+        period = 1
+    count = int(float(duration) * int(rate))
+    i = 0
+    while i < count:
+        samples.append(float(amplitude) if (i % period) < int(period / 2) else -float(amplitude))
+        i = i + 1
+    return sound(rate, samples)
+
+def duration(s):
+    if s["rate"] == 0:
+        return 0.0
+    return float(len(s["samples"])) / float(s["rate"])
+
+def metadata(s):
+    return {"rate": s["rate"], "channels": s["channels"], "samples": len(s["samples"]), "duration": duration(s)}
+
+def normalize(s):
+    peak = 0.0
+    for sample in s["samples"]:
+        v = abs(float(sample))
+        if v > peak:
+            peak = v
+    if peak == 0:
+        return sound(s["rate"], s["samples"], s["channels"])
+    out = []
+    for sample in s["samples"]:
+        out.append(float(sample) / peak)
+    return sound(s["rate"], out, s["channels"])
+
+def mix(left, right):
+    rate = left["rate"]
+    limit = len(left["samples"])
+    if len(right["samples"]) > limit:
+        limit = len(right["samples"])
+    out = []
+    i = 0
+    while i < limit:
+        a = 0.0
+        b = 0.0
+        if i < len(left["samples"]):
+            a = left["samples"][i]
+        if i < len(right["samples"]):
+            b = right["samples"][i]
+        out.append((a + b) / 2.0)
+        i = i + 1
+    return sound(rate, out)
+
+def trim(s, start, stop):
+    a = int(float(start) * s["rate"])
+    b = int(float(stop) * s["rate"])
+    return sound(s["rate"], s["samples"][a:b], s["channels"])
+
+def pcm8(s):
+    out = []
+    for sample in s["samples"]:
+        out.append(_byte(int((float(sample) + 1.0) * 127.5)))
+    return out
+
+def pcm16(s):
+    out = []
+    for sample in s["samples"]:
+        v = float(sample)
+        if v < -1:
+            v = -1.0
+        if v > 1:
+            v = 1.0
+        out.append(int(v * 32767.0))
+    return out
+
+def from_pcm(samples, rate=44100, channels=1, bits=8):
+    out = []
+    if int(bits) == 8:
+        for sample in samples:
+            out.append(float(_byte(sample)) / 127.5 - 1.0)
+    else:
+        for sample in samples:
+            v = int(sample)
+            if v < -32768:
+                v = -32768
+            if v > 32767:
+                v = 32767
+            out.append(float(v) / 32767.0)
+    return sound(rate, out, channels)
+
+def wav(s, bits=8):
+    data = pcm8(s)
+    if int(bits) == 16:
+        data = pcm16(s)
+    return {
+        "kind": "wav",
+        "format": "pcm",
+        "sample_rate": s["rate"],
+        "channels": s["channels"],
+        "bits_per_sample": int(bits),
+        "samples": len(s["samples"]),
+        "data": data,
+    }

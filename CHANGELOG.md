@@ -19,6 +19,17 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/option.cool` and `stdlib/result.cool` provide practical typed error-handling helpers (`some`, `none`, `ok`, `err`, `unwrap`, `unwrap_or`, `unwrap_err`, predicates) on top of the new enum surface
 - Formatter, AST/inspect/doc tooling, and module export indexing now understand typed-language declarations, including enum variants, trait methods, generic parameters, and `implements` clauses
 
+### Phase 6 Follow-on — Terminal, UI, And Presentation Modules
+
+- New bundled `stdlib/ansi.cool`, `stdlib/color.cool`, `stdlib/theme.cool`, `stdlib/tui.cool`, and `stdlib/scene.cool` cover ANSI styling/cursor helpers, RGB/HSL/HSV color operations, palettes, reusable theme styles/spacing, deterministic TUI widgets/layout/focus/event state, and lightweight ASCII scene graphs
+- `import term` now includes deterministic mouse event records, mouse tracking escape toggles, and mutable in-memory screen buffers (`screen`, `screen_put`, `screen_text`, `screen_clear`) in addition to raw mode, cursor control, sizing, key polling, and output helpers
+- The terminal/UI tranche is covered across interpreter, VM, and LLVM native builds, including native runtime support for the new `term` screen/mouse helpers
+
+### Phase 6 Follow-on — Media And Game Development Modules
+
+- New bundled `stdlib/image.cool`, `stdlib/audio.cool`, `stdlib/sprite.cool`, and `stdlib/game.cool` add in-memory image buffers, crop/resize/grayscale/PPM conversion, lightweight audio sample buffers with PCM/WAV-style records, ASCII sprite tiles/sheets/animation helpers, and entity/world/timer/input/collision/main-loop primitives
+- The media/game tranche is covered across interpreter, VM, and LLVM native builds with deterministic tests that avoid real TTY, audio device, or image codec dependencies
+
 ### Phase 6 Follow-on — Data Modules (Pass 1)
 
 - New bundled `stdlib/bytes.cool`, `stdlib/base64.cool`, `stdlib/codec.cool`, `stdlib/html.cool`, `stdlib/config.cool`, and `stdlib/schema.cool` modules cover byte strings, hex/base64, codec dispatch, HTML escaping/extraction, config loading/merging, and typed shape validation across interpreter, VM, and native builds

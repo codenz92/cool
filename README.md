@@ -52,13 +52,15 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Bundled runtime/automation/observability modules: `import event`, `import workflow`, `import agent`, `import retry`, `import metrics`, `import trace`, `import profile`, `import bench`, `import notebook`, and `import secrets`
 - Bundled math/data-science/finance modules: `import decimal`, `import money`, `import stats`, `import vector`, `import matrix`, `import geom`, `import graph`, `import tree`, `import pipeline`, `import stream`, `import table`, `import search`, `import embed`, and `import ml`
 - Bundled security/crypto modules: `import crypto` plus built-in `import hashlib`
+- Bundled terminal/UI modules: `import ansi`, `import color`, `import theme`, `import tui`, and `import scene` plus built-in `import term`
+- Bundled media/game modules: `import image`, `import audio`, `import sprite`, and `import game`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `read_bytes()`, `write()`, `write_bytes()`, and `readlines()`
 - Explicit runtime helpers: `copy()`, `clone()`, `close()`, `panic()`, and `abort()`
 - `runfile()` to execute another `.cool` file at runtime
 - `eval(str)` to evaluate a Cool expression or statement at runtime
-- `import term` for raw terminal mode, cursor control, terminal sizing, and real-time key input across interpreter, VM, and native builds (real TTY required for interactive input)
+- `import term` for raw terminal mode, cursor control, terminal sizing, key input, mouse event records, mouse tracking escape toggles, and deterministic screen buffers across interpreter, VM, and native builds (real TTY required for interactive input)
 - `os.popen(cmd)` to run shell commands and capture output
 - Integer width helpers: `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, plus pointer-width `isize`, `usize`, `word_bits()`, and `word_bytes()`
 - Runtime-model helpers via `import std.memory` and `import std.runtime`
@@ -386,6 +388,58 @@ print(crypto.verify("payload", sig, key))
 box = crypto.encrypt("secret", key)
 print(crypto.decrypt(box, key))
 print(crypto.token_hex(16))
+```
+
+### Terminal And UI Modules
+
+Terminal helpers now cover ANSI escape generation, RGB/HSL/HSV color utilities, theme palettes/spacing, deterministic TUI rendering and event state, ASCII scene graphs, and the built-in `term` runtime surface for raw mode, cursor/key/mouse helpers, and mutable screen buffers:
+
+```python
+import ansi
+import color
+import term
+import theme
+import tui
+
+print(ansi.style("Ready", [1, 38, 5, 46]))
+print(color.to_hex(color.mix(color.rgb(0, 0, 0), color.rgb(255, 255, 255))))
+
+screen = term.screen(20, 3, ".")
+term.screen_put(screen, 1, 2, "Cool")
+print(term.screen_text(screen))
+
+print(tui.render(tui.button("Run", true), 12))
+focus = tui.focus(["menu", "body"], 0)
+tui.next_focus(focus)
+print(tui.focused(focus))
+print(theme.style(theme.default(), "title", "Dashboard"))
+```
+
+### Media And Game Modules
+
+Small in-memory media/game helpers provide image buffers, PCM/WAV-style audio records, ASCII sprite tiles/animation, timers, and entity/world/collision primitives without external device or codec dependencies:
+
+```python
+import audio
+import game
+import image
+import sprite
+
+img = image.blank(2, 2, {"r": 10, "g": 20, "b": 30, "a": 255})
+image.set(img, 1, 1, {"r": 200, "g": 100, "b": 0, "a": 255})
+print(image.metadata(img)["pixels"])
+
+snd = audio.square(440, 0.1, 8000)
+print(audio.wav(audio.normalize(snd))["bits_per_sample"])
+
+hero = sprite.sprite([sprite.frame(["@."])], 1)
+print(sprite.render(hero))
+print(sprite.tile(["abcd", "efgh"], 1, 0, 2, 2)["lines"][1])
+
+world = game.world(20, 10, 60)
+game.add(world, game.entity("player", 1, 1, 1, 0))
+game.tick(world, 0.5)
+print(game.snapshot(world)["frame"])
 ```
 
 ### Core Module
@@ -1238,6 +1292,15 @@ stdlib/
   embed.cool        Bag-of-words embeddings, cosine similarity, nearest-neighbor search
   ml.cool           Standardization, min-max scaling, KNN, confusion, and accuracy
   crypto.cool       Key derivation, random tokens, signatures, and symmetric envelopes
+  ansi.cool         ANSI styling, cursor movement, and box drawing helpers
+  color.cool        RGB/HSL/HSV, palettes, hex, gradients, luminance, and contrast
+  theme.cool        Reusable palettes, spacing scales, and text-style presets
+  tui.cool          Deterministic labels, buttons, panels, lists, focus, and events
+  scene.cool        Lightweight ASCII/TUI scene graph helpers
+  image.cool        In-memory images, pixel edits, crop/resize, grayscale, and PPM
+  audio.cool        Sample buffers, PCM/WAV records, normalize/mix/trim helpers
+  sprite.cool       ASCII sprite frames, tiles, sheets, flipping, and animation
+  game.cool         Worlds, timers, entities, input state, loops, and collisions
   html.cool         Escaping, tag stripping, and small extraction helpers
   xml.cool          Lightweight XML parsing, text extraction, and serialization
   unicode.cool      Unicode categories, normalization, width, and grapheme helpers

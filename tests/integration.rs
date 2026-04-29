@@ -9096,3 +9096,122 @@ total(["x"])
     let err = run_cool_with_args(source, &["check"]).unwrap_err();
     assert!(err.contains("expected 'list[int]', got 'list[str]'"), "stderr:\n{err}");
 }
+
+fn phase6_terminal_media_source() -> &'static str {
+    r##"
+import ansi
+import audio
+import color
+import game
+import image
+import scene
+import sprite
+import term
+import theme
+import tui
+
+print(ansi.cursor(2, 3).endswith("H"))
+print(ansi.rgb_fg(1, 2, 3).startswith("\x1b[38;2"))
+print(ansi.box(4, 3, "T").split("\n")[0].startswith("+ T "))
+
+c = color.parse_hex("#336699")
+print(color.to_hex(c))
+print(color.to_hex(color.mix(color.rgb(0, 0, 0), color.rgb(255, 255, 255), 0.5)))
+print(int(color.luminance(color.rgb(255, 255, 255)) * 100))
+print(color.to_hex(color.hsl(120, 1, 0.5)))
+print(color.to_hex(color.hsv(240, 1, 1)))
+print(len(color.palette(c, 3)))
+
+th = theme.default()
+print(color.to_hex(theme.get(th, "accent")))
+print(theme.style(th, "title", "Hi").find("Hi") >= 0)
+print(theme.space(th, "md"))
+
+bounds = tui.rect(0, 0, 20, 5)
+print(tui.split_horizontal(bounds, [5, 15])[1]["width"])
+print(tui.render(tui.button("OK", true), 10).strip())
+print(tui.render(tui.list(["a", "b"], 1), 4).split("\n")[1].strip())
+focus_state = tui.focus(["a", "b"], 0)
+tui.next_focus(focus_state)
+print(tui.focused(focus_state))
+list_widget = tui.list(["a", "b"], 0)
+tui.handle_event(list_widget, {"key": "down"})
+print(list_widget["selected"])
+loop_record = tui.event_loop({"kind": "state"}, [{"type": "tick"}])
+print(len(loop_record["events"]))
+
+root = scene.node("root", 1, 1, "R")
+scene.add(root, scene.node("child", 1, 0, "C"))
+print(len(scene.flatten(root)))
+print(scene.bounds(root)["width"])
+print(scene.render(root, 4, 3).split("\n")[1])
+
+img = image.blank(2, 2, color.rgb(10, 20, 30))
+image.set(img, 1, 1, color.rgb(200, 100, 0))
+print(image.metadata(img)["pixels"])
+print(color.to_hex(image.get(img, 1, 1)))
+print(image.to_ppm(image.crop(img, 1, 1, 1, 1)).split("\n")[0])
+
+snd = audio.sound(4, [0.0, 0.5, -0.5, 1.0])
+print(int(audio.duration(snd) * 100))
+print(audio.metadata(audio.silence(1, 4))["samples"])
+print(len(audio.mix(snd, audio.silence(1, 4))["samples"]))
+print(audio.pcm8(snd)[3])
+print(audio.wav(snd)["bits_per_sample"])
+print(int(audio.from_pcm([0, 255], 4)["samples"][1] * 100))
+
+sp = sprite.sprite([sprite.frame(["ab", "cd"]), sprite.frame(["ef", "gh"])], 2)
+print(sprite.render(sp, 1).split("\n")[0])
+print(sprite.render(sprite.flip_h(sp), 0).split("\n")[0])
+print(sprite.current(sp, 0.6)["lines"][0])
+print(sprite.tile(["abcd", "efgh"], 1, 0, 2, 2)["lines"][1])
+
+w = game.world(10, 10, 10)
+player = game.entity("p", 1, 1, 2, 0, 1, 1)
+wall = game.entity("wall", 3, 1, 0, 0, 1, 1)
+game.add(w, player)
+game.add(w, wall)
+game.tick(w, 1.0)
+print(int(game.find(w, "p")["x"]))
+print(game.collides(player, wall))
+print(game.pressed(game.input_state(["left"]), "left"))
+timer = game.timer(1)
+game.timer_tick(timer, 0.5)
+print(timer["done"])
+game.timer_tick(timer, 0.5)
+print(timer["ticks"])
+loop_state = game.loop_state(w)
+game.step_loop(loop_state, 0.1)
+print(len(loop_state["frames"]))
+
+m = term.mouse_event("down", 4, 5, "left", ["shift"])
+print(m["button"])
+print(term.mouse_sequence(true).endswith("h"))
+scr = term.screen(5, 2, ".")
+term.screen_put(scr, 1, 2, "OK")
+print(term.screen_text(scr).split("\n")[0])
+term.screen_clear(scr, "-")
+print(term.screen_text(scr).split("\n")[1])
+"##
+}
+
+fn phase6_terminal_media_expected() -> Vec<&'static str> {
+    vec![
+        "true", "true", "true", "#336699", "#7f7f7f", "99", "#00ff00", "#0000ff", "3", "#fdb515", "true", "2", "15",
+        "> [ OK ]", "> b", "b", "1", "1", "2", "2", ".RC.", "4", "#c86400", "P3", "100", "4", "4", "255", "8", "100",
+        "ef", "ba", "ef", "fg", "3", "true", "true", "false", "1", "1", "left", "true", ".OK..", "-----",
+    ]
+}
+
+#[test]
+fn test_phase6_terminal_ui_presentation_and_media_game_modules_interpreter_and_vm() {
+    let source = phase6_terminal_media_source();
+
+    let interp = run_cool(source).unwrap();
+    let interp_lines: Vec<_> = interp.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(interp_lines, phase6_terminal_media_expected());
+
+    let vm = run_cool_vm(source).unwrap();
+    let vm_lines: Vec<_> = vm.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(vm_lines, phase6_terminal_media_expected());
+}

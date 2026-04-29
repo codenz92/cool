@@ -7700,6 +7700,125 @@ static CoolVal cool_term_size_val(void) {
     return out;
 }
 
+static char cool_term_fill_char(CoolVal value, char fallback) {
+    if (value.tag == TAG_NIL) return fallback;
+    const char* text = cool_to_str(value);
+    if (!text || text[0] == '\0') return fallback;
+    return text[0];
+}
+
+static char* cool_term_repeat_char(char fill, int64_t width) {
+    if (width < 0) width = 0;
+    char* out = (char*)malloc((size_t)width + 1);
+    if (!out) {
+        fprintf(stderr, "OutOfMemory: term screen allocation failed\n");
+        exit(1);
+    }
+    memset(out, fill, (size_t)width);
+    out[width] = '\0';
+    return out;
+}
+
+static CoolVal cool_term_mouse_event(CoolVal* args, int nargs) {
+    CoolVal out = cool_dict_new();
+    const char* event = nargs > 0 ? cool_to_str(args[0]) : "move";
+    int64_t row = nargs > 1 ? cool_to_int(args[1]).payload : 0;
+    int64_t col = nargs > 2 ? cool_to_int(args[2]).payload : 0;
+    CoolVal button = nargs > 3 ? args[3] : cv_nil();
+    CoolVal modifiers = nargs > 4 ? args[4] : cool_list_make(cv_int(0));
+    cool_dict_set(out, cv_str("kind"), cv_str("mouse"));
+    cool_dict_set(out, cv_str("event"), cv_str(strdup(event)));
+    cool_dict_set(out, cv_str("row"), cv_int(row));
+    cool_dict_set(out, cv_str("col"), cv_int(col));
+    cool_dict_set(out, cv_str("button"), button);
+    cool_dict_set(out, cv_str("modifiers"), modifiers);
+    return out;
+}
+
+static CoolVal cool_term_mouse_sequence(CoolVal* args, int nargs) {
+    int enabled = 1;
+    if (nargs > 0 && args[0].tag != TAG_NIL) {
+        enabled = args[0].tag == TAG_BOOL ? args[0].payload != 0 : cool_truthy(args[0]);
+    }
+    return cv_str(strdup(enabled ? "\033[?1000;1006h" : "\033[?1000;1006l"));
+}
+
+static CoolVal cool_term_screen(CoolVal* args, int nargs) {
+    int64_t width = nargs > 0 ? cool_to_int(args[0]).payload : 0;
+    int64_t height = nargs > 1 ? cool_to_int(args[1]).payload : 0;
+    if (width < 0) width = 0;
+    if (height < 0) height = 0;
+    char fill = nargs > 2 ? cool_term_fill_char(args[2], ' ') : ' ';
+    CoolVal rows = cool_list_make(cv_int(height));
+    for (int64_t i = 0; i < height; i++) {
+        cool_list_push(rows, cv_str(cool_term_repeat_char(fill, width)));
+    }
+    CoolVal out = cool_dict_new();
+    cool_dict_set(out, cv_str("kind"), cv_str("screen"));
+    cool_dict_set(out, cv_str("width"), cv_int(width));
+    cool_dict_set(out, cv_str("height"), cv_int(height));
+    cool_dict_set(out, cv_str("rows"), rows);
+    return out;
+}
+
+static CoolVal cool_term_screen_put(CoolVal* args, int nargs) {
+    if (nargs < 4 || args[0].tag != TAG_DICT) return nargs > 0 ? args[0] : cv_nil();
+    CoolVal screen = args[0];
+    CoolVal rows_val = cool_dict_get_opt(screen, cv_str("rows"));
+    if (rows_val.tag != TAG_LIST) return screen;
+    int64_t row = cool_to_int(args[1]).payload - 1;
+    int64_t col = cool_to_int(args[2]).payload - 1;
+    if (row < 0 || col < 0) return screen;
+    CoolList* rows = (CoolList*)(intptr_t)rows_val.payload;
+    if (row >= rows->length) return screen;
+    CoolVal line_val = ((CoolVal*)rows->data)[row];
+    if (line_val.tag != TAG_STR) return screen;
+    const char* line = (const char*)(intptr_t)line_val.payload;
+    const char* text = cool_to_str(args[3]);
+    size_t len = strlen(line);
+    if ((size_t)col >= len) return screen;
+    char* out = strdup(line);
+    if (!out) {
+        fprintf(stderr, "OutOfMemory: term screen allocation failed\n");
+        exit(1);
+    }
+    for (size_t i = 0; text[i] != '\0' && (size_t)col + i < len; i++) {
+        out[(size_t)col + i] = text[i];
+    }
+    cool_list_set(rows_val, cv_int(row), cv_str(out));
+    return screen;
+}
+
+static CoolVal cool_term_screen_text(CoolVal* args, int nargs) {
+    if (nargs < 1 || args[0].tag != TAG_DICT) return cv_str(strdup(""));
+    CoolVal rows_val = cool_dict_get_opt(args[0], cv_str("rows"));
+    if (rows_val.tag != TAG_LIST) return cv_str(strdup(""));
+    CoolList* rows = (CoolList*)(intptr_t)rows_val.payload;
+    CoolStrBuf out;
+    sb_init(&out);
+    for (int64_t i = 0; i < rows->length; i++) {
+        if (i > 0) sb_push_char(&out, '\n');
+        CoolVal row = ((CoolVal*)rows->data)[i];
+        sb_push_str(&out, row.tag == TAG_STR ? (const char*)(intptr_t)row.payload : cool_to_str(row));
+    }
+    return cv_str(out.data);
+}
+
+static CoolVal cool_term_screen_clear(CoolVal* args, int nargs) {
+    if (nargs < 1 || args[0].tag != TAG_DICT) return nargs > 0 ? args[0] : cv_nil();
+    CoolVal screen = args[0];
+    CoolVal rows_val = cool_dict_get_opt(screen, cv_str("rows"));
+    if (rows_val.tag != TAG_LIST) return screen;
+    char fill = nargs > 1 ? cool_term_fill_char(args[1], ' ') : ' ';
+    CoolList* rows = (CoolList*)(intptr_t)rows_val.payload;
+    for (int64_t i = 0; i < rows->length; i++) {
+        CoolVal row = ((CoolVal*)rows->data)[i];
+        int64_t width = row.tag == TAG_STR ? (int64_t)strlen((const char*)(intptr_t)row.payload) : 0;
+        cool_list_set(rows_val, cv_int(i), cv_str(cool_term_repeat_char(fill, width)));
+    }
+    return screen;
+}
+
 static const char* cool_platform_os_name(void) {
 #if defined(_WIN32)
     return "windows";
@@ -8319,6 +8438,24 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
                 if (timeout_ms < 0) timeout_ms = 0;
             }
             return cool_term_get_char(1, timeout_ms);
+        }
+        if (strcmp(name, "mouse_event") == 0 && nargs >= 3 && nargs <= 5) {
+            return cool_term_mouse_event(args, nargs);
+        }
+        if (strcmp(name, "mouse_sequence") == 0 && nargs <= 1) {
+            return cool_term_mouse_sequence(args, nargs);
+        }
+        if (strcmp(name, "screen") == 0 && (nargs == 2 || nargs == 3)) {
+            return cool_term_screen(args, nargs);
+        }
+        if (strcmp(name, "screen_put") == 0 && nargs == 4) {
+            return cool_term_screen_put(args, nargs);
+        }
+        if (strcmp(name, "screen_text") == 0 && nargs == 1) {
+            return cool_term_screen_text(args, nargs);
+        }
+        if (strcmp(name, "screen_clear") == 0 && (nargs == 1 || nargs == 2)) {
+            return cool_term_screen_clear(args, nargs);
         }
     }
 

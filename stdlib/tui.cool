@@ -1,0 +1,146 @@
+import ansi
+
+private def _line(width, ch=" "):
+    out = ""
+    i = 0
+    while i < int(width):
+        out = out + str(ch)
+        i = i + 1
+    return out
+
+private def _fit(text, width):
+    out = str(text)
+    w = int(width)
+    if len(out) > w:
+        return out[0:w]
+    while len(out) < w:
+        out = out + " "
+    return out
+
+private def _clamp_index(index, count):
+    if count <= 0:
+        return 0
+    idx = int(index)
+    if idx < 0:
+        return 0
+    if idx >= count:
+        return count - 1
+    return idx
+
+def rect(x, y, width, height):
+    return {"kind": "rect", "x": int(x), "y": int(y), "width": int(width), "height": int(height)}
+
+def split_horizontal(bounds, sizes):
+    out = []
+    x = bounds["x"]
+    for size in sizes:
+        out.append(rect(x, bounds["y"], int(size), bounds["height"]))
+        x = x + int(size)
+    return out
+
+def split_vertical(bounds, sizes):
+    out = []
+    y = bounds["y"]
+    for size in sizes:
+        out.append(rect(bounds["x"], y, bounds["width"], int(size)))
+        y = y + int(size)
+    return out
+
+def label(text, bounds=nil):
+    return {"kind": "label", "text": str(text), "bounds": bounds}
+
+def button(text, active=false, bounds=nil):
+    return {"kind": "button", "text": str(text), "active": bool(active), "bounds": bounds}
+
+def panel(title, children=nil, bounds=nil):
+    if children == nil:
+        children = []
+    return {"kind": "panel", "title": str(title), "children": children, "bounds": bounds}
+
+def list(items, selected=0, bounds=nil):
+    out = []
+    for item in items:
+        out.append(str(item))
+    return {"kind": "list", "items": out, "selected": int(selected), "bounds": bounds}
+
+def focus(items, index=0):
+    out = []
+    for item in items:
+        out.append(item)
+    return {"kind": "focus", "items": out, "index": _clamp_index(index, len(out))}
+
+def focused(state):
+    if len(state["items"]) == 0:
+        return nil
+    return state["items"][state["index"]]
+
+def next_focus(state):
+    state["index"] = _clamp_index(state["index"] + 1, len(state["items"]))
+    return state
+
+def prev_focus(state):
+    state["index"] = _clamp_index(state["index"] - 1, len(state["items"]))
+    return state
+
+def handle_event(widget, event):
+    key = event.get("key", event.get("type", ""))
+    if widget["kind"] == "list":
+        if key == "down":
+            widget["selected"] = _clamp_index(widget["selected"] + 1, len(widget["items"]))
+        elif key == "up":
+            widget["selected"] = _clamp_index(widget["selected"] - 1, len(widget["items"]))
+    elif widget["kind"] == "button":
+        if key == "enter" or key == "space":
+            widget["active"] = true
+            widget["activated"] = true
+    return widget
+
+def event_loop(state, events):
+    if state.get("events") == nil:
+        state["events"] = []
+    for event in events:
+        state["last_event"] = event
+        state["events"].append(event)
+    return state
+
+def render(widget, width=nil):
+    kind = widget["kind"]
+    if width == nil:
+        if widget.get("bounds") != nil:
+            width = widget["bounds"]["width"]
+        else:
+            width = 40
+    if kind == "label":
+        return _fit(widget["text"], width)
+    if kind == "button":
+        text = "[ " + widget["text"] + " ]"
+        if widget["active"]:
+            text = "> " + text
+        return _fit(text, width)
+    if kind == "list":
+        lines = []
+        i = 0
+        while i < len(widget["items"]):
+            prefix = "  "
+            if i == widget["selected"]:
+                prefix = "> "
+            lines.append(_fit(prefix + widget["items"][i], width))
+            i = i + 1
+        return "\n".join(lines)
+    if kind == "panel":
+        inner = int(width) - 2
+        rows = ["+" + _fit(" " + widget["title"] + " ", inner).replace(" ", "-") + "+"]
+        for child in widget["children"]:
+            for line in render(child, inner).split("\n"):
+                rows.append("|" + _fit(line, inner) + "|")
+        rows.append("+" + _line(inner, "-") + "+")
+        return "\n".join(rows)
+    return str(widget)
+
+def screen(width, height, fill=" "):
+    rows = []
+    i = 0
+    while i < int(height):
+        rows.append(_line(width, fill))
+        i = i + 1
+    return {"kind": "screen", "width": int(width), "height": int(height), "rows": rows}

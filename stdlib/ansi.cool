@@ -1,0 +1,100 @@
+private def _esc():
+    return "\x1b["
+
+private def _join_codes(codes):
+    parts = []
+    for code in codes:
+        parts.append(str(code))
+    return _esc() + ";".join(parts) + "m"
+
+private def _clamp(value):
+    n = int(value)
+    if n < 0:
+        return 0
+    if n > 255:
+        return 255
+    return n
+
+private def _repeat(ch, count):
+    out = ""
+    i = 0
+    while i < int(count):
+        out = out + str(ch)
+        i = i + 1
+    return out
+
+def sgr(codes):
+    return _join_codes(codes)
+
+def reset():
+    return _join_codes([0])
+
+def bold():
+    return _join_codes([1])
+
+def dim():
+    return _join_codes([2])
+
+def underline():
+    return _join_codes([4])
+
+def fg(code):
+    return _join_codes([30 + int(code)])
+
+def bg(code):
+    return _join_codes([40 + int(code)])
+
+def fg256(code):
+    return _join_codes([38, 5, int(code)])
+
+def bg256(code):
+    return _join_codes([48, 5, int(code)])
+
+def rgb_fg(r, g, b):
+    return _join_codes([38, 2, _clamp(r), _clamp(g), _clamp(b)])
+
+def rgb_bg(r, g, b):
+    return _join_codes([48, 2, _clamp(r), _clamp(g), _clamp(b)])
+
+def style(text, codes=nil):
+    if codes == nil:
+        codes = []
+    return _join_codes(codes) + str(text) + reset()
+
+def cursor(row, col):
+    return _esc() + str(int(row)) + ";" + str(int(col)) + "H"
+
+def move(row, col):
+    return cursor(row, col)
+
+def clear():
+    return _esc() + "2J" + _esc() + "H"
+
+def clear_line():
+    return _esc() + "2K"
+
+def hide_cursor():
+    return _esc() + "?25l"
+
+def show_cursor():
+    return _esc() + "?25h"
+
+def box(width, height, title=nil):
+    w = int(width)
+    h = int(height)
+    if w < 2:
+        w = 2
+    if h < 2:
+        h = 2
+    top = "+" + _repeat("-", w) + "+"
+    if title != nil and str(title) != "":
+        label = " " + str(title) + " "
+        if len(label) < w:
+            top = "+" + label + _repeat("-", w - len(label)) + "+"
+    rows = [top]
+    i = 0
+    while i < h - 2:
+        rows.append("|" + _repeat(" ", w) + "|")
+        i = i + 1
+    rows.append("+" + _repeat("-", w) + "+")
+    return "\n".join(rows)

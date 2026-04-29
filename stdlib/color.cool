@@ -1,0 +1,183 @@
+private def _clamp(value, lo=0, hi=255):
+    n = int(value)
+    if n < int(lo):
+        return int(lo)
+    if n > int(hi):
+        return int(hi)
+    return n
+
+private def _hex_digit(value):
+    digits = "0123456789abcdef"
+    return digits[int(value)]
+
+private def _hex2(value):
+    n = _clamp(value)
+    return _hex_digit(int(n / 16)) + _hex_digit(n % 16)
+
+private def _hex_value(ch):
+    digits = "0123456789abcdef"
+    idx = digits.find(str(ch).lower())
+    if idx < 0:
+        raise "color: invalid hex digit"
+    return idx
+
+private def _unit(value):
+    n = float(value)
+    if n < 0:
+        return 0.0
+    if n > 1:
+        return 1.0
+    return n
+
+private def _hue(value):
+    h = float(value)
+    while h < 0:
+        h = h + 360.0
+    while h >= 360:
+        h = h - 360.0
+    return h
+
+private def _sector_mod2(value):
+    out = float(value)
+    while out >= 2:
+        out = out - 2.0
+    while out < 0:
+        out = out + 2.0
+    return out
+
+def rgb(r, g, b, a=255):
+    return {"kind": "color", "r": _clamp(r), "g": _clamp(g), "b": _clamp(b), "a": _clamp(a)}
+
+def gray(value):
+    return rgb(value, value, value)
+
+def parse_hex(text):
+    raw = str(text).strip()
+    if raw.startswith("#"):
+        raw = raw[1:len(raw)]
+    if len(raw) == 3:
+        raw = raw[0] + raw[0] + raw[1] + raw[1] + raw[2] + raw[2]
+    if len(raw) != 6 and len(raw) != 8:
+        raise "color: expected #rgb, #rrggbb, or #rrggbbaa"
+    r = _hex_value(raw[0]) * 16 + _hex_value(raw[1])
+    g = _hex_value(raw[2]) * 16 + _hex_value(raw[3])
+    b = _hex_value(raw[4]) * 16 + _hex_value(raw[5])
+    a = 255
+    if len(raw) == 8:
+        a = _hex_value(raw[6]) * 16 + _hex_value(raw[7])
+    return rgb(r, g, b, a)
+
+def to_hex(c, alpha=false):
+    out = "#" + _hex2(c["r"]) + _hex2(c["g"]) + _hex2(c["b"])
+    if alpha:
+        out = out + _hex2(c.get("a", 255))
+    return out
+
+def mix(left, right, amount=0.5):
+    t = float(amount)
+    if t < 0:
+        t = 0.0
+    if t > 1:
+        t = 1.0
+    return rgb(
+        int(left["r"] * (1 - t) + right["r"] * t),
+        int(left["g"] * (1 - t) + right["g"] * t),
+        int(left["b"] * (1 - t) + right["b"] * t),
+        int(left.get("a", 255) * (1 - t) + right.get("a", 255) * t),
+    )
+
+def luminance(c):
+    return (0.2126 * c["r"] + 0.7152 * c["g"] + 0.0722 * c["b"]) / 255.0
+
+def contrast(left, right):
+    a = luminance(left) + 0.05
+    b = luminance(right) + 0.05
+    if a > b:
+        return a / b
+    return b / a
+
+def gradient(start, stop, steps):
+    count = int(steps)
+    if count <= 1:
+        return [start]
+    out = []
+    i = 0
+    while i < count:
+        out.append(mix(start, stop, float(i) / float(count - 1)))
+        i = i + 1
+    return out
+
+def hsl(h, s, l):
+    hue = _hue(h)
+    sat = _unit(s)
+    light = _unit(l)
+    c = (1.0 - abs(2.0 * light - 1.0)) * sat
+    x = c * (1.0 - abs(_sector_mod2(hue / 60.0) - 1.0))
+    m = light - c / 2.0
+    r1 = 0.0
+    g1 = 0.0
+    b1 = 0.0
+    if hue < 60:
+        r1 = c
+        g1 = x
+    elif hue < 120:
+        r1 = x
+        g1 = c
+    elif hue < 180:
+        g1 = c
+        b1 = x
+    elif hue < 240:
+        g1 = x
+        b1 = c
+    elif hue < 300:
+        r1 = x
+        b1 = c
+    else:
+        r1 = c
+        b1 = x
+    return rgb(int((r1 + m) * 255), int((g1 + m) * 255), int((b1 + m) * 255))
+
+def hsv(h, s, v):
+    hue = _hue(h)
+    sat = _unit(s)
+    value = _unit(v)
+    c = value * sat
+    x = c * (1.0 - abs(_sector_mod2(hue / 60.0) - 1.0))
+    m = value - c
+    r1 = 0.0
+    g1 = 0.0
+    b1 = 0.0
+    if hue < 60:
+        r1 = c
+        g1 = x
+    elif hue < 120:
+        r1 = x
+        g1 = c
+    elif hue < 180:
+        g1 = c
+        b1 = x
+    elif hue < 240:
+        g1 = x
+        b1 = c
+    elif hue < 300:
+        r1 = x
+        b1 = c
+    else:
+        r1 = c
+        b1 = x
+    return rgb(int((r1 + m) * 255), int((g1 + m) * 255), int((b1 + m) * 255))
+
+def palette(base, count=5):
+    n = int(count)
+    if n <= 1:
+        return [base]
+    out = []
+    i = 0
+    while i < n:
+        t = float(i) / float(n - 1)
+        if t < 0.5:
+            out.append(mix(rgb(0, 0, 0, base.get("a", 255)), base, t * 2.0))
+        else:
+            out.append(mix(base, rgb(255, 255, 255, base.get("a", 255)), (t - 0.5) * 2.0))
+        i = i + 1
+    return out
