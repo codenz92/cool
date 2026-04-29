@@ -651,6 +651,23 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 19 — Release Candidate And Distribution ✅ Complete
+
+> Goal: turn a hardened Cool build into a traceable release-candidate payload that can be uploaded, mirrored, or promoted without rebuilding.
+
+### Release Candidate Packaging
+
+- [x] Repo-local `scripts/release_candidate.sh` command that runs the release gate by default and builds the optimized `cool` compiler binary
+- [x] Platform-specific payload layout under `dist/release-candidate/<version>/<platform>/`
+- [x] SHA-256 checksums for the packaged binary, documentation, release scripts, and generated release notes
+- [x] Machine-readable `manifest.json` with package version, git commit, branch, dirty-state flag, host platform, Rust toolchain, and release-gate status
+- [x] Generated `RELEASE_NOTES.md` and compressed `cool-<version>-<platform>.tar.gz` distribution archive
+- [x] `latest.json` pointer for downstream automation and artifact mirrors
+- [x] GitHub Actions `Release Candidate` workflow that packages and uploads distribution artifacts on manual dispatch or `v*` tag pushes
+- [x] README documentation for local RC builds, skip-gate repackaging, and publish/tag boundaries
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -673,3 +690,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 16 — Systems Interop And Targets | ✅ Complete |
 | 17 — Signature Features And Flagship Software | ✅ Complete |
 | 18 — Release Hardening | ✅ Complete |
+| 19 — Release Candidate And Distribution | ✅ Complete |

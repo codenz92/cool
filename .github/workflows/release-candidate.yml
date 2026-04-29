@@ -1,0 +1,37 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install LLVM 17
+        run: |
+          brew install llvm@17
+          echo "LLVM_SYS_170_PREFIX=$(brew --prefix llvm@17)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Build release candidate
+        run: bash scripts/release_candidate.sh --require-clean
+
+      - name: Upload release-candidate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-release-candidate-${{ runner.os }}-${{ runner.arch }}
+          path: dist/release-candidate/**

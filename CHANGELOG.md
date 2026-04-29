@@ -2,7 +2,14 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 18 Complete
+## [Unreleased] - Phase 19 Complete
+
+### Phase 19 — Release Candidate And Distribution
+
+- Added `scripts/release_candidate.sh`, a repo-level release-candidate packager that runs the Phase 18 release gate by default, builds the optimized `cool` binary, and writes a platform-specific distribution payload under `dist/release-candidate/<version>/<platform>/`
+- Added generated release notes, SHA-256 checksums, `manifest.json` provenance, and `latest.json` automation metadata for each release-candidate build
+- Added a GitHub Actions `Release Candidate` workflow that packages and uploads RC artifacts on manual dispatch or `v*` tag pushes without requiring release-publishing credentials
+- Documented the RC command, skip-gate repackaging path, artifact layout, and explicit boundary that local RC builds do not create tags, push commits, upload releases, or publish packages
 
 ### Phase 18 — Release Hardening
 

@@ -882,6 +882,24 @@ bash scripts/release_gate.sh
 
 The gate runs `cargo fmt --check`, builds the `cool` binary, runs the full Rust test suite, statically checks representative Cool examples, verifies interpreter / VM / LLVM parity on a closure smoke program, and confirms freestanding object output still works.
 
+### Release Candidate Build
+
+Build a compiler release-candidate distribution after the gate passes:
+
+```bash
+bash scripts/release_candidate.sh
+```
+
+The command runs the release gate by default, builds `target/release/cool`, and writes a platform-specific payload under `dist/release-candidate/<version>/<platform>/`. The payload includes the release binary, README, changelog, roadmap, license, release scripts, generated release notes, `checksums.txt`, and `manifest.json` with the Cargo version, git commit, worktree state, host platform, Rust toolchain, and release-gate status. It also writes `dist/release-candidate/cool-<version>-<platform>.tar.gz` plus `dist/release-candidate/latest.json` for CI or downstream packaging.
+
+If the gate was already run in the same environment, use:
+
+```bash
+bash scripts/release_candidate.sh --skip-gate
+```
+
+The script only creates local distribution artifacts; it does not create git tags, push commits, upload GitHub releases, or publish packages. The `Release Candidate` GitHub Actions workflow runs the same script on manual dispatch or `v*` tag pushes and uploads the generated `dist/release-candidate/**` tree as a workflow artifact.
+
 ### Project workflow
 
 ```bash
