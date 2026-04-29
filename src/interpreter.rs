@@ -4109,11 +4109,12 @@ class Stack:
             "is_alive" => {
                 self.require_process_capability("os.is_alive()")?;
                 let pid = match args.get(0) {
-                    Some(Value::Int(n)) => *n as libc::pid_t,
+                    Some(Value::Int(n)) => *n,
                     _ => return Err(self.err("os.is_alive() requires a pid integer")),
                 };
                 #[cfg(unix)]
                 {
+                    let pid = pid as libc::pid_t;
                     let rc = unsafe { libc::kill(pid, 0) };
                     if rc == 0 {
                         Ok(Value::Bool(true))
@@ -4130,13 +4131,13 @@ class Stack:
                 }
                 #[cfg(not(unix))]
                 {
-                    Ok(Value::Bool(std::process::id() as i64 == pid as i64))
+                    Ok(Value::Bool(std::process::id() as i64 == pid))
                 }
             }
             "kill" => {
                 self.require_process_capability("os.kill()")?;
                 let pid = match args.get(0) {
-                    Some(Value::Int(n)) => *n as libc::pid_t,
+                    Some(Value::Int(n)) => *n,
                     _ => return Err(self.err("os.kill() requires a pid integer")),
                 };
                 let signal = match args.get(1) {
@@ -4146,6 +4147,7 @@ class Stack:
                 };
                 #[cfg(unix)]
                 {
+                    let pid = pid as libc::pid_t;
                     let rc = unsafe { libc::kill(pid, signal) };
                     if rc == 0 {
                         Ok(Value::Bool(true))
@@ -4155,6 +4157,7 @@ class Stack:
                 }
                 #[cfg(not(unix))]
                 {
+                    let _ = (pid, signal);
                     Err(self.err("os.kill() is only supported on unix hosts"))
                 }
             }

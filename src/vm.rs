@@ -2769,11 +2769,12 @@ impl VM {
                     "is_alive" => {
                         self.require_process_capability("os.is_alive()")?;
                         let pid = match args.first() {
-                            Some(VmValue::Int(n)) => *n as libc::pid_t,
+                            Some(VmValue::Int(n)) => *n,
                             _ => return Err(self.err("os.is_alive requires a pid integer")),
                         };
                         #[cfg(unix)]
                         {
+                            let pid = pid as libc::pid_t;
                             let rc = unsafe { libc::kill(pid, 0) };
                             if rc == 0 {
                                 Ok(VmValue::Bool(true))
@@ -2790,13 +2791,13 @@ impl VM {
                         }
                         #[cfg(not(unix))]
                         {
-                            Ok(VmValue::Bool(std::process::id() as i64 == pid as i64))
+                            Ok(VmValue::Bool(std::process::id() as i64 == pid))
                         }
                     }
                     "kill" => {
                         self.require_process_capability("os.kill()")?;
                         let pid = match args.first() {
-                            Some(VmValue::Int(n)) => *n as libc::pid_t,
+                            Some(VmValue::Int(n)) => *n,
                             _ => return Err(self.err("os.kill requires a pid integer")),
                         };
                         let signal = match args.get(1) {
@@ -2806,6 +2807,7 @@ impl VM {
                         };
                         #[cfg(unix)]
                         {
+                            let pid = pid as libc::pid_t;
                             let rc = unsafe { libc::kill(pid, signal) };
                             if rc == 0 {
                                 Ok(VmValue::Bool(true))
@@ -2815,6 +2817,7 @@ impl VM {
                         }
                         #[cfg(not(unix))]
                         {
+                            let _ = (pid, signal);
                             Err(self.err("os.kill is only supported on unix hosts"))
                         }
                     }
