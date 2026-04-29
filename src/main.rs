@@ -560,6 +560,8 @@ enum BuildFinalArtifact {
     KernelImage,
 }
 
+const DEFAULT_KERNEL_IMAGE_TARGET: &str = "x86_64-unknown-linux-gnu";
+
 impl BuildFinalArtifact {
     fn label(self) -> &'static str {
         match self {
@@ -578,6 +580,14 @@ impl BuildFinalArtifact {
             Self::Emit(BuildEmitKind::SharedLib) => shared_library_path(base, target_triple),
             Self::KernelImage => base.with_extension("elf"),
         }
+    }
+}
+
+fn effective_build_target(requested_target: Option<String>, final_artifact: BuildFinalArtifact) -> Option<String> {
+    if final_artifact == BuildFinalArtifact::KernelImage && requested_target.is_none() {
+        Some(DEFAULT_KERNEL_IMAGE_TARGET.to_string())
+    } else {
+        requested_target
     }
 }
 
@@ -1685,6 +1695,7 @@ Examples:
             } else {
                 BuildFinalArtifact::Emit(BuildEmitKind::Binary)
             };
+            let effective_target = effective_build_target(requested_target, final_artifact);
             let build_mode = if final_artifact == BuildFinalArtifact::KernelImage || freestanding_requested {
                 llvm_codegen::NativeBuildMode::Freestanding
             } else {
@@ -1715,7 +1726,7 @@ Examples:
             let native_links = native_link_config(&project);
 
             let base_output = PathBuf::from(project.output_name());
-            let final_path = final_artifact.output_path(&base_output, requested_target.as_deref());
+            let final_path = final_artifact.output_path(&base_output, effective_target.as_deref());
             let compile_output = if final_artifact == BuildFinalArtifact::KernelImage {
                 base_output.with_extension("o")
             } else {
@@ -1730,7 +1741,7 @@ Examples:
                 profile,
                 build_mode,
                 final_artifact,
-                requested_target.as_deref(),
+                effective_target.as_deref(),
                 requested_cpu.as_deref(),
                 requested_cpu_features.as_deref(),
                 requested_entry.as_deref(),
@@ -1750,7 +1761,7 @@ Examples:
                 options: llvm_codegen::NativeCompileOptions {
                     build_mode,
                     artifact_kind: compile_kind,
-                    target_triple: requested_target.clone(),
+                    target_triple: effective_target,
                     target_cpu: requested_cpu,
                     target_features: requested_cpu_features,
                     entry_symbol: requested_entry,
@@ -1811,6 +1822,7 @@ Examples:
             } else {
                 BuildFinalArtifact::Emit(BuildEmitKind::Binary)
             };
+            let effective_target = effective_build_target(requested_target, final_artifact);
             let build_mode = if final_artifact == BuildFinalArtifact::KernelImage || freestanding_requested {
                 llvm_codegen::NativeBuildMode::Freestanding
             } else {
@@ -1827,7 +1839,7 @@ Examples:
             }
 
             let base_output = file_path.with_extension("");
-            let final_path = final_artifact.output_path(&base_output, requested_target.as_deref());
+            let final_path = final_artifact.output_path(&base_output, effective_target.as_deref());
             let compile_output = if final_artifact == BuildFinalArtifact::KernelImage {
                 base_output.with_extension("o")
             } else {
@@ -1842,7 +1854,7 @@ Examples:
                 profile,
                 build_mode,
                 final_artifact,
-                requested_target.as_deref(),
+                effective_target.as_deref(),
                 requested_cpu.as_deref(),
                 requested_cpu_features.as_deref(),
                 requested_entry.as_deref(),
@@ -1867,7 +1879,7 @@ Examples:
                 options: llvm_codegen::NativeCompileOptions {
                     build_mode,
                     artifact_kind: compile_kind,
-                    target_triple: requested_target.clone(),
+                    target_triple: effective_target,
                     target_cpu: requested_cpu,
                     target_features: requested_cpu_features,
                     entry_symbol: requested_entry,

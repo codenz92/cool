@@ -4516,20 +4516,13 @@ fn test_cool_build_linker_script_flag_produces_elf() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let fn_section = if cfg!(target_os = "macos") {
-        "__TEXT,__boot"
-    } else {
-        ".text.boot"
-    };
     std::fs::write(
         dir.join("kernel.cool"),
-        format!(
-            r#"def _start():
-    section: "{fn_section}"
+        r#"def _start():
+    section: ".text.boot"
     entry: "_start"
     return 0
-"#
-        ),
+"#,
     )
     .unwrap();
 
@@ -4573,20 +4566,13 @@ linker_script = "link.ld"
     )
     .unwrap();
 
-    let fn_section = if cfg!(target_os = "macos") {
-        "__TEXT,__boot"
-    } else {
-        ".text.boot"
-    };
     std::fs::write(
         dir.join("src").join("main.cool"),
-        format!(
-            r#"def _start():
-    section: "{fn_section}"
+        r#"def _start():
+    section: ".text.boot"
     entry: "_start"
     return 0
-"#
-        ),
+"#,
     )
     .unwrap();
 
