@@ -439,6 +439,20 @@ mkdir -p "$RC_DIR/bin" "$RC_DIR/docs" "$RC_DIR/scripts"
 
 cp "$BINARY_SRC" "$RC_DIR/bin/$BINARY_NAME"
 chmod 755 "$RC_DIR/bin/$BINARY_NAME"
+if [[ "$PLATFORM" == windows-* || "$PLATFORM" == *-windows* ]]; then
+    IFS=';' read -ra RUNTIME_DLL_DIRS <<< "${COOL_RELEASE_RUNTIME_DLL_DIRS:-}"
+    for runtime_dir in "${RUNTIME_DLL_DIRS[@]}"; do
+        [[ -z "$runtime_dir" || ! -d "$runtime_dir" ]] && continue
+        while IFS= read -r dll_path; do
+            cp "$dll_path" "$RC_DIR/bin/"
+            chmod 755 "$RC_DIR/bin/$(basename "$dll_path")"
+        done < <(
+            find "$runtime_dir" -maxdepth 1 -type f \
+                \( -iname 'LLVM*.dll' -o -iname 'libLLVM*.dll' \) \
+                | LC_ALL=C sort
+        )
+    done
+fi
 cp README.md CHANGELOG.md ROADMAP.md LICENSE "$RC_DIR/"
 cp install.sh "$RC_DIR/"
 cp docs/INSTALL.md docs/RELEASE_TRUST.md docs/PACKAGE_CHANNELS.md docs/RELEASE_VALIDATION.md "$RC_DIR/docs/"

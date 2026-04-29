@@ -102,7 +102,8 @@ jobs:
             fi
             sleep $((attempt * 30))
           done
-          echo "LLVM_SYS_170_PREFIX=C:\\Program Files\\LLVM" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_170_PREFIX=C:/Program Files/LLVM" >> "$GITHUB_ENV"
+          echo "COOL_RELEASE_RUNTIME_DLL_DIRS=C:/Program Files/LLVM/bin" >> "$GITHUB_ENV"
           echo "C:\\Program Files\\LLVM\\bin" >> "$GITHUB_PATH"
 
       - name: Build platform release candidate
