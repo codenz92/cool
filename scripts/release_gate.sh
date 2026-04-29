@@ -48,10 +48,17 @@ case "$HOST_OS" in
         HOSTED_NATIVE_BINARY=0
         ;;
 esac
+if [[ -n "${COOL_RELEASE_GATE_HOSTED_NATIVE_BINARY:-}" ]]; then
+    HOSTED_NATIVE_BINARY="$COOL_RELEASE_GATE_HOSTED_NATIVE_BINARY"
+fi
 
 run cargo fmt --check
 run cargo build -q --bin cool
-run cargo test -q
+if [[ "$HOSTED_NATIVE_BINARY" -eq 1 ]]; then
+    run cargo test -q
+else
+    run cargo test -q --bins
+fi
 
 COOL_BIN="${COOL_BIN:-$ROOT/target/debug/cool}"
 if [[ ! -x "$COOL_BIN" ]]; then
