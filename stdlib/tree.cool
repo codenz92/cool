@@ -1,0 +1,80 @@
+private def _clone(value):
+    if type(value) == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+def node(value, children=nil, meta=nil):
+    out = {"kind": "tree_node", "value": value, "children": [], "meta": _clone(meta)}
+    if children != nil:
+        for child in children:
+            out["children"].append(child)
+    return out
+
+def add(parent, child):
+    parent["children"].append(child)
+    return child
+
+def walk(root, order="pre"):
+    out = []
+    if str(order) == "post":
+        for child in root["children"]:
+            for item in walk(child, order):
+                out.append(item)
+        out.append(root)
+        return out
+    out.append(root)
+    for child in root["children"]:
+        for item in walk(child, order):
+            out.append(item)
+    return out
+
+def values(root, order="pre"):
+    out = []
+    for item in walk(root, order):
+        out.append(item["value"])
+    return out
+
+def find(root, value):
+    for item in walk(root):
+        if item["value"] == value:
+            return item
+    return nil
+
+def height(root):
+    best = 0
+    for child in root["children"]:
+        h = height(child)
+        if h > best:
+            best = h
+    return best + 1
+
+def size(root):
+    total = 1
+    for child in root["children"]:
+        total = total + size(child)
+    return total
+
+def map(root, fn):
+    children = []
+    for child in root["children"]:
+        children.append(map(child, fn))
+    return node(fn(root["value"]), children, root.get("meta"))
+
+def filter(root, predicate):
+    if not predicate(root["value"]):
+        return nil
+    children = []
+    for child in root["children"]:
+        kept = filter(child, predicate)
+        if kept != nil:
+            children.append(kept)
+    return node(root["value"], children, root.get("meta"))
+

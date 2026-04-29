@@ -268,20 +268,20 @@
 #### Math, Data Science, And Finance
 
 - [x] `datetime` module — timestamps, local date formatting/parsing, and duration helpers
-- [ ] `decimal` module — exact decimal arithmetic for finance and configuration math
-- [ ] `money` module — decimal-safe currency values, formatting, and exchange abstractions
-- [ ] `stats` module — descriptive statistics, sampling, percentiles, and distributions
-- [ ] `vector` module — geometric vectors, transforms, and numeric helper operations
-- [ ] `matrix` module — small matrix math for graphics, tools, and simulation work
-- [ ] `geom` module — rectangles, points, intersections, bounds, and spatial utilities
-- [ ] `graph` module — graph nodes/edges, traversal, shortest path, DAG utilities
-- [ ] `tree` module — generic tree traversal, mutation, and query helpers
-- [ ] `pipeline` module — composable data pipelines and stream-style transformations
-- [ ] `stream` module — lazy iterators, generators, adapters, and chunked processing helpers
-- [ ] `table` module — tabular display, sorting, formatting, and CSV/console rendering helpers
-- [ ] `search` module — indexing, query parsing, scoring, and local search helpers
-- [ ] `embed` module — vector embeddings, similarity search hooks, and semantic indexing helpers
-- [ ] `ml` module — lightweight inference wrappers and data preprocessing primitives
+- [x] `decimal` module — exact decimal arithmetic for finance and configuration math
+- [x] `money` module — decimal-safe currency values, formatting, and exchange abstractions
+- [x] `stats` module — descriptive statistics, sampling, percentiles, and distributions
+- [x] `vector` module — geometric vectors, transforms, and numeric helper operations
+- [x] `matrix` module — small matrix math for graphics, tools, and simulation work
+- [x] `geom` module — rectangles, points, intersections, bounds, and spatial utilities
+- [x] `graph` module — graph nodes/edges, traversal, shortest path, DAG utilities
+- [x] `tree` module — generic tree traversal, mutation, and query helpers
+- [x] `pipeline` module — composable data pipelines and stream-style transformations
+- [x] `stream` module — lazy iterators, generators, adapters, and chunked processing helpers
+- [x] `table` module — tabular display, sorting, formatting, and CSV/console rendering helpers
+- [x] `search` module — indexing, query parsing, scoring, and local search helpers
+- [x] `embed` module — vector embeddings, similarity search hooks, and semantic indexing helpers
+- [x] `ml` module — lightweight inference wrappers and data preprocessing primitives
 
 #### Security And Crypto
 

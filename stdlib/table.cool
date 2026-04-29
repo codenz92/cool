@@ -1,0 +1,109 @@
+import csv
+
+private def _clone(value):
+    if type(value) == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+def table(rows=nil, columns=nil):
+    data = []
+    if rows != nil:
+        for row in rows:
+            data.append(_clone(row))
+    if columns == nil:
+        columns = []
+        if len(data) > 0 and type(data[0]) == "dict":
+            for key in data[0].keys():
+                columns.append(key)
+    return {"kind": "table", "columns": columns, "rows": data}
+
+def select(t, columns):
+    rows = []
+    for row in t["rows"]:
+        item = {}
+        for col in columns:
+            item[str(col)] = row.get(str(col))
+        rows.append(item)
+    return table(rows, columns)
+
+def where(t, predicate):
+    rows = []
+    for row in t["rows"]:
+        if predicate(row):
+            rows.append(_clone(row))
+    return table(rows, t["columns"])
+
+def sort_by(t, column, reverse=false):
+    rows = []
+    for row in t["rows"]:
+        rows.append(_clone(row))
+    i = 0
+    key = str(column)
+    while i < len(rows):
+        j = i + 1
+        while j < len(rows):
+            swap = rows[j].get(key) < rows[i].get(key)
+            if reverse:
+                swap = rows[j].get(key) > rows[i].get(key)
+            if swap:
+                tmp = rows[i]
+                rows[i] = rows[j]
+                rows[j] = tmp
+            j = j + 1
+        i = i + 1
+    return table(rows, t["columns"])
+
+def group_by(t, column):
+    groups = {}
+    key = str(column)
+    for row in t["rows"]:
+        value = str(row.get(key))
+        if value not in groups:
+            groups[value] = []
+        groups[value].append(_clone(row))
+    return groups
+
+def render(t):
+    lines = []
+    lines.append(" | ".join(t["columns"]))
+    for row in t["rows"]:
+        cells = []
+        for col in t["columns"]:
+            cells.append(str(row.get(col, "")))
+        lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+def to_csv(t):
+    lines = [",".join(t["columns"])]
+    for row in t["rows"]:
+        cells = []
+        for col in t["columns"]:
+            cells.append(str(row.get(col, "")))
+        lines.append(",".join(cells))
+    return "\n".join(lines)
+
+def from_csv(text):
+    rows = csv.loads(str(text))
+    if len(rows) == 0:
+        return table([], [])
+    columns = rows[0]
+    data = []
+    i = 1
+    while i < len(rows):
+        row = {}
+        j = 0
+        while j < len(columns) and j < len(rows[i]):
+            row[columns[j]] = rows[i][j]
+            j = j + 1
+        data.append(row)
+        i = i + 1
+    return table(data, columns)
+

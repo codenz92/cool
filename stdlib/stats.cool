@@ -1,0 +1,157 @@
+import math
+import random
+
+private def _numbers(values):
+    out = []
+    for item in values:
+        out.append(float(item))
+    return out
+
+private def _sorted(values):
+    out = _numbers(values)
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if out[j] < out[i]:
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+def count(values):
+    return len(values)
+
+def sum(values):
+    total = 0.0
+    for item in values:
+        total = total + float(item)
+    return total
+
+def mean(values):
+    if len(values) == 0:
+        return nil
+    return sum(values) / len(values)
+
+def min(values):
+    if len(values) == 0:
+        return nil
+    best = float(values[0])
+    for item in values:
+        value = float(item)
+        if value < best:
+            best = value
+    return best
+
+def max(values):
+    if len(values) == 0:
+        return nil
+    best = float(values[0])
+    for item in values:
+        value = float(item)
+        if value > best:
+            best = value
+    return best
+
+def median(values):
+    ordered = _sorted(values)
+    if len(ordered) == 0:
+        return nil
+    mid = int(len(ordered) / 2)
+    if len(ordered) % 2 == 0:
+        return (ordered[mid - 1] + ordered[mid]) / 2.0
+    return ordered[mid]
+
+def percentile(values, p):
+    ordered = _sorted(values)
+    if len(ordered) == 0:
+        return nil
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = float(p) / 100.0 * (len(ordered) - 1)
+    low = int(rank)
+    high = low + 1
+    if high >= len(ordered):
+        return ordered[len(ordered) - 1]
+    weight = rank - low
+    return ordered[low] * (1.0 - weight) + ordered[high] * weight
+
+def variance(values, sample=false):
+    avg = mean(values)
+    if avg == nil:
+        return nil
+    denom = len(values)
+    if sample:
+        denom = denom - 1
+    if denom <= 0:
+        return 0.0
+    total = 0.0
+    for item in values:
+        diff = float(item) - avg
+        total = total + diff * diff
+    return total / denom
+
+def stdev(values, sample=false):
+    value = variance(values, sample)
+    if value == nil:
+        return nil
+    return math.sqrt(value)
+
+def describe(values):
+    return {
+        "count": len(values),
+        "sum": sum(values),
+        "min": min(values),
+        "max": max(values),
+        "mean": mean(values),
+        "median": median(values),
+        "p90": percentile(values, 90),
+        "variance": variance(values),
+    }
+
+def histogram(values, bins):
+    ordered = _numbers(values)
+    count_bins = int(bins)
+    if count_bins <= 0:
+        return []
+    lo = min(ordered)
+    hi = max(ordered)
+    if lo == nil:
+        return []
+    if hi == lo:
+        return [{"min": lo, "max": hi, "count": len(ordered)}]
+    width = (hi - lo) / count_bins
+    out = []
+    i = 0
+    while i < count_bins:
+        out.append({"min": lo + width * i, "max": lo + width * (i + 1), "count": 0})
+        i = i + 1
+    for value in ordered:
+        idx = int((value - lo) / width)
+        if idx >= count_bins:
+            idx = count_bins - 1
+        out[idx]["count"] = out[idx]["count"] + 1
+    return out
+
+def sample(values, n, seed=nil):
+    if seed != nil:
+        random.seed(int(seed))
+    pool = []
+    for item in values:
+        pool.append(item)
+    out = []
+    limit = int(n)
+    while len(out) < limit and len(pool) > 0:
+        idx = random.randint(0, len(pool) - 1)
+        out.append(pool[idx])
+        next_pool = []
+        i = 0
+        while i < len(pool):
+            if i != idx:
+                next_pool.append(pool[i])
+            i = i + 1
+        pool = next_pool
+    return out
+

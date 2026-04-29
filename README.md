@@ -50,6 +50,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Bundled storage/package modules: `import cache`, `import memo`, `import package`, `import compress`, `import archive`, and `import bundle`
 - Bundled parsing/tooling modules: `import doc`, `import template`, `import lexer`, `import parser`, `import ast`, `import inspect`, `import diff`, `import patch`, `import project`, `import release`, `import repo`, `import modulegraph`, `import plugin`, `import lsp`, `import ffiutil`, and `import shell`
 - Bundled runtime/automation/observability modules: `import event`, `import workflow`, `import agent`, `import retry`, `import metrics`, `import trace`, `import profile`, `import bench`, `import notebook`, and `import secrets`
+- Bundled math/data-science/finance modules: `import decimal`, `import money`, `import stats`, `import vector`, `import matrix`, `import geom`, `import graph`, `import tree`, `import pipeline`, `import stream`, `import table`, `import search`, `import embed`, and `import ml`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `read_bytes()`, `write()`, `write_bytes()`, and `readlines()`
@@ -340,6 +341,34 @@ trace.finish_span(tr, span)
 print(len(trace.export(tr)))
 
 print(retry.should_retry(retry.policy(3), retry.failure(1, "timeout")))
+```
+
+### Math And Data Modules
+
+Bundled math, data-science, and finance helpers cover exact decimal and money values, descriptive statistics, vectors/matrices/geometry, graph/tree traversal, pipelines/streams, tables, local search, bag-of-words embeddings, and lightweight ML helpers:
+
+```python
+import decimal
+import graph
+import money
+import stats
+import table
+import vector
+
+total = money.add(money.amount("12.34", "USD"), money.amount("0.66", "USD"))
+print(money.format(total, "$"))
+
+print(decimal.format(decimal.div(decimal.parse("1"), decimal.parse("4"), 2)))
+print(stats.describe([1, 2, 3, 4])["median"])
+print(vector.dot(vector.vector([3, 4]), [1, 2]))
+
+g = graph.graph(true)
+graph.add_edge(g, "a", "b")
+graph.add_edge(g, "b", "c")
+print(graph.shortest_path(g, "a", "c"))
+
+t = table.table([{"name": "Ada", "score": 2}], ["name", "score"])
+print(table.render(t))
 ```
 
 ### Core Module
@@ -1177,6 +1206,20 @@ stdlib/
   bench.cool        Lightweight benchmark cases, suites, stats, and comparison
   notebook.cool     Executable note cells, saved outputs, Markdown, and JSON files
   secrets.cool      Secret lookup, redaction, encrypted vaults, and env injection
+  decimal.cool      Exact decimal arithmetic with scale-aware formatting
+  money.cool        Decimal-safe currency values, formatting, conversion, allocation
+  stats.cool        Descriptive statistics, percentiles, histograms, and sampling
+  vector.cool       Vector arithmetic, dot/cross products, norms, and distances
+  matrix.cool       Small matrix shapes, transpose, multiplication, and determinants
+  geom.cool         Points, rectangles, circles, areas, bounds, and intersections
+  graph.cool        Graph nodes/edges, BFS/DFS, shortest paths, DAG and cycle helpers
+  tree.cool         Generic tree construction, traversal, search, map, and filter
+  pipeline.cool     Composable map/filter/reduce and named value pipelines
+  stream.cool       Lazy-style stream adapters, ranges, filtering, mapping, chunking
+  table.cool        Tabular rows, selection, sorting, grouping, rendering, and CSV
+  search.cool       Local text indexing, query scoring, result sorting, highlighting
+  embed.cool        Bag-of-words embeddings, cosine similarity, nearest-neighbor search
+  ml.cool           Standardization, min-max scaling, KNN, confusion, and accuracy
   html.cool         Escaping, tag stripping, and small extraction helpers
   xml.cool          Lightweight XML parsing, text extraction, and serialization
   unicode.cool      Unicode categories, normalization, width, and grapheme helpers

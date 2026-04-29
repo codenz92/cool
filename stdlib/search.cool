@@ -1,0 +1,92 @@
+private def _tokens(text):
+    clean = ""
+    for ch in str(text).lower():
+        if (ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9"):
+            clean = clean + ch
+        else:
+            clean = clean + " "
+    out = []
+    for part in clean.split(" "):
+        if part != "":
+            out.append(part)
+    return out
+
+private def _doc_text(doc):
+    if type(doc) == "dict":
+        return str(doc.get("text", "")) + " " + str(doc.get("title", ""))
+    return str(doc)
+
+private def _sort_results(results):
+    out = []
+    for item in results:
+        out.append(item)
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if out[j]["score"] > out[i]["score"]:
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+def index(docs=nil):
+    idx = {"kind": "search_index", "docs": [], "terms": {}}
+    if docs != nil:
+        for doc in docs:
+            add(idx, doc)
+    return idx
+
+def add(idx, doc, id=nil):
+    doc_id = id
+    if doc_id == nil:
+        if type(doc) == "dict" and doc.get("id") != nil:
+            doc_id = doc["id"]
+        else:
+            doc_id = len(idx["docs"])
+    record = {"id": str(doc_id), "doc": doc, "text": _doc_text(doc)}
+    idx["docs"].append(record)
+    seen = []
+    for term in _tokens(record["text"]):
+        if term not in idx["terms"]:
+            idx["terms"][term] = {}
+        current = 0
+        if record["id"] in idx["terms"][term]:
+            current = idx["terms"][term][record["id"]]
+        idx["terms"][term][record["id"]] = current + 1
+        if term not in seen:
+            seen.append(term)
+    return record
+
+def query(text):
+    return {"kind": "search_query", "terms": _tokens(text), "text": str(text)}
+
+def score(idx, doc_id, query_record):
+    total = 0
+    for term in query_record["terms"]:
+        hits = {}
+        if term in idx["terms"]:
+            hits = idx["terms"][term]
+        if str(doc_id) in hits:
+            total = total + hits[str(doc_id)]
+    return total
+
+def search(idx, text, limit=nil):
+    q = query(text)
+    results = []
+    for record in idx["docs"]:
+        value = score(idx, record["id"], q)
+        if value > 0:
+            results.append({"id": record["id"], "score": value, "doc": record["doc"]})
+    results = _sort_results(results)
+    if limit != nil:
+        return results[0:int(limit)]
+    return results
+
+def highlight(text, terms, marker="**"):
+    out = str(text)
+    for term in _tokens(" ".join(terms)):
+        out = out.replace(term, str(marker) + term + str(marker))
+    return out

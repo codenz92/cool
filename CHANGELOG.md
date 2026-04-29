@@ -79,6 +79,13 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/notebook.cool` and `stdlib/secrets.cool` add executable notebook cells with saved outputs plus redaction, secret lookup, encrypted vault storage, and environment injection helpers
 - The automation/observability tranche is covered across the interpreter, VM, and LLVM backend with deterministic assertions around events, workflows, retries, metrics, traces, profiling, benchmarking, notebook persistence, and secret vault round-trips
 
+### Phase 6 Follow-on — Math, Data Science, And Finance Modules
+
+- New bundled `stdlib/decimal.cool`, `stdlib/money.cool`, and `stdlib/stats.cool` add scale-aware decimal arithmetic, decimal-safe currency values/conversion/allocation, descriptive statistics, percentiles, histograms, and sampling helpers
+- New bundled `stdlib/vector.cool`, `stdlib/matrix.cool`, `stdlib/geom.cool`, `stdlib/graph.cool`, and `stdlib/tree.cool` add numeric vectors/matrices, geometry primitives, graph traversal/shortest-path/DAG helpers, and generic tree construction/traversal/search helpers
+- New bundled `stdlib/pipeline.cool`, `stdlib/stream.cool`, `stdlib/table.cool`, `stdlib/search.cool`, `stdlib/embed.cool`, and `stdlib/ml.cool` add composable data pipelines, stream adapters, tabular rendering/sorting/grouping, local search indexes, bag-of-words embeddings, and lightweight ML preprocessing/KNN/accuracy helpers
+- The new math/data/finance tranche is covered across the interpreter, VM, and LLVM backend, including a native decimal parser fix that avoids host `int()` octal interpretation for leading-zero fractional strings
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

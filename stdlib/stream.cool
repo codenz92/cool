@@ -1,0 +1,80 @@
+def stream(iterable):
+    items = []
+    for item in iterable:
+        items.append(item)
+    return {"kind": "stream", "items": items}
+
+def range_stream(start, stop=nil, step=1):
+    if stop == nil:
+        stop = start
+        start = 0
+    out = []
+    i = int(start)
+    inc = int(step)
+    if inc == 0:
+        raise "stream: step cannot be zero"
+    if inc > 0:
+        while i < int(stop):
+            out.append(i)
+            i = i + inc
+    else:
+        while i > int(stop):
+            out.append(i)
+            i = i + inc
+    return stream(out)
+
+def values(s):
+    return s["items"]
+
+def map(s, fn):
+    out = []
+    for item in s["items"]:
+        out.append(fn(item))
+    return stream(out)
+
+def filter(s, predicate):
+    out = []
+    for item in s["items"]:
+        if predicate(item):
+            out.append(item)
+    return stream(out)
+
+def take(s, count):
+    out = []
+    i = 0
+    while i < int(count) and i < len(s["items"]):
+        out.append(s["items"][i])
+        i = i + 1
+    return stream(out)
+
+def chunk(s, size):
+    width = int(size)
+    if width <= 0:
+        raise "stream: chunk size must be positive"
+    out = []
+    i = 0
+    while i < len(s["items"]):
+        part = []
+        j = 0
+        while j < width and i + j < len(s["items"]):
+            part.append(s["items"][i + j])
+            j = j + 1
+        out.append(part)
+        i = i + width
+    return stream(out)
+
+def reduce(s, fn, initial=nil):
+    i = 0
+    if initial == nil and len(s["items"]) > 0:
+        acc = s["items"][0]
+        i = 1
+    else:
+        acc = initial
+    while i < len(s["items"]):
+        acc = fn(acc, s["items"][i])
+        i = i + 1
+    return acc
+
+def collect(s):
+    return values(s)
+

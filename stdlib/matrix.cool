@@ -1,0 +1,123 @@
+private def _rows(value):
+    if type(value) == "dict" and value.get("kind") == "matrix":
+        return value["rows"]
+    out = []
+    for row in value:
+        next_row = []
+        for item in row:
+            next_row.append(float(item))
+        out.append(next_row)
+    return out
+
+private def _matrix(rows):
+    return {"kind": "matrix", "rows": _rows(rows)}
+
+private def _shape(rows):
+    cols = 0
+    if len(rows) > 0:
+        cols = len(rows[0])
+    return [len(rows), cols]
+
+def matrix(rows):
+    return _matrix(rows)
+
+def values(value):
+    return _rows(value)
+
+def shape(value):
+    return _shape(_rows(value))
+
+def identity(size):
+    rows = []
+    i = 0
+    while i < int(size):
+        row = []
+        j = 0
+        while j < int(size):
+            row.append(1.0 if i == j else 0.0)
+            j = j + 1
+        rows.append(row)
+        i = i + 1
+    return _matrix(rows)
+
+def transpose(value):
+    rows = _rows(value)
+    dims = _shape(rows)
+    out = []
+    c = 0
+    while c < dims[1]:
+        row = []
+        r = 0
+        while r < dims[0]:
+            row.append(rows[r][c])
+            r = r + 1
+        out.append(row)
+        c = c + 1
+    return _matrix(out)
+
+def add(left, right):
+    a = _rows(left)
+    b = _rows(right)
+    if _shape(a) != _shape(b):
+        raise "matrix: shape mismatch"
+    out = []
+    r = 0
+    while r < len(a):
+        row = []
+        c = 0
+        while c < len(a[r]):
+            row.append(a[r][c] + b[r][c])
+            c = c + 1
+        out.append(row)
+        r = r + 1
+    return _matrix(out)
+
+def mul(left, right):
+    a = _rows(left)
+    b = _rows(right)
+    ashape = _shape(a)
+    bshape = _shape(b)
+    if ashape[1] != bshape[0]:
+        raise "matrix: multiply shape mismatch"
+    out = []
+    r = 0
+    while r < ashape[0]:
+        row = []
+        c = 0
+        while c < bshape[1]:
+            total = 0.0
+            k = 0
+            while k < ashape[1]:
+                total = total + a[r][k] * b[k][c]
+                k = k + 1
+            row.append(total)
+            c = c + 1
+        out.append(row)
+        r = r + 1
+    return _matrix(out)
+
+def apply(value, vec):
+    rows = _rows(value)
+    out = []
+    for row in rows:
+        total = 0.0
+        i = 0
+        while i < len(row):
+            total = total + row[i] * float(vec[i])
+            i = i + 1
+        out.append(total)
+    return out
+
+def determinant(value):
+    rows = _rows(value)
+    dims = _shape(rows)
+    if dims[0] != dims[1]:
+        raise "matrix: determinant requires square matrix"
+    if dims[0] == 1:
+        return rows[0][0]
+    if dims[0] == 2:
+        return rows[0][0] * rows[1][1] - rows[0][1] * rows[1][0]
+    if dims[0] == 3:
+        return rows[0][0] * (rows[1][1] * rows[2][2] - rows[1][2] * rows[2][1]) - rows[0][1] * (rows[1][0] * rows[2][2] - rows[1][2] * rows[2][0]) + rows[0][2] * (rows[1][0] * rows[2][1] - rows[1][1] * rows[2][0])
+    raise "matrix: determinant currently supports up to 3x3"
+

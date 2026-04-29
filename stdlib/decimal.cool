@@ -1,0 +1,168 @@
+private def _fail(message):
+    raise "decimal: " + str(message)
+
+private def _pow10(scale):
+    value = 1
+    i = 0
+    while i < int(scale):
+        value = value * 10
+        i = i + 1
+    return value
+
+private def _digits(text):
+    out = ""
+    for ch in str(text):
+        if ch >= "0" and ch <= "9":
+            out = out + ch
+    if out == "":
+        return "0"
+    return out
+
+private def _parse_digits(text):
+    total = 0
+    for ch in str(text):
+        total = total * 10 + (ord(ch) - ord("0"))
+    return total
+
+private def _from_parts(units, scale):
+    return {"kind": "decimal", "units": int(units), "scale": int(scale)}
+
+private def _as_decimal(value):
+    if type(value) == "dict" and value.get("kind") == "decimal":
+        return value
+    return parse(value)
+
+private def _align_pair(left, right):
+    a = _as_decimal(left)
+    b = _as_decimal(right)
+    scale = a["scale"]
+    if b["scale"] > scale:
+        scale = b["scale"]
+    au = a["units"] * _pow10(scale - a["scale"])
+    bu = b["units"] * _pow10(scale - b["scale"])
+    return [au, bu, scale]
+
+private def _trim_trailing(value):
+    out = str(value)
+    while len(out) > 1 and out.endswith("0"):
+        out = out[0:len(out) - 1]
+    return out
+
+def from_minor(units, scale=0):
+    return _from_parts(units, scale)
+
+def parse(value, scale=nil):
+    if type(value) == "dict" and value.get("kind") == "decimal":
+        if scale == nil:
+            return _from_parts(value["units"], value["scale"])
+        return quantize(value, int(scale))
+    if type(value) == "int":
+        return _from_parts(value * _pow10(0 if scale == nil else int(scale)), 0 if scale == nil else int(scale))
+    text = str(value).strip()
+    if text == "":
+        _fail("empty decimal")
+    sign = 1
+    if text.startswith("-"):
+        sign = -1
+        text = text[1:len(text)]
+    elif text.startswith("+"):
+        text = text[1:len(text)]
+    pieces = text.split(".")
+    whole = _digits(pieces[0])
+    frac = ""
+    if len(pieces) > 1:
+        frac = _digits(pieces[1])
+    current_scale = len(frac)
+    target_scale = current_scale
+    if scale != nil:
+        target_scale = int(scale)
+    units = _parse_digits(whole + frac)
+    if target_scale > current_scale:
+        units = units * _pow10(target_scale - current_scale)
+    elif target_scale < current_scale:
+        units = int(units / _pow10(current_scale - target_scale))
+    return _from_parts(sign * units, target_scale)
+
+def decimal(value, scale=nil):
+    return parse(value, scale)
+
+def scale(value):
+    return _as_decimal(value)["scale"]
+
+def units(value):
+    return _as_decimal(value)["units"]
+
+def add(left, right):
+    parts = _align_pair(left, right)
+    return _from_parts(parts[0] + parts[1], parts[2])
+
+def sub(left, right):
+    parts = _align_pair(left, right)
+    return _from_parts(parts[0] - parts[1], parts[2])
+
+def neg(value):
+    item = _as_decimal(value)
+    return _from_parts(-item["units"], item["scale"])
+
+def mul(left, right):
+    a = _as_decimal(left)
+    b = _as_decimal(right)
+    return _from_parts(a["units"] * b["units"], a["scale"] + b["scale"])
+
+def div(left, right, scale=2):
+    a = _as_decimal(left)
+    b = _as_decimal(right)
+    if b["units"] == 0:
+        _fail("division by zero")
+    target = int(scale)
+    numerator = a["units"] * _pow10(target + b["scale"])
+    denominator = b["units"] * _pow10(a["scale"])
+    return _from_parts(int(numerator / denominator), target)
+
+def compare(left, right):
+    parts = _align_pair(left, right)
+    if parts[0] < parts[1]:
+        return -1
+    if parts[0] > parts[1]:
+        return 1
+    return 0
+
+def eq(left, right):
+    return compare(left, right) == 0
+
+def quantize(value, new_scale=2):
+    item = _as_decimal(value)
+    target = int(new_scale)
+    if target == item["scale"]:
+        return _from_parts(item["units"], item["scale"])
+    if target > item["scale"]:
+        return _from_parts(item["units"] * _pow10(target - item["scale"]), target)
+    divisor = _pow10(item["scale"] - target)
+    units = int(item["units"] / divisor)
+    return _from_parts(units, target)
+
+def format(value, trim=false):
+    item = _as_decimal(value)
+    sign = ""
+    units = item["units"]
+    if units < 0:
+        sign = "-"
+        units = -units
+    scale_value = item["scale"]
+    if scale_value <= 0:
+        return sign + str(units)
+    base = _pow10(scale_value)
+    whole = int(units / base)
+    frac_units = units - whole * base
+    frac = str(frac_units)
+    while len(frac) < scale_value:
+        frac = "0" + frac
+    if trim:
+        frac = _trim_trailing(frac)
+    if frac == "0" or frac == "":
+        return sign + str(whole)
+    return sign + str(whole) + "." + frac
+
+def to_float(value):
+    item = _as_decimal(value)
+    return float(item["units"]) / float(_pow10(item["scale"]))

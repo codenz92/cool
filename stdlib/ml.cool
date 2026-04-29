@@ -1,0 +1,126 @@
+import math
+import stats
+
+private def _numbers(values):
+    out = []
+    for item in values:
+        out.append(float(item))
+    return out
+
+private def _distance(left, right):
+    total = 0.0
+    i = 0
+    while i < len(left) and i < len(right):
+        diff = float(left[i]) - float(right[i])
+        total = total + diff * diff
+        i = i + 1
+    return math.sqrt(total)
+
+def standardize(values):
+    vals = _numbers(values)
+    avg = stats.mean(vals)
+    sd = stats.stdev(vals)
+    if sd == 0 or sd == nil:
+        sd = 1.0
+    out = []
+    for item in vals:
+        out.append((item - avg) / sd)
+    return out
+
+def minmax(values):
+    vals = _numbers(values)
+    lo = stats.min(vals)
+    hi = stats.max(vals)
+    out = []
+    if hi == lo:
+        for item in vals:
+            out.append(0.0)
+        return out
+    for item in vals:
+        out.append((item - lo) / (hi - lo))
+    return out
+
+def split(features, labels, ratio=0.8):
+    cut = int(len(features) * float(ratio))
+    return {
+        "train_x": features[0:cut],
+        "train_y": labels[0:cut],
+        "test_x": features[cut:len(features)],
+        "test_y": labels[cut:len(labels)],
+    }
+
+def knn(train_x, train_y, sample, k=1):
+    rows = []
+    i = 0
+    while i < len(train_x):
+        rows.append({"label": train_y[i], "distance": _distance(train_x[i], sample)})
+        i = i + 1
+    i = 0
+    while i < len(rows):
+        j = i + 1
+        while j < len(rows):
+            if rows[j]["distance"] < rows[i]["distance"]:
+                tmp = rows[i]
+                rows[i] = rows[j]
+                rows[j] = tmp
+            j = j + 1
+        i = i + 1
+    votes = {}
+    limit = int(k)
+    i = 0
+    while i < limit and i < len(rows):
+        label = str(rows[i]["label"])
+        current = 0
+        if label in votes:
+            current = votes[label]
+        votes[label] = current + 1
+        i = i + 1
+    best = nil
+    best_count = -1
+    for label in votes.keys():
+        if votes[label] > best_count:
+            best = label
+            best_count = votes[label]
+    return best
+
+def majority(labels):
+    counts = {}
+    for label in labels:
+        key = str(label)
+        current = 0
+        if key in counts:
+            current = counts[key]
+        counts[key] = current + 1
+    best = nil
+    best_count = -1
+    for key in counts.keys():
+        if counts[key] > best_count:
+            best = key
+            best_count = counts[key]
+    return best
+
+def confusion(truth, predicted):
+    matrix = {}
+    i = 0
+    while i < len(truth) and i < len(predicted):
+        actual = str(truth[i])
+        guess = str(predicted[i])
+        if actual not in matrix:
+            matrix[actual] = {}
+        current = 0
+        if guess in matrix[actual]:
+            current = matrix[actual][guess]
+        matrix[actual][guess] = current + 1
+        i = i + 1
+    return matrix
+
+def accuracy(truth, predicted):
+    if len(truth) == 0:
+        return 0.0
+    correct = 0
+    i = 0
+    while i < len(truth) and i < len(predicted):
+        if str(truth[i]) == str(predicted[i]):
+            correct = correct + 1
+        i = i + 1
+    return float(correct) / float(len(truth))

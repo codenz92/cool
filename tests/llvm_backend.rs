@@ -1039,6 +1039,157 @@ fn expected_phase6_runtime_automation_lines() -> Vec<String> {
     ]
 }
 
+fn write_phase6_math_data_finance_suite(dir: &PathBuf) -> PathBuf {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    let source_path = dir.join("main.cool");
+    let source = r###"import decimal
+import embed
+import geom
+import graph
+import matrix
+import ml
+import money
+import pipeline
+import search
+import stats
+import stream
+import table
+import tree
+import vector
+
+def double(x):
+    return x * 2
+
+def is_even(x):
+    return x % 2 == 0
+
+def add_pair(acc, item):
+    return acc + item
+
+def inc(x):
+    return x + 1
+
+def times(x, factor):
+    return x * factor
+
+print(decimal.format(decimal.add(decimal.parse("1.25"), decimal.parse("2.75"))))
+print(decimal.compare(decimal.parse("4.00"), decimal.parse("4")))
+print(decimal.format(decimal.div(decimal.parse("1"), decimal.parse("4"), 2)))
+
+usd = money.amount("12.34", "USD")
+fee = money.amount("0.66", "USD")
+print(money.format(money.add(usd, fee), "$"))
+print(money.minor_units(money.convert(usd, "EUR", {"USD_EUR": "0.50"})))
+print(len(money.allocate(money.amount("10.00", "USD"), 3)))
+
+values = [1, 2, 3, 4]
+print(int(stats.mean(values)))
+print(int(stats.median(values)))
+print(int(stats.percentile(values, 50)))
+print(stats.histogram(values, 2)[0]["count"])
+
+v = vector.vector([3, 4])
+print(int(vector.norm(v)))
+print(int(vector.dot(v, [1, 2])))
+print(int(vector.values(vector.add(v, [1, 1]))[0]))
+
+m = matrix.matrix([[1, 2], [3, 4]])
+print(matrix.shape(m)[0])
+print(int(matrix.determinant(m)))
+print(int(matrix.apply(matrix.identity(2), [5, 6])[1]))
+
+r = geom.rect(0, 0, 10, 5)
+print(int(geom.area(r)))
+print(geom.contains(r, geom.point(2, 2)))
+print(int(geom.union_rect(r, geom.rect(8, 4, 4, 4))["width"]))
+
+g = graph.graph(true)
+graph.add_edge(g, "a", "b")
+graph.add_edge(g, "b", "c")
+print(graph.bfs(g, "a")[2])
+print(len(graph.shortest_path(g, "a", "c")))
+print(graph.has_cycle(g))
+
+root = tree.node("root")
+tree.add(root, tree.node("child", [tree.node("leaf")]))
+print(tree.size(root))
+print(tree.height(root))
+print(tree.values(root)[2])
+
+p = pipeline.pipeline("numbers")
+pipeline.add(p, "inc", inc)
+pipeline.add(p, "times", times, [3])
+print(pipeline.run(p, 1)["value"])
+print(pipeline.reduce([1, 2, 3], add_pair, 0))
+
+s = stream.range_stream(0, 5)
+print(stream.collect(stream.map(stream.filter(s, is_even), double))[1])
+print(stream.collect(stream.chunk(s, 2))[1][0])
+
+t = table.table([{"name": "Ada", "score": 2}, {"name": "Bo", "score": 1}], ["name", "score"])
+print(table.sort_by(t, "score")["rows"][0]["name"])
+print(table.render(t).find("Ada") >= 0)
+
+idx = search.index([{"id": "a", "text": "cool language tools"}, {"id": "b", "text": "finance math"}])
+print(search.search(idx, "cool tools")[0]["id"])
+print(search.search(idx, "finance")[0]["score"])
+
+emb = embed.index(["cool language", "finance money"])
+print(embed.nearest(emb, "cool tools", 1)[0]["id"])
+print(int(embed.encode("cool cool", ["cool"])["values"][0]))
+
+print(ml.knn([[0, 0], [10, 10]], ["near", "far"], [1, 1]))
+print(int(ml.accuracy(["a", "b"], ["a", "x"]) * 100))
+print(ml.confusion(["yes", "no", "yes"], ["yes", "yes", "yes"])["no"]["yes"])
+"###;
+    fs::write(&source_path, source).unwrap();
+    source_path
+}
+
+fn expected_phase6_math_data_finance_lines() -> Vec<String> {
+    vec![
+        "4.00".to_string(),
+        "0".to_string(),
+        "0.25".to_string(),
+        "$13.00".to_string(),
+        "617".to_string(),
+        "3".to_string(),
+        "2".to_string(),
+        "2".to_string(),
+        "2".to_string(),
+        "2".to_string(),
+        "5".to_string(),
+        "11".to_string(),
+        "4".to_string(),
+        "2".to_string(),
+        "-2".to_string(),
+        "6".to_string(),
+        "50".to_string(),
+        "true".to_string(),
+        "12".to_string(),
+        "c".to_string(),
+        "3".to_string(),
+        "false".to_string(),
+        "3".to_string(),
+        "3".to_string(),
+        "leaf".to_string(),
+        "6".to_string(),
+        "6".to_string(),
+        "4".to_string(),
+        "2".to_string(),
+        "Bo".to_string(),
+        "true".to_string(),
+        "a".to_string(),
+        "1".to_string(),
+        "0".to_string(),
+        "2".to_string(),
+        "near".to_string(),
+        "50".to_string(),
+        "1".to_string(),
+    ]
+}
+
 fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().unwrap();
@@ -4095,6 +4246,16 @@ fn test_llvm_phase6_runtime_automation_modules() {
     let result = compile_and_run_native_path(&source_path).unwrap();
     let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_runtime_automation_lines());
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_math_data_finance_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_math");
+    let source_path = write_phase6_math_data_finance_suite(&temp_dir);
+    let result = compile_and_run_native_path(&source_path).unwrap();
+    let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_math_data_finance_lines());
     let _ = fs::remove_dir_all(&temp_dir);
 }
 

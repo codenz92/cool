@@ -1,0 +1,65 @@
+import math
+
+def point(x=0, y=0):
+    return {"kind": "point", "x": float(x), "y": float(y)}
+
+def rect(x, y, width, height):
+    return {"kind": "rect", "x": float(x), "y": float(y), "width": float(width), "height": float(height)}
+
+def circle(x, y, radius):
+    return {"kind": "circle", "x": float(x), "y": float(y), "radius": float(radius)}
+
+def area(shape):
+    if shape["kind"] == "rect":
+        return shape["width"] * shape["height"]
+    if shape["kind"] == "circle":
+        return 3.141592653589793 * shape["radius"] * shape["radius"]
+    return 0.0
+
+def perimeter(shape):
+    if shape["kind"] == "rect":
+        return 2.0 * (shape["width"] + shape["height"])
+    if shape["kind"] == "circle":
+        return 2.0 * 3.141592653589793 * shape["radius"]
+    return 0.0
+
+def contains(shape, p):
+    if shape["kind"] == "rect":
+        return p["x"] >= shape["x"] and p["x"] <= shape["x"] + shape["width"] and p["y"] >= shape["y"] and p["y"] <= shape["y"] + shape["height"]
+    if shape["kind"] == "circle":
+        return distance(point(shape["x"], shape["y"]), p) <= shape["radius"]
+    return false
+
+def intersects(left, right):
+    if left["kind"] == "rect" and right["kind"] == "rect":
+        return not (left["x"] + left["width"] < right["x"] or right["x"] + right["width"] < left["x"] or left["y"] + left["height"] < right["y"] or right["y"] + right["height"] < left["y"])
+    return contains(left, point(right.get("x", 0), right.get("y", 0))) or contains(right, point(left.get("x", 0), left.get("y", 0)))
+
+def union_rect(left, right):
+    x1 = left["x"]
+    if right["x"] < x1:
+        x1 = right["x"]
+    y1 = left["y"]
+    if right["y"] < y1:
+        y1 = right["y"]
+    x2 = left["x"] + left["width"]
+    rx2 = right["x"] + right["width"]
+    if rx2 > x2:
+        x2 = rx2
+    y2 = left["y"] + left["height"]
+    ry2 = right["y"] + right["height"]
+    if ry2 > y2:
+        y2 = ry2
+    return rect(x1, y1, x2 - x1, y2 - y1)
+
+def distance(left, right):
+    dx = float(left["x"]) - float(right["x"])
+    dy = float(left["y"]) - float(right["y"])
+    return math.sqrt(dx * dx + dy * dy)
+
+def translate(shape, dx, dy):
+    out = copy(shape)
+    out["x"] = out["x"] + float(dx)
+    out["y"] = out["y"] + float(dy)
+    return out
+

@@ -1,0 +1,129 @@
+private def _ensure_node(g, node):
+    key = str(node)
+    if key not in g["nodes"]:
+        g["nodes"].append(key)
+    if key not in g["edges"]:
+        g["edges"][key] = []
+    return key
+
+private def _sorted(values):
+    out = []
+    for item in values:
+        out.append(str(item))
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if out[j] < out[i]:
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+def graph(directed=true):
+    return {"kind": "graph", "directed": bool(directed), "nodes": [], "edges": {}}
+
+def add_node(g, node):
+    return _ensure_node(g, node)
+
+def add_edge(g, source, target, weight=1):
+    src = _ensure_node(g, source)
+    dst = _ensure_node(g, target)
+    g["edges"][src].append({"to": dst, "weight": float(weight)})
+    if not g["directed"]:
+        g["edges"][dst].append({"to": src, "weight": float(weight)})
+    return g
+
+def neighbors(g, node):
+    key = str(node)
+    out = []
+    for edge in g["edges"].get(key, []):
+        out.append(edge["to"])
+    return out
+
+def bfs(g, start):
+    seen = []
+    queue = [str(start)]
+    out = []
+    while len(queue) > 0:
+        node = queue[0]
+        queue = queue[1:len(queue)]
+        if node in seen:
+            continue
+        seen.append(node)
+        out.append(node)
+        for next_node in neighbors(g, node):
+            if next_node not in seen:
+                queue.append(next_node)
+    return out
+
+def dfs(g, start):
+    seen = []
+    stack = [str(start)]
+    out = []
+    while len(stack) > 0:
+        idx = len(stack) - 1
+        node = stack[idx]
+        stack = stack[0:idx]
+        if node in seen:
+            continue
+        seen.append(node)
+        out.append(node)
+        nbrs = neighbors(g, node)
+        i = len(nbrs) - 1
+        while i >= 0:
+            if nbrs[i] not in seen:
+                stack.append(nbrs[i])
+            i = i - 1
+    return out
+
+def shortest_path(g, start, goal):
+    start = str(start)
+    goal = str(goal)
+    queue = [{"node": start, "path": [start]}]
+    seen = []
+    while len(queue) > 0:
+        item = queue[0]
+        queue = queue[1:len(queue)]
+        node = item["node"]
+        if node == goal:
+            return item["path"]
+        if node in seen:
+            continue
+        seen.append(node)
+        for next_node in neighbors(g, node):
+            if next_node not in seen:
+                path = []
+                for part in item["path"]:
+                    path.append(part)
+                path.append(next_node)
+                queue.append({"node": next_node, "path": path})
+    return []
+
+def topological(g):
+    indegree = {}
+    for node in g["nodes"]:
+        indegree[node] = 0
+    for node in g["edges"].keys():
+        for edge in g["edges"][node]:
+            indegree[edge["to"]] = indegree.get(edge["to"], 0) + 1
+    ready = []
+    for node in _sorted(indegree.keys()):
+        if indegree[node] == 0:
+            ready.append(node)
+    out = []
+    while len(ready) > 0:
+        node = ready[0]
+        ready = ready[1:len(ready)]
+        out.append(node)
+        for edge in g["edges"].get(node, []):
+            indegree[edge["to"]] = indegree[edge["to"]] - 1
+            if indegree[edge["to"]] == 0:
+                ready.append(edge["to"])
+    return out
+
+def has_cycle(g):
+    return len(topological(g)) != len(g["nodes"])
+

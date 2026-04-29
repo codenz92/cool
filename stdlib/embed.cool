@@ -1,0 +1,101 @@
+import math
+
+private def _tokens(text):
+    clean = ""
+    for ch in str(text).lower():
+        if (ch >= "a" and ch <= "z") or (ch >= "0" and ch <= "9"):
+            clean = clean + ch
+        else:
+            clean = clean + " "
+    out = []
+    for part in clean.split(" "):
+        if part != "":
+            out.append(part)
+    return out
+
+private def _sort_keys(mapping):
+    keys = []
+    for key in mapping.keys():
+        keys.append(str(key))
+    i = 0
+    while i < len(keys):
+        j = i + 1
+        while j < len(keys):
+            if keys[j] < keys[i]:
+                tmp = keys[i]
+                keys[i] = keys[j]
+                keys[j] = tmp
+            j = j + 1
+        i = i + 1
+    return keys
+
+def bag(text):
+    counts = {}
+    for token in _tokens(text):
+        current = 0
+        if token in counts:
+            current = counts[token]
+        counts[token] = current + 1
+    return counts
+
+def vocabulary(texts):
+    vocab = {}
+    for text in texts:
+        for token in _tokens(text):
+            vocab[token] = true
+    return _sort_keys(vocab)
+
+def encode(text, vocab=nil):
+    counts = bag(text)
+    if vocab == nil:
+        vocab = _sort_keys(counts)
+    values = []
+    for term in vocab:
+        current = 0
+        if term in counts:
+            current = counts[term]
+        values.append(float(current))
+    return {"kind": "embedding", "vocab": vocab, "values": values}
+
+def dot(left, right):
+    total = 0.0
+    i = 0
+    while i < len(left["values"]) and i < len(right["values"]):
+        total = total + left["values"][i] * right["values"][i]
+        i = i + 1
+    return total
+
+def norm(value):
+    return math.sqrt(dot(value, value))
+
+def cosine(left, right):
+    denom = norm(left) * norm(right)
+    if denom == 0:
+        return 0.0
+    return dot(left, right) / denom
+
+def index(texts):
+    vocab = vocabulary(texts)
+    rows = []
+    i = 0
+    while i < len(texts):
+        rows.append({"id": str(i), "text": texts[i], "embedding": encode(texts[i], vocab)})
+        i = i + 1
+    return {"kind": "embedding_index", "vocab": vocab, "rows": rows}
+
+def nearest(idx, text, limit=3):
+    q = encode(text, idx["vocab"])
+    results = []
+    for row in idx["rows"]:
+        results.append({"id": row["id"], "text": row["text"], "score": cosine(q, row["embedding"])})
+    i = 0
+    while i < len(results):
+        j = i + 1
+        while j < len(results):
+            if results[j]["score"] > results[i]["score"]:
+                tmp = results[i]
+                results[i] = results[j]
+                results[j] = tmp
+            j = j + 1
+        i = i + 1
+    return results[0:int(limit)]

@@ -1,0 +1,97 @@
+import math
+
+private def _values(value):
+    if type(value) == "dict" and value.get("kind") == "vector":
+        return value["values"]
+    out = []
+    for item in value:
+        out.append(float(item))
+    return out
+
+private def _vec(values):
+    out = []
+    for item in values:
+        out.append(float(item))
+    return {"kind": "vector", "values": out}
+
+private def _same(left, right):
+    a = _values(left)
+    b = _values(right)
+    if len(a) != len(b):
+        raise "vector: dimension mismatch"
+    return [a, b]
+
+def vector(values):
+    return _vec(values)
+
+def zeros(size):
+    out = []
+    i = 0
+    while i < int(size):
+        out.append(0.0)
+        i = i + 1
+    return _vec(out)
+
+def values(value):
+    return _values(value)
+
+def dim(value):
+    return len(_values(value))
+
+def add(left, right):
+    pair = _same(left, right)
+    out = []
+    i = 0
+    while i < len(pair[0]):
+        out.append(pair[0][i] + pair[1][i])
+        i = i + 1
+    return _vec(out)
+
+def sub(left, right):
+    pair = _same(left, right)
+    out = []
+    i = 0
+    while i < len(pair[0]):
+        out.append(pair[0][i] - pair[1][i])
+        i = i + 1
+    return _vec(out)
+
+def scale(value, factor):
+    out = []
+    for item in _values(value):
+        out.append(item * float(factor))
+    return _vec(out)
+
+def dot(left, right):
+    pair = _same(left, right)
+    total = 0.0
+    i = 0
+    while i < len(pair[0]):
+        total = total + pair[0][i] * pair[1][i]
+        i = i + 1
+    return total
+
+def norm(value):
+    return math.sqrt(dot(value, value))
+
+def normalize(value):
+    n = norm(value)
+    if n == 0:
+        return _vec(_values(value))
+    return scale(value, 1.0 / n)
+
+def distance(left, right):
+    return norm(sub(left, right))
+
+def cross(left, right):
+    pair = _same(left, right)
+    a = pair[0]
+    b = pair[1]
+    if len(a) != 3:
+        raise "vector: cross product requires 3 dimensions"
+    return _vec([
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ])
+

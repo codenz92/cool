@@ -1,0 +1,65 @@
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    raise "pipeline: calls support up to 3 arguments"
+
+def pipeline(name=nil):
+    if name == nil or str(name) == "":
+        name = "pipeline"
+    return {"kind": "pipeline", "name": str(name), "steps": []}
+
+def step(name, fn, args=nil):
+    if args == nil:
+        args = []
+    return {"kind": "pipeline_step", "name": str(name), "fn": fn, "args": args}
+
+def add(pipe, name, fn=nil, args=nil):
+    item = name
+    if type(name) != "dict":
+        item = step(name, fn, args)
+    pipe["steps"].append(item)
+    return item
+
+def run(pipe, value):
+    current = value
+    history = []
+    for item in pipe["steps"]:
+        args = [current]
+        for arg in item.get("args", []):
+            args.append(arg)
+        current = _call(item["fn"], args)
+        history.append({"step": item["name"], "value": current})
+    return {"value": current, "history": history}
+
+def map(values, fn):
+    out = []
+    for item in values:
+        out.append(fn(item))
+    return out
+
+def filter(values, predicate):
+    out = []
+    for item in values:
+        if predicate(item):
+            out.append(item)
+    return out
+
+def reduce(values, fn, initial=nil):
+    i = 0
+    if initial == nil and len(values) > 0:
+        acc = values[0]
+        i = 1
+    else:
+        acc = initial
+    while i < len(values):
+        acc = fn(acc, values[i])
+        i = i + 1
+    return acc
+

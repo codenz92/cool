@@ -1,0 +1,108 @@
+import decimal
+
+private def _fail(message):
+    raise "money: " + str(message)
+
+private def _clone(value):
+    if type(value) == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _as_money(value):
+    if type(value) == "dict" and value.get("kind") == "money":
+        return value
+    _fail("expected money value")
+
+private def _same_currency(left, right):
+    a = _as_money(left)
+    b = _as_money(right)
+    if a["currency"] != b["currency"]:
+        _fail("currency mismatch: " + a["currency"] + " != " + b["currency"])
+
+def amount(value, currency="USD", scale=2):
+    return {
+        "kind": "money",
+        "amount": decimal.parse(value, scale),
+        "currency": str(currency).upper(),
+    }
+
+def from_minor(units, currency="USD", scale=2):
+    return {"kind": "money", "amount": decimal.from_minor(units, scale), "currency": str(currency).upper()}
+
+def currency(value):
+    return _as_money(value)["currency"]
+
+def minor_units(value):
+    return decimal.units(_as_money(value)["amount"])
+
+def add(left, right):
+    _same_currency(left, right)
+    a = _as_money(left)
+    b = _as_money(right)
+    return {"kind": "money", "amount": decimal.add(a["amount"], b["amount"]), "currency": a["currency"]}
+
+def sub(left, right):
+    _same_currency(left, right)
+    a = _as_money(left)
+    b = _as_money(right)
+    return {"kind": "money", "amount": decimal.sub(a["amount"], b["amount"]), "currency": a["currency"]}
+
+def negate(value):
+    item = _as_money(value)
+    return {"kind": "money", "amount": decimal.neg(item["amount"]), "currency": item["currency"]}
+
+def multiply(value, factor, scale=2):
+    item = _as_money(value)
+    product = decimal.mul(item["amount"], decimal.parse(factor))
+    return {"kind": "money", "amount": decimal.quantize(product, scale), "currency": item["currency"]}
+
+def convert(value, target_currency, rates, scale=2):
+    item = _as_money(value)
+    target = str(target_currency).upper()
+    if item["currency"] == target:
+        return {"kind": "money", "amount": _clone(item["amount"]), "currency": target}
+    pair = item["currency"] + "_" + target
+    rate = nil
+    if type(rates) == "dict":
+        if pair in rates:
+            rate = rates[pair]
+        elif target in rates:
+            rate = rates[target]
+    if rate == nil:
+        _fail("missing exchange rate for " + pair)
+    product = decimal.mul(item["amount"], decimal.parse(rate))
+    return {"kind": "money", "amount": decimal.quantize(product, scale), "currency": target}
+
+def format(value, symbol=nil):
+    item = _as_money(value)
+    prefix = item["currency"] + " "
+    if symbol != nil:
+        prefix = str(symbol)
+    return prefix + decimal.format(item["amount"])
+
+def allocate(value, parts):
+    item = _as_money(value)
+    count = int(parts)
+    if count <= 0:
+        _fail("parts must be positive")
+    total = decimal.units(item["amount"])
+    each = int(total / count)
+    remainder = total - each * count
+    out = []
+    i = 0
+    while i < count:
+        units = each
+        if i < remainder:
+            units = units + 1
+        out.append(from_minor(units, item["currency"], decimal.scale(item["amount"])))
+        i = i + 1
+    return out
+
