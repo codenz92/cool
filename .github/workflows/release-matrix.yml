@@ -34,6 +34,7 @@ jobs:
   build-platform:
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -81,6 +82,9 @@ jobs:
             sudo apt-get install -y llvm-17-dev clang-17 lld-17 libpolly-17-dev
           fi
           echo "LLVM_SYS_170_PREFIX=/usr/lib/llvm-17" >> "$GITHUB_ENV"
+          echo "CC=clang-17" >> "$GITHUB_ENV"
+          echo "CXX=clang++-17" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C linker=clang-17 -C link-arg=-fuse-ld=lld" >> "$GITHUB_ENV"
           echo "/usr/lib/llvm-17/bin" >> "$GITHUB_PATH"
 
       - name: Install LLVM 17 on macOS
@@ -136,6 +140,7 @@ jobs:
   assemble:
     name: Assemble multi-platform release
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     needs: build-platform
     defaults:
       run:
