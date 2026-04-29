@@ -72,6 +72,13 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/plugin.cool`, `stdlib/lsp.cool`, `stdlib/ffiutil.cool`, and `stdlib/shell.cool` add plugin descriptors/registries, JSON-RPC/LSP message utilities, FFI signature/wrapper helpers, and shell quoting/splitting/alias/completion helpers
 - The new tooling tranche is covered across the interpreter, VM, and LLVM backend, including native-portability fixes for template contexts, string helpers, dictionary key ordering, and inspection fallbacks
 
+### Phase 6 Follow-on — Runtime, Automation, And Observability Modules
+
+- New bundled `stdlib/event.cool`, `stdlib/workflow.cool`, `stdlib/agent.cool`, and `stdlib/retry.cool` add pub/sub event buses, resumable workflow graphs, agent-style task plans/executors, and retry policies with backoff and failure classification
+- New bundled `stdlib/metrics.cool`, `stdlib/trace.cool`, `stdlib/profile.cool`, and `stdlib/bench.cool` add counters/gauges/histograms, trace/span records, runtime hotspot summaries, and lightweight benchmark statistics/comparison helpers
+- New bundled `stdlib/notebook.cool` and `stdlib/secrets.cool` add executable notebook cells with saved outputs plus redaction, secret lookup, encrypted vault storage, and environment injection helpers
+- The automation/observability tranche is covered across the interpreter, VM, and LLVM backend with deterministic assertions around events, workflows, retries, metrics, traces, profiling, benchmarking, notebook persistence, and secret vault round-trips
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

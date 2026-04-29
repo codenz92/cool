@@ -1084,6 +1084,143 @@ fn expected_phase6_tooling_lines() -> Vec<String> {
     ]
 }
 
+fn write_phase6_runtime_automation_suite(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let base = cool_quote_path(dir);
+    let source = r###"import agent
+import bench
+import event
+import metrics
+import notebook
+import path
+import profile
+import retry
+import secrets
+import trace
+import workflow
+
+base = "@BASE@"
+
+def handler(evt):
+    return "handled:" + evt["topic"]
+
+b = event.bus("ops")
+event.subscribe(b, "build.*", handler)
+evt = event.emit(b, "build.done", {"ok": true})
+print(evt["topic"])
+print(evt["results"][0])
+print(len(event.drain(b)))
+
+wf = workflow.workflow("deploy")
+workflow.add(wf, workflow.step("build"))
+workflow.add(wf, workflow.step("test", nil, ["build"]))
+print(workflow.ready(wf)[0]["id"])
+workflow.complete(wf, "build", "ok")
+print(workflow.ready(wf)[0]["id"])
+print(workflow.checkpoint(wf)["steps"][0]["state"])
+
+p = agent.plan("ship", "release")
+agent.add_task(p, agent.task("write", "Write docs"))
+agent.add_task(p, agent.task("publish", "Publish", ["write"]))
+print(agent.next_task(p)["id"])
+agent.complete(p, "write", "done")
+print(agent.next_task(p)["id"])
+mem = agent.memory()
+agent.remember(mem, "fact", 42)
+print(agent.recall(mem, "fact"))
+
+pol = retry.policy(3, 0)
+print(retry.should_retry(pol, retry.failure(1, "timeout")))
+print(retry.summary([retry.failure(1, "x"), retry.success(2, "ok")])["ok"])
+
+r = metrics.registry("app")
+metrics.inc(r, "requests", 2)
+metrics.set_gauge(r, "workers", 3)
+metrics.observe(r, "latency", 1)
+metrics.observe(r, "latency", 3)
+snap = metrics.snapshot(r)
+print(snap["counters"]["requests"])
+print(snap["gauges"]["workers"])
+print(snap["histograms"]["latency"]["count"])
+
+tr = trace.tracer("run", "trace-1")
+root = trace.start_span(tr, "root")
+trace.event(root, "checkpoint", {"n": 1})
+child = trace.start_span(tr, "child", root)
+trace.finish_span(tr, child)
+trace.finish_span(tr, root)
+print(len(trace.export(tr)))
+print(trace.export(tr)[0]["name"])
+print(len(trace.export(tr)[0]["events"]))
+
+prof = profile.profiler("app")
+profile.record(prof, "parse", 2)
+profile.record(prof, "parse", 3)
+profile.record(prof, "codegen", 1)
+print(profile.summary(prof)["samples"])
+print(profile.hotspots(prof)[0]["name"])
+print(profile.flamegraph(prof).find("parse") >= 0)
+
+print(int(bench.stats([1, 2, 3])["median"]))
+print(bench.compare({"name": "a", "mean": 2}, {"name": "b", "mean": 1})["faster"])
+
+nb = notebook.notebook("Demo")
+notebook.add(nb, notebook.markdown("Intro"))
+cell = notebook.code("print(1)")
+notebook.record_output(cell, "1")
+notebook.add(nb, cell)
+print(len(notebook.outputs(nb)))
+print(notebook.render_markdown(nb).find("```cool") >= 0)
+notebook.save(nb, path.join(base, "note.json"))
+loaded = notebook.load(path.join(base, "note.json"))
+print(loaded["title"])
+
+v = secrets.vault(path.join(base, "vault.json"), "key")
+secrets.put(v, "TOKEN", "abc123")
+print(secrets.get(v, "TOKEN"))
+print(secrets.redact("abc123"))
+env = secrets.inject({}, {"TOKEN": "abc123"})
+print(env["TOKEN"])
+print(secrets.list(v)[0])
+"###
+    .replace("@BASE@", &base);
+    std::fs::write(dir.join("main.cool"), source).unwrap();
+}
+
+fn expected_phase6_runtime_automation_lines() -> Vec<String> {
+    vec![
+        "build.done".to_string(),
+        "handled:build.done".to_string(),
+        "1".to_string(),
+        "build".to_string(),
+        "test".to_string(),
+        "done".to_string(),
+        "write".to_string(),
+        "publish".to_string(),
+        "42".to_string(),
+        "true".to_string(),
+        "1".to_string(),
+        "2".to_string(),
+        "3".to_string(),
+        "2".to_string(),
+        "2".to_string(),
+        "root".to_string(),
+        "1".to_string(),
+        "3".to_string(),
+        "parse".to_string(),
+        "true".to_string(),
+        "2".to_string(),
+        "b".to_string(),
+        "1".to_string(),
+        "true".to_string(),
+        "Demo".to_string(),
+        "abc123".to_string(),
+        "ab***23".to_string(),
+        "abc123".to_string(),
+        "TOKEN".to_string(),
+    ]
+}
+
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     let status = Command::new("cp")
         .args(["-R", src.to_str().unwrap(), dst.to_str().unwrap()])
@@ -8073,6 +8210,28 @@ fn test_phase6_tooling_modules_in_vm() {
     let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
     let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_tooling_lines());
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_runtime_automation_modules_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_phase6_runtime_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_runtime_automation_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &[]).unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_runtime_automation_lines());
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_runtime_automation_modules_in_vm() {
+    let temp_dir = unique_temp_dir("cool_phase6_runtime_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_runtime_automation_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_runtime_automation_lines());
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 

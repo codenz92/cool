@@ -1,0 +1,103 @@
+import time
+
+private def _sorted_hotspots(items):
+    out = []
+    for item in items:
+        out.append(item)
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if out[j]["total"] > out[i]["total"]:
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    raise "profile: calls support up to 3 arguments"
+
+def profiler(name=nil):
+    if name == nil or str(name) == "":
+        name = "profile"
+    return {"kind": "profiler", "name": str(name), "samples": [], "active": {}, "created_at": time.time()}
+
+def record(profiler_record, name, duration, meta=nil):
+    item = {"name": str(name), "duration": float(duration), "meta": meta, "time": time.time()}
+    profiler_record["samples"].append(item)
+    return item
+
+def start_section(profiler_record, name, meta=nil):
+    token = str(name)
+    profiler_record["active"][token] = {"name": token, "started_at": time.monotonic(), "meta": meta}
+    return profiler_record["active"][token]
+
+def stop_section(profiler_record, name):
+    token = str(name)
+    if token not in profiler_record["active"]:
+        return nil
+    active = profiler_record["active"][token]
+    duration = time.monotonic() - active["started_at"]
+    profiler_record["active"] = without(profiler_record["active"], token)
+    return record(profiler_record, token, duration, active.get("meta"))
+
+private def without(mapping, key):
+    out = {}
+    for item in mapping.keys():
+        if item != key:
+            out[item] = mapping[item]
+    return out
+
+def call(profiler_record, name, fn, args=nil):
+    if args == nil:
+        args = []
+    start_section(profiler_record, name)
+    result = _call(fn, args)
+    stop_section(profiler_record, name)
+    return result
+
+def hotspots(profiler_record):
+    index = {}
+    for sample in profiler_record["samples"]:
+        name = sample["name"]
+        if name not in index:
+            index[name] = {"name": name, "count": 0, "total": 0.0, "max": 0.0}
+        item = index[name]
+        item["count"] = item["count"] + 1
+        item["total"] = item["total"] + float(sample["duration"])
+        if float(sample["duration"]) > item["max"]:
+            item["max"] = float(sample["duration"])
+    out = []
+    for key in index.keys():
+        item = index[key]
+        item["mean"] = item["total"] / item["count"]
+        out.append(item)
+    return _sorted_hotspots(out)
+
+def summary(profiler_record):
+    total = 0.0
+    for sample in profiler_record["samples"]:
+        total = total + float(sample["duration"])
+    return {
+        "name": profiler_record["name"],
+        "samples": len(profiler_record["samples"]),
+        "total": total,
+        "hotspots": hotspots(profiler_record),
+    }
+
+def flamegraph(profiler_record):
+    lines = []
+    for item in hotspots(profiler_record):
+        lines.append(item["name"] + " " + str(item["total"]))
+    return "\n".join(lines)

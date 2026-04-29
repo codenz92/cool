@@ -1,0 +1,185 @@
+import time
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _normalize_list(value):
+    if value == nil:
+        return []
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(str(item))
+        return out
+    return [str(value)]
+
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    raise "agent: executor functions support up to 3 arguments"
+
+private def _task_by_id(plan, task_id):
+    for item in plan["tasks"]:
+        if item["id"] == str(task_id):
+            return item
+    return nil
+
+private def _done_ids(plan):
+    out = []
+    for item in plan["tasks"]:
+        if item["state"] == "done":
+            out.append(item["id"])
+    return out
+
+private def _deps_done(plan, item):
+    done = _done_ids(plan)
+    for dep in item["deps"]:
+        if dep not in done:
+            return false
+    return true
+
+def task(id, goal, deps=nil, kind="task", meta=nil):
+    return {
+        "kind": str(kind),
+        "id": str(id),
+        "goal": str(goal),
+        "deps": _normalize_list(deps),
+        "state": "pending",
+        "result": nil,
+        "error": nil,
+        "meta": _clone(meta),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+
+def plan(name, goal=nil, meta=nil):
+    return {
+        "kind": "agent_plan",
+        "name": str(name),
+        "goal": goal,
+        "tasks": [],
+        "log": [],
+        "meta": _clone(meta),
+        "created_at": time.time(),
+    }
+
+def add_task(plan_record, item):
+    if _task_by_id(plan_record, item["id"]) != nil:
+        raise "agent: duplicate task '" + item["id"] + "'"
+    plan_record["tasks"].append(item)
+    plan_record["log"].append({"event": "add", "task": item["id"], "time": time.time()})
+    return item
+
+def ready(plan_record):
+    out = []
+    for item in plan_record["tasks"]:
+        if item["state"] == "pending" and _deps_done(plan_record, item):
+            out.append(item)
+    return out
+
+def next_task(plan_record):
+    candidates = ready(plan_record)
+    if len(candidates) == 0:
+        return nil
+    return candidates[0]
+
+def complete(plan_record, task_id, result=nil):
+    item = _task_by_id(plan_record, task_id)
+    if item == nil:
+        raise "agent: unknown task '" + str(task_id) + "'"
+    item["state"] = "done"
+    item["result"] = _clone(result)
+    item["error"] = nil
+    item["updated_at"] = time.time()
+    plan_record["log"].append({"event": "complete", "task": item["id"], "time": item["updated_at"]})
+    return item
+
+def fail(plan_record, task_id, error):
+    item = _task_by_id(plan_record, task_id)
+    if item == nil:
+        raise "agent: unknown task '" + str(task_id) + "'"
+    item["state"] = "failed"
+    item["error"] = str(error)
+    item["updated_at"] = time.time()
+    plan_record["log"].append({"event": "fail", "task": item["id"], "time": item["updated_at"]})
+    return item
+
+def memory(seed=nil):
+    data = {}
+    if seed != nil and type(seed) == "dict":
+        data = _clone(seed)
+    return {"kind": "agent_memory", "data": data, "writes": 0}
+
+def remember(mem, key, value):
+    mem["data"][str(key)] = _clone(value)
+    mem["writes"] = mem["writes"] + 1
+    return value
+
+def recall(mem, key, default=nil):
+    token = str(key)
+    if token in mem["data"]:
+        return _clone(mem["data"][token])
+    return default
+
+def executor(handlers=nil, memory_record=nil):
+    if handlers == nil:
+        handlers = {}
+    if memory_record == nil:
+        memory_record = memory()
+    return {"kind": "agent_executor", "handlers": handlers, "memory": memory_record}
+
+def run_task(plan_record, item, exec=nil):
+    if type(item) != "dict":
+        item = _task_by_id(plan_record, item)
+    if item == nil:
+        raise "agent: unknown task"
+    if not _deps_done(plan_record, item):
+        raise "agent: dependencies are not complete for '" + item["id"] + "'"
+    item["state"] = "running"
+    item["updated_at"] = time.time()
+    try:
+        result = nil
+        if exec != nil and item["kind"] in exec["handlers"]:
+            result = _call(exec["handlers"][item["kind"]], [item, exec["memory"], plan_record])
+        return complete(plan_record, item["id"], result)
+    except as err:
+        return fail(plan_record, item["id"], err)
+
+def run_ready(plan_record, exec=nil):
+    out = []
+    for item in ready(plan_record):
+        out.append(run_task(plan_record, item, exec))
+    return out
+
+def status(plan_record):
+    counts = {"pending": 0, "running": 0, "done": 0, "failed": 0}
+    for item in plan_record["tasks"]:
+        state = item["state"]
+        if state not in counts:
+            counts[state] = 0
+        counts[state] = counts[state] + 1
+    return {
+        "name": plan_record["name"],
+        "goal": plan_record["goal"],
+        "tasks": len(plan_record["tasks"]),
+        "counts": counts,
+        "done": counts.get("done", 0) == len(plan_record["tasks"]) and counts.get("failed", 0) == 0,
+    }

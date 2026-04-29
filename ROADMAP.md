@@ -253,17 +253,17 @@
 #### Runtime, Automation, And Observability
 
 - [x] `jobs` module — background jobs, worker pools, queues, and task orchestration helpers
-- [ ] `event` module — pub/sub events, listeners, timers, and message buses
-- [ ] `workflow` module — step graphs, checkpoints, resumability, and automation composition
-- [ ] `agent` module — task/plan/executor primitives for autonomous tool workflows in Cool
-- [ ] `retry` module — retry policies, backoff, jitter, and failure classification
-- [ ] `metrics` module — counters, timers, histograms, and lightweight instrumentation
-- [ ] `trace` module — spans, trace IDs, and execution tracing helpers
-- [ ] `profile` module — runtime profiling hooks, flame summaries, and hotspot reporting
+- [x] `event` module — pub/sub events, listeners, timers, and message buses
+- [x] `workflow` module — step graphs, checkpoints, resumability, and automation composition
+- [x] `agent` module — task/plan/executor primitives for autonomous tool workflows in Cool
+- [x] `retry` module — retry policies, backoff, jitter, and failure classification
+- [x] `metrics` module — counters, timers, histograms, and lightweight instrumentation
+- [x] `trace` module — spans, trace IDs, and execution tracing helpers
+- [x] `profile` module — runtime profiling hooks, flame summaries, and hotspot reporting
 - [x] `test` module — assertions, fixtures, discovery helpers, and a standard unit-test API
-- [ ] `bench` module — lightweight benchmarking helpers for timing and comparison
-- [ ] `notebook` module — executable notes, cells, saved outputs, and literate-programming helpers
-- [ ] `secrets` module — secret lookup, redaction, encrypted storage, and runtime injection
+- [x] `bench` module — lightweight benchmarking helpers for timing and comparison
+- [x] `notebook` module — executable notes, cells, saved outputs, and literate-programming helpers
+- [x] `secrets` module — secret lookup, redaction, encrypted storage, and runtime injection
 
 #### Math, Data Science, And Finance
 

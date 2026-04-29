@@ -1,0 +1,113 @@
+import time
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _next_id(tracer_record, prefix):
+    tracer_record["next_id"] = tracer_record["next_id"] + 1
+    return str(prefix) + "-" + str(tracer_record["next_id"])
+
+private def _remove_current(tracer_record, span_id):
+    out = []
+    for item in tracer_record["stack"]:
+        if item["span_id"] != span_id:
+            out.append(item)
+    tracer_record["stack"] = out
+
+def tracer(name=nil, trace_id=nil):
+    if name == nil or str(name) == "":
+        name = "trace"
+    if trace_id == nil:
+        trace_id = str(name) + "-" + str(int(time.time() * 1000000))
+    return {
+        "kind": "tracer",
+        "name": str(name),
+        "trace_id": str(trace_id),
+        "next_id": 0,
+        "spans": [],
+        "stack": [],
+    }
+
+def current(tracer_record):
+    if len(tracer_record["stack"]) == 0:
+        return nil
+    return tracer_record["stack"][len(tracer_record["stack"]) - 1]
+
+def start_span(tracer_record, name, parent=nil, attrs=nil):
+    parent_id = nil
+    if parent == nil:
+        parent = current(tracer_record)
+    if parent != nil:
+        parent_id = parent["span_id"]
+    span = {
+        "kind": "span",
+        "trace_id": tracer_record["trace_id"],
+        "span_id": _next_id(tracer_record, "span"),
+        "parent_id": parent_id,
+        "name": str(name),
+        "attrs": _clone(attrs),
+        "events": [],
+        "started_at": time.monotonic(),
+        "finished_at": nil,
+        "duration": nil,
+        "status": "open",
+    }
+    tracer_record["spans"].append(span)
+    tracer_record["stack"].append(span)
+    return span
+
+def event(span, name, attrs=nil):
+    item = {"name": str(name), "attrs": _clone(attrs), "time": time.monotonic()}
+    span["events"].append(item)
+    return item
+
+def annotate(span, key, value):
+    if span["attrs"] == nil or type(span["attrs"]) != "dict":
+        span["attrs"] = {}
+    span["attrs"][str(key)] = _clone(value)
+    return span
+
+def finish_span(tracer_record, span=nil, status="ok"):
+    if span == nil:
+        span = current(tracer_record)
+    if span == nil:
+        return nil
+    if span["finished_at"] == nil:
+        span["finished_at"] = time.monotonic()
+        span["duration"] = span["finished_at"] - span["started_at"]
+        span["status"] = str(status)
+    _remove_current(tracer_record, span["span_id"])
+    return span
+
+def export(tracer_record):
+    return _clone(tracer_record["spans"])
+
+def tree(tracer_record):
+    roots = []
+    for span in tracer_record["spans"]:
+        if span["parent_id"] == nil:
+            roots.append({"span": _clone(span), "children": []})
+    for span in tracer_record["spans"]:
+        if span["parent_id"] == nil:
+            continue
+        for root in roots:
+            if root["span"]["span_id"] == span["parent_id"]:
+                root["children"].append(_clone(span))
+    return roots
+
+def trace_id(tracer_record):
+    return tracer_record["trace_id"]
+
+def span_id(span):
+    return span["span_id"]

@@ -1,0 +1,156 @@
+import time
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _matches(pattern, topic):
+    pat = str(pattern)
+    name = str(topic)
+    if pat == "*" or pat == name:
+        return true
+    if pat.endswith(".*"):
+        prefix = pat[0:len(pat) - 1]
+        return name.startswith(prefix)
+    return false
+
+private def _listener_id(target):
+    target["next_listener_id"] = target["next_listener_id"] + 1
+    return target["next_listener_id"]
+
+private def _message_id(target):
+    target["next_message_id"] = target["next_message_id"] + 1
+    return target["next_message_id"]
+
+private def _compact_listeners(target):
+    active = []
+    for listener in target["listeners"]:
+        if listener["active"]:
+            active.append(listener)
+    target["listeners"] = active
+
+def bus(name=nil):
+    if name == nil or str(name) == "":
+        name = "bus"
+    return {
+        "kind": "event_bus",
+        "name": str(name),
+        "listeners": [],
+        "queue": [],
+        "history": [],
+        "next_listener_id": 0,
+        "next_message_id": 0,
+    }
+
+def listener(topic, handler=nil, once=false, meta=nil):
+    return {
+        "kind": "listener",
+        "id": 0,
+        "topic": str(topic),
+        "handler": handler,
+        "once": bool(once),
+        "active": true,
+        "meta": _clone(meta),
+    }
+
+def subscribe(target, topic, handler=nil, options=nil):
+    item = listener(topic, handler, false, nil)
+    if options != nil and type(options) == "dict":
+        item["once"] = bool(options.get("once", false))
+        item["meta"] = _clone(options.get("meta"))
+    item["id"] = _listener_id(target)
+    target["listeners"].append(item)
+    return item
+
+def once(target, topic, handler=nil, meta=nil):
+    return subscribe(target, topic, handler, {"once": true, "meta": meta})
+
+def unsubscribe(target, listener_or_id):
+    target_id = listener_or_id
+    if type(listener_or_id) == "dict":
+        target_id = listener_or_id.get("id")
+    removed = false
+    for item in target["listeners"]:
+        if item["id"] == target_id:
+            item["active"] = false
+            removed = true
+    _compact_listeners(target)
+    return removed
+
+def emit(target, topic, data=nil, meta=nil):
+    evt = {
+        "kind": "event",
+        "id": _message_id(target),
+        "topic": str(topic),
+        "data": _clone(data),
+        "meta": _clone(meta),
+        "time": time.time(),
+        "results": [],
+    }
+    target["queue"].append(evt)
+    target["history"].append(evt)
+    for item in target["listeners"]:
+        if item["active"] and _matches(item["topic"], evt["topic"]):
+            if item["handler"] != nil:
+                evt["results"].append(item["handler"](evt))
+            if item["once"]:
+                item["active"] = false
+    _compact_listeners(target)
+    return evt
+
+def publish(target, topic, data=nil, meta=nil):
+    return emit(target, topic, data, meta)
+
+def drain(target, topic=nil):
+    out = []
+    keep = []
+    for item in target["queue"]:
+        if topic == nil or _matches(topic, item["topic"]):
+            out.append(item)
+        else:
+            keep.append(item)
+    target["queue"] = keep
+    return out
+
+def messages(target):
+    return _clone(target["history"])
+
+def listeners(target, topic=nil):
+    out = []
+    for item in target["listeners"]:
+        if item["active"] and (topic == nil or _matches(topic, item["topic"])):
+            out.append(_clone(item))
+    return out
+
+def clear(target):
+    target["queue"] = []
+    target["history"] = []
+    return target
+
+def timer(target, topic, delay_seconds, data=nil):
+    return {
+        "kind": "timer",
+        "bus": target,
+        "topic": str(topic),
+        "data": _clone(data),
+        "due_at": time.monotonic() + float(delay_seconds),
+        "fired": false,
+    }
+
+def tick(timer_record):
+    if timer_record["fired"]:
+        return nil
+    if time.monotonic() < timer_record["due_at"]:
+        return nil
+    timer_record["fired"] = true
+    return emit(timer_record["bus"], timer_record["topic"], timer_record["data"])

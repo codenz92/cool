@@ -1,0 +1,130 @@
+import random
+import time
+
+private def _normalize_args(args):
+    if args == nil:
+        return []
+    if type(args) == "list" or type(args) == "tuple":
+        out = []
+        for item in args:
+            out.append(item)
+        return out
+    return [args]
+
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    if argc == 4:
+        return fn(args[0], args[1], args[2], args[3])
+    if argc == 5:
+        return fn(args[0], args[1], args[2], args[3], args[4])
+    raise "retry: calls support up to 5 arguments"
+
+def policy(max_attempts=3, delay=0.0, factor=2.0, max_delay=nil, jitter=0.0, retry_on=nil):
+    attempts = int(max_attempts)
+    if attempts < 1:
+        attempts = 1
+    return {
+        "kind": "retry_policy",
+        "max_attempts": attempts,
+        "delay": float(delay),
+        "factor": float(factor),
+        "max_delay": max_delay,
+        "jitter": float(jitter),
+        "retry_on": retry_on,
+    }
+
+def success(attempt, value=nil):
+    return {
+        "ok": true,
+        "attempt": int(attempt),
+        "value": value,
+        "error": nil,
+        "time": time.time(),
+    }
+
+def failure(attempt, error, classification="error"):
+    return {
+        "ok": false,
+        "attempt": int(attempt),
+        "value": nil,
+        "error": str(error),
+        "classification": str(classification),
+        "time": time.time(),
+    }
+
+def classify(error):
+    text = str(error).lower()
+    if text.find("timeout") >= 0:
+        return "timeout"
+    if text.find("rate") >= 0 or text.find("429") >= 0:
+        return "rate_limit"
+    if text.find("connection") >= 0 or text.find("network") >= 0:
+        return "transient"
+    return "error"
+
+def next_delay(policy_record, attempt):
+    delay = float(policy_record["delay"])
+    i = 1
+    while i < int(attempt):
+        delay = delay * float(policy_record["factor"])
+        i = i + 1
+    if policy_record["max_delay"] != nil and delay > float(policy_record["max_delay"]):
+        delay = float(policy_record["max_delay"])
+    jitter = float(policy_record["jitter"])
+    if jitter > 0:
+        delay = delay + random.random() * jitter
+    if delay < 0:
+        return 0.0
+    return delay
+
+def should_retry(policy_record, record):
+    if record["ok"]:
+        return false
+    if int(record["attempt"]) >= int(policy_record["max_attempts"]):
+        return false
+    allowed = policy_record["retry_on"]
+    if allowed == nil:
+        return true
+    classification = record.get("classification", classify(record.get("error", "")))
+    if type(allowed) == "list" or type(allowed) == "tuple":
+        return classification in allowed
+    return classification == str(allowed)
+
+def run(fn, policy_record=nil, args=nil, sleep_between=false):
+    if policy_record == nil:
+        policy_record = policy()
+    arg_list = _normalize_args(args)
+    attempts = []
+    attempt = 1
+    while true:
+        try:
+            value = _call(fn, arg_list)
+            record = success(attempt, value)
+            attempts.append(record)
+            return {"ok": true, "value": value, "attempts": attempts, "last": record}
+        except as err:
+            record = failure(attempt, err, classify(err))
+            attempts.append(record)
+            if not should_retry(policy_record, record):
+                return {"ok": false, "value": nil, "attempts": attempts, "last": record, "error": record["error"]}
+            if sleep_between:
+                time.sleep(next_delay(policy_record, attempt))
+        attempt = attempt + 1
+
+def summary(records):
+    ok = 0
+    failed = 0
+    for item in records:
+        if item["ok"]:
+            ok = ok + 1
+        else:
+            failed = failed + 1
+    return {"total": len(records), "ok": ok, "failed": failed}

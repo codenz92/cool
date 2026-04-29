@@ -1,0 +1,122 @@
+import json
+import os
+import time
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+def notebook(title=nil, meta=nil):
+    if title == nil or str(title) == "":
+        title = "Notebook"
+    return {
+        "kind": "notebook",
+        "title": str(title),
+        "cells": [],
+        "meta": _clone(meta),
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+
+def cell(kind, source, meta=nil):
+    return {
+        "kind": str(kind),
+        "source": str(source),
+        "outputs": [],
+        "meta": _clone(meta),
+        "state": "pending",
+        "started_at": nil,
+        "finished_at": nil,
+    }
+
+def markdown(source, meta=nil):
+    item = cell("markdown", source, meta)
+    item["state"] = "done"
+    return item
+
+def code(source, meta=nil):
+    return cell("code", source, meta)
+
+def add(book, cell_record):
+    book["cells"].append(cell_record)
+    book["updated_at"] = time.time()
+    return cell_record
+
+def record_output(cell_record, value, kind="text"):
+    out = {"kind": str(kind), "value": value, "time": time.time()}
+    cell_record["outputs"].append(out)
+    cell_record["state"] = "done"
+    cell_record["finished_at"] = time.time()
+    return out
+
+def outputs(book):
+    out = []
+    for item in book["cells"]:
+        for output in item["outputs"]:
+            out.append(output)
+    return out
+
+def run_cell(cell_record, executor=nil):
+    if cell_record["kind"] != "code":
+        cell_record["state"] = "done"
+        return cell_record
+    cell_record["state"] = "running"
+    cell_record["started_at"] = time.time()
+    try:
+        if executor == nil:
+            record_output(cell_record, nil, "skipped")
+        else:
+            record_output(cell_record, executor(cell_record["source"]), "result")
+    except as err:
+        record_output(cell_record, str(err), "error")
+        cell_record["state"] = "failed"
+    return cell_record
+
+def run(book, executor=nil):
+    for item in book["cells"]:
+        run_cell(item, executor)
+    book["updated_at"] = time.time()
+    return book
+
+def render_markdown(book):
+    lines = ["# " + book["title"], ""]
+    for item in book["cells"]:
+        if item["kind"] == "markdown":
+            lines.append(item["source"])
+            lines.append("")
+            continue
+        lines.append("```cool")
+        lines.append(item["source"])
+        lines.append("```")
+        for output in item["outputs"]:
+            if output["value"] != nil:
+                lines.append("")
+                lines.append("```text")
+                lines.append(str(output["value"]))
+                lines.append("```")
+        lines.append("")
+    return "\n".join(lines)
+
+def save(book, file_path):
+    f = open(file_path, "w")
+    f.write(json.dumps(book))
+    f.close()
+    return file_path
+
+def load(file_path):
+    if not os.exists(file_path):
+        return nil
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return json.loads(text)

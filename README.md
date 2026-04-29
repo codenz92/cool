@@ -49,6 +49,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Bundled networking/service modules: `import url`, `import websocket`, `import rpc`, `import graphql`, `import mail`, `import feed`, `import calendar`, and `import cluster`
 - Bundled storage/package modules: `import cache`, `import memo`, `import package`, `import compress`, `import archive`, and `import bundle`
 - Bundled parsing/tooling modules: `import doc`, `import template`, `import lexer`, `import parser`, `import ast`, `import inspect`, `import diff`, `import patch`, `import project`, `import release`, `import repo`, `import modulegraph`, `import plugin`, `import lsp`, `import ffiutil`, and `import shell`
+- Bundled runtime/automation/observability modules: `import event`, `import workflow`, `import agent`, `import retry`, `import metrics`, `import trace`, `import profile`, `import bench`, `import notebook`, and `import secrets`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `read_bytes()`, `write()`, `write_bytes()`, and `readlines()`
@@ -307,6 +308,39 @@ for result in jobs.await_all(g):
 ```
 
 The module includes groups, deadlines, cancellation, channels, background command tasks, HTTP tasks, and polling helpers. The bundled `cool pkg`, `pulse`, and `control` tools all use this layer directly.
+
+### Runtime Automation Modules
+
+Bundled automation and observability helpers now cover pub/sub events, resumable workflows, agent-style plans, retries, counters/gauges/histograms, traces, profiler summaries, benchmark records, executable notebooks, and redacted/encrypted secret storage:
+
+```python
+import event
+import metrics
+import retry
+import trace
+import workflow
+
+bus = event.bus("build")
+event.emit(bus, "build.done", {"ok": true})
+print(event.drain(bus)[0]["topic"])
+
+wf = workflow.workflow("release")
+workflow.add(wf, workflow.step("test"))
+workflow.complete(wf, "test", "ok")
+print(workflow.status(wf)["done"])
+
+r = metrics.registry("service")
+metrics.inc(r, "requests", 2)
+metrics.observe(r, "latency", 0.25)
+print(metrics.snapshot(r)["histograms"]["latency"]["count"])
+
+tr = trace.tracer("request")
+span = trace.start_span(tr, "handler")
+trace.finish_span(tr, span)
+print(len(trace.export(tr)))
+
+print(retry.should_retry(retry.policy(3), retry.failure(1, "timeout")))
+```
 
 ### Core Module
 
@@ -1133,6 +1167,16 @@ stdlib/
   lsp.cool          JSON-RPC/LSP message, diagnostic, completion, and hover helpers
   ffiutil.cool      FFI signature parsing and wrapper-generation helpers
   shell.cool        Shell quoting, splitting, aliasing, completion, and source parsing
+  event.cool        Pub/sub events, listeners, timers, and message queues
+  workflow.cool     Step graphs, checkpoints, resumability, and automation flows
+  agent.cool        Task plans, executor handlers, and memory helpers
+  retry.cool        Retry policies, backoff, jitter, and failure classification
+  metrics.cool      Counters, gauges, histograms, timers, and Prometheus text
+  trace.cool        Trace/span IDs, events, annotations, and span export helpers
+  profile.cool      Runtime sample recording, hotspot summaries, and flame text
+  bench.cool        Lightweight benchmark cases, suites, stats, and comparison
+  notebook.cool     Executable note cells, saved outputs, Markdown, and JSON files
+  secrets.cool      Secret lookup, redaction, encrypted vaults, and env injection
   html.cool         Escaping, tag stripping, and small extraction helpers
   xml.cool          Lightweight XML parsing, text extraction, and serialization
   unicode.cool      Unicode categories, normalization, width, and grapheme helpers

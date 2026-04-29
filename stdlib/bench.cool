@@ -1,0 +1,122 @@
+import time
+
+private def _normalize_args(args):
+    if args == nil:
+        return []
+    if type(args) == "list" or type(args) == "tuple":
+        out = []
+        for item in args:
+            out.append(item)
+        return out
+    return [args]
+
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    raise "bench: calls support up to 3 arguments"
+
+private def _sorted_numbers(values):
+    out = []
+    for item in values:
+        out.append(float(item))
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if out[j] < out[i]:
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+def stats(values):
+    ordered = _sorted_numbers(values)
+    total = 0.0
+    for item in ordered:
+        total = total + item
+    mean = 0.0
+    median = nil
+    min_value = nil
+    max_value = nil
+    if len(ordered) > 0:
+        mean = total / len(ordered)
+        min_value = ordered[0]
+        max_value = ordered[len(ordered) - 1]
+        mid = int(len(ordered) / 2)
+        if len(ordered) % 2 == 0:
+            median = (ordered[mid - 1] + ordered[mid]) / 2.0
+        else:
+            median = ordered[mid]
+    return {"count": len(ordered), "min": min_value, "max": max_value, "mean": mean, "median": median, "total": total}
+
+def case(name, fn=nil, args=nil, iterations=1, warmup=0):
+    return {
+        "kind": "bench_case",
+        "name": str(name),
+        "fn": fn,
+        "args": _normalize_args(args),
+        "iterations": int(iterations),
+        "warmup": int(warmup),
+    }
+
+def suite(name=nil):
+    if name == nil or str(name) == "":
+        name = "bench"
+    return {"kind": "bench_suite", "name": str(name), "cases": []}
+
+def add(suite_record, case_record):
+    suite_record["cases"].append(case_record)
+    return case_record
+
+def result(name, durations):
+    summary = stats(durations)
+    summary["name"] = str(name)
+    summary["durations"] = durations
+    return summary
+
+def run_case(case_record):
+    if case_record["fn"] == nil:
+        return result(case_record["name"], [])
+    i = 0
+    while i < case_record["warmup"]:
+        _call(case_record["fn"], case_record["args"])
+        i = i + 1
+    durations = []
+    i = 0
+    while i < case_record["iterations"]:
+        started = time.monotonic()
+        _call(case_record["fn"], case_record["args"])
+        durations.append(time.monotonic() - started)
+        i = i + 1
+    return result(case_record["name"], durations)
+
+def run(suite_record):
+    out = []
+    for item in suite_record["cases"]:
+        out.append(run_case(item))
+    return out
+
+def compare(left, right):
+    left_mean = float(left.get("mean", 0.0))
+    right_mean = float(right.get("mean", 0.0))
+    faster = left.get("name", "left")
+    slower = right.get("name", "right")
+    ratio = 0.0
+    if right_mean < left_mean:
+        faster = right.get("name", "right")
+        slower = left.get("name", "left")
+        if right_mean > 0:
+            ratio = left_mean / right_mean
+    else:
+        if left_mean > 0:
+            ratio = right_mean / left_mean
+    return {"faster": faster, "slower": slower, "ratio": ratio}

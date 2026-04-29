@@ -1,0 +1,232 @@
+import json
+import os
+import time
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _normalize_list(value):
+    if value == nil:
+        return []
+    if type(value) == "list" or type(value) == "tuple":
+        out = []
+        for item in value:
+            out.append(str(item))
+        return out
+    return [str(value)]
+
+private def _call(fn, args):
+    argc = len(args)
+    if argc == 0:
+        return fn()
+    if argc == 1:
+        return fn(args[0])
+    if argc == 2:
+        return fn(args[0], args[1])
+    if argc == 3:
+        return fn(args[0], args[1], args[2])
+    raise "workflow: actions support up to 3 arguments"
+
+private def _find_index(flow, step_id):
+    i = 0
+    wanted = str(step_id)
+    while i < len(flow["steps"]):
+        if flow["steps"][i]["id"] == wanted:
+            return i
+        i = i + 1
+    return -1
+
+private def _find(flow, step_id):
+    idx = _find_index(flow, step_id)
+    if idx < 0:
+        return nil
+    return flow["steps"][idx]
+
+private def _complete_ids(flow):
+    ids = []
+    for item in flow["steps"]:
+        if item["state"] == "done":
+            ids.append(item["id"])
+    return ids
+
+private def _deps_done(flow, item):
+    done = _complete_ids(flow)
+    for dep in item["deps"]:
+        if dep not in done:
+            return false
+    return true
+
+def workflow(name=nil, meta=nil):
+    if name == nil or str(name) == "":
+        name = "workflow"
+    return {
+        "kind": "workflow",
+        "name": str(name),
+        "steps": [],
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "meta": _clone(meta),
+    }
+
+def step(id, action=nil, deps=nil, meta=nil):
+    return {
+        "kind": "step",
+        "id": str(id),
+        "action": action,
+        "deps": _normalize_list(deps),
+        "state": "pending",
+        "result": nil,
+        "error": nil,
+        "started_at": nil,
+        "finished_at": nil,
+        "meta": _clone(meta),
+    }
+
+def add(flow, item, action=nil, deps=nil, meta=nil):
+    entry = item
+    if type(item) != "dict":
+        entry = step(item, action, deps, meta)
+    elif action != nil:
+        entry["action"] = action
+    if _find(flow, entry["id"]) != nil:
+        raise "workflow: duplicate step '" + entry["id"] + "'"
+    flow["steps"].append(entry)
+    flow["updated_at"] = time.time()
+    return entry
+
+def get(flow, step_id):
+    return _find(flow, step_id)
+
+def ready(flow):
+    out = []
+    for item in flow["steps"]:
+        if item["state"] == "pending" and _deps_done(flow, item):
+            out.append(item)
+    return out
+
+def complete(flow, step_id, result=nil):
+    item = _find(flow, step_id)
+    if item == nil:
+        raise "workflow: unknown step '" + str(step_id) + "'"
+    item["state"] = "done"
+    item["result"] = _clone(result)
+    item["error"] = nil
+    item["finished_at"] = time.time()
+    flow["updated_at"] = item["finished_at"]
+    return item
+
+def fail(flow, step_id, error):
+    item = _find(flow, step_id)
+    if item == nil:
+        raise "workflow: unknown step '" + str(step_id) + "'"
+    item["state"] = "failed"
+    item["error"] = str(error)
+    item["finished_at"] = time.time()
+    flow["updated_at"] = item["finished_at"]
+    return item
+
+def run_step(flow, step_or_id):
+    item = step_or_id
+    if type(step_or_id) != "dict":
+        item = _find(flow, step_or_id)
+    if item == nil:
+        raise "workflow: unknown step"
+    if item["state"] == "done":
+        return item
+    if not _deps_done(flow, item):
+        raise "workflow: dependencies are not complete for '" + item["id"] + "'"
+    item["state"] = "running"
+    item["started_at"] = time.time()
+    try:
+        result = nil
+        if item["action"] != nil:
+            result = _call(item["action"], [flow, item])
+        return complete(flow, item["id"], result)
+    except as err:
+        return fail(flow, item["id"], err)
+
+def run_ready(flow):
+    out = []
+    for item in ready(flow):
+        out.append(run_step(flow, item))
+    return out
+
+def run_all(flow):
+    progressed = true
+    while progressed:
+        candidates = ready(flow)
+        progressed = len(candidates) > 0
+        for item in candidates:
+            run_step(flow, item)
+    return status(flow)
+
+def status(flow):
+    counts = {"pending": 0, "running": 0, "done": 0, "failed": 0}
+    for item in flow["steps"]:
+        state = item["state"]
+        if state not in counts:
+            counts[state] = 0
+        counts[state] = counts[state] + 1
+    return {
+        "name": flow["name"],
+        "steps": len(flow["steps"]),
+        "counts": counts,
+        "done": counts.get("done", 0) == len(flow["steps"]) and counts.get("failed", 0) == 0,
+    }
+
+def checkpoint(flow):
+    steps = []
+    for item in flow["steps"]:
+        steps.append({
+            "id": item["id"],
+            "deps": _clone(item["deps"]),
+            "state": item["state"],
+            "result": _clone(item["result"]),
+            "error": item["error"],
+            "meta": _clone(item["meta"]),
+        })
+    return {
+        "kind": "workflow_checkpoint",
+        "name": flow["name"],
+        "steps": steps,
+        "meta": _clone(flow["meta"]),
+        "updated_at": flow["updated_at"],
+    }
+
+def save_checkpoint(flow, file_path):
+    f = open(file_path, "w")
+    f.write(json.dumps(checkpoint(flow)))
+    f.close()
+    return file_path
+
+def load_checkpoint(file_path):
+    if not os.exists(file_path):
+        return nil
+    f = open(file_path, "r")
+    text = f.read()
+    f.close()
+    return json.loads(text)
+
+def resume(snapshot, actions=nil):
+    flow = workflow(snapshot.get("name", "workflow"), snapshot.get("meta"))
+    for item in snapshot.get("steps", []):
+        action = nil
+        if actions != nil and type(actions) == "dict" and item["id"] in actions:
+            action = actions[item["id"]]
+        entry = step(item["id"], action, item.get("deps", []), item.get("meta"))
+        entry["state"] = item.get("state", "pending")
+        entry["result"] = item.get("result")
+        entry["error"] = item.get("error")
+        flow["steps"].append(entry)
+    return flow

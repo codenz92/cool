@@ -1,0 +1,118 @@
+import time
+
+private def _clone(value):
+    kind = type(value)
+    if kind == "dict":
+        out = {}
+        for key in value.keys():
+            out[key] = _clone(value[key])
+        return out
+    if kind == "list" or kind == "tuple":
+        out = []
+        for item in value:
+            out.append(_clone(item))
+        return out
+    return clone(value)
+
+private def _sorted(values):
+    out = []
+    for item in values:
+        out.append(item)
+    i = 0
+    while i < len(out):
+        j = i + 1
+        while j < len(out):
+            if str(out[j]) < str(out[i]):
+                tmp = out[i]
+                out[i] = out[j]
+                out[j] = tmp
+            j = j + 1
+        i = i + 1
+    return out
+
+private def _hist(values):
+    total = 0.0
+    min_value = nil
+    max_value = nil
+    for item in values:
+        value = float(item)
+        total = total + value
+        if min_value == nil or value < min_value:
+            min_value = value
+        if max_value == nil or value > max_value:
+            max_value = value
+    mean = 0.0
+    if len(values) > 0:
+        mean = total / len(values)
+    return {"count": len(values), "sum": total, "min": min_value, "max": max_value, "mean": mean}
+
+def registry(name=nil):
+    if name == nil or str(name) == "":
+        name = "metrics"
+    return {
+        "kind": "metrics_registry",
+        "name": str(name),
+        "counters": {},
+        "gauges": {},
+        "histograms": {},
+        "created_at": time.time(),
+    }
+
+def inc(registry_record, name, amount=1):
+    key = str(name)
+    if key not in registry_record["counters"]:
+        registry_record["counters"][key] = 0
+    registry_record["counters"][key] = registry_record["counters"][key] + int(amount)
+    return registry_record["counters"][key]
+
+def counter(registry_record, name, amount=1):
+    return inc(registry_record, name, amount)
+
+def set_gauge(registry_record, name, value):
+    registry_record["gauges"][str(name)] = value
+    return value
+
+def gauge(registry_record, name, value=nil):
+    if value != nil:
+        return set_gauge(registry_record, name, value)
+    return registry_record["gauges"].get(str(name), nil)
+
+def observe(registry_record, name, value):
+    key = str(name)
+    if key not in registry_record["histograms"]:
+        registry_record["histograms"][key] = []
+    registry_record["histograms"][key].append(float(value))
+    return value
+
+def start_timer(registry_record, name):
+    return {"kind": "metrics_timer", "registry": registry_record, "name": str(name), "started_at": time.monotonic()}
+
+def stop_timer(timer_record):
+    duration = time.monotonic() - timer_record["started_at"]
+    observe(timer_record["registry"], timer_record["name"], duration)
+    timer_record["duration"] = duration
+    return duration
+
+def snapshot(registry_record):
+    histograms = {}
+    for key in registry_record["histograms"].keys():
+        histograms[key] = _hist(registry_record["histograms"][key])
+    return {
+        "name": registry_record["name"],
+        "counters": _clone(registry_record["counters"]),
+        "gauges": _clone(registry_record["gauges"]),
+        "histograms": histograms,
+    }
+
+def prometheus(registry_record):
+    snap = snapshot(registry_record)
+    lines = []
+    for key in _sorted(snap["counters"].keys()):
+        lines.append(key + " " + str(snap["counters"][key]))
+    for key in _sorted(snap["gauges"].keys()):
+        lines.append(key + " " + str(snap["gauges"][key]))
+    for key in _sorted(snap["histograms"].keys()):
+        item = snap["histograms"][key]
+        lines.append(key + "_count " + str(item["count"]))
+        lines.append(key + "_sum " + str(item["sum"]))
+    return "\n".join(lines)
