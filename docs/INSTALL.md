@@ -83,6 +83,10 @@ Hosted installs can infer `SHA256SUMS` from the release URL:
 bash install.sh --version 1.0.0 --verify-metadata
 ```
 
+Public releases are also checked from the hosted download URLs with
+`scripts/verify_hosted_release.sh`. See `docs/RELEASE_RUNBOOK.md` for the
+release-day flow and `docs/SUPPORT_MATRIX.md` for the supported platform list.
+
 ## Smoke Test
 
 By default the installer runs:

@@ -1,0 +1,108 @@
+name: Hosted Release Verify
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, without the leading v. Defaults to the tag.
+        required: false
+        type: string
+      tag:
+        description: Release tag. Defaults to v<version>.
+        required: false
+        type: string
+      base_url:
+        description: Release download base URL.
+        required: false
+        default: https://github.com/codenz92/cool-lang/releases/download
+        type: string
+      install_smoke:
+        description: Run a Linux hosted installer smoke test.
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-hosted-release:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Verify hosted release
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          TAG_INPUT: ${{ inputs.tag }}
+          BASE_URL_INPUT: ${{ inputs.base_url }}
+          INSTALL_SMOKE_INPUT: ${{ inputs.install_smoke }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG="$TAG_INPUT"
+          if [[ -n "$RELEASE_TAG" ]]; then
+            TAG="$RELEASE_TAG"
+          fi
+
+          VERSION="$VERSION_INPUT"
+          if [[ -z "$VERSION" && -n "$TAG" ]]; then
+            VERSION="${TAG#v}"
+          fi
+          if [[ -z "$VERSION" ]]; then
+            VERSION="$(python3 -c 'import re, pathlib; print(re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text(encoding="utf-8")).group(1))')"
+          fi
+          if [[ -z "$TAG" ]]; then
+            TAG="v$VERSION"
+          fi
+
+          BASE_URL="$BASE_URL_INPUT"
+          if [[ -z "$BASE_URL" ]]; then
+            BASE_URL="https://github.com/codenz92/cool-lang/releases/download"
+          fi
+          INSTALL_SMOKE="$INSTALL_SMOKE_INPUT"
+          if [[ -z "$INSTALL_SMOKE" ]]; then
+            INSTALL_SMOKE="true"
+          fi
+
+          VERIFY_ARGS=(
+            --version "$VERSION"
+            --tag "$TAG"
+            --base-url "$BASE_URL"
+            --platform multi
+            --require-trust
+            --check-channel-archive
+            --require-platform linux-x86_64
+            --require-platform macos-x86_64
+            --require-platform macos-arm64
+            --require-platform windows-x86_64
+            --report "dist/hosted-validation/$VERSION/hosted-release-validation.json"
+          )
+          if [[ "$INSTALL_SMOKE" == "true" ]]; then
+            VERIFY_ARGS+=(--install-smoke --install-smoke-platform linux-x86_64)
+          fi
+
+          bash scripts/verify_hosted_release.sh "${VERIFY_ARGS[@]}"
+
+      - name: Upload hosted verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-hosted-release-verification
+          path: dist/hosted-validation/**

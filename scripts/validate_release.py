@@ -222,6 +222,8 @@ def validate_archive(asset, package_name, version):
         f"{root}/docs/RELEASE_TRUST.md",
         f"{root}/docs/PACKAGE_CHANNELS.md",
         f"{root}/docs/RELEASE_VALIDATION.md",
+        f"{root}/docs/RELEASE_RUNBOOK.md",
+        f"{root}/docs/SUPPORT_MATRIX.md",
         f"{root}/scripts/release_candidate.sh",
         f"{root}/scripts/promote_release.sh",
         f"{root}/scripts/trust_release.py",
@@ -229,6 +231,7 @@ def validate_archive(asset, package_name, version):
         f"{root}/scripts/package_channels.py",
         f"{root}/scripts/assemble_matrix_release.py",
         f"{root}/scripts/validate_release.py",
+        f"{root}/scripts/verify_hosted_release.py",
         f"{root}/scripts/smoke_matrix_release.py",
     ]
     for rel in required:

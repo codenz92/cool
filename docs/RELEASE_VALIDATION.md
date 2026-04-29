@@ -72,6 +72,37 @@ bash scripts/validate_release.sh \
 The report records the release platform, platforms discovered, archive count,
 checksum counts, channel counts, and installer smoke target.
 
+## Hosted Release Verification
+
+After assets are uploaded to a public GitHub Release or mirror, verify the
+hosted URLs rather than local `dist/` files:
+
+```bash
+bash scripts/verify_hosted_release.sh \
+  --version 1.0.0 \
+  --platform multi \
+  --require-trust \
+  --check-channel-archive \
+  --require-platform linux-x86_64 \
+  --require-platform macos-x86_64 \
+  --require-platform macos-arm64 \
+  --require-platform windows-x86_64 \
+  --install-smoke \
+  --install-smoke-platform linux-x86_64
+```
+
+The hosted verifier downloads `release.json`, `latest.json`, `SHA256SUMS`,
+release assets, trust metadata, and the package-channel archive from the release
+URL, then checks hashes, sizes, archive layout, payload checksums, trust records,
+channel checksums, and optional installer behavior.
+
+Use `--base-url <url>` for mirrors. The URL should be the release download base
+that contains tag directories, for example:
+
+```text
+https://github.com/codenz92/cool-lang/releases/download
+```
+
 ## Synthetic Matrix Smoke Test
 
 When a real four-platform matrix is too expensive for every pull request, run a
@@ -97,3 +128,4 @@ tag is cut.
 4. `bash scripts/package_channels.sh generate --version <version>`
 5. `bash scripts/validate_release.sh --version <version> --require-trust --require-channels --install-smoke`
 6. For a real release, dispatch `Release Matrix` or push tag `v<version>` and confirm the aggregate validation report passes.
+7. After the release is public, run `Hosted Release Verify` or `scripts/verify_hosted_release.sh` against the hosted assets.

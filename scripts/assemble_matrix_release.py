@@ -160,6 +160,8 @@ def main():
         "package_channels.py",
         "validate_release.sh",
         "validate_release.py",
+        "verify_hosted_release.sh",
+        "verify_hosted_release.py",
     ]:
         src = ROOT / ("scripts" if rel != "install.sh" else "") / rel
         if not src.is_file():

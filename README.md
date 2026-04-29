@@ -1006,6 +1006,26 @@ bash scripts/validate_release.sh \
 
 The validator audits release metadata, asset hashes, archive payload layouts, trust metadata, Homebrew/Winget/Debian channel files, channel bundles, and optional installer execution. `scripts/smoke_matrix_release.sh` runs a synthetic four-platform matrix from one promoted host release so pull-request CI can catch release/channel regressions before a real tag. See `docs/RELEASE_VALIDATION.md` for validation reports and the release checklist.
 
+### Hosted Release Operations
+
+After a GitHub Release or mirror is public, verify the uploaded assets from the hosted download URLs:
+
+```bash
+bash scripts/verify_hosted_release.sh \
+  --version 1.0.0 \
+  --platform multi \
+  --require-trust \
+  --check-channel-archive \
+  --require-platform linux-x86_64 \
+  --require-platform macos-x86_64 \
+  --require-platform macos-arm64 \
+  --require-platform windows-x86_64 \
+  --install-smoke \
+  --install-smoke-platform linux-x86_64
+```
+
+The hosted verifier downloads release metadata, archives, trust files, and the package-channel archive before checking hashes, sizes, archive layout, payload checksums, trust references, channel checksums, and installer behavior. The `Hosted Release Verify` workflow runs this check on published releases and can be manually dispatched for mirrors. See `docs/RELEASE_RUNBOOK.md` and `docs/SUPPORT_MATRIX.md` for the release-day checklist, rollback path, and supported-platform contract.
+
 ### Project workflow
 
 ```bash
@@ -1491,6 +1511,7 @@ examples/
 | 21 — Published release automation and supply-chain trust | ✅ Complete |
 | 22 — Multi-platform release matrix and package channels | ✅ Complete |
 | 23 — Public release validation and ecosystem readiness | ✅ Complete |
+| 24 — Real public release and post-release operations | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

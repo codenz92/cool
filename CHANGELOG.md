@@ -2,7 +2,15 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 23 Complete
+## [Unreleased] - Phase 24 Complete
+
+### Phase 24 — Real Public Release And Post-Release Operations
+
+- Added `scripts/verify_hosted_release.sh` / `.py` to verify public GitHub Release or mirror assets from hosted URLs, including release metadata, archives, trust files, package-channel archives, optional signatures, and installer smoke behavior
+- Added the GitHub Actions `Hosted Release Verify` workflow for post-publish hosted asset checks on published releases and manual mirror rechecks
+- Added `docs/RELEASE_RUNBOOK.md` and `docs/SUPPORT_MATRIX.md` for release-day operations, rollback/hotfix handling, supported platforms, channel coverage, and verification policy
+- Added release checklist and hotfix issue templates plus a PR template with release-impact validation prompts
+- Packaged hosted verification scripts and release-operations docs into release candidates, promoted releases, and assembled matrix releases
 
 ### Phase 23 — Public Release Validation And Ecosystem Readiness
 

@@ -51,12 +51,14 @@ jobs:
             scripts/package_channels.sh \
             scripts/assemble_matrix_release.sh \
             scripts/validate_release.sh \
+            scripts/verify_hosted_release.sh \
             scripts/smoke_matrix_release.sh
           python3 -m py_compile \
             scripts/trust_release.py \
             scripts/package_channels.py \
             scripts/assemble_matrix_release.py \
             scripts/validate_release.py \
+            scripts/verify_hosted_release.py \
             scripts/smoke_matrix_release.py
 
           bash scripts/release_candidate.sh --skip-gate --platform macos-arm64
@@ -74,6 +76,21 @@ jobs:
             --source-platform macos-arm64 \
             --work-dir dist/matrix-smoke
 
+          MIRROR="$(mktemp -d)"
+          mkdir -p "$MIRROR/v$VERSION"
+          cp dist/releases/"$VERSION"/* "$MIRROR/v$VERSION/"
+          cp dist/channels/cool-"$VERSION"-package-channels.tar.gz "$MIRROR/v$VERSION/"
+          bash scripts/verify_hosted_release.sh \
+            --version "$VERSION" \
+            --base-url "file://$MIRROR" \
+            --platform macos-arm64 \
+            --require-trust \
+            --require-platform macos-arm64 \
+            --check-channel-archive \
+            --install-smoke \
+            --install-smoke-platform macos-arm64 \
+            --report "dist/hosted-validation/$VERSION/hosted-release-validation.json"
+
       - name: Upload validation reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -81,4 +98,5 @@ jobs:
           name: cool-release-validation
           path: |
             dist/validation/**
+            dist/hosted-validation/**
             dist/matrix-smoke/dist/validation/**

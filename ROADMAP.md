@@ -754,6 +754,27 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 24 — Real Public Release And Post-Release Operations ✅ Complete
+
+> Goal: close the release loop after upload by verifying public download URLs, documenting release-day operations, and giving regressions a clear support path.
+
+### Hosted Release Verification
+
+- [x] `scripts/verify_hosted_release.sh` / `.py` verify GitHub Release or mirror assets from hosted URLs instead of local `dist/` directories
+- [x] Hosted verification checks `release.json`, `latest.json`, `SHA256SUMS`, archive hashes/sizes, payload layouts, platform sidecars, trust metadata, package-channel archive checksums, and optional installer smoke behavior
+- [x] The verifier supports required-platform checks, signed metadata verification with `--verify-key`, mirror bases with `--base-url`, JSON reports, retained download directories, and local `file://` mirrors for CI smoke tests
+- [x] GitHub Actions `Hosted Release Verify` runs on published releases and manual dispatches, uploads hosted verification reports, and validates the full public platform contract
+
+### Release Operations
+
+- [x] `docs/RELEASE_RUNBOOK.md` defines local preflight, matrix release, published verification, rollback, hotfix, and final-record procedures
+- [x] `docs/SUPPORT_MATRIX.md` records supported platforms, archive defaults, package channels, verification coverage, and platform support policy
+- [x] Release issue templates cover public release checklists and hotfix/regression handling
+- [x] Pull request template now calls out validation and release-impact checks
+- [x] Release candidates and promoted/matrix releases include hosted verification scripts plus release runbook and support-matrix docs
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -781,3 +802,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 21 — Published Release Automation And Supply-Chain Trust | ✅ Complete |
 | 22 — Multi-Platform Release Matrix And Package Channels | ✅ Complete |
 | 23 — Public Release Validation And Ecosystem Readiness | ✅ Complete |
+| 24 — Real Public Release And Post-Release Operations | ✅ Complete |

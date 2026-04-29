@@ -359,6 +359,8 @@ $zip_asset_line
 - \`install.sh\`
 - \`validate_release.sh\`
 - \`validate_release.py\`
+- \`verify_hosted_release.sh\`
+- \`verify_hosted_release.py\`
 - \`SHA256SUMS\`
 - \`release.json\`
 - \`sbom.spdx.json\`
@@ -619,9 +621,11 @@ chmod 755 "$RELEASE_DIR/install.sh"
 cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RELEASE_DIR/"
 cp scripts/package_channels.sh scripts/package_channels.py "$RELEASE_DIR/"
 cp scripts/validate_release.sh scripts/validate_release.py "$RELEASE_DIR/"
+cp scripts/verify_hosted_release.sh scripts/verify_hosted_release.py "$RELEASE_DIR/"
 chmod 755 "$RELEASE_DIR/trust_release.sh" "$RELEASE_DIR/trust_release.py" "$RELEASE_DIR/publish_release.sh"
 chmod 755 "$RELEASE_DIR/package_channels.sh" "$RELEASE_DIR/package_channels.py"
 chmod 755 "$RELEASE_DIR/validate_release.sh" "$RELEASE_DIR/validate_release.py"
+chmod 755 "$RELEASE_DIR/verify_hosted_release.sh" "$RELEASE_DIR/verify_hosted_release.py"
 
 write_release_notes
 write_sha256sums
