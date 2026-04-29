@@ -22,9 +22,3 @@ libc = "0.2"
 [dependencies.inkwell]
 version = "0.4"
 features = ["llvm17-0"]
-
-[target.'cfg(windows)'.dependencies]
-llvm-sys = { version = "170", features = ["disable-alltargets-init", "no-llvm-linking"] }
-
-[build-dependencies]
-cc = "1"

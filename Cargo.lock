@@ -117,13 +117,11 @@ dependencies = [
 name = "cool"
 version = "1.0.0"
 dependencies = [
- "cc",
  "chrono",
  "crossterm",
  "inkwell",
  "libc",
  "libloading",
- "llvm-sys",
  "md5",
  "object",
  "regex",
