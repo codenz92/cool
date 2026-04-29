@@ -21,4 +21,5 @@ libc = "0.2"
 
 [dependencies.inkwell]
 version = "0.4"
+default-features = false
 features = ["llvm17-0"]
