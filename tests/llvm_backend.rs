@@ -3,11 +3,13 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static LLVM_BUILD_LOCK: Mutex<()> = Mutex::new(());
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn cool_bin() -> &'static str {
     env!("CARGO_BIN_EXE_cool")
@@ -15,12 +17,14 @@ fn cool_bin() -> &'static str {
 
 fn unique_test_path(stem: &str, ext: &str) -> PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    PathBuf::from(format!("{stem}_{nonce}.{ext}"))
+    let seq = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{stem}_{nonce}_{seq}.{ext}"))
 }
 
 fn unique_temp_dir(stem: &str) -> PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    std::env::current_dir().unwrap().join(format!("{stem}_{nonce}"))
+    let seq = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{stem}_{nonce}_{seq}"))
 }
 
 fn cool_quote_path(path: &std::path::Path) -> String {
