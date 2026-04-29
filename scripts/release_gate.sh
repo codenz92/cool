@@ -41,6 +41,14 @@ require_command() {
 require_command cargo
 require_command cc
 
+HOST_OS="$(uname -s)"
+HOSTED_NATIVE_BINARY=1
+case "$HOST_OS" in
+    MINGW*|MSYS*|CYGWIN*)
+        HOSTED_NATIVE_BINARY=0
+        ;;
+esac
+
 run cargo fmt --check
 run cargo build -q --bin cool
 run cargo test -q
@@ -77,8 +85,12 @@ COOL
 PARITY_EXPECTED=$'12\n105'
 expect_output "$PARITY_EXPECTED" "$COOL_BIN" "$PARITY_SRC"
 expect_output "$PARITY_EXPECTED" "$COOL_BIN" --vm "$PARITY_SRC"
-run "$COOL_BIN" build --emit binary "$PARITY_SRC"
-expect_output "$PARITY_EXPECTED" "${PARITY_SRC%.cool}"
+if [[ "$HOSTED_NATIVE_BINARY" -eq 1 ]]; then
+    run "$COOL_BIN" build --emit binary "$PARITY_SRC"
+    expect_output "$PARITY_EXPECTED" "${PARITY_SRC%.cool}"
+else
+    printf '\n==> skipping hosted native binary parity on %s\n' "$HOST_OS"
+fi
 
 FREESTANDING_SRC="$TMP_DIR/freestanding.cool"
 cat > "$FREESTANDING_SRC" <<'COOL'
