@@ -50,6 +50,10 @@ jobs:
           - runner: windows-2022
             platform: windows-x86_64
     steps:
+      - name: Disable CRLF conversion on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
