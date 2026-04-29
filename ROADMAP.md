@@ -25,6 +25,7 @@
 3. Typed language features for larger compiled programs
 4. Hardened native toolchain for routine binary shipping
 5. Systems interop as a signature advantage (`bindgen`, ABI, targets, link flow)
+6. Release gate and CI-backed quality checks for routine shipping
 
 ## Legend
 
@@ -635,6 +636,21 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 18 — Release Hardening ✅ Complete
+
+> Goal: turn the completed feature roadmap into a repeatable release process with one command that exercises the critical product surface before shipping.
+
+### Release Gate
+
+- [x] Repo-local `scripts/release_gate.sh` command for formatting, build, and full Rust test coverage
+- [x] Static Cool checks for representative application and service examples
+- [x] Cross-runtime parity smoke covering interpreter, bytecode VM, and LLVM native execution
+- [x] Freestanding object-output smoke test for the systems subset
+- [x] GitHub Actions workflow that runs the same release gate on pushes, pull requests, and manual dispatches
+- [x] README documentation for running the gate locally before release or push
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -656,3 +672,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 15 — Native Toolchain And Distribution | ✅ Complete |
 | 16 — Systems Interop And Targets | ✅ Complete |
 | 17 — Signature Features And Flagship Software | ✅ Complete |
+| 18 — Release Hardening | ✅ Complete |

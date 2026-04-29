@@ -2,7 +2,13 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 17 Complete
+## [Unreleased] - Phase 18 Complete
+
+### Phase 18 — Release Hardening
+
+- Added `scripts/release_gate.sh` as the canonical release gate for formatting, build, full Rust test coverage, static Cool checks, interpreter/VM/native parity smoke coverage, and freestanding object output validation
+- Added a GitHub Actions `Release Gate` workflow that runs the same gate on pushes, pull requests, and manual dispatches
+- Documented the release gate in the README and added Phase 18 to the roadmap as the completed hardening layer after the feature roadmap
 
 ### LLVM Backend
 

@@ -872,6 +872,16 @@ cargo build --release
 cargo run --release --bin bench_compare -- --runs 5 --warmups 1
 ```
 
+### Release Gate
+
+Run the repo-level release gate before tagging or pushing a release-critical change:
+
+```bash
+bash scripts/release_gate.sh
+```
+
+The gate runs `cargo fmt --check`, builds the `cool` binary, runs the full Rust test suite, statically checks representative Cool examples, verifies interpreter / VM / LLVM parity on a closure smoke program, and confirms freestanding object output still works.
+
 ### Project workflow
 
 ```bash
