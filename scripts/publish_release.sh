@@ -198,6 +198,10 @@ ASSETS=()
 while IFS= read -r asset; do
     ASSETS+=("$asset")
 done < <(find "$RELEASE_DIR" -maxdepth 1 -type f | LC_ALL=C sort)
+CHANNEL_ARCHIVE="$DIST_DIR/channels/cool-$VERSION-package-channels.tar.gz"
+if [[ -f "$CHANNEL_ARCHIVE" ]]; then
+    ASSETS+=("$CHANNEL_ARCHIVE")
+fi
 if [[ "${#ASSETS[@]}" -eq 0 ]]; then
     printf 'publish release: no assets found under %s\n' "$RELEASE_DIR" >&2
     exit 1

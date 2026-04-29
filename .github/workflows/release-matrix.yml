@@ -1,0 +1,212 @@
+name: Release Matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version override. Defaults to Cargo.toml, or the pushed tag without the v prefix.
+        required: false
+        type: string
+      publish:
+        description: Publish the assembled multi-platform GitHub Release.
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      draft:
+        description: Create the GitHub Release as a draft when publishing manually.
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-platform:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x86_64
+          - runner: macos-13
+            platform: macos-x86_64
+          - runner: macos-14
+            platform: macos-arm64
+          - runner: windows-2022
+            platform: windows-x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install LLVM 17 on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release software-properties-common
+          if ! sudo apt-get install -y llvm-17-dev clang-17 lld-17; then
+            wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+            chmod +x /tmp/llvm.sh
+            sudo /tmp/llvm.sh 17
+            sudo apt-get install -y llvm-17-dev clang-17 lld-17
+          fi
+          echo "LLVM_SYS_170_PREFIX=/usr/lib/llvm-17" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-17/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 17 on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@17
+          echo "LLVM_SYS_170_PREFIX=$(brew --prefix llvm@17)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 17 on Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install llvm --version=17.0.6 -y --allow-downgrade
+          echo "LLVM_SYS_170_PREFIX=C:\\Program Files\\LLVM" >> "$GITHUB_ENV"
+          echo "C:\\Program Files\\LLVM\\bin" >> "$GITHUB_PATH"
+
+      - name: Build platform release candidate
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          if [[ -z "$VERSION_INPUT" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION_INPUT="${GITHUB_REF_NAME#v}"
+          fi
+          if [[ -n "$VERSION_INPUT" ]]; then
+            bash scripts/release_candidate.sh --require-clean --version "$VERSION_INPUT" --platform "$PLATFORM"
+            bash scripts/promote_release.sh --version "$VERSION_INPUT" --platform "$PLATFORM" --skip-trust
+          else
+            bash scripts/release_candidate.sh --require-clean --platform "$PLATFORM"
+            bash scripts/promote_release.sh --platform "$PLATFORM" --skip-trust
+          fi
+
+      - name: Upload platform assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-${{ matrix.platform }}-release
+          path: |
+            dist/release-candidate/**
+            dist/releases/**
+
+  assemble:
+    name: Assemble multi-platform release
+    runs-on: ubuntu-22.04
+    needs: build-platform
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download platform assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/matrix-input
+
+      - name: Assemble, trust, and channelize
+        env:
+          COOL_RELEASE_SIGNING_KEY_B64: ${{ secrets.COOL_RELEASE_SIGNING_KEY_B64 }}
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+        run: |
+          if [[ -z "$VERSION_INPUT" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION_INPUT="${GITHUB_REF_NAME#v}"
+          fi
+          VERSION_ARGS=()
+          if [[ -n "$VERSION_INPUT" ]]; then
+            VERSION_ARGS=(--version "$VERSION_INPUT")
+          fi
+
+          bash scripts/assemble_matrix_release.sh --source-dir dist/matrix-input "${VERSION_ARGS[@]}"
+
+          TRUST_ARGS=(generate "${VERSION_ARGS[@]}" --platform multi)
+          VERIFY_ARGS=(verify "${VERSION_ARGS[@]}" --platform multi)
+          if [[ -n "$COOL_RELEASE_SIGNING_KEY_B64" ]]; then
+            SIGN_KEY="$RUNNER_TEMP/cool-release-signing-key.pem"
+            VERIFY_KEY="$RUNNER_TEMP/cool-release-signing-public.pem"
+            printf '%s' "$COOL_RELEASE_SIGNING_KEY_B64" | base64 --decode > "$SIGN_KEY"
+            chmod 600 "$SIGN_KEY"
+            openssl pkey -in "$SIGN_KEY" -pubout -out "$VERIFY_KEY"
+            TRUST_ARGS+=(--sign-key "$SIGN_KEY")
+            VERIFY_ARGS+=(--verify-key "$VERIFY_KEY")
+          fi
+          bash scripts/trust_release.sh "${TRUST_ARGS[@]}"
+          bash scripts/trust_release.sh "${VERIFY_ARGS[@]}"
+
+          bash scripts/package_channels.sh generate "${VERSION_ARGS[@]}" \
+            --require-platform linux-x86_64 \
+            --require-platform macos-x86_64 \
+            --require-platform macos-arm64 \
+            --require-platform windows-x86_64
+
+      - name: Publish or dry-run
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+          PUBLISH_INPUT: ${{ github.event.inputs.publish }}
+          DRAFT_INPUT: ${{ github.event.inputs.draft }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -z "$VERSION_INPUT" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION_INPUT="${GITHUB_REF_NAME#v}"
+          fi
+          PUBLISH_ARGS=(--platform multi)
+          if [[ -n "$VERSION_INPUT" ]]; then
+            PUBLISH_ARGS+=(--version "$VERSION_INPUT")
+          fi
+          SHOULD_PUBLISH="$PUBLISH_INPUT"
+          SHOULD_DRAFT="$DRAFT_INPUT"
+          if [[ "${GITHUB_EVENT_NAME:-}" == "push" ]]; then
+            SHOULD_PUBLISH="true"
+            SHOULD_DRAFT="false"
+          fi
+          if [[ "$SHOULD_PUBLISH" == "true" ]]; then
+            PUBLISH_ARGS+=(--publish)
+          fi
+          if [[ "$SHOULD_DRAFT" == "false" ]]; then
+            PUBLISH_ARGS+=(--no-draft)
+          fi
+          bash scripts/publish_release.sh "${PUBLISH_ARGS[@]}"
+
+      - name: Upload assembled release and channels
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-multi-platform-release
+          path: |
+            dist/releases/**
+            dist/channels/**

@@ -334,7 +334,12 @@ write_asset_entries() {
 
 write_release_notes() {
     local archive_sha
+    local zip_asset_line
     archive_sha="$(sha256_file "$PROMOTED_ARCHIVE_PATH")"
+    zip_asset_line=""
+    if [[ -f "$PROMOTED_ZIP_PATH" ]]; then
+        zip_asset_line="- \`$ZIP_NAME\` — SHA-256 \`$(sha256_file "$PROMOTED_ZIP_PATH")\`"
+    fi
     cat > "$RELEASE_NOTES_OUT" <<EOF
 # Cool $VERSION
 
@@ -347,6 +352,7 @@ Promoted: $GENERATED_AT
 ## Assets
 
 - \`$ARCHIVE_NAME\` — SHA-256 \`$archive_sha\`
+$zip_asset_line
 - \`$(basename "$PROMOTED_MANIFEST_PATH")\`
 - \`$(basename "$PROMOTED_CHECKSUMS_PATH")\`
 - \`$(basename "$PROMOTED_RC_NOTES_PATH")\`
@@ -377,7 +383,9 @@ EOF
 
 write_release_json() {
     local archive_url
+    local zip_archive_url
     archive_url="${BASE_DOWNLOAD_URL}/${TAG}/${ARCHIVE_NAME}"
+    zip_archive_url="${BASE_DOWNLOAD_URL}/${TAG}/${ZIP_NAME}"
     cat > "$RELEASE_JSON_PATH" <<EOF
 {
   "schema_version": 1,
@@ -403,6 +411,7 @@ write_release_json() {
   "install": {
     "base_url": $(json_string "$BASE_DOWNLOAD_URL"),
     "archive_url": $(json_string "$archive_url"),
+    "zip_archive_url": $(json_string "$zip_archive_url"),
     "script": "install.sh"
   },
   "assets": [
@@ -413,6 +422,16 @@ EOF
 }
 
 write_latest_json() {
+    local zip_block
+    zip_block=""
+    if [[ -f "$PROMOTED_ZIP_PATH" ]]; then
+        zip_block=",
+  \"zip_archive\": {
+    \"path\": $(json_string "$(relative_to_root "$PROMOTED_ZIP_PATH")"),
+    \"sha256\": $(json_string "$(sha256_file "$PROMOTED_ZIP_PATH")"),
+    \"bytes\": $(file_size "$PROMOTED_ZIP_PATH")
+  }"
+    fi
     cat > "$LATEST_RELEASE_PATH" <<EOF
 {
   "schema_version": 1,
@@ -432,7 +451,7 @@ write_latest_json() {
     "path": $(json_string "$(relative_to_root "$PROMOTED_ARCHIVE_PATH")"),
     "sha256": $(json_string "$(sha256_file "$PROMOTED_ARCHIVE_PATH")"),
     "bytes": $(file_size "$PROMOTED_ARCHIVE_PATH")
-  }
+  }$zip_block
 }
 EOF
     cp "$LATEST_RELEASE_PATH" "$VERSION_LATEST_PATH"
@@ -496,11 +515,14 @@ MANIFEST_PATH="$RC_DIR/manifest.json"
 CHECKSUMS_PATH="$RC_DIR/checksums.txt"
 RC_NOTES_PATH="$RC_DIR/RELEASE_NOTES.md"
 RC_ARCHIVE_PATH="$DIST_DIR/release-candidate/$PACKAGE_NAME-$VERSION-$PLATFORM.tar.gz"
+RC_ZIP_PATH="$DIST_DIR/release-candidate/$PACKAGE_NAME-$VERSION-$PLATFORM.zip"
 PAYLOAD_ROOT="$PACKAGE_NAME-$VERSION-$PLATFORM"
 
 RELEASE_DIR="$DIST_DIR/releases/$VERSION"
 ARCHIVE_NAME="$PACKAGE_NAME-$VERSION-$PLATFORM.tar.gz"
+ZIP_NAME="$PACKAGE_NAME-$VERSION-$PLATFORM.zip"
 PROMOTED_ARCHIVE_PATH="$RELEASE_DIR/$ARCHIVE_NAME"
+PROMOTED_ZIP_PATH="$RELEASE_DIR/$ZIP_NAME"
 PROMOTED_MANIFEST_PATH="$RELEASE_DIR/$PACKAGE_NAME-$VERSION-$PLATFORM.manifest.json"
 PROMOTED_CHECKSUMS_PATH="$RELEASE_DIR/$PACKAGE_NAME-$VERSION-$PLATFORM.checksums.txt"
 PROMOTED_RC_NOTES_PATH="$RELEASE_DIR/$PACKAGE_NAME-$VERSION-$PLATFORM.RC_NOTES.md"
@@ -584,13 +606,18 @@ fi
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 cp "$RC_ARCHIVE_PATH" "$PROMOTED_ARCHIVE_PATH"
+if [[ -f "$RC_ZIP_PATH" ]]; then
+    cp "$RC_ZIP_PATH" "$PROMOTED_ZIP_PATH"
+fi
 cp "$MANIFEST_PATH" "$PROMOTED_MANIFEST_PATH"
 cp "$CHECKSUMS_PATH" "$PROMOTED_CHECKSUMS_PATH"
 cp "$RC_NOTES_PATH" "$PROMOTED_RC_NOTES_PATH"
 cp install.sh "$RELEASE_DIR/install.sh"
 chmod 755 "$RELEASE_DIR/install.sh"
 cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RELEASE_DIR/"
+cp scripts/package_channels.sh scripts/package_channels.py "$RELEASE_DIR/"
 chmod 755 "$RELEASE_DIR/trust_release.sh" "$RELEASE_DIR/trust_release.py" "$RELEASE_DIR/publish_release.sh"
+chmod 755 "$RELEASE_DIR/package_channels.sh" "$RELEASE_DIR/package_channels.py"
 
 write_release_notes
 write_sha256sums

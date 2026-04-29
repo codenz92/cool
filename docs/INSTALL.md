@@ -38,6 +38,14 @@ Override it for mirrors or internal channels:
 bash install.sh --version 1.0.0 --base-url https://example.invalid/cool/releases/download
 ```
 
+Windows installs default to the `.zip` asset for the selected Windows platform.
+macOS and Linux installs default to `.tar.gz` assets. Override the platform when
+installing a non-host asset:
+
+```bash
+bash install.sh --version 1.0.0 --platform linux-x86_64
+```
+
 ## Checksum Verification
 
 Every promoted release writes `SHA256SUMS`. Verify the archive before installing

@@ -75,10 +75,12 @@ jobs:
             RC_ARGS=(--require-clean --version "$VERSION_INPUT")
             PROMOTE_ARGS=(--version "$VERSION_INPUT")
             PUBLISH_ARGS=(--version "$VERSION_INPUT")
+            CHANNEL_ARGS=(--version "$VERSION_INPUT")
           else
             RC_ARGS=(--require-clean)
             PROMOTE_ARGS=()
             PUBLISH_ARGS=()
+            CHANNEL_ARGS=()
           fi
 
           VERIFY_KEY=""
@@ -94,6 +96,7 @@ jobs:
 
           bash scripts/release_candidate.sh "${RC_ARGS[@]}"
           bash scripts/promote_release.sh "${PROMOTE_ARGS[@]}"
+          bash scripts/package_channels.sh generate "${CHANNEL_ARGS[@]}"
 
           SHOULD_PUBLISH="$PUBLISH_INPUT"
           SHOULD_DRAFT="$DRAFT_INPUT"
@@ -130,4 +133,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cool-published-release-${{ runner.os }}-${{ runner.arch }}
-          path: dist/releases/**
+          path: |
+            dist/releases/**
+            dist/channels/**

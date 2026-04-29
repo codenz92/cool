@@ -960,6 +960,24 @@ The `Published Release` GitHub Actions workflow builds the RC, promotes it, gene
 bash install.sh --version 1.0.0 --verify-metadata
 ```
 
+### Multi-Platform Matrix And Package Channels
+
+Build the full release matrix in CI with Linux, macOS Intel, macOS Arm, and Windows x64 jobs. Each platform job emits a release candidate, promotes platform assets, and uploads them for the aggregate job:
+
+```bash
+bash scripts/release_candidate.sh --platform linux-x86_64
+bash scripts/promote_release.sh --platform linux-x86_64 --skip-trust
+```
+
+The aggregate job uses:
+
+```bash
+bash scripts/assemble_matrix_release.sh --source-dir dist/matrix-input --version 1.0.0
+bash scripts/package_channels.sh generate --version 1.0.0
+```
+
+Release candidates now emit both `.tar.gz` and `.zip` archives. The installer defaults to `.zip` for Windows platforms and `.tar.gz` for macOS/Linux. Package-channel generation writes `channels.json`, `CHANNEL_SHA256SUMS`, a Homebrew formula, Winget portable manifests when a Windows zip exists, Debian/apt metadata when a Linux x86_64 tarball exists, and `cool-<version>-package-channels.tar.gz` for upload as a release asset. See `docs/PACKAGE_CHANNELS.md` for the channel layout and required-platform checks.
+
 ### Project workflow
 
 ```bash
@@ -1443,6 +1461,7 @@ examples/
 | 19 — Release candidate and distribution | ✅ Complete |
 | 20 — Release promotion and installer channels | ✅ Complete |
 | 21 — Published release automation and supply-chain trust | ✅ Complete |
+| 22 — Multi-platform release matrix and package channels | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

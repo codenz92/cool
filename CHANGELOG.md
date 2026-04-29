@@ -2,7 +2,16 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 21 Complete
+## [Unreleased] - Phase 22 Complete
+
+### Phase 22 — Multi-Platform Release Matrix And Package Channels
+
+- Added explicit `--platform` release-candidate support plus `.zip` payload generation alongside `.tar.gz` archives, enabling Windows portable/package-manager channels without changing macOS/Linux tarball installs
+- Added `scripts/assemble_matrix_release.sh` / `.py` to merge per-platform matrix outputs into a single multi-platform release directory
+- Added `scripts/package_channels.sh` / `.py` to generate `channels.json`, `CHANNEL_SHA256SUMS`, a Homebrew formula, Winget portable manifests, Debian/apt metadata, and a `cool-<version>-package-channels.tar.gz` upload bundle
+- Added the GitHub Actions `Release Matrix` workflow for Linux x86_64, macOS x86_64, macOS arm64, and Windows x86_64 release artifacts, aggregate trust verification, channel generation, and optional publishing
+- Extended `install.sh` with platform normalization and Windows zip defaults while preserving tarball defaults for macOS/Linux
+- Added `docs/PACKAGE_CHANNELS.md` and updated install/release documentation for matrix assembly, required-platform checks, and package-channel outputs
 
 ### Phase 21 — Published Release Automation And Supply-Chain Trust
 

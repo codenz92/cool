@@ -241,18 +241,20 @@ def generate_provenance(version, platform_name, release_dir, release_json, gener
     repo = os.environ.get("GITHUB_REPOSITORY", "codenz92/cool-lang")
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     workflow = os.environ.get("GITHUB_WORKFLOW", "local")
+    workflow_ref = os.environ.get("GITHUB_WORKFLOW_REF")
     run_id = os.environ.get("GITHUB_RUN_ID", "local")
     run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
     source_uri = git_output("remote", "get-url", "origin")
     commit = git_output("rev-parse", "HEAD")
     cargo_lock = ROOT / "Cargo.lock"
+    build_type = f"{server}/{workflow_ref}" if workflow_ref else f"{server}/{repo}/actions/workflows/{workflow}"
     statement = {
         "_type": "https://in-toto.io/Statement/v1",
         "subject": release_subjects(release_dir),
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {
             "buildDefinition": {
-                "buildType": f"{server}/{repo}/.github/workflows/published-release.yml@v1",
+                "buildType": build_type,
                 "externalParameters": {
                     "version": version,
                     "platform": platform_name,

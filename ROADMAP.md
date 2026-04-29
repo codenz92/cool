@@ -709,6 +709,29 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 22 — Multi-Platform Release Matrix And Package Channels ✅ Complete
+
+> Goal: ship the trusted release pipeline across real user platforms and generate package-channel metadata from the resulting artifacts.
+
+### Multi-Platform Matrix
+
+- [x] Release candidates support explicit `--platform` labels and emit both `.tar.gz` and `.zip` payload archives
+- [x] GitHub Actions `Release Matrix` workflow builds Linux x86_64, macOS x86_64, macOS arm64, and Windows x86_64 release artifacts with per-platform smoke/promotion steps
+- [x] `scripts/assemble_matrix_release.sh` / `.py` combine matrix artifacts into one multi-platform release directory
+- [x] Multi-platform trust generation and publish dry-run support through `--platform multi`
+- [x] Installer defaults to Windows zip assets and macOS/Linux tarball assets, with platform normalization for common host labels
+
+### Package Channels
+
+- [x] `scripts/package_channels.sh` / `.py` generate package-channel metadata from promoted release assets
+- [x] Homebrew formula generation for macOS and Linuxbrew tarball installs
+- [x] Winget portable manifests generated when a Windows zip artifact is present
+- [x] Debian package and apt-style `Packages` indexes generated when a Linux x86_64 tarball is present
+- [x] `channels.json`, `CHANNEL_SHA256SUMS`, `latest.json`, and `cool-<version>-package-channels.tar.gz` channel bundle for release uploads and mirrors
+- [x] Documentation for package-channel generation, required-platform checks, and matrix assembly
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -734,3 +757,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 19 — Release Candidate And Distribution | ✅ Complete |
 | 20 — Release Promotion And Installer Channels | ✅ Complete |
 | 21 — Published Release Automation And Supply-Chain Trust | ✅ Complete |
+| 22 — Multi-Platform Release Matrix And Package Channels | ✅ Complete |

@@ -71,6 +71,24 @@ platform_arch() {
     esac
 }
 
+normalize_platform() {
+    local value="$1"
+    case "$value" in
+        darwin-*) value="macos-${value#darwin-}" ;;
+        win-*|mingw-*|msys-*|cygwin-*) value="windows-${value#*-}" ;;
+    esac
+    value="${value/amd64/x86_64}"
+    value="${value/aarch64/arm64}"
+    printf '%s' "$value"
+}
+
+archive_extension() {
+    case "$1" in
+        windows-*|*-windows*) printf 'zip' ;;
+        *) printf 'tar.gz' ;;
+    esac
+}
+
 require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
         printf 'install cool: missing required command: %s\n' "$1" >&2
@@ -100,6 +118,45 @@ download_archive() {
         printf 'install cool: missing required command: curl or wget\n' >&2
         exit 1
     fi
+}
+
+python_command() {
+    if command -v python3 >/dev/null 2>&1; then
+        printf 'python3'
+    elif command -v python >/dev/null 2>&1; then
+        printf 'python'
+    else
+        printf 'install cool: missing required command: python3 or python\n' >&2
+        exit 1
+    fi
+}
+
+extract_archive() {
+    local archive="$1"
+    local output_dir="$2"
+    case "$archive" in
+        *.zip)
+            "$(python_command)" - "$archive" "$output_dir" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+output_dir = Path(sys.argv[2])
+with zipfile.ZipFile(archive) as zf:
+    base = output_dir.resolve()
+    for member in zf.infolist():
+        target = (base / member.filename).resolve()
+        if base != target and base not in target.parents:
+            raise SystemExit(f"unsafe zip member path: {member.filename}")
+    zf.extractall(output_dir)
+PY
+            ;;
+        *)
+            require_command tar
+            tar -xzf "$archive" -C "$output_dir"
+            ;;
+    esac
 }
 
 is_url() {
@@ -316,12 +373,12 @@ require_command awk
 require_command find
 require_command head
 require_command mktemp
-require_command tar
 require_command uname
 
 if [[ -z "$PLATFORM" ]]; then
     PLATFORM="$(platform_os)-$(platform_arch)"
 fi
+PLATFORM="$(normalize_platform "$PLATFORM")"
 if [[ -z "$BIN_DIR" ]]; then
     BIN_DIR="$PREFIX/bin"
 fi
@@ -338,9 +395,10 @@ if [[ -z "$ARCHIVE" ]]; then
             printf 'install cool: --version is required when --from or --url is not provided\n' >&2
             exit 2
         fi
-        ARCHIVE_URL="${BASE_URL}/v${VERSION}/cool-${VERSION}-${PLATFORM}.tar.gz"
+        ARCHIVE_URL="${BASE_URL}/v${VERSION}/cool-${VERSION}-${PLATFORM}.$(archive_extension "$PLATFORM")"
     fi
-    ARCHIVE="$TMP_DIR/cool-release.tar.gz"
+    ARCHIVE_NAME="$(basename "$ARCHIVE_URL")"
+    ARCHIVE="$TMP_DIR/$ARCHIVE_NAME"
     printf 'Downloading %s\n' "$ARCHIVE_URL"
     download_archive "$ARCHIVE_URL" "$ARCHIVE"
 fi
@@ -381,7 +439,7 @@ if [[ "$VERIFY_METADATA" -eq 1 ]]; then
     verify_archive_from_checksums "$CHECKSUMS_PATH" "$ARCHIVE"
 fi
 
-tar -xzf "$ARCHIVE" -C "$TMP_DIR"
+extract_archive "$ARCHIVE" "$TMP_DIR"
 PAYLOAD_DIR="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 if [[ -z "$PAYLOAD_DIR" ]]; then
     printf 'install cool: archive did not contain a payload directory\n' >&2
@@ -394,7 +452,7 @@ if [[ "$PLATFORM" == windows-* || "$PLATFORM" == *-windows* ]]; then
     BINARY_NAME="cool.exe"
 fi
 PAYLOAD_BIN="$PAYLOAD_DIR/bin/$BINARY_NAME"
-if [[ ! -x "$PAYLOAD_BIN" ]]; then
+if [[ ! -f "$PAYLOAD_BIN" ]]; then
     printf 'install cool: archive payload does not contain an executable bin/%s\n' "$BINARY_NAME" >&2
     exit 1
 fi

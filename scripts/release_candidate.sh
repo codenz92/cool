@@ -7,6 +7,7 @@ cd "$ROOT"
 DIST_DIR="$ROOT/dist"
 RUN_GATE=1
 VERSION_OVERRIDE=""
+PLATFORM_OVERRIDE=""
 REQUIRE_CLEAN=0
 
 usage() {
@@ -14,12 +15,13 @@ usage() {
 release candidate v1.0 — build and package the Cool compiler distribution
 
 Usage:
-  bash scripts/release_candidate.sh [--skip-gate] [--require-clean] [--version X.Y.Z] [--dist-dir DIR]
+  bash scripts/release_candidate.sh [--skip-gate] [--require-clean] [--version X.Y.Z] [--platform PLATFORM] [--dist-dir DIR]
 
 Options:
   --skip-gate      Package after a previously successful release gate run.
   --require-clean  Fail when the git worktree has uncommitted changes.
   --version X.Y.Z  Override the Cargo.toml package version in artifact metadata.
+  --platform NAME  Override the platform label, e.g. linux-x86_64 or windows-x86_64.
   --dist-dir DIR   Write artifacts under DIR instead of ./dist.
 USAGE
 }
@@ -46,6 +48,22 @@ while [[ $# -gt 0 ]]; do
             VERSION_OVERRIDE="${1#--version=}"
             if [[ -z "$VERSION_OVERRIDE" ]]; then
                 printf 'release candidate: --version requires a value\n' >&2
+                exit 2
+            fi
+            shift
+            ;;
+        --platform)
+            if [[ $# -lt 2 || -z "${2:-}" ]]; then
+                printf 'release candidate: --platform requires a value\n' >&2
+                exit 2
+            fi
+            PLATFORM_OVERRIDE="$2"
+            shift 2
+            ;;
+        --platform=*)
+            PLATFORM_OVERRIDE="${1#--platform=}"
+            if [[ -z "$PLATFORM_OVERRIDE" ]]; then
+                printf 'release candidate: --platform requires a value\n' >&2
                 exit 2
             fi
             shift
@@ -160,8 +178,8 @@ platform_arch() {
 }
 
 exe_suffix() {
-    case "$(uname -s)" in
-        MINGW*|MSYS*|CYGWIN*) printf '.exe' ;;
+    case "$1" in
+        windows-*|*-windows*) printf '.exe' ;;
         *) printf '' ;;
     esac
 }
@@ -244,6 +262,7 @@ write_manifest() {
   "host": {
     "os": $(json_string "$OS_LABEL"),
     "arch": $(json_string "$ARCH_LABEL"),
+    "platform": $(json_string "$HOST_PLATFORM"),
     "uname": $(json_string "$UNAME_VALUE")
   },
   "artifacts": [
@@ -273,12 +292,17 @@ Release gate: $GATE_STATUS
 - \`install.sh\`
 - \`docs/INSTALL.md\`
 - \`docs/RELEASE_TRUST.md\`
+- \`docs/PACKAGE_CHANNELS.md\`
 - \`scripts/release_gate.sh\`
 - \`scripts/release_candidate.sh\`
 - \`scripts/promote_release.sh\`
 - \`scripts/trust_release.sh\`
 - \`scripts/trust_release.py\`
 - \`scripts/publish_release.sh\`
+- \`scripts/package_channels.sh\`
+- \`scripts/package_channels.py\`
+- \`scripts/assemble_matrix_release.sh\`
+- \`scripts/assemble_matrix_release.py\`
 - \`manifest.json\`
 - \`checksums.txt\`
 
@@ -292,7 +316,9 @@ EOF
 
 write_latest() {
     local archive_sha
+    local zip_sha
     archive_sha="$(sha256_file "$ARCHIVE_PATH")"
+    zip_sha="$(sha256_file "$ZIP_ARCHIVE_PATH")"
     cat > "$LATEST_PATH" <<EOF
 {
   "schema_version": 1,
@@ -313,6 +339,11 @@ write_latest() {
     "sha256": $(json_string "$archive_sha"),
     "bytes": $(file_size "$ARCHIVE_PATH")
   },
+  "zip_archive": {
+    "path": $(json_string "$(relative_to_root "$ZIP_ARCHIVE_PATH")"),
+    "sha256": $(json_string "$zip_sha"),
+    "bytes": $(file_size "$ZIP_ARCHIVE_PATH")
+  },
   "manifest": {
     "path": $(json_string "$(relative_to_root "$MANIFEST_PATH")"),
     "sha256": $(json_string "$(sha256_file "$MANIFEST_PATH")"),
@@ -327,6 +358,7 @@ require_command cargo
 require_command date
 require_command find
 require_command git
+require_command python3
 require_command sed
 require_command tar
 require_command uname
@@ -345,8 +377,9 @@ fi
 VERSION="${VERSION_OVERRIDE:-$PACKAGE_VERSION}"
 OS_LABEL="$(platform_os)"
 ARCH_LABEL="$(platform_arch)"
-PLATFORM="$OS_LABEL-$ARCH_LABEL"
-EXE_SUFFIX="$(exe_suffix)"
+HOST_PLATFORM="$OS_LABEL-$ARCH_LABEL"
+PLATFORM="${PLATFORM_OVERRIDE:-$HOST_PLATFORM}"
+EXE_SUFFIX="$(exe_suffix "$PLATFORM")"
 BINARY_NAME="$PACKAGE_NAME$EXE_SUFFIX"
 BINARY_SRC="$ROOT/target/release/$BINARY_NAME"
 RC_DIR="$DIST_DIR/release-candidate/$VERSION/$PLATFORM"
@@ -355,6 +388,8 @@ MANIFEST_PATH="$RC_DIR/manifest.json"
 RELEASE_NOTES_PATH="$RC_DIR/RELEASE_NOTES.md"
 ARCHIVE_NAME="$PACKAGE_NAME-$VERSION-$PLATFORM.tar.gz"
 ARCHIVE_PATH="$DIST_DIR/release-candidate/$ARCHIVE_NAME"
+ZIP_ARCHIVE_NAME="$PACKAGE_NAME-$VERSION-$PLATFORM.zip"
+ZIP_ARCHIVE_PATH="$DIST_DIR/release-candidate/$ZIP_ARCHIVE_NAME"
 LATEST_PATH="$DIST_DIR/release-candidate/latest.json"
 GENERATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
@@ -397,9 +432,11 @@ cp "$BINARY_SRC" "$RC_DIR/bin/$BINARY_NAME"
 chmod 755 "$RC_DIR/bin/$BINARY_NAME"
 cp README.md CHANGELOG.md ROADMAP.md LICENSE "$RC_DIR/"
 cp install.sh "$RC_DIR/"
-cp docs/INSTALL.md docs/RELEASE_TRUST.md "$RC_DIR/docs/"
+cp docs/INSTALL.md docs/RELEASE_TRUST.md docs/PACKAGE_CHANNELS.md "$RC_DIR/docs/"
 cp scripts/release_gate.sh scripts/release_candidate.sh scripts/promote_release.sh "$RC_DIR/scripts/"
 cp scripts/trust_release.sh scripts/trust_release.py scripts/publish_release.sh "$RC_DIR/scripts/"
+cp scripts/package_channels.sh scripts/package_channels.py "$RC_DIR/scripts/"
+cp scripts/assemble_matrix_release.sh scripts/assemble_matrix_release.py "$RC_DIR/scripts/"
 
 write_release_notes
 write_checksums
@@ -413,12 +450,34 @@ cp -R "$RC_DIR"/. "$ARCHIVE_STAGE/$PAYLOAD_ROOT"/
 mkdir -p "$(dirname "$ARCHIVE_PATH")"
 rm -f "$ARCHIVE_PATH"
 run tar -czf "$ARCHIVE_PATH" -C "$ARCHIVE_STAGE" "$PAYLOAD_ROOT"
+rm -f "$ZIP_ARCHIVE_PATH"
+run python3 - "$ARCHIVE_STAGE" "$PAYLOAD_ROOT" "$ZIP_ARCHIVE_PATH" <<'PY'
+import sys
+import zipfile
+from pathlib import Path
+
+stage = Path(sys.argv[1])
+payload = sys.argv[2]
+output = Path(sys.argv[3])
+root = stage / payload
+
+with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            continue
+        rel = Path(payload) / path.relative_to(root)
+        info = zipfile.ZipInfo(rel.as_posix())
+        info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
+        with path.open("rb") as fh:
+            archive.writestr(info, fh.read())
+PY
 
 write_latest
 
 printf '\nrelease candidate: ok\n'
 printf '  Payload   -> %s\n' "$(relative_to_root "$RC_DIR")"
 printf '  Archive   -> %s\n' "$(relative_to_root "$ARCHIVE_PATH")"
+printf '  Zip       -> %s\n' "$(relative_to_root "$ZIP_ARCHIVE_PATH")"
 printf '  Manifest  -> %s\n' "$(relative_to_root "$MANIFEST_PATH")"
 printf '  Checksums -> %s\n' "$(relative_to_root "$CHECKSUMS_PATH")"
 printf '  Latest    -> %s\n' "$(relative_to_root "$LATEST_PATH")"
