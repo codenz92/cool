@@ -86,6 +86,11 @@ All notable changes to the Cool language project.
 - New bundled `stdlib/pipeline.cool`, `stdlib/stream.cool`, `stdlib/table.cool`, `stdlib/search.cool`, `stdlib/embed.cool`, and `stdlib/ml.cool` add composable data pipelines, stream adapters, tabular rendering/sorting/grouping, local search indexes, bag-of-words embeddings, and lightweight ML preprocessing/KNN/accuracy helpers
 - The new math/data/finance tranche is covered across the interpreter, VM, and LLVM backend, including a native decimal parser fix that avoids host `int()` octal interpretation for leading-zero fractional strings
 
+### Phase 6 Follow-on — Security And Crypto Module
+
+- New bundled `stdlib/crypto.cool` adds key derivation, random byte/token helpers, constant-time comparison, HMAC-style signatures, signature verification, and authenticated symmetric envelope encryption/decryption on top of the shared `hashlib`, `bytes`, and `base64` surfaces
+- The security/crypto tranche is covered across the interpreter, VM, and LLVM backend with deterministic key, token, sign/verify, encrypt/decrypt, seal/open, and comparison checks
+
 ### Signature Capability
 
 - Projects can now declare `[capabilities]` in `cool.toml` for `file`, `network`, `env`, and `process` access, and the interpreter, VM, and native runtime all enforce the same policy for `open()`, `os`, `http`, `socket`, `subprocess`, and related helpers

@@ -286,7 +286,7 @@
 #### Security And Crypto
 
 - [x] `hashlib` module — `md5`, `sha1`, `sha256`, and digest helpers
-- [ ] `crypto` module — symmetric encryption, signatures, random bytes, and key helpers
+- [x] `crypto` module — symmetric encryption, signatures, random bytes, and key helpers
 
 #### Terminal, UI, And Presentation
 

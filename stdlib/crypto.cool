@@ -1,0 +1,190 @@
+import base64
+import bytes
+import hashlib
+import random
+
+private def _fail(message):
+    raise "crypto: " + str(message)
+
+private def _parse_hex_pair(text, index):
+    pair = str(text)[index:index + 2]
+    return bytes.from_hex(pair)[0]
+
+private def _byte_text(value):
+    kind = type(value)
+    if kind == "list" or kind == "tuple":
+        return bytes.to_string(value)
+    if kind == "dict" and value.get("kind") == "crypto_key":
+        return value["hex"]
+    return str(value)
+
+private def _hex_bytes(value):
+    kind = type(value)
+    if kind == "list" or kind == "tuple":
+        return bytes.hex(value)
+    return bytes.hex(bytes.from_string(str(value)))
+
+private def _xor_bytes(data, key_data):
+    if len(key_data) == 0:
+        _fail("key bytes cannot be empty")
+    out = []
+    i = 0
+    while i < len(data):
+        out.append((int(data[i]) ^ int(key_data[i % len(key_data)])) & 255)
+        i = i + 1
+    return out
+
+private def _keystream(key_hex, nonce_hex, length):
+    out = []
+    counter = 0
+    while len(out) < int(length):
+        block = hashlib.sha256(str(key_hex) + ":" + str(nonce_hex) + ":" + str(counter))
+        i = 0
+        while i + 1 < len(block) and len(out) < int(length):
+            out.append(_parse_hex_pair(block, i))
+            i = i + 2
+        counter = counter + 1
+    return out
+
+private def _mac_payload(key_hex, nonce_hex, ciphertext_hex, aad=""):
+    return "box:v1:" + str(key_hex) + ":" + str(nonce_hex) + ":" + str(ciphertext_hex) + ":" + str(aad)
+
+private def _expand_hex(seed, length):
+    out = ""
+    counter = 0
+    while len(out) < int(length) * 2:
+        out = out + hashlib.sha256(str(seed) + ":" + str(counter))
+        counter = counter + 1
+    return out[0:int(length) * 2]
+
+def random_bytes(length, seed=nil):
+    if seed != nil:
+        random.seed(int(seed))
+    out = []
+    i = 0
+    while i < int(length):
+        out.append(random.randint(0, 255))
+        i = i + 1
+    return out
+
+def random_hex(length=32, seed=nil):
+    return bytes.hex(random_bytes(length, seed))
+
+def token_hex(length=32, seed=nil):
+    return random_hex(length, seed)
+
+def token_urlsafe(length=32, seed=nil):
+    text = base64.encode(random_bytes(length, seed), true, false)
+    return text.replace("=", "")
+
+def derive_key(password, salt="", rounds=1000, length=32):
+    count = int(rounds)
+    if count < 1:
+        count = 1
+    digest = hashlib.sha256("kdf:v1:" + str(password) + ":" + str(salt))
+    i = 1
+    while i < count:
+        digest = hashlib.sha256(digest + ":" + str(password) + ":" + str(salt) + ":" + str(i))
+        i = i + 1
+    return {
+        "kind": "crypto_key",
+        "algorithm": "sha256-kdf",
+        "salt": str(salt),
+        "rounds": count,
+        "length": int(length),
+        "hex": _expand_hex(digest, int(length)),
+    }
+
+def generate_key(length=32, seed=nil):
+    return {
+        "kind": "crypto_key",
+        "algorithm": "random",
+        "salt": nil,
+        "rounds": 1,
+        "length": int(length),
+        "hex": random_hex(length, seed),
+    }
+
+def key_hex(key):
+    if type(key) == "dict" and key.get("kind") == "crypto_key":
+        return key["hex"]
+    text = str(key)
+    if len(text) % 2 == 0:
+        return text.lower()
+    return bytes.hex(bytes.from_string(text))
+
+def constant_time_equal(left, right):
+    a = str(left)
+    b = str(right)
+    diff = len(a) ^ len(b)
+    limit = len(a)
+    if len(b) > limit:
+        limit = len(b)
+    i = 0
+    while i < limit:
+        av = 0
+        bv = 0
+        if i < len(a):
+            av = ord(a[i])
+        if i < len(b):
+            bv = ord(b[i])
+        diff = diff | (av ^ bv)
+        i = i + 1
+    return diff == 0
+
+def digest(algorithm, data):
+    return hashlib.digest(str(algorithm), _byte_text(data))
+
+def sha256(data):
+    return hashlib.sha256(_byte_text(data))
+
+def sign(data, key, algorithm="sha256"):
+    key_text = key_hex(key)
+    payload = "sign:v1:" + key_text + ":" + _hex_bytes(data)
+    return hashlib.digest(str(algorithm), payload)
+
+def verify(data, signature, key, algorithm="sha256"):
+    expected = sign(data, key, algorithm)
+    return constant_time_equal(expected, signature)
+
+def encrypt(plaintext, key, options=nil):
+    if options == nil:
+        options = {}
+    key_value = key_hex(key)
+    nonce = options.get("nonce")
+    if nonce == nil:
+        nonce = random_hex(12, options.get("seed"))
+    aad = options.get("aad", "")
+    plain = bytes.from_string(str(plaintext))
+    stream = _keystream(key_value, nonce, len(plain))
+    cipher = _xor_bytes(plain, stream)
+    cipher_hex = bytes.hex(cipher)
+    mac = hashlib.sha256(_mac_payload(key_value, nonce, cipher_hex, aad))
+    return {
+        "kind": "crypto_box",
+        "algorithm": "xor-sha256-hmac",
+        "nonce": nonce,
+        "ciphertext": cipher_hex,
+        "mac": mac,
+        "aad": aad,
+    }
+
+def decrypt(box, key, options=nil):
+    if options == nil:
+        options = {}
+    key_value = key_hex(key)
+    aad = box.get("aad", options.get("aad", ""))
+    expected = hashlib.sha256(_mac_payload(key_value, box["nonce"], box["ciphertext"], aad))
+    if not constant_time_equal(expected, box["mac"]):
+        _fail("authentication failed")
+    cipher = bytes.from_hex(box["ciphertext"])
+    stream = _keystream(key_value, box["nonce"], len(cipher))
+    plain = _xor_bytes(cipher, stream)
+    return bytes.to_string(plain)
+
+def seal(plaintext, password, salt="", rounds=1000, options=nil):
+    return encrypt(plaintext, derive_key(password, salt, rounds), options)
+
+def open(box, password, salt="", rounds=1000, options=nil):
+    return decrypt(box, derive_key(password, salt, rounds), options)
+

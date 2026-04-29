@@ -1369,6 +1369,54 @@ fn expected_phase6_math_data_finance_lines() -> Vec<String> {
     ]
 }
 
+fn write_phase6_security_crypto_suite(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    let source = r###"import crypto
+
+key = crypto.derive_key("password", "salt", 2, 16)
+print(key["algorithm"])
+print(len(key["hex"]))
+print(len(crypto.random_bytes(4, 7)))
+print(len(crypto.random_hex(4, 7)))
+print(len(crypto.token_urlsafe(6, 7)) > 0)
+
+sig = crypto.sign("hello", key)
+print(len(sig))
+print(crypto.verify("hello", sig, key))
+print(crypto.verify("HELLO", sig, key))
+
+box = crypto.encrypt("secret", key, {"nonce": "00112233445566778899aabb", "aad": "meta"})
+print(box["algorithm"])
+print(len(box["ciphertext"]))
+print(crypto.decrypt(box, key))
+
+sealed = crypto.seal("payload", "pw", "salt", 2, {"nonce": "abcdefabcdefabcdefabcdef"})
+print(crypto.open(sealed, "pw", "salt", 2))
+print(crypto.constant_time_equal("abc", "abc"))
+print(crypto.constant_time_equal("abc", "abd"))
+"###;
+    std::fs::write(dir.join("main.cool"), source).unwrap();
+}
+
+fn expected_phase6_security_crypto_lines() -> Vec<String> {
+    vec![
+        "sha256-kdf".to_string(),
+        "32".to_string(),
+        "4".to_string(),
+        "8".to_string(),
+        "true".to_string(),
+        "64".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+        "xor-sha256-hmac".to_string(),
+        "12".to_string(),
+        "secret".to_string(),
+        "payload".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+    ]
+}
+
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     let status = Command::new("cp")
         .args(["-R", src.to_str().unwrap(), dst.to_str().unwrap()])
@@ -8402,6 +8450,28 @@ fn test_phase6_math_data_finance_modules_in_vm() {
     let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
     let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_math_data_finance_lines());
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_security_crypto_modules_in_interpreter() {
+    let temp_dir = unique_temp_dir("cool_phase6_crypto_interp");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_security_crypto_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &[]).unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_security_crypto_lines());
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_phase6_security_crypto_modules_in_vm() {
+    let temp_dir = unique_temp_dir("cool_phase6_crypto_vm");
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    write_phase6_security_crypto_suite(&temp_dir);
+    let output = run_cool_path_with_args(&temp_dir.join("main.cool"), &["--vm"]).unwrap();
+    let lines: Vec<String> = output.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_security_crypto_lines());
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 

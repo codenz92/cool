@@ -51,6 +51,7 @@ Cool is a high-level systems language with Python-like syntax and a native-first
 - Bundled parsing/tooling modules: `import doc`, `import template`, `import lexer`, `import parser`, `import ast`, `import inspect`, `import diff`, `import patch`, `import project`, `import release`, `import repo`, `import modulegraph`, `import plugin`, `import lsp`, `import ffiutil`, and `import shell`
 - Bundled runtime/automation/observability modules: `import event`, `import workflow`, `import agent`, `import retry`, `import metrics`, `import trace`, `import profile`, `import bench`, `import notebook`, and `import secrets`
 - Bundled math/data-science/finance modules: `import decimal`, `import money`, `import stats`, `import vector`, `import matrix`, `import geom`, `import graph`, `import tree`, `import pipeline`, `import stream`, `import table`, `import search`, `import embed`, and `import ml`
+- Bundled security/crypto modules: `import crypto` plus built-in `import hashlib`
 - x86 port I/O primitives: `outb(port, byte)`, `inb(port)`, `write_serial_byte(byte)` — bare-metal serial output with no C runtime dependency
 - Package system: `import foo.bar` loads `foo/bar.cool`
 - File I/O via `open()`, `read()`, `read_bytes()`, `write()`, `write_bytes()`, and `readlines()`
@@ -369,6 +370,22 @@ print(graph.shortest_path(g, "a", "c"))
 
 t = table.table([{"name": "Ada", "score": 2}], ["name", "score"])
 print(table.render(t))
+```
+
+### Security Modules
+
+`import crypto` builds on `hashlib`, `bytes`, and `base64` to provide key derivation, random byte/token helpers, HMAC-style signatures, constant-time comparison, and authenticated symmetric envelopes:
+
+```python
+import crypto
+
+key = crypto.derive_key("password", "salt", 1000, 32)
+sig = crypto.sign("payload", key)
+print(crypto.verify("payload", sig, key))
+
+box = crypto.encrypt("secret", key)
+print(crypto.decrypt(box, key))
+print(crypto.token_hex(16))
 ```
 
 ### Core Module
@@ -1220,6 +1237,7 @@ stdlib/
   search.cool       Local text indexing, query scoring, result sorting, highlighting
   embed.cool        Bag-of-words embeddings, cosine similarity, nearest-neighbor search
   ml.cool           Standardization, min-max scaling, KNN, confusion, and accuracy
+  crypto.cool       Key derivation, random tokens, signatures, and symmetric envelopes
   html.cool         Escaping, tag stripping, and small extraction helpers
   xml.cool          Lightweight XML parsing, text extraction, and serialization
   unicode.cool      Unicode categories, normalization, width, and grapheme helpers

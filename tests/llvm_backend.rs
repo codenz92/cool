@@ -1190,6 +1190,57 @@ fn expected_phase6_math_data_finance_lines() -> Vec<String> {
     ]
 }
 
+fn write_phase6_security_crypto_suite(dir: &PathBuf) -> PathBuf {
+    let _ = fs::remove_dir_all(dir);
+    fs::create_dir_all(dir).unwrap();
+    let source_path = dir.join("main.cool");
+    let source = r###"import crypto
+
+key = crypto.derive_key("password", "salt", 2, 16)
+print(key["algorithm"])
+print(len(key["hex"]))
+print(len(crypto.random_bytes(4, 7)))
+print(len(crypto.random_hex(4, 7)))
+print(len(crypto.token_urlsafe(6, 7)) > 0)
+
+sig = crypto.sign("hello", key)
+print(len(sig))
+print(crypto.verify("hello", sig, key))
+print(crypto.verify("HELLO", sig, key))
+
+box = crypto.encrypt("secret", key, {"nonce": "00112233445566778899aabb", "aad": "meta"})
+print(box["algorithm"])
+print(len(box["ciphertext"]))
+print(crypto.decrypt(box, key))
+
+sealed = crypto.seal("payload", "pw", "salt", 2, {"nonce": "abcdefabcdefabcdefabcdef"})
+print(crypto.open(sealed, "pw", "salt", 2))
+print(crypto.constant_time_equal("abc", "abc"))
+print(crypto.constant_time_equal("abc", "abd"))
+"###;
+    fs::write(&source_path, source).unwrap();
+    source_path
+}
+
+fn expected_phase6_security_crypto_lines() -> Vec<String> {
+    vec![
+        "sha256-kdf".to_string(),
+        "32".to_string(),
+        "4".to_string(),
+        "8".to_string(),
+        "true".to_string(),
+        "64".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+        "xor-sha256-hmac".to_string(),
+        "12".to_string(),
+        "secret".to_string(),
+        "payload".to_string(),
+        "true".to_string(),
+        "false".to_string(),
+    ]
+}
+
 fn compile_and_run_native_expect_runtime_error(source: &str) -> String {
     let _guard = LLVM_BUILD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().unwrap();
@@ -4256,6 +4307,16 @@ fn test_llvm_phase6_math_data_finance_modules() {
     let result = compile_and_run_native_path(&source_path).unwrap();
     let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
     assert_eq!(lines, expected_phase6_math_data_finance_lines());
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_llvm_phase6_security_crypto_modules() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_crypto");
+    let source_path = write_phase6_security_crypto_suite(&temp_dir);
+    let result = compile_and_run_native_path(&source_path).unwrap();
+    let lines: Vec<String> = result.lines().map(|line| line.to_string()).collect();
+    assert_eq!(lines, expected_phase6_security_crypto_lines());
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
