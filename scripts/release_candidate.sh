@@ -432,8 +432,18 @@ RELEASE_BUILD_RUSTFLAGS="${RUSTFLAGS:-}"
 if [[ -n "${COOL_RELEASE_BUILD_RUSTFLAGS:-}" ]]; then
     RELEASE_BUILD_RUSTFLAGS="${RELEASE_BUILD_RUSTFLAGS:+$RELEASE_BUILD_RUSTFLAGS }$COOL_RELEASE_BUILD_RUSTFLAGS"
 fi
+RELEASE_BUILD_ENV=()
+if [[ -n "${COOL_RELEASE_BUILD_CC:-}" ]]; then
+    RELEASE_BUILD_ENV+=(CC="$COOL_RELEASE_BUILD_CC")
+fi
+if [[ -n "${COOL_RELEASE_BUILD_CXX:-}" ]]; then
+    RELEASE_BUILD_ENV+=(CXX="$COOL_RELEASE_BUILD_CXX")
+fi
 if [[ -n "$RELEASE_BUILD_RUSTFLAGS" ]]; then
-    run env RUSTFLAGS="$RELEASE_BUILD_RUSTFLAGS" cargo build --release --bin "$PACKAGE_NAME"
+    RELEASE_BUILD_ENV+=(RUSTFLAGS="$RELEASE_BUILD_RUSTFLAGS")
+fi
+if [[ "${#RELEASE_BUILD_ENV[@]}" -gt 0 ]]; then
+    run env "${RELEASE_BUILD_ENV[@]}" cargo build --release --bin "$PACKAGE_NAME"
 else
     run cargo build --release --bin "$PACKAGE_NAME"
 fi
