@@ -668,6 +668,26 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 20 — Release Promotion And Installer Channels ✅ Complete
+
+> Goal: promote a validated release candidate into upload-ready release assets and provide a repeatable install path for local, hosted, and mirrored channels.
+
+### Promotion
+
+- [x] Repo-local `scripts/promote_release.sh` command that validates RC manifests, checksums, archive layout, release-gate status, git commit, and worktree cleanliness before promotion
+- [x] Promoted release layout under `dist/releases/<version>/` with platform archive, manifest/checksum sidecars, `RELEASE.md`, `SHA256SUMS`, `release.json`, and `latest.json`
+- [x] Safe-by-default tag handling: promotion records the intended tag and only creates a local annotated tag when `--create-tag` is explicitly passed
+- [x] GitHub Actions `Release Promotion` workflow that builds an RC, promotes it, and uploads `dist/releases/**` on manual dispatch or `v*` tag pushes
+
+### Installer Channels
+
+- [x] Root `install.sh` installer for local archives, exact URLs, GitHub Releases downloads, alternate mirrors, custom prefixes, checksum verification, and post-install smoke tests
+- [x] RC packaging now includes `install.sh`, install documentation, and promotion scripts so distribution payloads are self-describing
+- [x] `docs/INSTALL.md` documents local artifact installs, hosted installs, mirror overrides, checksum verification, and smoke-test behavior
+- [x] README documentation for promotion, installer usage, checksum verification, and publish/tag boundaries
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -691,3 +711,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 17 — Signature Features And Flagship Software | ✅ Complete |
 | 18 — Release Hardening | ✅ Complete |
 | 19 — Release Candidate And Distribution | ✅ Complete |
+| 20 — Release Promotion And Installer Channels | ✅ Complete |

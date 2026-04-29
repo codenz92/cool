@@ -1,0 +1,56 @@
+name: Release Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version override. Defaults to Cargo.toml, or the pushed tag without the v prefix.
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install LLVM 17
+        run: |
+          brew install llvm@17
+          echo "LLVM_SYS_170_PREFIX=$(brew --prefix llvm@17)" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Build and promote release assets
+        run: |
+          VERSION_INPUT="${{ github.event.inputs.version }}"
+          if [[ -z "$VERSION_INPUT" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            VERSION_INPUT="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -n "$VERSION_INPUT" ]]; then
+            bash scripts/release_candidate.sh --require-clean --version "$VERSION_INPUT"
+            bash scripts/promote_release.sh --version "$VERSION_INPUT"
+          else
+            bash scripts/release_candidate.sh --require-clean
+            bash scripts/promote_release.sh
+          fi
+
+      - name: Upload promoted release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: cool-release-${{ runner.os }}-${{ runner.arch }}
+          path: dist/releases/**

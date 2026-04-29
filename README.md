@@ -890,7 +890,7 @@ Build a compiler release-candidate distribution after the gate passes:
 bash scripts/release_candidate.sh
 ```
 
-The command runs the release gate by default, builds `target/release/cool`, and writes a platform-specific payload under `dist/release-candidate/<version>/<platform>/`. The payload includes the release binary, README, changelog, roadmap, license, release scripts, generated release notes, `checksums.txt`, and `manifest.json` with the Cargo version, git commit, worktree state, host platform, Rust toolchain, and release-gate status. It also writes `dist/release-candidate/cool-<version>-<platform>.tar.gz` plus `dist/release-candidate/latest.json` for CI or downstream packaging.
+The command runs the release gate by default, builds `target/release/cool`, and writes a platform-specific payload under `dist/release-candidate/<version>/<platform>/`. The payload includes the release binary, README, changelog, roadmap, license, installer, install docs, release scripts, generated release notes, `checksums.txt`, and `manifest.json` with the Cargo version, git commit, worktree state, host platform, Rust toolchain, and release-gate status. It also writes `dist/release-candidate/cool-<version>-<platform>.tar.gz` plus `dist/release-candidate/latest.json` for CI or downstream packaging.
 
 If the gate was already run in the same environment, use:
 
@@ -899,6 +899,33 @@ bash scripts/release_candidate.sh --skip-gate
 ```
 
 The script only creates local distribution artifacts; it does not create git tags, push commits, upload GitHub releases, or publish packages. The `Release Candidate` GitHub Actions workflow runs the same script on manual dispatch or `v*` tag pushes and uploads the generated `dist/release-candidate/**` tree as a workflow artifact.
+
+### Release Promotion And Installer Channels
+
+Promote a validated release candidate into upload-ready release assets:
+
+```bash
+bash scripts/promote_release.sh --version 1.0.0
+```
+
+Promotion validates the RC manifest, `checksums.txt`, archive layout, release-gate status, git commit, and worktree cleanliness before writing `dist/releases/<version>/`. The promoted directory contains the platform tarball, platform manifest/checksum sidecars, `RELEASE.md`, `SHA256SUMS`, `release.json`, `latest.json`, and `install.sh`. By default the command does not create tags, push tags, upload GitHub releases, or publish packages; use `--create-tag` only when you explicitly want a local annotated tag.
+
+Install from a promoted local artifact:
+
+```bash
+bash install.sh \
+  --from dist/releases/1.0.0/cool-1.0.0-macos-arm64.tar.gz \
+  --prefix "$HOME/.local"
+```
+
+Install from a hosted GitHub release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/codenz92/cool-lang/master/install.sh \
+  | bash -s -- --version 1.0.0 --prefix "$HOME/.local"
+```
+
+Use `--verify-sha256 <hash>` with the archive hash from `SHA256SUMS` when installing from a downloaded asset. See `docs/INSTALL.md` for local, hosted, mirror, and smoke-test details.
 
 ### Project workflow
 
@@ -1374,11 +1401,14 @@ examples/
 | 10 — Production readiness and ecosystem | ✅ Complete |
 | 11 — Freestanding systems foundation | ✅ Complete |
 | 12 — Static semantic core | ✅ Complete |
-| 13 — Typed language features | ⏳ Planned |
-| 14 — Runtime and memory model | ⏳ Planned |
+| 13 — Typed language features | ✅ Complete |
+| 14 — Runtime and memory model | ✅ Complete |
 | 15 — Native toolchain and distribution | ✅ Complete |
 | 16 — Systems interop and targets | ✅ Complete |
 | 17 — Signature features and flagship software | ✅ Complete |
+| 18 — Release hardening | ✅ Complete |
+| 19 — Release candidate and distribution | ✅ Complete |
+| 20 — Release promotion and installer channels | ✅ Complete |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full breakdown.
 

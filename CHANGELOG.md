@@ -2,7 +2,16 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 19 Complete
+## [Unreleased] - Phase 20 Complete
+
+### Phase 20 — Release Promotion And Installer Channels
+
+- Added `scripts/promote_release.sh`, a safe-by-default release promotion command that validates RC manifests, checksums, archive layout, release-gate status, git commit, and worktree cleanliness before writing upload-ready assets under `dist/releases/<version>/`
+- Added promoted release metadata: `RELEASE.md`, `SHA256SUMS`, `release.json`, `latest.json`, platform manifest/checksum sidecars, and explicit local tag handling through `--create-tag`
+- Added root `install.sh` for local archives, exact URLs, GitHub Releases downloads, mirror overrides, checksum verification, custom prefixes, and post-install smoke tests
+- Added `docs/INSTALL.md` plus README guidance for release promotion, installer channels, checksum verification, and the boundary between local asset preparation and publishing
+- Added a GitHub Actions `Release Promotion` workflow that builds an RC, promotes it, and uploads `dist/releases/**` on manual dispatch or `v*` tag pushes
+- Updated RC packaging to include the installer, install docs, and promotion script in release-candidate payloads
 
 ### Phase 19 — Release Candidate And Distribution
 

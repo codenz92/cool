@@ -270,8 +270,11 @@ Release gate: $GATE_STATUS
 - \`CHANGELOG.md\`
 - \`ROADMAP.md\`
 - \`LICENSE\`
+- \`install.sh\`
+- \`docs/INSTALL.md\`
 - \`scripts/release_gate.sh\`
 - \`scripts/release_candidate.sh\`
+- \`scripts/promote_release.sh\`
 - \`manifest.json\`
 - \`checksums.txt\`
 
@@ -384,12 +387,14 @@ if [[ ! -x "$BINARY_SRC" ]]; then
 fi
 
 rm -rf "$RC_DIR"
-mkdir -p "$RC_DIR/bin" "$RC_DIR/scripts"
+mkdir -p "$RC_DIR/bin" "$RC_DIR/docs" "$RC_DIR/scripts"
 
 cp "$BINARY_SRC" "$RC_DIR/bin/$BINARY_NAME"
 chmod 755 "$RC_DIR/bin/$BINARY_NAME"
 cp README.md CHANGELOG.md ROADMAP.md LICENSE "$RC_DIR/"
-cp scripts/release_gate.sh scripts/release_candidate.sh "$RC_DIR/scripts/"
+cp install.sh "$RC_DIR/"
+cp docs/INSTALL.md "$RC_DIR/docs/"
+cp scripts/release_gate.sh scripts/release_candidate.sh scripts/promote_release.sh "$RC_DIR/scripts/"
 
 write_release_notes
 write_checksums
