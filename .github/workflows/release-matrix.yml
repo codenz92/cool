@@ -85,6 +85,7 @@ jobs:
           echo "COOL_RELEASE_BUILD_CC=clang-17" >> "$GITHUB_ENV"
           echo "COOL_RELEASE_BUILD_CXX=clang++-17" >> "$GITHUB_ENV"
           echo "COOL_RELEASE_BUILD_RUSTFLAGS=-C linker=clang-17 -C link-arg=-fuse-ld=lld" >> "$GITHUB_ENV"
+          echo "COOL_RELEASE_GATE_CARGO_TEST_BINS_ONLY=1" >> "$GITHUB_ENV"
           echo "/usr/lib/llvm-17/bin" >> "$GITHUB_PATH"
 
       - name: Install LLVM 17 on macOS

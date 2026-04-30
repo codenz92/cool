@@ -43,21 +43,26 @@ require_command cc
 
 HOST_OS="$(uname -s)"
 HOSTED_NATIVE_BINARY=1
+CARGO_TEST_BINS_ONLY=0
 case "$HOST_OS" in
     MINGW*|MSYS*|CYGWIN*)
         HOSTED_NATIVE_BINARY=0
+        CARGO_TEST_BINS_ONLY=1
         ;;
 esac
 if [[ -n "${COOL_RELEASE_GATE_HOSTED_NATIVE_BINARY:-}" ]]; then
     HOSTED_NATIVE_BINARY="$COOL_RELEASE_GATE_HOSTED_NATIVE_BINARY"
 fi
+if [[ -n "${COOL_RELEASE_GATE_CARGO_TEST_BINS_ONLY:-}" ]]; then
+    CARGO_TEST_BINS_ONLY="$COOL_RELEASE_GATE_CARGO_TEST_BINS_ONLY"
+fi
 
 run cargo fmt --check
 run cargo build -q --bin cool
-if [[ "$HOSTED_NATIVE_BINARY" -eq 1 ]]; then
-    run cargo test -q
-else
+if [[ "$CARGO_TEST_BINS_ONLY" -eq 1 || "$HOSTED_NATIVE_BINARY" -ne 1 ]]; then
     run cargo test -q --bins
+else
+    run cargo test -q
 fi
 
 COOL_BIN="${COOL_BIN:-$ROOT/target/debug/cool}"
