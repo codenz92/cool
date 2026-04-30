@@ -4360,6 +4360,93 @@ fn test_llvm_phase6_pass3_stdlib_modules() {
 }
 
 #[test]
+fn test_llvm_phase6_pass3_user_module_imports_are_native_safe() {
+    for module in ["store", "daemon", "sandbox", "sync"] {
+        let source = format!("import {module}\nprint(\"phase6-import-{module}\")\n");
+        let result = compile_and_run_native(&source)
+            .unwrap_or_else(|err| panic!("phase6 pass3 import failed for module '{module}':\n{err}"));
+        assert!(
+            result.contains(&format!("phase6-import-{module}")),
+            "phase6 pass3 import for module '{module}' produced unexpected output:\n{result}"
+        );
+    }
+}
+
+#[test]
+fn test_llvm_phase6_pass3_user_module_entrypoints_are_native_safe() {
+    let temp_dir = unique_temp_dir("cool_llvm_phase6_pass3_entrypoints");
+    let base = cool_quote_path(&temp_dir);
+    let cases = [
+        (
+            "store",
+            format!(
+                r#"import path
+import store
+db = store.open_store(path.join("{base}", "store-db"))
+prefs = db.namespace("prefs")
+prefs.set("answer", 42)
+print(prefs.get("answer"))
+"#
+            ),
+            "42",
+        ),
+        (
+            "daemon",
+            format!(
+                r#"import daemon
+import path
+svc = daemon.service("probe", {{"root": path.join("{base}", "services"), "command": "printf native-safe"}})
+print(svc.name)
+svc.cleanup(true)
+"#
+            ),
+            "probe",
+        ),
+        (
+            "sandbox",
+            format!(
+                r#"import path
+import sandbox
+box = sandbox.open_sandbox({{"root": path.join("{base}", "workspace")}})
+box.write_text("probe.txt", "ok")
+print(box.read_text("probe.txt"))
+"#
+            ),
+            "ok",
+        ),
+        (
+            "sync",
+            format!(
+                r#"import os
+import path
+import sync
+src = path.join("{base}", "sync-src")
+dst = path.join("{base}", "sync-dst")
+os.mkdir(src)
+f = open(path.join(src, "probe.txt"), "w")
+f.write("sync-ok")
+f.close()
+plan = sync.sync_dirs(src, dst, path.join("{base}", "sync-state.json"))
+print(len(plan["conflicts"]))
+"#
+            ),
+            "0",
+        ),
+    ];
+
+    for (name, source, expected) in cases {
+        let result = compile_and_run_native_with_env(&source, &[("COOL_PHASE6_SB", "allowed")])
+            .unwrap_or_else(|err| panic!("phase6 pass3 entrypoint failed for module '{name}':\n{err}"));
+        assert!(
+            result.lines().any(|line| line == expected),
+            "phase6 pass3 entrypoint for module '{name}' expected line '{expected}', got:\n{result}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_llvm_phase6_filesystem_os_modules() {
     let temp_dir = unique_temp_dir("cool_llvm_phase6_fs");
     let _ = fs::remove_dir_all(&temp_dir);
