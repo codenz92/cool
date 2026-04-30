@@ -2467,26 +2467,92 @@ static CoolVal collections_stack_size(CoolVal self) {
     return cool_len(collections_get_items(self));
 }
 
+static void collections_check_arity(const char* name, int32_t argc, int32_t expected) {
+    if (argc == expected) return;
+    fprintf(stderr, "RuntimeError: collections.%s expected %d arguments, got %d\n", name, expected, argc);
+    exit(1);
+}
+
+static CoolVal collections_queue_push_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.push", argc, 2);
+    return collections_queue_push(argv[0], argv[1]);
+}
+
+static CoolVal collections_queue_enqueue_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.enqueue", argc, 2);
+    return collections_queue_enqueue(argv[0], argv[1]);
+}
+
+static CoolVal collections_queue_pop_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.pop", argc, 1);
+    return collections_queue_pop(argv[0]);
+}
+
+static CoolVal collections_queue_dequeue_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.dequeue", argc, 1);
+    return collections_queue_dequeue(argv[0]);
+}
+
+static CoolVal collections_queue_peek_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.peek", argc, 1);
+    return collections_queue_peek(argv[0]);
+}
+
+static CoolVal collections_queue_is_empty_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.is_empty", argc, 1);
+    return collections_queue_is_empty(argv[0]);
+}
+
+static CoolVal collections_queue_size_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Queue.size", argc, 1);
+    return collections_queue_size(argv[0]);
+}
+
+static CoolVal collections_stack_push_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Stack.push", argc, 2);
+    return collections_stack_push(argv[0], argv[1]);
+}
+
+static CoolVal collections_stack_pop_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Stack.pop", argc, 1);
+    return collections_stack_pop(argv[0]);
+}
+
+static CoolVal collections_stack_peek_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Stack.peek", argc, 1);
+    return collections_stack_peek(argv[0]);
+}
+
+static CoolVal collections_stack_is_empty_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Stack.is_empty", argc, 1);
+    return collections_stack_is_empty(argv[0]);
+}
+
+static CoolVal collections_stack_size_argv(int32_t argc, CoolVal* argv) {
+    collections_check_arity("Stack.size", argc, 1);
+    return collections_stack_size(argv[0]);
+}
+
 static void cool_init_collections_classes(void) {
     if (g_queue_class.tag == TAG_CLASS && g_stack_class.tag == TAG_CLASS) return;
 
     int64_t queue_methods[] = {
-        (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_queue_push,
-        (int64_t)(intptr_t)"method_enqueue", (int64_t)(intptr_t)collections_queue_enqueue,
-        (int64_t)(intptr_t)"method_pop", (int64_t)(intptr_t)collections_queue_pop,
-        (int64_t)(intptr_t)"method_dequeue", (int64_t)(intptr_t)collections_queue_dequeue,
-        (int64_t)(intptr_t)"method_peek", (int64_t)(intptr_t)collections_queue_peek,
-        (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_queue_is_empty,
-        (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_queue_size,
+        (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_queue_push_argv,
+        (int64_t)(intptr_t)"method_enqueue", (int64_t)(intptr_t)collections_queue_enqueue_argv,
+        (int64_t)(intptr_t)"method_pop", (int64_t)(intptr_t)collections_queue_pop_argv,
+        (int64_t)(intptr_t)"method_dequeue", (int64_t)(intptr_t)collections_queue_dequeue_argv,
+        (int64_t)(intptr_t)"method_peek", (int64_t)(intptr_t)collections_queue_peek_argv,
+        (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_queue_is_empty_argv,
+        (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_queue_size_argv,
     };
     g_queue_class = cool_class_new("Queue", cv_nil(), 7, queue_methods);
 
     int64_t stack_methods[] = {
-        (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_stack_push,
-        (int64_t)(intptr_t)"method_pop", (int64_t)(intptr_t)collections_stack_pop,
-        (int64_t)(intptr_t)"method_peek", (int64_t)(intptr_t)collections_stack_peek,
-        (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_stack_is_empty,
-        (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_stack_size,
+        (int64_t)(intptr_t)"method_push", (int64_t)(intptr_t)collections_stack_push_argv,
+        (int64_t)(intptr_t)"method_pop", (int64_t)(intptr_t)collections_stack_pop_argv,
+        (int64_t)(intptr_t)"method_peek", (int64_t)(intptr_t)collections_stack_peek_argv,
+        (int64_t)(intptr_t)"method_is_empty", (int64_t)(intptr_t)collections_stack_is_empty_argv,
+        (int64_t)(intptr_t)"method_size", (int64_t)(intptr_t)collections_stack_size_argv,
     };
     g_stack_class = cool_class_new("Stack", cv_nil(), 5, stack_methods);
 }
