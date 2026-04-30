@@ -17894,6 +17894,9 @@ fn link_hosted_binary(
     if reproducible {
         link_cmd.env("SOURCE_DATE_EPOCH", "0");
     }
+    if target.triple.contains("linux") {
+        link_cmd.arg("-no-pie");
+    }
     link_cmd.arg(runtime_obj).arg(object_path).arg("-o").arg(output_path);
     append_runtime_support_libraries(&mut link_cmd, target);
     append_native_link_config(&mut link_cmd, native_links, target);
