@@ -10,7 +10,7 @@ release verification.
 | Platform | Runner | Archive formats | Installer default | Status |
 | --- | --- | --- | --- | --- |
 | `linux-x86_64` | `ubuntu-22.04` | `.tar.gz`, `.zip` | `.tar.gz` | Supported |
-| `macos-x86_64` | `macos-13` | `.tar.gz`, `.zip` | `.tar.gz` | Supported |
+| `macos-x86_64` | `macos-15-intel` | `.tar.gz`, `.zip` | `.tar.gz` | Supported |
 | `macos-arm64` | `macos-14` | `.tar.gz`, `.zip` | `.tar.gz` | Supported |
 | `windows-x86_64` | `windows-2022` | `.tar.gz`, `.zip` | `.zip` | Supported |
 
