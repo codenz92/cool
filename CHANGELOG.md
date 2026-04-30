@@ -2,7 +2,18 @@
 
 All notable changes to the Cool language project.
 
-## [Unreleased] - Phase 24 Complete
+## [Unreleased] - Phase 25 Complete
+
+### Phase 25 — Public 1.0.0 Release Execution
+
+- Published the public, non-draft `v1.0.0` GitHub Release from commit `03d66a6d0fdfe80bd17acb2775aa0d5ec1252753`
+- Passed branch `Release Gate` and `Release Validation`, a non-publishing four-platform `Release Matrix` dry-run, and the tag-triggered publishing `Release Matrix`
+- Verified hosted public release assets with required platform coverage, trust metadata, package-channel archive checks, and installer smoke; report written to `dist/hosted-validation/1.0.0/public-hosted-release-validation.json`
+- Audited the public installer with `install.sh --version 1.0.0 --platform macos-arm64 --verify-metadata` and confirmed the installed `cool help` path
+- Hardened native dynamic dispatch by routing generated method, closure, and constructor calls through argv dispatch wrappers, fixing the macOS Intel LLVM release gate crash
+- Updated built-in native `collections` classes to use the same argv dispatch ABI as generated classes
+- Added LLVM backend regressions for Phase 6 pass3 user-module imports/entrypoints and dynamic default-argument dispatch
+- Added `docs/RELEASE_1_0_0.md` as the release evidence record
 
 ### Phase 24 — Real Public Release And Post-Release Operations
 

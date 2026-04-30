@@ -1026,6 +1026,8 @@ bash scripts/verify_hosted_release.sh \
 
 The hosted verifier downloads release metadata, archives, trust files, and the package-channel archive before checking hashes, sizes, archive layout, payload checksums, trust references, channel checksums, and installer behavior. The `Hosted Release Verify` workflow runs this check on published releases and can be manually dispatched for mirrors. See `docs/RELEASE_RUNBOOK.md` and `docs/SUPPORT_MATRIX.md` for the release-day checklist, rollback path, and supported-platform contract.
 
+The public `v1.0.0` release is live at https://github.com/codenz92/cool-lang/releases/tag/v1.0.0. The release evidence record, including matrix run IDs, hosted verification, and installer audit, is in `docs/RELEASE_1_0_0.md`.
+
 ### Project workflow
 
 ```bash

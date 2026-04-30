@@ -26,6 +26,7 @@
 4. Hardened native toolchain for routine binary shipping
 5. Systems interop as a signature advantage (`bindgen`, ABI, targets, link flow)
 6. Release gate and CI-backed quality checks for routine shipping
+7. Public `v1.0.0` release shipped with a four-platform matrix, hosted verification, installer audit, trust metadata, and package channels
 
 ## Legend
 
@@ -776,6 +777,29 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 
 ---
 
+## Phase 25 — Public 1.0.0 Release Execution ✅ Complete
+
+> Goal: ship the actual `v1.0.0` release, prove all public assets from hosted URLs, and record release-day evidence.
+
+### Release Execution
+
+- [x] Final release commit `03d66a6d0fdfe80bd17acb2775aa0d5ec1252753` passed branch `Release Gate` and `Release Validation`
+- [x] Non-publishing `Release Matrix` dry-run passed for Linux x86_64, macOS x86_64, macOS arm64, Windows x86_64, and multi-platform assembly
+- [x] Annotated `v1.0.0` tag was moved to the verified commit and tag-triggered publishing matrix completed successfully
+- [x] Public GitHub Release is non-draft and includes platform archives, checksums, manifests, trust metadata, provenance, SBOM, validation report, installer, and package-channel bundle
+- [x] Hosted release verification passed from public GitHub Release URLs with required-platform checks, trust checks, channel archive checks, and installer smoke
+- [x] Public installer audit passed with `install.sh --verify-metadata` and installed `cool help`
+- [x] Release evidence is recorded in `docs/RELEASE_1_0_0.md`
+
+### Final Hardening
+
+- [x] LLVM dynamic method/closure dispatch now uses generated argv wrappers, avoiding Darwin x86_64 struct-argument ABI traps
+- [x] Built-in native `collections` classes use the same argv dispatch ABI as generated classes
+- [x] Phase 6 pass3 user-module import and entrypoint tests cover `store`, `daemon`, `sandbox`, and `sync`
+- [x] Native dynamic-dispatch regression coverage confirms default arguments are bound for method, closure, and constructor calls
+
+---
+
 ## Summary
 
 | Phase | Status |
@@ -804,3 +828,4 @@ The self-hosted compiler lives in `coolc/compiler_vm.cool`. It includes a full l
 | 22 — Multi-Platform Release Matrix And Package Channels | ✅ Complete |
 | 23 — Public Release Validation And Ecosystem Readiness | ✅ Complete |
 | 24 — Real Public Release And Post-Release Operations | ✅ Complete |
+| 25 — Public 1.0.0 Release Execution | ✅ Complete |
