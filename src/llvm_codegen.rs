@@ -434,10 +434,12 @@ CoolVal cool_read_f64_volatile(CoolVal);
 CoolVal cool_write_f64_volatile(CoolVal, CoolVal);
 CoolVal cool_module_get_attr(const char*, const char*);
 CoolVal cool_module_call(const char*, const char*, int32_t, ...);
+CoolVal cool_module_call_argv(const char*, const char*, int32_t, CoolVal*);
 CoolVal cool_noncallable(CoolVal);
 CoolVal cool_ffi_open(CoolVal);
 CoolVal cool_ffi_func(CoolVal, CoolVal, CoolVal, CoolVal);
 CoolVal cool_ffi_call(CoolVal, int32_t, ...);
+CoolVal cool_ffi_call_argv(CoolVal, int32_t, CoolVal*);
 int32_t cool_is_ffi_func(CoolVal);
 CoolVal cool_round(CoolVal, CoolVal);
 CoolVal cool_sorted(CoolVal);
@@ -450,7 +452,7 @@ CoolVal cool_capture_cell_set(CoolVal, CoolVal);
 CoolVal cool_call_closure(CoolVal, int32_t, ...);
 CoolVal cool_closure_set_capture(CoolVal, int64_t, CoolVal);
 CoolVal cool_get_closure_capture_cell(int32_t);
-static CoolVal cool_call_closure_argv(CoolVal, int32_t, CoolVal*);
+CoolVal cool_call_closure_argv(CoolVal, int32_t, CoolVal*);
 void cool_enter_try(void*);
 void cool_exit_try(void);
 CoolVal cool_get_exception(void);
@@ -461,6 +463,7 @@ void cool_pop_with(void);
 static CoolSubprocessResult cool_subprocess_run_shell(const char*, int, double);
 static CoolVal cool_subprocess_result_dict(CoolSubprocessResult);
 void cool_print(int32_t, ...);
+void cool_print_argv(int32_t, CoolVal*);
 
 /* ── class / object support ─────────────────────────────────────────── */
 CoolVal cool_class_new(const char*, CoolVal, int64_t, int64_t*);
@@ -468,6 +471,7 @@ CoolVal cool_object_new(CoolVal);
 CoolVal cool_get_attr(CoolVal, const char*);
 CoolVal cool_set_attr(CoolVal, const char*, CoolVal);
 CoolVal cool_call_method_vararg(CoolVal, const char*, int32_t, ...);
+CoolVal cool_call_method_argv(CoolVal, const char*, int32_t, CoolVal*);
 CoolVal cool_get_arg(int32_t);
 CoolVal cool_is_instance(CoolVal, const char*);
 int32_t cool_exception_matches(CoolVal, const char*);
@@ -1449,12 +1453,10 @@ CoolVal cool_list_concat(CoolVal a, CoolVal b) {
 }
 
 /* ── print ────────────────────────────────────────────────────────────── */
-void cool_print(int32_t n, ...) {
-    va_list ap;
-    va_start(ap, n);
+void cool_print_argv(int32_t n, CoolVal* argv) {
     for (int32_t i = 0; i < n; i++) {
         if (i > 0) putchar(' ');
-        CoolVal v = va_arg(ap, CoolVal);
+        CoolVal v = argv ? argv[i] : cv_nil();
         switch (v.tag) {
             case TAG_NIL:   fputs("nil",  stdout); break;
             case TAG_INT:   printf("%lld", (long long)v.payload); break;
@@ -1482,8 +1484,27 @@ void cool_print(int32_t n, ...) {
             default:        fputs("<unknown>", stdout); break;
         }
     }
-    va_end(ap);
     putchar('\n');
+}
+
+void cool_print(int32_t n, ...) {
+    CoolVal stack_args[32];
+    CoolVal* argv = stack_args;
+    if (n > 32) {
+        argv = (CoolVal*)malloc((size_t)n * sizeof(CoolVal));
+        if (!argv) {
+            fprintf(stderr, "OutOfMemory: print argument allocation failed\n");
+            exit(1);
+        }
+    }
+    va_list ap;
+    va_start(ap, n);
+    for (int32_t i = 0; i < n; i++) {
+        argv[i] = va_arg(ap, CoolVal);
+    }
+    va_end(ap);
+    cool_print_argv(n, argv);
+    if (argv != stack_args) free(argv);
 }
 
 /* ── class operations ─────────────────────────────────────────────────── */
@@ -3133,13 +3154,20 @@ CoolVal cool_close(CoolVal value) {
 CoolVal cool_call_method_vararg(CoolVal obj, const char* name, int32_t nargs, ...) {
     va_list ap;
     va_start(ap, nargs);
+    CoolVal argv[31];
+    for (int32_t i = 0; i < nargs && i < 31; i++) {
+        argv[i] = va_arg(ap, CoolVal);
+    }
+    va_end(ap);
+    return cool_call_method_argv(obj, name, nargs, argv);
+}
+
+CoolVal cool_call_method_argv(CoolVal obj, const char* name, int32_t nargs, CoolVal* argv) {
     g_method_args[0] = obj;
     for (int32_t i = 0; i < nargs && i < 31; i++) {
-        g_method_args[i + 1] = va_arg(ap, CoolVal);
+        g_method_args[i + 1] = argv ? argv[i] : cv_nil();
     }
     g_method_arg_count = nargs + 1;
-    va_end(ap);
-
     const char* builtin_name = strncmp(name, "method_", 7) == 0 ? name + 7 : name;
 
     if (obj.tag == TAG_STR) {
@@ -7533,7 +7561,7 @@ static CoolVal cool_ffi_dispatch(CoolFfiFunc* fn, CoolFfiSlot* slots) {
     exit(1);
 }
 
-CoolVal cool_ffi_call(CoolVal fn_v, int32_t nargs, ...) {
+CoolVal cool_ffi_call_argv(CoolVal fn_v, int32_t nargs, CoolVal* argv) {
     if (fn_v.tag != TAG_FFI_FUNC) {
         fprintf(stderr, "TypeError: value is not an ffi function\n");
         exit(1);
@@ -7548,16 +7576,10 @@ CoolVal cool_ffi_call(CoolVal fn_v, int32_t nargs, ...) {
         exit(1);
     }
 
-    va_list ap;
-    va_start(ap, nargs);
-    CoolVal argv[8];
-    for (int32_t i = 0; i < nargs; i++) argv[i] = va_arg(ap, CoolVal);
-    va_end(ap);
-
     char* owned_strings[8] = {0};
     CoolFfiSlot slots[8];
     for (int32_t i = 0; i < nargs; i++) {
-        slots[i] = cool_ffi_value_to_slot(argv[i], fn->arg_types[i], owned_strings, i);
+        slots[i] = cool_ffi_value_to_slot(argv ? argv[i] : cv_nil(), fn->arg_types[i], owned_strings, i);
     }
 
     CoolVal result = cool_ffi_dispatch(fn, slots);
@@ -7565,6 +7587,15 @@ CoolVal cool_ffi_call(CoolVal fn_v, int32_t nargs, ...) {
         if (owned_strings[i]) free(owned_strings[i]);
     }
     return result;
+}
+
+CoolVal cool_ffi_call(CoolVal fn_v, int32_t nargs, ...) {
+    va_list ap;
+    va_start(ap, nargs);
+    CoolVal argv[8];
+    for (int32_t i = 0; i < nargs && i < 8; i++) argv[i] = va_arg(ap, CoolVal);
+    va_end(ap);
+    return cool_ffi_call_argv(fn_v, nargs, argv);
 }
 
 int32_t cool_is_ffi_func(CoolVal v) {
@@ -7955,13 +7986,7 @@ CoolVal cool_module_get_attr(const char* module, const char* name) {
     return cv_nil();
 }
 
-CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ...) {
-    va_list ap;
-    va_start(ap, nargs);
-    CoolVal args[8];
-    for (int32_t i = 0; i < nargs && i < 8; i++) args[i] = va_arg(ap, CoolVal);
-    va_end(ap);
-
+CoolVal cool_module_call_argv(const char* module, const char* name, int32_t nargs, CoolVal* args) {
     if (strcmp(module, "math") == 0) {
         if (nargs == 1) {
             double x = cv_to_float(args[0]);
@@ -8802,6 +8827,15 @@ CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ..
     exit(1);
 }
 
+CoolVal cool_module_call(const char* module, const char* name, int32_t nargs, ...) {
+    va_list ap;
+    va_start(ap, nargs);
+    CoolVal args[8];
+    for (int32_t i = 0; i < nargs && i < 8; i++) args[i] = va_arg(ap, CoolVal);
+    va_end(ap);
+    return cool_module_call_argv(module, name, nargs, args);
+}
+
 static CoolVal cool_list_contains_local(CoolVal list, CoolVal item) {
     if (list.tag != TAG_LIST && list.tag != TAG_TUPLE) return cv_bool(0);
     CoolList* l = (CoolList*)(intptr_t)list.payload;
@@ -8943,7 +8977,7 @@ static void cool_pop_closure_captures(void) {
     }
 }
 
-static CoolVal cool_call_closure_argv(CoolVal callable, int32_t argc, CoolVal* argv) {
+CoolVal cool_call_closure_argv(CoolVal callable, int32_t argc, CoolVal* argv) {
     if (!cool_is_closure(callable)) {
         fprintf(stderr, "TypeError: callable argument must be a function\n");
         exit(1);
@@ -9556,8 +9590,10 @@ struct RuntimeFns<'ctx> {
     cool_bitnot: FunctionValue<'ctx>,
     cool_lshift: FunctionValue<'ctx>,
     cool_rshift: FunctionValue<'ctx>,
-    /// void cool_print(int32_t n, ...)   — variadic
+    /// void cool_print(int32_t n, ...)   — variadic compatibility wrapper
+    #[allow(dead_code)]
     cool_print: FunctionValue<'ctx>,
+    cool_print_argv: FunctionValue<'ctx>,
     /// void abort(void)
     abort_fn: FunctionValue<'ctx>,
     /// void llvm.trap(void)
@@ -9639,7 +9675,9 @@ struct RuntimeFns<'ctx> {
     cool_object_new: FunctionValue<'ctx>,
     cool_get_attr: FunctionValue<'ctx>,
     cool_set_attr: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_call_method_vararg: FunctionValue<'ctx>,
+    cool_call_method_argv: FunctionValue<'ctx>,
     cool_get_arg: FunctionValue<'ctx>,
     cool_set_global_arg: FunctionValue<'ctx>,
     #[allow(dead_code)]
@@ -9666,7 +9704,9 @@ struct RuntimeFns<'ctx> {
     cool_to_bool_val: FunctionValue<'ctx>,
     cool_noncallable: FunctionValue<'ctx>,
     cool_is_ffi_func: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_ffi_call: FunctionValue<'ctx>,
+    cool_ffi_call_argv: FunctionValue<'ctx>,
     cool_round: FunctionValue<'ctx>,
     cool_sorted: FunctionValue<'ctx>,
     cool_sum: FunctionValue<'ctx>,
@@ -9684,7 +9724,9 @@ struct RuntimeFns<'ctx> {
     cool_capture_cell_set: FunctionValue<'ctx>,
     cool_closure_set_capture: FunctionValue<'ctx>,
     cool_get_closure_capture_cell: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_call_closure: FunctionValue<'ctx>,
+    cool_call_closure_argv: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_set_closure_capture: FunctionValue<'ctx>,
     #[allow(dead_code)]
@@ -9713,7 +9755,9 @@ struct RuntimeFns<'ctx> {
     #[allow(dead_code)]
     cool_module_exists: FunctionValue<'ctx>,
     cool_module_get_attr: FunctionValue<'ctx>,
+    #[allow(dead_code)]
     cool_module_call: FunctionValue<'ctx>,
+    cool_module_call_argv: FunctionValue<'ctx>,
     #[allow(dead_code)]
     cool_call_fn_ptr: FunctionValue<'ctx>,
     // struct support
@@ -10118,6 +10162,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_rshift: decl!("cool_rshift", cv_type.fn_type(&[cv, cv], false)),
             // void cool_print(i32 n, ...)  — is_var_arg = true
             cool_print: decl!("cool_print", voidt.fn_type(&[i32m], true)),
+            cool_print_argv: decl!("cool_print_argv", voidt.fn_type(&[i32m, ptrm], false)),
             abort_fn: decl!("abort", voidt.fn_type(&[], false)),
             trap_fn: decl!("llvm.trap", voidt.fn_type(&[], false)),
             // raw memory — all take CoolVal(s) and return CoolVal
@@ -10194,6 +10239,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_get_attr: decl!("cool_get_attr", cv_type.fn_type(&[cv, ptrm], false)),
             cool_set_attr: decl!("cool_set_attr", cv_type.fn_type(&[cv, ptrm, cv], false)),
             cool_call_method_vararg: decl!("cool_call_method_vararg", cv_type.fn_type(&[cv, ptrm, i32m], true)),
+            cool_call_method_argv: decl!("cool_call_method_argv", cv_type.fn_type(&[cv, ptrm, i32m, ptrm], false)),
             cool_get_arg: decl!("cool_get_arg", cv_type.fn_type(&[i32m], false)),
             cool_set_global_arg: decl!("cool_set_global_arg", voidt.fn_type(&[i32m, cv], false)),
             cool_is_instance: decl!("cool_is_instance", cv_type.fn_type(&[cv, ptrm], false)),
@@ -10219,6 +10265,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_noncallable: decl!("cool_noncallable", cv_type.fn_type(&[cv], false)),
             cool_is_ffi_func: decl!("cool_is_ffi_func", i32t.fn_type(&[cv], false)),
             cool_ffi_call: decl!("cool_ffi_call", cv_type.fn_type(&[cv, i32m], true)),
+            cool_ffi_call_argv: decl!("cool_ffi_call_argv", cv_type.fn_type(&[cv, i32m, ptrm], false)),
             cool_round: decl!("cool_round", cv_type.fn_type(&[cv, cv], false)),
             cool_sorted: decl!("cool_sorted", cv_type.fn_type(&[cv], false)),
             cool_sum: decl!("cool_sum", cv_type.fn_type(&[cv], false)),
@@ -10233,6 +10280,7 @@ impl<'ctx> Compiler<'ctx> {
             cool_closure_set_capture: decl!("cool_closure_set_capture", cv_type.fn_type(&[cv, i64m, cv], false)),
             cool_get_closure_capture_cell: decl!("cool_get_closure_capture_cell", cv_type.fn_type(&[i32m], false)),
             cool_call_closure: decl!("cool_call_closure", cv_type.fn_type(&[cv, i32m], true)),
+            cool_call_closure_argv: decl!("cool_call_closure_argv", cv_type.fn_type(&[cv, i32m, ptrm], false)),
             cool_set_closure_capture: decl!("cool_set_closure_capture", voidt.fn_type(&[i32m, cv], false)),
             cool_get_closure_capture: decl!("cool_get_closure_capture", cv_type.fn_type(&[i32m], false)),
             // exception handling
@@ -10252,6 +10300,10 @@ impl<'ctx> Compiler<'ctx> {
             cool_module_exists: decl!("cool_module_exists", i32t.fn_type(&[ptrm], false)),
             cool_module_get_attr: decl!("cool_module_get_attr", cv_type.fn_type(&[ptrm, ptrm], false)),
             cool_module_call: decl!("cool_module_call", cv_type.fn_type(&[ptrm, ptrm, i32m], true)),
+            cool_module_call_argv: decl!(
+                "cool_module_call_argv",
+                cv_type.fn_type(&[ptrm, ptrm, i32m, ptrm], false)
+            ),
             cool_call_fn_ptr: decl!("cool_call_fn_ptr", cv_type.fn_type(&[i64m, i32m], true)),
             cool_struct_new: decl!("cool_struct_new", cv_type.fn_type(&[i64m, ptrm], false)),
             cool_struct_get_field: decl!("cool_struct_get_field", cv_type.fn_type(&[cv, ptrm], false)),
@@ -12004,6 +12056,35 @@ impl<'ctx> Compiler<'ctx> {
         builder.build_alloca(self.cv_type, name).unwrap()
     }
 
+    fn build_coolval_argv(&mut self, values: &[StructValue<'ctx>], name: &str) -> PointerValue<'ctx> {
+        let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+        if values.is_empty() {
+            return ptr_type.const_null();
+        }
+
+        let array_type = self.cv_type.array_type(values.len() as u32);
+        let alloca = self.builder.build_alloca(array_type, &format!("{name}_argv")).unwrap();
+        let i32t = self.context.i32_type();
+        let zero = i32t.const_zero();
+        for (idx, value) in values.iter().enumerate() {
+            let idx_value = i32t.const_int(idx as u64, false);
+            let slot = unsafe {
+                self.builder
+                    .build_gep(array_type, alloca, &[zero, idx_value], &format!("{name}_arg{idx}"))
+                    .unwrap()
+            };
+            self.builder.build_store(slot, *value).unwrap();
+        }
+        let first = unsafe {
+            self.builder
+                .build_gep(array_type, alloca, &[zero, zero], &format!("{name}_first"))
+                .unwrap()
+        };
+        self.builder
+            .build_pointer_cast(first, ptr_type, &format!("{name}_argv_ptr"))
+            .unwrap()
+    }
+
     fn capture_cell_new(&mut self, value: StructValue<'ctx>, name: &str) -> StructValue<'ctx> {
         self.builder
             .build_call(self.rt.cool_capture_cell_new, &[value.into()], name)
@@ -12127,13 +12208,15 @@ impl<'ctx> Compiler<'ctx> {
             .build_global_string_ptr(&method_label, &global_name)
             .unwrap();
         let nargs_i32 = self.context.i32_type().const_int(args.len() as u64, false);
-        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-            vec![obj.into(), method_ptr.as_pointer_value().into(), nargs_i32.into()];
-        for arg in args {
-            call_args.push((*arg).into());
-        }
+        let argv = self.build_coolval_argv(args, name);
+        let call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+            obj.into(),
+            method_ptr.as_pointer_value().into(),
+            nargs_i32.into(),
+            argv.into(),
+        ];
         self.builder
-            .build_call(self.rt.cool_call_method_vararg, &call_args, name)
+            .build_call(self.rt.cool_call_method_argv, &call_args, name)
             .unwrap()
             .try_as_basic_value()
             .left()
@@ -14301,8 +14384,9 @@ impl<'ctx> Compiler<'ctx> {
                 self.build_str("AssertionError")
             };
             let n1 = self.context.i32_type().const_int(1, false);
+            let argv = self.build_coolval_argv(&[msg_cv], "assert_print");
             self.builder
-                .build_call(self.rt.cool_print, &[n1.into(), msg_cv.into()], "")
+                .build_call(self.rt.cool_print_argv, &[n1.into(), argv.into()], "")
                 .unwrap();
             self.builder.build_call(self.rt.abort_fn, &[], "").unwrap();
         }
@@ -16405,13 +16489,15 @@ impl<'ctx> Compiler<'ctx> {
             return Err("FFI functions do not support keyword arguments".into());
         }
         let nargs_i32 = self.context.i32_type().const_int(args.len() as u64, false);
-        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![callable.into(), nargs_i32.into()];
+        let mut compiled_args = Vec::with_capacity(args.len());
         for arg in args {
-            call_args.push(self.compile_expr(arg)?.into());
+            compiled_args.push(self.compile_expr(arg)?);
         }
+        let argv = self.build_coolval_argv(&compiled_args, name);
+        let call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![callable.into(), nargs_i32.into(), argv.into()];
         Ok(self
             .builder
-            .build_call(self.rt.cool_ffi_call, &call_args, name)
+            .build_call(self.rt.cool_ffi_call_argv, &call_args, name)
             .unwrap()
             .try_as_basic_value()
             .left()
@@ -16442,17 +16528,20 @@ impl<'ctx> Compiler<'ctx> {
                         .build_global_string_ptr(member, &format!("module_call_{}_{}", module_name, member))
                         .unwrap();
                     let nargs_i32 = self.context.i32_type().const_int(args.len() as u64, false);
-                    let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                    let mut compiled_args = Vec::with_capacity(args.len());
+                    for arg in args {
+                        compiled_args.push(self.compile_expr(arg)?);
+                    }
+                    let argv = self.build_coolval_argv(&compiled_args, "module_call");
+                    let call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
                         module_ptr.as_pointer_value().into(),
                         member_ptr.as_pointer_value().into(),
                         nargs_i32.into(),
+                        argv.into(),
                     ];
-                    for arg in args {
-                        call_args.push(self.compile_expr(arg)?.into());
-                    }
                     return Ok(self
                         .builder
-                        .build_call(self.rt.cool_module_call, &call_args, "module_call")
+                        .build_call(self.rt.cool_module_call_argv, &call_args, "module_call")
                         .unwrap()
                         .try_as_basic_value()
                         .left()
@@ -16616,18 +16705,21 @@ impl<'ctx> Compiler<'ctx> {
                 // Call method - the runtime looks up the method from the class structure
                 let i32t = self.context.i32_type();
                 let nargs_i32 = i32t.const_int(args.len() as u64, false); // number of args (excluding self, added by runtime)
-                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
+                let mut compiled_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    compiled_args.push(self.compile_expr(arg)?);
+                }
+                let argv = self.build_coolval_argv(&compiled_args, "call_method");
+                let call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![
                     obj_val.into(),
                     attr_name_ptr.as_pointer_value().into(),
                     nargs_i32.into(),
+                    argv.into(),
                 ];
-                for arg in args {
-                    call_args.push(self.compile_expr(arg)?.into());
-                }
 
                 return Ok(self
                     .builder
-                    .build_call(self.rt.cool_call_method_vararg, &call_args, "call_method")
+                    .build_call(self.rt.cool_call_method_argv, &call_args, "call_method")
                     .unwrap()
                     .try_as_basic_value()
                     .left()
@@ -16862,13 +16954,15 @@ impl<'ctx> Compiler<'ctx> {
             }
             let i32t = self.context.i32_type();
             let nargs_i32 = i32t.const_int(args.len() as u64, false);
-            let mut closure_call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![cv.into(), nargs_i32.into()];
+            let mut compiled_args = Vec::with_capacity(args.len());
             for arg in args {
-                closure_call_args.push(self.compile_expr(arg)?.into());
+                compiled_args.push(self.compile_expr(arg)?);
             }
+            let argv = self.build_coolval_argv(&compiled_args, "call_closure");
+            let closure_call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![cv.into(), nargs_i32.into(), argv.into()];
             let closure_result = self
                 .builder
-                .build_call(self.rt.cool_call_closure, &closure_call_args, "call_closure")
+                .build_call(self.rt.cool_call_closure_argv, &closure_call_args, "call_closure")
                 .unwrap()
                 .try_as_basic_value()
                 .left()
@@ -17099,12 +17193,16 @@ impl<'ctx> Compiler<'ctx> {
         if name == "print" {
             let n = args.len() as u64;
             let n_v = self.context.i32_type().const_int(n, false);
-            let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![n_v.into()];
+            let mut compiled_args = Vec::with_capacity(args.len());
             for arg in args {
                 let cv = self.compile_expr(arg)?;
-                call_args.push(cv.into());
+                compiled_args.push(cv);
             }
-            self.builder.build_call(self.rt.cool_print, &call_args, "").unwrap();
+            let argv = self.build_coolval_argv(&compiled_args, "print");
+            let call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![n_v.into(), argv.into()];
+            self.builder
+                .build_call(self.rt.cool_print_argv, &call_args, "")
+                .unwrap();
             return Ok(self.build_nil());
         }
 
