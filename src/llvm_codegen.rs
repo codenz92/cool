@@ -17082,6 +17082,13 @@ impl<'ctx> Compiler<'ctx> {
                     name, triple_str
                 ));
             }
+            if triple_str.contains("darwin") || triple_str.contains("apple") {
+                return Err(format!(
+                    "'{}' uses x86 port I/O and is not supported on Darwin/Mach-O target '{}'; \
+                     use an x86 freestanding target such as x86_64-unknown-none",
+                    name, triple_str
+                ));
+            }
         }
         if name == "outb" || name == "write_serial_byte" {
             let (port_i16, val_i8) = if name == "outb" {

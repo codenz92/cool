@@ -163,7 +163,12 @@ fn compile_and_run_native_with_env(source: &str, envs: &[(&str, &str)]) -> Resul
     if run_output.status.success() {
         Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
     } else {
-        Err(String::from_utf8_lossy(&run_output.stderr).to_string())
+        Err(format!(
+            "status: {}\nstdout:\n{}\nstderr:\n{}",
+            run_output.status,
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        ))
     }
 }
 
@@ -198,7 +203,12 @@ fn compile_and_run_native_path_with_env(source_path: &PathBuf, envs: &[(&str, &s
     if run_output.status.success() {
         Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
     } else {
-        Err(String::from_utf8_lossy(&run_output.stderr).to_string())
+        Err(format!(
+            "status: {}\nstdout:\n{}\nstderr:\n{}",
+            run_output.status,
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        ))
     }
 }
 
@@ -2363,9 +2373,11 @@ def mem_test():
 
 #[test]
 fn test_llvm_freestanding_port_io_builtins_have_no_undefined_runtime_symbols() {
-    // outb / inb / write_serial_byte are x86-only; skip on other architectures.
-    if !cfg!(target_arch = "x86_64") && !cfg!(target_arch = "x86") {
-        eprintln!("skipping: port I/O builtins require an x86/x86-64 host");
+    // outb / inb / write_serial_byte are x86 freestanding operations. Darwin
+    // hosts use Mach-O targets by default, where these inline-asm constraints
+    // are not valid; use an explicit freestanding target there instead.
+    if (!cfg!(target_arch = "x86_64") && !cfg!(target_arch = "x86")) || cfg!(target_os = "macos") {
+        eprintln!("skipping: port I/O builtins require a non-Darwin x86/x86-64 host target");
         return;
     }
     let source = r#"
