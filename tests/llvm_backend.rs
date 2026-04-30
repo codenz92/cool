@@ -4447,6 +4447,34 @@ print(len(plan["conflicts"]))
 }
 
 #[test]
+fn test_llvm_dynamic_dispatch_binds_default_arguments() {
+    let result = compile_and_run_native(
+        r#"class Greeter:
+    def pair(self, left, right="R"):
+        return left + right
+
+class Box:
+    def __init__(self, value="default"):
+        self.value = value
+
+def join(left, right="R"):
+    return left + right
+
+greeter = Greeter()
+print(greeter.pair("L"))
+alias = join
+print(alias("L"))
+box_ctor = Box
+box = box_ctor()
+print(box.value)
+"#,
+    )
+    .unwrap();
+    let lines: Vec<_> = result.lines().collect();
+    assert_eq!(lines, vec!["LR", "LR", "default"]);
+}
+
+#[test]
 fn test_llvm_phase6_filesystem_os_modules() {
     let temp_dir = unique_temp_dir("cool_llvm_phase6_fs");
     let _ = fs::remove_dir_all(&temp_dir);

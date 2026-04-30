@@ -825,25 +825,14 @@ int32_t cool_truthy(CoolVal v) {
     }
 }
 
-typedef CoolVal (*CoolFn0)(void);
-typedef CoolVal (*CoolFn1)(CoolVal);
-typedef CoolVal (*CoolFn2)(CoolVal, CoolVal);
-typedef CoolVal (*CoolFn3)(CoolVal, CoolVal, CoolVal);
-typedef CoolVal (*CoolFn4)(CoolVal, CoolVal, CoolVal, CoolVal);
-typedef CoolVal (*CoolFn5)(CoolVal, CoolVal, CoolVal, CoolVal, CoolVal);
+typedef CoolVal (*CoolArgvFn)(int32_t, CoolVal*);
 
 static CoolVal call_cool_fn_ptr(int64_t fn_ptr, int32_t argc, CoolVal* argv) {
-    switch (argc) {
-        case 0: return ((CoolFn0)(intptr_t)fn_ptr)();
-        case 1: return ((CoolFn1)(intptr_t)fn_ptr)(argv[0]);
-        case 2: return ((CoolFn2)(intptr_t)fn_ptr)(argv[0], argv[1]);
-        case 3: return ((CoolFn3)(intptr_t)fn_ptr)(argv[0], argv[1], argv[2]);
-        case 4: return ((CoolFn4)(intptr_t)fn_ptr)(argv[0], argv[1], argv[2], argv[3]);
-        case 5: return ((CoolFn5)(intptr_t)fn_ptr)(argv[0], argv[1], argv[2], argv[3], argv[4]);
-        default:
-            fprintf(stderr, "RuntimeError: too many arguments for native call (%d)\n", argc);
-            exit(1);
+    if (fn_ptr == 0) {
+        fprintf(stderr, "RuntimeError: null native function pointer\n");
+        exit(1);
     }
+    return ((CoolArgvFn)(intptr_t)fn_ptr)(argc, argv);
 }
 
 /* ── arithmetic ───────────────────────────────────────────────────────── */
@@ -11440,6 +11429,244 @@ impl<'ctx> Compiler<'ctx> {
         Ok(closure_fn)
     }
 
+    fn compile_argv_dispatch_wrapper(
+        &mut self,
+        label: &str,
+        fn_val: FunctionValue<'ctx>,
+        params: &[crate::ast::Param],
+        return_type: Option<ExternAbiType>,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let raw_name = fn_val.get_name().to_string_lossy();
+        let wrapper_name = format!("{raw_name}$argv");
+        if let Some(existing) = self.module.get_function(&wrapper_name) {
+            return Ok(existing);
+        }
+
+        let i32t = self.context.i32_type();
+        let ptr_t = self.context.i8_type().ptr_type(AddressSpace::default());
+        let wrapper_fn = self.module.add_function(
+            &wrapper_name,
+            self.cv_type.fn_type(&[i32t.into(), ptr_t.into()], false),
+            None,
+        );
+        wrapper_fn.set_linkage(inkwell::module::Linkage::Private);
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_cell_vars = std::mem::take(&mut self.cell_vars);
+        let saved_functions = self.functions.clone();
+        let saved_function_params = self.function_params.clone();
+        let saved_function_return_types = self.function_return_types.clone();
+        let saved_classes = self.classes.clone();
+        let saved_fn = self.current_fn.replace(wrapper_fn);
+        let saved_ret_type = self.current_fn_return_type;
+        let saved_captured_vars = std::mem::take(&mut self.captured_vars);
+        let saved_loops = std::mem::take(&mut self.loop_stack);
+        let saved_imports = std::mem::take(&mut self.imported_modules);
+        let saved_user_modules = std::mem::take(&mut self.imported_user_modules);
+        let saved_cleanups = std::mem::take(&mut self.cleanup_stack);
+        let saved_tries = std::mem::take(&mut self.try_stack);
+        let saved_var_struct_types = std::mem::take(&mut self.var_struct_types);
+        let saved_class = self.current_class.take();
+        let saved_debug_scope = self.current_debug_scope();
+        let saved_line = self.current_line;
+        let saved_allow_toplevel_defs = self.allow_toplevel_defs;
+        self.allow_toplevel_defs = false;
+        self.current_fn_return_type = None;
+        self.imported_modules = saved_imports.clone();
+        self.imported_user_modules = saved_user_modules.clone();
+
+        let entry = self.context.append_basic_block(wrapper_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let argc = wrapper_fn
+            .get_nth_param(0)
+            .ok_or_else(|| format!("argv wrapper '{label}' missing argc"))?
+            .into_int_value();
+        let argv = wrapper_fn
+            .get_nth_param(1)
+            .ok_or_else(|| format!("argv wrapper '{label}' missing argv"))?
+            .into_pointer_value();
+
+        let too_many_bb = self.context.append_basic_block(wrapper_fn, "too_many_args");
+        let arity_ok_bb = self.context.append_basic_block(wrapper_fn, "arity_ok");
+        let max_args = i32t.const_int(params.len() as u64, false);
+        let too_many = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, argc, max_args, "argv_too_many")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(too_many, too_many_bb, arity_ok_bb)
+            .unwrap();
+
+        self.builder.position_at_end(too_many_bb);
+        let too_many_msg = self.build_str(&format!(
+            "too many arguments for '{label}': expected at most {}, got more",
+            params.len()
+        ));
+        self.builder
+            .build_call(self.rt.cool_panic, &[too_many_msg.into()], "argv_too_many_panic")
+            .unwrap();
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(arity_ok_bb);
+        let argv_cv_ptr = self
+            .builder
+            .build_pointer_cast(argv, self.cv_type.ptr_type(AddressSpace::default()), "argv_cv_ptr")
+            .unwrap();
+
+        let mut values = Vec::with_capacity(params.len());
+        for (idx, param) in params.iter().enumerate() {
+            let arg_bb = self
+                .context
+                .append_basic_block(wrapper_fn, &format!("arg{idx}_present"));
+            let missing_bb = self
+                .context
+                .append_basic_block(wrapper_fn, &format!("arg{idx}_missing"));
+            let next_bb = self.context.append_basic_block(wrapper_fn, &format!("arg{idx}_bound"));
+            let idx_i32 = i32t.const_int(idx as u64, false);
+            let has_arg = self
+                .builder
+                .build_int_compare(IntPredicate::UGT, argc, idx_i32, &format!("argv_has_arg{idx}"))
+                .unwrap();
+            self.builder
+                .build_conditional_branch(has_arg, arg_bb, missing_bb)
+                .unwrap();
+
+            self.builder.position_at_end(arg_bb);
+            let idx_i64 = self.context.i64_type().const_int(idx as u64, false);
+            let slot = unsafe {
+                self.builder
+                    .build_gep(self.cv_type, argv_cv_ptr, &[idx_i64], &format!("argv_arg{idx}_ptr"))
+                    .unwrap()
+            };
+            let arg_value = self
+                .builder
+                .build_load(self.cv_type, slot, &format!("argv_arg{idx}"))
+                .unwrap()
+                .into_struct_value();
+            let arg_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(next_bb).unwrap();
+
+            self.builder.position_at_end(missing_bb);
+            let default_value = if let Some(default) = &param.default {
+                let value = self.compile_expr(default)?;
+                let default_end = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(next_bb).unwrap();
+                Some((value, default_end))
+            } else {
+                let msg = self.build_str(&format!("missing required argument '{}' for '{}'", param.name, label));
+                self.builder
+                    .build_call(self.rt.cool_panic, &[msg.into()], "argv_missing_arg_panic")
+                    .unwrap();
+                self.builder.build_unreachable().unwrap();
+                None
+            };
+
+            self.builder.position_at_end(next_bb);
+            let phi = self
+                .builder
+                .build_phi(self.cv_type, &format!("argv_arg{idx}_value"))
+                .unwrap();
+            phi.add_incoming(&[(&arg_value, arg_end)]);
+            if let Some((value, default_end)) = default_value {
+                phi.add_incoming(&[(&value, default_end)]);
+            }
+            values.push(phi.as_basic_value().into_struct_value());
+        }
+
+        let result =
+            self.call_fn_with_struct_args(fn_val, params, return_type, &values, &format!("{label}_argv_call"))?;
+        if !self.current_block_terminated() {
+            self.builder.build_return(Some(&result)).unwrap();
+        }
+
+        self.locals = saved_locals;
+        self.cell_vars = saved_cell_vars;
+        self.functions = saved_functions;
+        self.function_params = saved_function_params;
+        self.function_return_types = saved_function_return_types;
+        self.classes = saved_classes;
+        self.current_fn = saved_fn;
+        self.current_fn_return_type = saved_ret_type;
+        self.captured_vars = saved_captured_vars;
+        self.loop_stack = saved_loops;
+        self.imported_modules = saved_imports;
+        self.imported_user_modules = saved_user_modules;
+        self.cleanup_stack = saved_cleanups;
+        self.try_stack = saved_tries;
+        self.var_struct_types = saved_var_struct_types;
+        self.current_class = saved_class;
+        self.allow_toplevel_defs = saved_allow_toplevel_defs;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.restore_debug_scope(saved_debug_scope, saved_line);
+
+        Ok(wrapper_fn)
+    }
+
+    fn compile_constructor_closure_wrapper(
+        &mut self,
+        class_name: &str,
+        constructor: FunctionValue<'ctx>,
+        params: &[crate::ast::Param],
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let raw_name = constructor.get_name().to_string_lossy();
+        let adapter_name = format!("{raw_name}$ctor_adapter");
+        let adapter = if let Some(existing) = self.module.get_function(&adapter_name) {
+            existing
+        } else {
+            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'_>> =
+                params.iter().map(|_| self.cv_type.into()).collect();
+            let adapter_fn = self
+                .module
+                .add_function(&adapter_name, self.cv_type.fn_type(&param_types, false), None);
+            adapter_fn.set_linkage(inkwell::module::Linkage::Private);
+
+            let saved_bb = self.builder.get_insert_block();
+            let saved_fn = self.current_fn.replace(adapter_fn);
+            let saved_debug_scope = self.current_debug_scope();
+            let saved_line = self.current_line;
+
+            let entry = self.context.append_basic_block(adapter_fn, "entry");
+            self.builder.position_at_end(entry);
+            let i32t = self.context.i32_type();
+            for (idx, _) in params.iter().enumerate() {
+                let value = adapter_fn
+                    .get_nth_param(idx as u32)
+                    .ok_or_else(|| format!("constructor wrapper '{class_name}' missing parameter {idx}"))?
+                    .into_struct_value();
+                self.builder
+                    .build_call(
+                        self.rt.cool_set_global_arg,
+                        &[i32t.const_int(idx as u64, false).into(), value.into()],
+                        "ctor_set_global_arg",
+                    )
+                    .unwrap();
+            }
+            let result = self
+                .builder
+                .build_call(constructor, &[], "ctor_adapter_call")
+                .unwrap()
+                .try_as_basic_value()
+                .left()
+                .unwrap()
+                .into_struct_value();
+            self.builder.build_return(Some(&result)).unwrap();
+
+            self.current_fn = saved_fn;
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+            self.restore_debug_scope(saved_debug_scope, saved_line);
+
+            adapter_fn
+        };
+
+        self.compile_argv_dispatch_wrapper(class_name, adapter, params, None)
+    }
+
     fn build_closure_value(
         &mut self,
         fn_val: FunctionValue<'ctx>,
@@ -11491,7 +11718,8 @@ impl<'ctx> Compiler<'ctx> {
         let fn_name = self.mangle_global_name(&format!("__nested_{}_{}", name, self.str_counter));
         self.str_counter += 1;
         let fn_val = self.compile_closure_function(&fn_name, params, body, &capture_names)?;
-        let closure = self.build_closure_value(fn_val, &capture_names, name)?;
+        let dispatch_fn = self.compile_argv_dispatch_wrapper(name, fn_val, params, None)?;
+        let closure = self.build_closure_value(dispatch_fn, &capture_names, name)?;
         self.store_variable_value(name, closure)?;
         Ok(())
     }
@@ -11655,11 +11883,7 @@ impl<'ctx> Compiler<'ctx> {
     fn bind_top_level_function_closure(&mut self, name: &str, fn_val: FunctionValue<'ctx>) -> Result<(), String> {
         let params = self.function_params.get(name).cloned().unwrap_or_default();
         let return_type = self.function_return_types.get(name).copied().flatten();
-        let closure_target = if params.iter().any(|param| param.type_name.is_some()) || return_type.is_some() {
-            self.compile_typed_closure_wrapper(name, fn_val, &params, return_type)?
-        } else {
-            fn_val
-        };
+        let closure_target = self.compile_argv_dispatch_wrapper(name, fn_val, &params, return_type)?;
 
         let fn_ptr = closure_target.as_global_value().as_pointer_value();
         let fn_ptr_int = self
@@ -13700,6 +13924,8 @@ impl<'ctx> Compiler<'ctx> {
         // Fill in method data
         for (i, (method_name, &fn_val)) in methods.iter().enumerate() {
             let idx = i as u64;
+            let params = method_params.get(method_name).cloned().unwrap_or_default();
+            let dispatch_fn = self.compile_argv_dispatch_wrapper(method_name, fn_val, &params, None)?;
 
             // Store name pointer at offset idx * 16
             let name_offset = self.context.i64_type().const_int(idx * 16, false);
@@ -13744,7 +13970,7 @@ impl<'ctx> Compiler<'ctx> {
                     "fn_ptr_cast",
                 )
                 .unwrap();
-            let fn_ptr = fn_val.as_global_value().as_pointer_value();
+            let fn_ptr = dispatch_fn.as_global_value().as_pointer_value();
             let fn_as_int = self
                 .builder
                 .build_ptr_to_int(fn_ptr, self.context.i64_type(), "fn_int")
@@ -13842,7 +14068,7 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(bb);
         }
 
-        let constructor_params = init_params
+        let constructor_params: Vec<crate::ast::Param> = init_params
             .clone()
             .or_else(|| method_params.get("__init__").cloned())
             .unwrap_or_default()
@@ -13859,7 +14085,7 @@ impl<'ctx> Compiler<'ctx> {
                 method_params,
                 attributes,
                 parent: parent.map(str::to_string),
-                constructor_params,
+                constructor_params: constructor_params.clone(),
             },
         );
 
@@ -13873,7 +14099,8 @@ impl<'ctx> Compiler<'ctx> {
             .build_alloca(self.cv_type, &format!("{}_holder", name))
             .unwrap();
 
-        let ctor_ptr = constructor.as_global_value().as_pointer_value();
+        let ctor_dispatch = self.compile_constructor_closure_wrapper(name, constructor, &constructor_params)?;
+        let ctor_ptr = ctor_dispatch.as_global_value().as_pointer_value();
         let ctor_ptr_int = self
             .builder
             .build_ptr_to_int(ctor_ptr, self.context.i64_type(), &format!("{}_ctor_ptr", name))
@@ -15208,7 +15435,8 @@ impl<'ctx> Compiler<'ctx> {
                 self.str_counter += 1;
                 let lambda_body = vec![Stmt::Return(Some(*body.clone()))];
                 let lambda_fn = self.compile_closure_function(&fn_name, params, &lambda_body, &capture_names)?;
-                self.build_closure_value(lambda_fn, &capture_names, "lambda")
+                let dispatch_fn = self.compile_argv_dispatch_wrapper("lambda", lambda_fn, params, None)?;
+                self.build_closure_value(dispatch_fn, &capture_names, "lambda")
             }
 
             Expr::Ternary {
